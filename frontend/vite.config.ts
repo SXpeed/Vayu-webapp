@@ -2,6 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import { defineConfig, loadEnv, Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
 // Plugin to copy static files (sw.js) to the dist folder after build
 function copyStaticFiles(): Plugin {
@@ -36,7 +37,7 @@ export default defineConfig(({ mode }) => {
           '/ws-proxy': {target: 'ws://localhost:5000', ws: true},
         },
       },
-      plugins: [react(), copyStaticFiles()],
+      plugins: [react(), tailwindcss(), copyStaticFiles()],
       resolve: {
         alias: {
           '@': path.resolve(__dirname, '.'),

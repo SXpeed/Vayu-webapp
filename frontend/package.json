@@ -16,6 +16,7 @@
     "react-dom": "latest"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.1",
     "@types/node": "latest",
     "@vitejs/plugin-react": "latest",
     "autoprefixer": "^10.5.2",
