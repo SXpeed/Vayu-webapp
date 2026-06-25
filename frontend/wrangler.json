@@ -1,10 +1,8 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "vayu-design-for-living",
+  "name": "vayu-webapp",
   "pages_build_output_dir": "dist",
   "compatibility_date": "2026-06-24",
-  "workers_dev": false,
-  "preview_urls": false,
   "build": {
     "command": "npm run build"
   }
