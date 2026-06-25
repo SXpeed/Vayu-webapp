@@ -1,0 +1,16 @@
+{
+  "name": "vayu-design-for-living",
+  "scripts": {
+    "dev-frontend": "npm run dev --prefix frontend",
+    "dev-backend": "npm run dev --prefix backend",
+    "build": "cd frontend && npm install && npm run build",
+    "dev": "concurrently \"npm run dev-frontend\" \"npm run dev-backend\""
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.42.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "concurrently": "latest",
+    "wrangler": "^4.104.0"
+  }
+}

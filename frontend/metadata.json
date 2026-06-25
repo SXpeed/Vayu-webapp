@@ -1,0 +1,7 @@
+{
+  "name": "Vayu Design for living",
+  "description": "A mobile-first application for Vayu Design to manage artworks, create catalogs, and automate billing.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
