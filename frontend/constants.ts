@@ -202,19 +202,15 @@ export const MOCK_INQUIRIES: Inquiry[] = [
     }
 ];
 
-export const MOCK_USERS: UserProfile[] = [
+export const MOCK_TEAM_MEMBERS: UserProfile[] = [
     {
         id: 'admin_1',
         name: 'Vivek Sahni',
         email: 'admin@vayu.com',
         phone: '9999999999',
         address: 'Mumbai, India',
-        password: 'vayu@123',
-        theme: 'light',
+        isOnline: true,
     },
-];
-
-export const MOCK_TEAM_MEMBERS: UserProfile[] = [
     {
         id: 'user_1',
         name: 'Arjun Kapoor',
@@ -252,8 +248,8 @@ export const MOCK_TEAM_MEMBERS: UserProfile[] = [
 export const MOCK_CONVERSATIONS: Conversation[] = [
     {
         id: 'conv_general',
-        participantIds: ['user_1', 'user_2', 'user_3', 'user_4'],
-        participantNames: ['Arjun Kapoor', 'Meera Patel', 'Rohan Singh', 'Priya Sharma'],
+        participantIds: ['admin_1', 'user_1', 'user_2', 'user_3', 'user_4'],
+        participantNames: ['Vivek Sahni', 'Arjun Kapoor', 'Meera Patel', 'Rohan Singh', 'Priya Sharma'],
         lastMessage: 'The new collection looks great, let\'s finalize the pricing.',
         lastMessageTime: Date.now() - 600000,
         unreadCount: 3,

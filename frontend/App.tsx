@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ViewState, Artwork, Catalog, Invoice, Collection, Inquiry, Conversation, ConversationDetails, Message, MessageTag, MessageReplyTo, MessageAttachment, InquiryMessage, UserProfile } from './types';
-import { BottomNav } from './components/BottomNav';
 import Layout from './components/Layout';
 import { LoginView } from './views/LoginView';
+import { authService, AuthUser } from './services/authService';
 import { HomeView } from './views/HomeView';
 import { ArtworksView } from './views/ArtworksView';
 import { CatalogsView } from './views/CatalogsView';
@@ -31,6 +31,7 @@ const App: React.FC = () => {
     const [inquiryMessages, setInquiryMessages] = useState<InquiryMessage[]>([]);
     const [teamMembers, setTeamMembers] = useState<UserProfile[]>([]);
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+    const [authUser, setAuthUser] = useState<AuthUser | null>(null);
 
     const loadData = useCallback(async () => {
         const loadedArtworks = await db.getArtworks();
@@ -60,17 +61,23 @@ const App: React.FC = () => {
             try {
                 await db.init();
 
-                // Check for logged in user session
-                const sessionPhone = localStorage.getItem('vayu_session');
-                if (sessionPhone) {
-                    const user = await db.getUser(sessionPhone);
-                    if (user) {
-                        setUserProfile(user);
-                        setTheme(user.theme || 'light');
-                        setCurrentView('home');
-                        // Push initial state to history for back button handling
-                        window.history.pushState({ view: 'home' }, '');
-                    }
+                // Check for existing auth token
+                const me = await authService.getMe();
+                if (me) {
+                    setAuthUser(me);
+                    const savedTheme = (localStorage.getItem('vayu_theme') as 'light' | 'dark') || 'light';
+                    const profile: UserProfile = {
+                        id: me.id,
+                        name: me.name,
+                        email: me.email,
+                        phone: '',
+                        address: '',
+                        theme: savedTheme,
+                    };
+                    setUserProfile(profile);
+                    setTheme(savedTheme);
+                    setCurrentView('home');
+                    window.history.pushState({ view: 'home' }, '');
                 } else {
                     window.history.pushState({ view: 'login' }, '');
                 }
@@ -137,10 +144,19 @@ const App: React.FC = () => {
     }, [theme]);
 
     // Handlers
-    const handleLogin = async (user: UserProfile) => {
-        setUserProfile(user as UserProfile);
-        setTheme((user.theme as 'light' | 'dark') || 'light');
-        localStorage.setItem('vayu_session', user.phone);
+    const handleLogin = (user: AuthUser) => {
+        setAuthUser(user);
+        const savedTheme = (localStorage.getItem('vayu_theme') as 'light' | 'dark') || 'light';
+        const profile: UserProfile = {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            phone: '',
+            address: '',
+            theme: savedTheme,
+        };
+        setUserProfile(profile);
+        setTheme(savedTheme);
         navigateTo('home');
     };
 
@@ -302,8 +318,9 @@ const App: React.FC = () => {
         }, 2200);
     };
 
-    const handleLogout = () => {
-        localStorage.removeItem('vayu_session');
+    const handleLogout = async () => {
+        await authService.logout();
+        setAuthUser(null);
         setUserProfile(null);
         navigateTo('login');
     };
@@ -493,7 +510,7 @@ const App: React.FC = () => {
     };
 
     return (
-        <Layout currentView={currentView} onNavigate={navigateTo}>
+        <Layout currentView={currentView} onNavigate={navigateTo} userProfile={authUser}>
             {renderView()}
             {selectedArtwork && (
                 <ArtworkDetailView artwork={selectedArtwork} onClose={handleCloseArtwork} onUpdateArtwork={handleUpdateArtwork} onDeleteArtwork={handleDeleteArtwork} />

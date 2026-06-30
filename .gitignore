@@ -4,11 +4,10 @@ node_modules/
 # Build output
 frontend/dist/
 
-# Environment files
-backend/.env.local
-backend/.env
-.env
-.env.local
+# Environment files — never commit secrets
+**/.env
+**/.env.*
+!**/.env.example
 
 # OS files
 .DS_Store

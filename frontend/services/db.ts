@@ -1,5 +1,5 @@
 import { Artwork, Catalog, Collection, Invoice, Inquiry, Conversation, Message, InquiryMessage, UserProfile } from '../types';
-import { MOCK_ARTWORKS, MOCK_CATALOGS, MOCK_COLLECTIONS, MOCK_INVOICES, MOCK_INQUIRIES, MOCK_CONVERSATIONS, MOCK_MESSAGES, MOCK_TEAM_MEMBERS, MOCK_USERS } from '../constants';
+import { MOCK_ARTWORKS, MOCK_CATALOGS, MOCK_COLLECTIONS, MOCK_INVOICES, MOCK_INQUIRIES, MOCK_CONVERSATIONS, MOCK_MESSAGES, MOCK_TEAM_MEMBERS } from '../constants';
 
 const STORAGE_KEYS = {
   users: 'vayu_users',
@@ -12,7 +12,11 @@ const STORAGE_KEYS = {
   messages: 'vayu_messages',
   inquiryMessages: 'vayu_inquiry_messages',
   team: 'vayu_team',
+  seedVersion: 'vayu_seed_version',
 };
+
+// Bump this when mock data changes that needs a re-seed (e.g. conversations updated)
+const SEED_VERSION = 2;
 
 function getArray<T>(key: string): T[] {
   const raw = localStorage.getItem(key);
@@ -32,7 +36,10 @@ function upsertById<T extends { id: string }>(arr: T[], item: T): T[] {
 
 export const db = {
   async init() {
-    if (getArray<Artwork>(STORAGE_KEYS.artworks).length === 0) {
+    const storedVersion = Number(localStorage.getItem(STORAGE_KEYS.seedVersion) ?? 0);
+    const needsSeed = getArray<Artwork>(STORAGE_KEYS.artworks).length === 0 || storedVersion < SEED_VERSION;
+
+    if (needsSeed) {
       setArray(STORAGE_KEYS.artworks, MOCK_ARTWORKS);
       setArray(STORAGE_KEYS.catalogs, MOCK_CATALOGS);
       setArray(STORAGE_KEYS.collections, MOCK_COLLECTIONS);
@@ -41,22 +48,23 @@ export const db = {
       setArray(STORAGE_KEYS.conversations, MOCK_CONVERSATIONS);
       setArray(STORAGE_KEYS.messages, MOCK_MESSAGES);
       setArray(STORAGE_KEYS.team, MOCK_TEAM_MEMBERS);
-    }
-    if (getArray<UserProfile>(STORAGE_KEYS.users).length === 0) {
-      setArray(STORAGE_KEYS.users, MOCK_USERS);
+      localStorage.setItem(STORAGE_KEYS.seedVersion, String(SEED_VERSION));
     }
   },
 
-  // Users (keyed by phone)
+  // Users (local cache — auth truth lives in KV via worker)
   async saveUser(user: UserProfile): Promise<void> {
     const users = getArray<UserProfile>(STORAGE_KEYS.users);
-    const idx = users.findIndex(u => u.phone === user.phone);
+    const idx = users.findIndex(u => u.email === user.email);
     if (idx >= 0) users[idx] = user;
     else users.push(user);
     setArray(STORAGE_KEYS.users, users);
   },
   async getUser(phone: string): Promise<UserProfile | null> {
     return getArray<UserProfile>(STORAGE_KEYS.users).find(u => u.phone === phone) || null;
+  },
+  async getUserByEmail(email: string): Promise<UserProfile | null> {
+    return getArray<UserProfile>(STORAGE_KEYS.users).find(u => u.email?.toLowerCase() === email.toLowerCase()) || null;
   },
 
   // Artworks
