@@ -1,14 +1,9 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "vayu-webapp",
-  "type": "javascript",
   "workers_dev": true,
-  "site": {
-    "bucket": "dist",
-    "entry-point": "."
-  },
   "compatibility_date": "2026-06-24",
-  "build": {
-    "command": "npm run build"
+  "assets": {
+    "directory": "dist"
   }
 }
