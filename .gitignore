@@ -4,6 +4,9 @@ node_modules/
 # Build output
 frontend/dist/
 
+# Wrangler local state (D1/KV/R2 local dev data)
+.wrangler/
+
 # Environment files — never commit secrets
 **/.env
 **/.env.*
