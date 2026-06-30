@@ -12,5 +12,8 @@
     "@types/react-dom": "^19.2.3",
     "concurrently": "latest",
     "wrangler": "^4.104.0"
+  },
+  "dependencies": {
+    "@better-auth/infra": "^0.3.4"
   }
 }
