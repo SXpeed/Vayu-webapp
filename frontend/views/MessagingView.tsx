@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit2, Check, CheckCheck, Pin, Archive, MoreVertical, Paperclip, Reply } from 'lucide-react';
+import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit2, Check, CheckCheck, Pin, Archive, MoreVertical, Paperclip, Reply, Loader2 } from 'lucide-react';
 import { Conversation, ConversationDetails, Message, MessageTag, MessageReplyTo, MessageAttachment, UserProfile } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
+import storageService from '../services/storageService';
 
 interface MessagingViewProps {
     conversations: Conversation[];
@@ -342,6 +343,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
     const [isEditingDetails, setIsEditingDetails] = useState(false);
     const [replyingTo, setReplyingTo] = useState<MessageReplyTo | null>(null);
     const [pendingAttachment, setPendingAttachment] = useState<MessageAttachment | null>(null);
+    const [isUploading, setIsUploading] = useState(false);
     const [showSearch, setShowSearch] = useState(false);
     const [chatSearchQuery, setChatSearchQuery] = useState('');
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -391,20 +393,23 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
         setSelectedTags(newSet);
     };
 
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                if (typeof reader.result === 'string') {
-                    setPendingAttachment({
-                        type: file.type.startsWith('image/') ? 'image' : 'file',
-                        url: reader.result,
-                        name: file.name,
-                    });
-                }
-            };
-            reader.readAsDataURL(file);
+            setIsUploading(true);
+            try {
+                const result = await storageService.upload(file);
+                setPendingAttachment({
+                    type: file.type.startsWith('image/') ? 'image' : 'file',
+                    url: result.url,
+                    name: file.name,
+                });
+            } catch (error) {
+                console.error('Upload failed:', error);
+                alert('Failed to upload file. Please try again.');
+            } finally {
+                setIsUploading(false);
+            }
         }
         e.target.value = '';
     };
@@ -714,9 +719,10 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                     </button>
                     <button
                         onClick={() => fileInputRef.current?.click()}
-                        className="p-2 rounded-full text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors active-scale shrink-0"
+                        disabled={isUploading}
+                        className="p-2 rounded-full text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors active-scale shrink-0 disabled:opacity-60"
                     >
-                        <Paperclip size={18} />
+                        {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
                     </button>
                     <input type="file" accept="image/*,.pdf,.doc,.docx,.txt" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
                     <input

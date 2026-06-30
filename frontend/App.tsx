@@ -13,6 +13,7 @@ import { ArtworkDetailView } from './views/ArtworkDetailView';
 import { InquiryView } from './views/InquiryView';
 import { MessagingView } from './views/MessagingView';
 import { db } from './services/db';
+import storageService from './services/storageService';
 
 const App: React.FC = () => {
     const [currentView, setCurrentView] = useState<ViewState>('login');
@@ -215,6 +216,22 @@ const App: React.FC = () => {
     };
 
     const handleDeleteArtwork = async (id: string) => {
+        // Delete associated R2 images before removing the artwork record
+        const artworkToDelete = artworks.find(a => a.id === id);
+        if (artworkToDelete) {
+            await Promise.all(
+                artworkToDelete.imageUrls.map(async (url) => {
+                    if (url.startsWith('/api/files/')) {
+                        const key = decodeURIComponent(url.slice('/api/files/'.length));
+                        try {
+                            await storageService.delete(key);
+                        } catch (error) {
+                            console.error(`Failed to delete R2 file ${key}:`, error);
+                        }
+                    }
+                })
+            );
+        }
         await db.deleteArtwork(id);
         setArtworks((prev: Artwork[]) => prev.filter((a: Artwork) => a.id !== id));
         if (selectedArtwork?.id === id) {

@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
-import { Plus, X, Search, Image as ImageIcon, Camera, Folder, Trash2 } from 'lucide-react';
+import { Plus, X, Search, Image as ImageIcon, Camera, Folder, Trash2, Loader2 } from 'lucide-react';
 import { Artwork, ArtworkStatus } from '../types';
+import storageService from '../services/storageService';
 
 interface ArtworksViewProps {
     artworks: Artwork[];
@@ -70,8 +71,8 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
                                 <div className="flex justify-between items-start">
                                     <h3 className="font-serif text-gray-900 dark:text-gray-100 line-clamp-1 text-sm">{artwork.title}</h3>
                                     <span className={`text-[8px] px-1.5 py-0.5 rounded-[3px] font-medium uppercase tracking-wider ${artwork.status === 'Available' ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400' :
-                                            artwork.status === 'Sold' ? 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400' :
-                                                'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-400'
+                                        artwork.status === 'Sold' ? 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400' :
+                                            'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-400'
                                         }`}>
                                         {artwork.status}
                                     </span>
@@ -127,6 +128,8 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
     });
     const [showUploadOptions, setShowUploadOptions] = useState(false);
 
+    const [isUploading, setIsUploading] = useState(false);
+
     const cameraInputRef = useRef<HTMLInputElement>(null);
     const galleryInputRef = useRef<HTMLInputElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -144,25 +147,38 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
         setFormData(prev => ({ ...prev, [name]: value }));
     };
 
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                if (typeof reader.result === 'string') {
-                    setFormData(prev => ({
-                        ...prev,
-                        imageUrls: [...prev.imageUrls, reader.result as string]
-                    }));
-                }
-            };
-            reader.readAsDataURL(file);
+            setIsUploading(true);
+            try {
+                const result = await storageService.upload(file);
+                setFormData(prev => ({
+                    ...prev,
+                    imageUrls: [...prev.imageUrls, result.url]
+                }));
+            } catch (error) {
+                console.error('Upload failed:', error);
+                alert('Failed to upload image. Please try again.');
+            } finally {
+                setIsUploading(false);
+            }
         }
         // Reset input value so the same file can be selected again if needed
         e.target.value = '';
     };
 
-    const handleRemoveImage = (indexToRemove: number) => {
+    const handleRemoveImage = async (indexToRemove: number) => {
+        const urlToRemove = formData.imageUrls[indexToRemove];
+        // Only attempt R2 deletion for R2-hosted files (not legacy data URLs)
+        if (urlToRemove && urlToRemove.startsWith('/api/files/')) {
+            const key = decodeURIComponent(urlToRemove.slice('/api/files/'.length));
+            try {
+                await storageService.delete(key);
+            } catch (error) {
+                console.error('Failed to delete from R2:', error);
+            }
+        }
         setFormData(prev => ({
             ...prev,
             imageUrls: prev.imageUrls.filter((_, index) => index !== indexToRemove)
@@ -216,10 +232,20 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
                             <button
                                 type="button"
                                 onClick={() => setShowUploadOptions(true)}
-                                className="w-32 h-32 shrink-0 rounded-[7px] border-2 border-dashed border-gray-300 dark:border-gray-700 flex flex-col items-center justify-center text-gray-400 dark:text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-800 hover:border-gold-400 dark:hover:border-gold-500 transition-colors snap-start active-scale"
+                                disabled={isUploading}
+                                className="w-32 h-32 shrink-0 rounded-[7px] border-2 border-dashed border-gray-300 dark:border-gray-700 flex flex-col items-center justify-center text-gray-400 dark:text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-800 hover:border-gold-400 dark:hover:border-gold-500 transition-colors snap-start active-scale disabled:opacity-60"
                             >
-                                <Plus size={24} className="mb-1" strokeWidth={1.5} />
-                                <span className="text-[10px] font-medium uppercase tracking-wider">Add Photo</span>
+                                {isUploading ? (
+                                    <>
+                                        <Loader2 size={24} className="mb-1 animate-spin" strokeWidth={1.5} />
+                                        <span className="text-[10px] font-medium uppercase tracking-wider">Uploading...</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Plus size={24} className="mb-1" strokeWidth={1.5} />
+                                        <span className="text-[10px] font-medium uppercase tracking-wider">Add Photo</span>
+                                    </>
+                                )}
                             </button>
                         </div>
                     </div>

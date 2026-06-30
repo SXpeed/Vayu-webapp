@@ -263,6 +263,47 @@ export default {
         return json({ success: true });
       }
 
+      // ── POST /upload — upload file to R2 (auth required) ───────────
+      if (path === '/upload' && method === 'POST') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const formData = await request.formData();
+        const file = formData.get('file') as File | string | null;
+        if (!file || typeof file === 'string') return err('No file provided');
+        if (file.size > 100 * 1024 * 1024) return err('File too large (max 100MB)');
+        const ext = file.name.split('.').pop()?.toLowerCase() || '';
+        const key = `uploads/${session.userId}/${Date.now()}-${crypto.randomUUID()}${ext ? '.' + ext : ''}`;
+        await env.VAYU_R2.put(key, file.stream(), {
+          httpMetadata: { contentType: file.type || 'application/octet-stream' },
+        });
+        return json({ key, url: `/api/files/${key}` });
+      }
+
+      // ── GET /files/:key — serve file from R2 (public) ──────────────
+      if (path.startsWith('/files/') && method === 'GET') {
+        const key = decodeURIComponent(path.slice('/files/'.length));
+        if (!key) return err('File not found', 404);
+        const obj = await env.VAYU_R2.get(key);
+        if (!obj) return err('File not found', 404);
+        const headers = new Headers();
+        obj.writeHttpMetadata(headers);
+        headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+        headers.set('Access-Control-Allow-Origin', '*');
+        return new Response(obj.body, { status: 200, headers });
+      }
+
+      // ── DELETE /files/:key — delete file from R2 (auth required) ───
+      if (path.startsWith('/files/') && method === 'DELETE') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const key = decodeURIComponent(path.slice('/files/'.length));
+        if (!key) return err('File not found', 404);
+        const obj = await env.VAYU_R2.head(key);
+        if (!obj) return err('File not found', 404);
+        await env.VAYU_R2.delete(key);
+        return json({ success: true });
+      }
+
       return json({ error: 'Not found' }, 404);
     } catch (e) {
       return json({ error: (e as Error).message }, 500);
