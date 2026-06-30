@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ViewState, Artwork, Catalog, Invoice, Collection, Inquiry, Conversation, ConversationDetails, Message, MessageTag, MessageReplyTo, MessageAttachment, InquiryMessage, UserProfile } from './types';
 import Layout from './components/Layout';
 import { LoginView } from './views/LoginView';
@@ -35,7 +35,14 @@ const App: React.FC = () => {
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
     const [authUser, setAuthUser] = useState<AuthUser | null>(null);
 
-    const loadData = useCallback(async () => {
+    // Ref to access current authUser inside callbacks without adding it as a
+    // dependency. This prevents the infinite loop that occurred when loadData
+    // depended on [authUser] → init effect re-ran → getMe() → setAuthUser → ...
+    const authUserRef = useRef<AuthUser | null>(null);
+
+    // loadData takes isAuthenticated as a parameter instead of reading from
+    // state/closure, so it has NO state dependencies and a stable reference.
+    const loadData = useCallback(async (isAuthenticated: boolean) => {
         const loadedArtworks = await db.getArtworks();
         const loadedCatalogs = await db.getCatalogs();
         const loadedCollections = await db.getCollections();
@@ -51,7 +58,7 @@ const App: React.FC = () => {
         setInquiryMessages(loadedInquiryMessages);
 
         // Load conversations & messages from D1 (cloud) when authenticated
-        if (authUser) {
+        if (isAuthenticated) {
             try {
                 const loadedConversations = await messagingService.getConversations();
                 const loadedMessages = await messagingService.getMessages();
@@ -66,7 +73,7 @@ const App: React.FC = () => {
             setConversations(await db.getConversations());
             setAllMessages(await db.getMessages());
         }
-    }, [authUser]);
+    }, []);
 
     // Load team members from the auth service (Worker/KV) and map to UserProfile
     const loadTeamMembers = useCallback(async () => {
@@ -87,7 +94,7 @@ const App: React.FC = () => {
         }
     }, []);
 
-    // Initialize DB and load data
+    // Initialize DB and load data — runs ONCE on mount (empty deps)
     useEffect(() => {
         const initApp = async () => {
             try {
@@ -96,6 +103,7 @@ const App: React.FC = () => {
                 // Check for existing auth token
                 const me = await authService.getMe();
                 if (me) {
+                    authUserRef.current = me;
                     setAuthUser(me);
                     const savedTheme = (localStorage.getItem('vayu_theme') as 'light' | 'dark') || 'light';
                     const profile: UserProfile = {
@@ -110,20 +118,26 @@ const App: React.FC = () => {
                     setTheme(savedTheme);
                     setCurrentView('home');
                     window.history.pushState({ view: 'home' }, '');
+
+                    // Authenticated — load data from D1
+                    await loadData(true);
+                    await loadTeamMembers();
                 } else {
                     window.history.pushState({ view: 'login' }, '');
+                    // Not authenticated — load local data only
+                    await loadData(false);
                 }
-
-                await loadData();
-                await loadTeamMembers();
             } catch (err) {
                 console.error('App initialization error:', err);
+                // On error, still load local data so the app is usable
+                await loadData(false);
             } finally {
                 setIsLoading(false);
             }
         };
         initApp();
-    }, [loadData, loadTeamMembers]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // Handle Browser/Phone Back Button
     useEffect(() => {
@@ -161,15 +175,16 @@ const App: React.FC = () => {
         channel.onmessage = (event) => {
             if (event.data.type === 'SYNC_REQUIRED') {
                 console.log('Cloud sync triggered, reloading data...');
-                loadData();
+                loadData(!!authUserRef.current);
                 loadTeamMembers();
             }
         };
         return () => channel.close();
     }, [loadData, loadTeamMembers]);
 
-    // ── Polling: fetch conversations & messages from D1 every 5 seconds ──
+    // ── Polling: fetch conversations & messages from D1 every 15 seconds ──
     // This enables near-real-time messaging across devices/browsers.
+    // Uses authUserRef to avoid re-creating the interval on every authUser change.
     useEffect(() => {
         if (!authUser) return;
         let cancelled = false;
@@ -189,7 +204,7 @@ const App: React.FC = () => {
         };
 
         poll(); // Initial fetch
-        const interval = setInterval(poll, 5000);
+        const interval = setInterval(poll, 15000);
         return () => {
             cancelled = true;
             clearInterval(interval);
@@ -206,7 +221,8 @@ const App: React.FC = () => {
     }, [theme]);
 
     // Handlers
-    const handleLogin = (user: AuthUser) => {
+    const handleLogin = async (user: AuthUser) => {
+        authUserRef.current = user;
         setAuthUser(user);
         const savedTheme = (localStorage.getItem('vayu_theme') as 'light' | 'dark') || 'light';
         const profile: UserProfile = {
@@ -220,8 +236,9 @@ const App: React.FC = () => {
         setUserProfile(profile);
         setTheme(savedTheme);
         navigateTo('home');
-        // Load team members after login
-        loadTeamMembers();
+        // Load team members and cloud messaging data after login
+        await loadTeamMembers();
+        await loadData(true);
     };
 
     const handleUpdateProfile = async (updatedProfile: UserProfile) => {
@@ -400,6 +417,7 @@ const App: React.FC = () => {
 
     const handleLogout = async () => {
         await authService.logout();
+        authUserRef.current = null;
         setAuthUser(null);
         setUserProfile(null);
         navigateTo('login');

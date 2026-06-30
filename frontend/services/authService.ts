@@ -19,6 +19,7 @@ function authHeaders(): Record<string, string> {
   return base;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function call<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...options,
@@ -71,8 +72,14 @@ export const authService = {
     if (!getToken()) return null;
     try {
       return await call<AuthUser>('/auth/me');
-    } catch {
-      localStorage.removeItem(TOKEN_KEY);
+    } catch (err) {
+      // Only remove the token on a genuine 401 Unauthorized (invalid/expired
+      // session). Transient errors (network, 500, etc.) should NOT log the
+      // user out — they may just be a momentary blip on hard refresh.
+      const msg = (err as Error).message || '';
+      if (msg.includes('Unauthorized')) {
+        localStorage.removeItem(TOKEN_KEY);
+      }
       return null;
     }
   },
