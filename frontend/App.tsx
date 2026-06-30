@@ -261,6 +261,41 @@ const App: React.FC = () => {
         };
     }, [authUser]);
 
+    // ── Polling: fetch collections, catalogs & inquiries from D1 every 15s ──
+    // This enables cross-device sync for these entities (no real-time needed,
+    // but polling ensures new items created on other devices appear quickly).
+    useEffect(() => {
+        if (!authUser) return;
+        let cancelled = false;
+
+        const pollEntities = async () => {
+            if (cancelled) return;
+            try {
+                const [remoteArtworks, remoteCollections, remoteCatalogs, remoteInquiries] = await Promise.all([
+                    artworkService.getArtworks(),
+                    collectionService.getCollections(),
+                    catalogService.getCatalogs(),
+                    inquiryService.getInquiries(),
+                ]);
+                if (!cancelled) {
+                    setArtworks(remoteArtworks);
+                    setCollections(remoteCollections);
+                    setCatalogs(remoteCatalogs);
+                    setInquiries(remoteInquiries);
+                }
+            } catch (err) {
+                // Silent fail — will retry next poll cycle
+            }
+        };
+
+        pollEntities(); // Initial fetch
+        const interval = setInterval(pollEntities, 15000);
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, [authUser]);
+
     // Apply Theme
     useEffect(() => {
         if (theme === 'dark') {
