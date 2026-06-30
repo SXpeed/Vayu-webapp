@@ -3,7 +3,20 @@
   "name": "vayu-webapp",
   "workers_dev": true,
   "compatibility_date": "2026-06-24",
+  "main": "worker.ts",
   "assets": {
     "directory": "dist"
-  }
+  },
+  "kv_namespaces": [
+    {
+      "binding": "VAYU_KV",
+      "id": "<KV_NAMESPACE_ID_PLACEHOLDER>"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "VAYU_R2",
+      "bucket_name": "vayu-r2-bucket"
+    }
+  ]
 }
