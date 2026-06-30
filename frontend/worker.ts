@@ -1,49 +1,55 @@
-// worker.ts - Cloudflare Worker handling API routes with KV and R2
-
-// Bindings are defined in wrangler.json as VAYU_KV (KV) and VAYU_R2 (R2 bucket)
-
 interface Env {
   VAYU_KV: KVNamespace;
   VAYU_R2: R2Bucket;
 }
 
-// Utility to parse JSON body
-async function parseJson(request: Request) {
-  const contentType = request.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    return request.json();
-  }
-  return null;
-}
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
 
-// Helper to respond with JSON
-function jsonResponse(data: any, init?: ResponseInit) {
-  return new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' }, ...init });
+function jsonResponse(data: unknown, init?: ResponseInit): Response {
+  return new Response(JSON.stringify(data), {
+    ...init,
+    headers: { 'Content-Type': 'application/json', ...CORS_HEADERS, ...(init?.headers ?? {}) },
+  });
 }
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+
     const url = new URL(request.url);
-    const pathname = url.pathname;
+    const path = url.pathname.replace(/^\/api/, '');
     const method = request.method;
-    const path = pathname.replace(/^\/api/, '');
+
     try {
+      // POST /api/users — create or update a user (keyed by phone)
       if (path === '/users' && method === 'POST') {
-        const user = await parseJson(request);
-        if (!user) return new Response('Invalid JSON', { status: 400 });
-        const key = `user:${user.phone}`;
-        await env.VAYU_KV.put(key, JSON.stringify(user));
+        const body = await request.json().catch(() => null) as { phone?: string } | null;
+        if (!body || !body.phone) {
+          return jsonResponse({ error: 'Missing required field: phone' }, { status: 400 });
+        }
+        await env.VAYU_KV.put(`user:${body.phone}`, JSON.stringify(body));
         return jsonResponse({ success: true });
       }
+
+      // GET /api/users/:phone — fetch a user by phone
       if (path.startsWith('/users/') && method === 'GET') {
-        const phone = decodeURIComponent(path.split('/')[2]);
+        const phone = decodeURIComponent(path.slice('/users/'.length));
+        if (!phone) return jsonResponse({ error: 'Missing phone' }, { status: 400 });
         const value = await env.VAYU_KV.get(`user:${phone}`);
-        return value ? jsonResponse(JSON.parse(value)) : new Response('Not found', { status: 404 });
+        return value
+          ? jsonResponse(JSON.parse(value))
+          : jsonResponse({ error: 'Not found' }, { status: 404 });
       }
-      // Additional handlers for other entities omitted for brevity
-      return new Response('Not found', { status: 404 });
+
+      return jsonResponse({ error: 'Not found' }, { status: 404 });
     } catch (err) {
-      return new Response('Server error: ' + (err as any).message, { status: 500 });
+      return jsonResponse({ error: (err as Error).message }, { status: 500 });
     }
   },
 };

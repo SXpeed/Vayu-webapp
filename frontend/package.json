@@ -17,6 +17,7 @@
     "react-dom": "latest"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260630.1",
     "@tailwindcss/vite": "^4.3.1",
     "@types/node": "latest",
     "@vitejs/plugin-react": "latest",
@@ -24,6 +25,7 @@
     "postcss": "^8.5.15",
     "tailwindcss": "^4.3.1",
     "typescript": "latest",
-    "vite": "latest"
+    "vite": "latest",
+    "wrangler": "^4.105.0"
   }
 }
