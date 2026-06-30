@@ -14,6 +14,7 @@ import { InquiryView } from './views/InquiryView';
 import { MessagingView } from './views/MessagingView';
 import { db } from './services/db';
 import { messagingService } from './services/messagingService';
+import { artworkService } from './services/artworkService';
 import storageService from './services/storageService';
 
 const App: React.FC = () => {
@@ -43,33 +44,39 @@ const App: React.FC = () => {
     // loadData takes isAuthenticated as a parameter instead of reading from
     // state/closure, so it has NO state dependencies and a stable reference.
     const loadData = useCallback(async (isAuthenticated: boolean) => {
-        const loadedArtworks = await db.getArtworks();
         const loadedCatalogs = await db.getCatalogs();
         const loadedCollections = await db.getCollections();
         const loadedInvoices = await db.getInvoices();
         const loadedInquiries = await db.getInquiries();
         const loadedInquiryMessages = await db.getInquiryMessages();
 
-        setArtworks(loadedArtworks);
         setCatalogs(loadedCatalogs);
         setCollections(loadedCollections);
         setInvoices(loadedInvoices);
         setInquiries(loadedInquiries);
         setInquiryMessages(loadedInquiryMessages);
 
-        // Load conversations & messages from D1 (cloud) when authenticated
+        // Load artworks, conversations & messages from D1 (cloud) when authenticated
         if (isAuthenticated) {
             try {
-                const loadedConversations = await messagingService.getConversations();
-                const loadedMessages = await messagingService.getMessages();
+                const [loadedArtworks, loadedConversations, loadedMessages] = await Promise.all([
+                    artworkService.getArtworks(),
+                    messagingService.getConversations(),
+                    messagingService.getMessages(),
+                ]);
+                setArtworks(loadedArtworks);
                 setConversations(loadedConversations);
                 setAllMessages(loadedMessages);
+                // Cache artworks locally for offline fallback
+                for (const art of loadedArtworks) await db.saveArtwork(art);
             } catch (err) {
-                console.error('Failed to load messaging data from D1:', err);
+                console.error('Failed to load cloud data from D1:', err);
+                setArtworks(await db.getArtworks());
                 setConversations(await db.getConversations());
                 setAllMessages(await db.getMessages());
             }
         } else {
+            setArtworks(await db.getArtworks());
             setConversations(await db.getConversations());
             setAllMessages(await db.getMessages());
         }
@@ -262,11 +269,15 @@ const App: React.FC = () => {
             id: `art_${Date.now()}`,
             createdAt: Date.now(),
         };
+        // Save to D1 (cloud) and cache locally
+        try { await artworkService.saveArtwork(artwork); } catch (e) { console.error('D1 sync failed (add artwork):', e); }
         await db.saveArtwork(artwork);
         setArtworks((prev: Artwork[]) => [artwork, ...prev]);
     };
 
     const handleUpdateArtwork = async (updatedArt: Artwork) => {
+        // Sync to D1 (cloud) and update local cache
+        try { await artworkService.updateArtwork(updatedArt); } catch (e) { console.error('D1 sync failed (update artwork):', e); }
         await db.saveArtwork(updatedArt);
         setArtworks((prev: Artwork[]) => prev.map((a: Artwork) => a.id === updatedArt.id ? updatedArt : a));
         if (selectedArtwork?.id === updatedArt.id) {
@@ -275,22 +286,8 @@ const App: React.FC = () => {
     };
 
     const handleDeleteArtwork = async (id: string) => {
-        // Delete associated R2 images before removing the artwork record
-        const artworkToDelete = artworks.find(a => a.id === id);
-        if (artworkToDelete) {
-            await Promise.all(
-                artworkToDelete.imageUrls.map(async (url) => {
-                    if (url.startsWith('/api/files/')) {
-                        const key = decodeURIComponent(url.slice('/api/files/'.length));
-                        try {
-                            await storageService.delete(key);
-                        } catch (error) {
-                            console.error(`Failed to delete R2 file ${key}:`, error);
-                        }
-                    }
-                })
-            );
-        }
+        // Delete from D1 (worker also cleans up associated R2 images)
+        try { await artworkService.deleteArtwork(id); } catch (e) { console.error('D1 sync failed (delete artwork):', e); }
         await db.deleteArtwork(id);
         setArtworks((prev: Artwork[]) => prev.filter((a: Artwork) => a.id !== id));
         if (selectedArtwork?.id === id) {
@@ -348,10 +345,11 @@ const App: React.FC = () => {
 
         const invoicedArtIds = new Set(invoice.items.map(item => item.artworkId));
 
-        // Update artwork status in DB and state
+        // Update artwork status in D1, local DB, and state
         const updatedArtworks = artworks.map(art => {
             if (invoicedArtIds.has(art.id)) {
                 const updatedArt = { ...art, status: 'Sold' as const };
+                artworkService.updateArtwork(updatedArt).catch(e => console.error('D1 sync failed (invoice artwork status):', e));
                 db.saveArtwork(updatedArt); // Fire and forget
                 return updatedArt;
             }

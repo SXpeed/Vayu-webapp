@@ -34,3 +34,24 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_conversations_participants ON conversations(participant_ids);
+
+-- ── Artworks table ───────────────────────────────────────────────────────
+-- Stores product/artwork metadata. Images are stored in R2 and referenced
+-- by URL in the image_urls JSON array.
+
+CREATE TABLE IF NOT EXISTS artworks (
+  id TEXT PRIMARY KEY,
+  custom_id TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT '',
+  description TEXT DEFAULT '',
+  dimensions TEXT DEFAULT '',
+  medium TEXT DEFAULT '',
+  status TEXT DEFAULT 'Available',   -- Available | Sold | Reserved
+  location TEXT DEFAULT '',
+  price REAL DEFAULT 0,
+  image_urls TEXT DEFAULT '[]',       -- JSON array of R2 URLs
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_artworks_created ON artworks(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_artworks_status ON artworks(status);

@@ -148,6 +148,24 @@ function rowToMessage(row: Record<string, unknown>): any {
   };
 }
 
+// ── D1 row → Artwork mapper ────────────────────────────────────────────────
+
+function rowToArtwork(row: Record<string, unknown>): any {
+  return {
+    id: row.id as string,
+    customId: row.custom_id as string,
+    title: row.title as string,
+    description: row.description as string,
+    dimensions: row.dimensions as string,
+    medium: row.medium as string,
+    status: row.status as string,
+    location: row.location as string,
+    price: row.price as number,
+    imageUrls: JSON.parse(row.image_urls as string),
+    createdAt: row.created_at as number,
+  };
+}
+
 // ── Main handler ───────────────────────────────────────────────────────────
 
 export default {
@@ -516,6 +534,99 @@ export default {
             'UPDATE messages SET status = ? WHERE id = ?'
           ).bind(status, id).run();
         }
+        return json({ success: true });
+      }
+
+      // ════════════════════════════════════════════════════════════════════
+      // ── ARTWORK ENDPOINTS (D1-backed) ─────────────────────────────────
+      // ════════════════════════════════════════════════════════════════════
+
+      // ── GET /artworks — list all artworks ────────────────────────────
+      if (path === '/artworks' && method === 'GET') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const results = await env.VAYU_DB.prepare(
+          'SELECT * FROM artworks ORDER BY created_at DESC'
+        ).all();
+        const artworks = (results.results || []).map(rowToArtwork);
+        return json(artworks);
+      }
+
+      // ── POST /artworks — create or upsert an artwork ─────────────────
+      if (path === '/artworks' && method === 'POST') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const body = await request.json();
+        const art = body as any;
+        if (!art.id) return err('id is required');
+        await env.VAYU_DB.prepare(
+          `INSERT OR REPLACE INTO artworks
+           (id, custom_id, title, description, dimensions, medium, status,
+            location, price, image_urls, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          art.id,
+          art.customId || '',
+          art.title || '',
+          art.description || '',
+          art.dimensions || '',
+          art.medium || '',
+          art.status || 'Available',
+          art.location || '',
+          art.price || 0,
+          JSON.stringify(art.imageUrls || []),
+          art.createdAt || Date.now()
+        ).run();
+        return json(art, 201);
+      }
+
+      // ── PUT /artworks/:id — update an artwork ────────────────────────
+      if (path.startsWith('/artworks/') && method === 'PUT') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const body = await request.json();
+        const art = body as any;
+        await env.VAYU_DB.prepare(
+          `UPDATE artworks SET
+             custom_id = ?, title = ?, description = ?, dimensions = ?,
+             medium = ?, status = ?, location = ?, price = ?, image_urls = ?
+           WHERE id = ?`
+        ).bind(
+          art.customId || '',
+          art.title || '',
+          art.description || '',
+          art.dimensions || '',
+          art.medium || '',
+          art.status || 'Available',
+          art.location || '',
+          art.price || 0,
+          JSON.stringify(art.imageUrls || []),
+          path.slice('/artworks/'.length)
+        ).run();
+        return json(art);
+      }
+
+      // ── DELETE /artworks/:id — delete an artwork ─────────────────────
+      if (path.startsWith('/artworks/') && method === 'DELETE') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const artId = path.slice('/artworks/'.length);
+
+        // Fetch the artwork to get its image URLs for R2 cleanup
+        const result = await env.VAYU_DB.prepare(
+          'SELECT image_urls FROM artworks WHERE id = ?'
+        ).bind(artId).first();
+        if (result) {
+          const imageUrls: string[] = JSON.parse(result.image_urls as string);
+          for (const imgUrl of imageUrls) {
+            if (imgUrl.startsWith('/api/files/')) {
+              const key = decodeURIComponent(imgUrl.slice('/api/files/'.length));
+              try { await env.VAYU_R2.delete(key); } catch { }
+            }
+          }
+        }
+
+        await env.VAYU_DB.prepare('DELETE FROM artworks WHERE id = ?').bind(artId).run();
         return json({ success: true });
       }
 
