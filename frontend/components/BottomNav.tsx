@@ -18,7 +18,10 @@ export const BottomNav: React.FC<BottomNavProps> = ({ currentView, onChangeView 
     ];
 
     return (
-        <div className="absolute bottom-0 w-full bg-white dark:bg-[#1a1a1a] border-t border-gray-200 dark:border-gray-800 pb-safe z-40 transition-colors duration-300">
+        <div
+            className="absolute bottom-0 w-full bg-white dark:bg-[#1a1a1a] border-t border-gray-200 dark:border-gray-800 z-40 transition-colors duration-300"
+            style={{ paddingBottom: 'max(0px, env(safe-area-inset-bottom))' }}
+        >
             <div className="flex justify-around items-center h-16">
                 {navItems.map((item) => {
                     const Icon = item.icon;

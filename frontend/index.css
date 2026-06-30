@@ -2,6 +2,18 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+.full-height {
+  height: 100dvh;
+}
+
+@utility pt-safe {
+    padding-top: env(safe-area-inset-top);
+}
+
+@utility pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+}
+
 @theme {
     --font-sans: 'Inter', sans-serif;
     --font-serif: 'Playfair Display', serif;

@@ -2,10 +2,13 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="theme-color" content="#1a1a1a">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Vayu Design">
+    <meta name="format-detection" content="telephone=no">
+    <meta name="mobile-web-app-capable" content="yes">
     <title>Vayu Design for living</title>
     
     <!-- PWA Manifest -->
@@ -27,14 +30,67 @@
             -ms-overflow-style: none;  /* IE and Edge */
             scrollbar-width: none;  /* Firefox */
         }
+
+        /* ===== iOS / iPhone Optimizations ===== */
+
+        html {
+            /* Prevent overscroll bounce on iOS */
+            overscroll-behavior: none;
+            /* Smooth momentum scrolling */
+            -webkit-overflow-scrolling: touch;
+        }
+
         body {
             background-color: #e5e7eb; /* gray-200 */
             margin: 0;
             font-family: 'Inter', sans-serif;
             -webkit-tap-highlight-color: transparent;
+            /* Prevent text selection on long-press (iOS) */
+            -webkit-user-select: none;
+            user-select: none;
+            /* Prevent iOS callout on long-press */
+            -webkit-touch-callout: none;
+            /* Prevent pull-to-refresh */
+            overscroll-behavior-y: contain;
         }
+
+        /* Allow text selection in inputs/textareas */
+        input, textarea, [contenteditable] {
+            -webkit-user-select: text;
+            user-select: text;
+        }
+
+        /* Prevent iOS zoom on input focus (font-size must be >= 16px) */
+        input, select, textarea {
+            font-size: 16px !important;
+        }
+        input[type="text"],
+        input[type="email"],
+        input[type="tel"],
+        input[type="number"],
+        input[type="search"],
+        input[type="password"],
+        textarea,
+        select {
+            font-size: 16px !important;
+        }
+
         .dark body {
             background-color: #000000;
+        }
+
+        /* 
+         * Safe area: When running as standalone PWA on iPhone with notch/Dynamic Island,
+         * add extra top padding to all headers that use pt-8 to account for the notch.
+         * This is applied via CSS so no component changes are needed.
+         */
+        @supports (padding-top: env(safe-area-inset-top)) {
+            @media all and (display-mode: standalone), all and (display-mode: fullscreen) {
+                /* Boost header padding for safe area on iPhone */
+                .pt-8 {
+                    padding-top: calc(2rem + env(safe-area-inset-top)) !important;
+                }
+            }
         }
 
         /* Custom Animations */
@@ -90,6 +146,47 @@
                         });
                 });
             });
+        }
+
+        // Fullscreen API fallback for PWA launched from home screen
+        function isStandalone() {
+            return window.matchMedia('(display-mode: standalone)').matches
+                || window.matchMedia('(display-mode: fullscreen)').matches
+                || window.navigator.standalone === true;
+        }
+
+        function requestFullscreen() {
+            const el = document.documentElement;
+            const rfs = el.requestFullscreen
+                || el.webkitRequestFullscreen
+                || el.mozRequestFullScreen
+                || el.msRequestFullscreen;
+            if (rfs) {
+                rfs.call(el).catch(() => {});
+            }
+        }
+
+        if (isStandalone()) {
+            // Request fullscreen on first user interaction
+            document.addEventListener('click', function onFirstTouch() {
+                requestFullscreen();
+                document.removeEventListener('click', onFirstTouch);
+            }, { once: true });
+
+            // Re-enter fullscreen if user exits it
+            document.addEventListener('fullscreenchange', () => {
+                if (!document.fullscreenElement && isStandalone()) {
+                    document.addEventListener('click', function onTouch() {
+                        requestFullscreen();
+                        document.removeEventListener('click', onTouch);
+                    }, { once: true });
+                }
+            });
+
+            // Lock orientation to portrait if supported
+            if (screen.orientation && screen.orientation.lock) {
+                screen.orientation.lock('portrait').catch(() => {});
+            }
         }
 </script>
 </body>

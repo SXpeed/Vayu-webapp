@@ -19,7 +19,16 @@ interface PdfOptions {
     showPrice: boolean;
 }
 
-const getBase64ImageWithGradient = (url: string, radiusPx: number = 0): Promise<{ dataUrl: string, width: number, height: number, gradientDataUrl: string }> => {
+type CatalogTheme = 1 | 2 | 3 | 4;
+
+const THEME_INFO: { id: CatalogTheme; name: string; desc: string; bg: string; fg: string; accent: string }[] = [
+    { id: 1, name: 'Classic', desc: 'White & gradient', bg: '#ffffff', fg: '#1a1a1a', accent: '#e0e0e0' },
+    { id: 2, name: 'Grey & Gold', desc: 'Luxury feel', bg: '#3a3a3a', fg: '#C9A84C', accent: '#C9A84C' },
+    { id: 3, name: 'Edge Gradient', desc: 'Full-page gradient', bg: '#2c3e50', fg: '#ffffff', accent: '#8e44ad' },
+    { id: 4, name: 'Dark & Gold', desc: 'Premium dark', bg: '#2a2a2a', fg: '#C9A84C', accent: '#C9A84C' },
+];
+
+const getBase64ImageWithGradient = (url: string, radiusPx: number = 0): Promise<{ dataUrl: string, width: number, height: number, gradientDataUrl: string, fullPageGradientDataUrl: string, edgeR: number, edgeG: number, edgeB: number }> => {
     return new Promise((resolve, reject) => {
         const img = new Image();
         img.crossOrigin = 'Anonymous';
@@ -60,32 +69,45 @@ const getBase64ImageWithGradient = (url: string, radiusPx: number = 0): Promise<
                 }
             }
 
-            // 2. Create Gradient Canvas (A4 proportion)
+            // 2. Create Radial Gradient Canvas (Theme 1 - Classic)
             const gradCanvas = document.createElement('canvas');
             gradCanvas.width = 840;
             gradCanvas.height = 1188;
             const gradCtx = gradCanvas.getContext('2d');
             if (gradCtx) {
-                // Fill with white first
                 gradCtx.fillStyle = '#ffffff';
                 gradCtx.fillRect(0, 0, 840, 1188);
-
-                // Draw radial gradient from border color to white
                 const gradient = gradCtx.createRadialGradient(420, 594, 50, 420, 594, 700);
-                gradient.addColorStop(0, `rgba(${r},${g},${b},0.35)`); // Soft border color
-                gradient.addColorStop(1, `rgba(255,255,255,1)`); // Fade to white
+                gradient.addColorStop(0, `rgba(${r},${g},${b},0.35)`);
+                gradient.addColorStop(1, `rgba(255,255,255,1)`);
                 gradCtx.fillStyle = gradient;
                 gradCtx.fillRect(0, 0, 840, 1188);
             }
 
-            // 3. Process original image (rounded corners)
+            // 3. Create Full-Page Linear Gradient Canvas (Theme 3 - Edge Gradient)
+            const fullGradCanvas = document.createElement('canvas');
+            fullGradCanvas.width = 840;
+            fullGradCanvas.height = 1188;
+            const fullGradCtx = fullGradCanvas.getContext('2d');
+            if (fullGradCtx) {
+                const darkerR = Math.max(0, Math.floor(r * 0.3));
+                const darkerG = Math.max(0, Math.floor(g * 0.3));
+                const darkerB = Math.max(0, Math.floor(b * 0.3));
+                const fullGrad = fullGradCtx.createLinearGradient(0, 0, 0, 1188);
+                fullGrad.addColorStop(0, `rgb(${r},${g},${b})`);
+                fullGrad.addColorStop(0.5, `rgb(${Math.floor((r + darkerR) / 2)},${Math.floor((g + darkerG) / 2)},${Math.floor((b + darkerB) / 2)})`);
+                fullGrad.addColorStop(1, `rgb(${darkerR},${darkerG},${darkerB})`);
+                fullGradCtx.fillStyle = fullGrad;
+                fullGradCtx.fillRect(0, 0, 840, 1188);
+            }
+
+            // 4. Process original image (rounded corners)
             const canvas = document.createElement('canvas');
             canvas.width = img.width;
             canvas.height = img.height;
             const ctx = canvas.getContext('2d');
             if (ctx) {
                 if (radiusPx > 0) {
-                    // Calculate proportional radius based on image size to simulate 5px on PDF
                     const rad = Math.max(img.width, img.height) * 0.02;
                     ctx.beginPath();
                     ctx.moveTo(rad, 0);
@@ -105,7 +127,9 @@ const getBase64ImageWithGradient = (url: string, radiusPx: number = 0): Promise<
                     dataUrl: canvas.toDataURL('image/png'),
                     width: img.width,
                     height: img.height,
-                    gradientDataUrl: gradCanvas.toDataURL('image/jpeg', 0.8)
+                    gradientDataUrl: gradCanvas.toDataURL('image/jpeg', 0.8),
+                    fullPageGradientDataUrl: fullGradCanvas.toDataURL('image/jpeg', 0.8),
+                    edgeR: r, edgeG: g, edgeB: b
                 });
             } else {
                 reject(new Error('Failed to get canvas context'));
@@ -124,6 +148,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
 
     const [showPdfOptions, setShowPdfOptions] = useState(false);
     const [catalogToDownload, setCatalogToDownload] = useState<Catalog | null>(null);
+    const [selectedTheme, setSelectedTheme] = useState<CatalogTheme>(1);
     const [pdfOptions, setPdfOptions] = useState<PdfOptions>({
         showCatalogName: true,
         showTitle: true,
@@ -155,6 +180,9 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                 return;
             }
 
+            // Gold color RGB for themes 2 & 4
+            const goldR = 201, goldG = 168, goldB = 76; // #C9A84C
+
             for (let i = 0; i < catalogArtworks.length; i++) {
                 const art = catalogArtworks[i];
                 if (i > 0) doc.addPage();
@@ -162,22 +190,136 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                 let imgInfo = null;
                 if (art.imageUrls && art.imageUrls.length > 0) {
                     try {
-                        // Pass radius = 20 (px equivalent for canvas)
-                        imgInfo = await getBase64ImageWithGradient(art.imageUrls[0], 20);
-
-                        // Draw the gradient background covering the entire A4 page
-                        doc.addImage(imgInfo.gradientDataUrl, 'JPEG', 0, 0, 210, 297);
+                        imgInfo = await getBase64ImageWithGradient(art.imageUrls[0], selectedTheme === 1 ? 0 : 20);
                     } catch (e) {
                         console.error("Failed to load image for PDF", e);
                     }
                 }
 
-                // Top 12% (0 - 35.64mm)
+                // ====================================================================
+                // THEME 1: Editorial Catalog Layout (matching reference design)
+                // ====================================================================
+                if (selectedTheme === 1) {
+                    const pageW = 210;
+                    const pageH = 297;
+                    const marginL = 15;
+                    const marginR = 15;
+                    const contentW = pageW - marginL - marginR;
+
+                    // -- Background: light grey gradient (top to bottom)
+                    const bgCanvas = document.createElement('canvas');
+                    bgCanvas.width = 840;
+                    bgCanvas.height = 1188;
+                    const bgCtx = bgCanvas.getContext('2d');
+                    if (bgCtx) {
+                        const bgGrad = bgCtx.createLinearGradient(0, 0, 0, 1188);
+                        bgGrad.addColorStop(0, '#f2f2f2');
+                        bgGrad.addColorStop(1, '#d9d9d9');
+                        bgCtx.fillStyle = bgGrad;
+                        bgCtx.fillRect(0, 0, 840, 1188);
+                    }
+                    doc.addImage(bgCanvas.toDataURL('image/jpeg', 0.9), 'JPEG', 0, 0, pageW, pageH);
+
+                    // -- Image section (top ~70% of page, large and centered)
+                    let cursorY = 15;
+                    const imgAreaMaxH = 195; // ~66% of 297mm
+
+                    if (imgInfo) {
+                        let imgW = imgInfo.width;
+                        let imgH = imgInfo.height;
+                        const ratio = Math.min(contentW / imgW, imgAreaMaxH / imgH);
+                        imgW = imgW * ratio;
+                        imgH = imgH * ratio;
+                        const imgX = marginL + (contentW - imgW) / 2;
+                        const imgY = cursorY + (imgAreaMaxH - imgH) / 2; // Center vertically
+                        doc.addImage(imgInfo.dataUrl, 'PNG', imgX, imgY, imgW, imgH);
+                        cursorY = cursorY + imgAreaMaxH + 10;
+                    } else {
+                        cursorY = 160;
+                    }
+
+                    // -- Artwork title (large, left-aligned, directly below image)
+                    if (pdfOptions.showTitle) {
+                        doc.setFont("times", "normal");
+                        doc.setFontSize(26);
+                        doc.setTextColor(30, 30, 30);
+                        const titleLines = doc.splitTextToSize(art.title, contentW);
+                        doc.text(titleLines, marginL, cursorY);
+                        cursorY += (titleLines.length * 10) + 6;
+                    }
+
+                    // -- Detail fields: thin line above, then bold label + value
+                    const addDetailField = (label: string, value: string) => {
+                        // Thin separator line above each field
+                        doc.setDrawColor(180, 180, 180);
+                        doc.setLineWidth(0.2);
+                        doc.line(marginL, cursorY, marginL + contentW * 0.45, cursorY);
+                        cursorY += 5;
+
+                        // Bold label
+                        doc.setFont("helvetica", "bold");
+                        doc.setFontSize(7);
+                        doc.setTextColor(40, 40, 40);
+                        doc.text(label.toUpperCase(), marginL, cursorY, { charSpace: 0.8 });
+                        cursorY += 4;
+
+                        // Value
+                        doc.setFont("helvetica", "normal");
+                        doc.setFontSize(9.5);
+                        doc.setTextColor(70, 70, 70);
+                        const lines = doc.splitTextToSize(value, contentW * 0.5);
+                        doc.text(lines, marginL, cursorY);
+                        cursorY += (lines.length * 4.2) + 4;
+                    };
+
+                    // Medium
+                    if (art.medium) {
+                        addDetailField('Material', art.medium);
+                    }
+
+                    // Dimensions
+                    if (pdfOptions.showDimensions && art.dimensions) {
+                        addDetailField('Dimensions', art.dimensions);
+                    }
+
+                    // Price
+                    if (pdfOptions.showPrice) {
+                        addDetailField('Price', `\u20B9${art.price.toLocaleString('en-IN')}`);
+                    }
+
+                    continue; // Skip the shared rendering below
+                }
+
+                // ====================================================================
+                // THEMES 2, 3, 4: Centered layout
+                // ====================================================================
+
+                // -- Background
+                if (selectedTheme === 2) {
+                    doc.setFillColor(58, 58, 58); // #3a3a3a
+                    doc.rect(0, 0, 210, 297, 'F');
+                } else if (selectedTheme === 3 && imgInfo) {
+                    doc.addImage(imgInfo.fullPageGradientDataUrl, 'JPEG', 0, 0, 210, 297);
+                } else if (selectedTheme === 4) {
+                    doc.setFillColor(42, 42, 42); // #2a2a2a
+                    doc.rect(0, 0, 210, 297, 'F');
+                }
+
+                // -- Text color helper
+                const setThemeTextColor = () => {
+                    if (selectedTheme === 2 || selectedTheme === 4) {
+                        doc.setTextColor(goldR, goldG, goldB);
+                    } else if (selectedTheme === 3) {
+                        doc.setTextColor(255, 255, 255);
+                    }
+                };
+
+                // -- Top: Catalog Name & Title (centered)
                 let topY = 20;
                 if (pdfOptions.showCatalogName) {
                     doc.setFont("helvetica", "bold");
                     doc.setFontSize(16);
-                    doc.setTextColor(0, 0, 0); // Black
+                    setThemeTextColor();
                     doc.text(catalogToDownload.name.toUpperCase(), 105, topY, { align: "center" });
                     topY += 10;
                 }
@@ -185,14 +327,14 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                 if (pdfOptions.showTitle) {
                     doc.setFont("helvetica", "normal");
                     doc.setFontSize(20);
-                    doc.setTextColor(0, 0, 0); // Black
+                    setThemeTextColor();
                     doc.text(art.title, 105, topY, { align: "center" });
                 }
 
-                // Middle 76% (35.64mm - 261.36mm)
+                // -- Middle: Image (centered)
                 if (imgInfo) {
-                    const maxWidth = 170;
-                    const maxHeight = 210;
+                    const maxWidth = selectedTheme === 4 ? 190 : 170;
+                    const maxHeight = selectedTheme === 4 ? 220 : 210;
                     let imgW = imgInfo.width;
                     let imgH = imgInfo.height;
                     const ratio = Math.min(maxWidth / imgW, maxHeight / imgH);
@@ -200,7 +342,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                     imgH = imgH * ratio;
 
                     const x = (210 - imgW) / 2;
-                    const y = 35.64 + (225.72 - imgH) / 2; // Center vertically in the middle area
+                    const y = 35.64 + (225.72 - imgH) / 2;
 
                     doc.addImage(imgInfo.dataUrl, 'PNG', x, y, imgW, imgH);
                 } else if (art.imageUrls && art.imageUrls.length > 0) {
@@ -210,12 +352,12 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                     doc.text("[Image could not be loaded]", 105, 148, { align: "center" });
                 }
 
-                // Bottom 12% (261.36mm - 297mm)
+                // -- Bottom: Dimensions & Price (centered)
                 let bottomY = 275;
                 if (pdfOptions.showDimensions) {
                     doc.setFont("helvetica", "normal");
                     doc.setFontSize(12);
-                    doc.setTextColor(0, 0, 0); // Black
+                    setThemeTextColor();
                     doc.text(`Dimensions: ${art.dimensions}`, 105, bottomY, { align: "center" });
                     bottomY += 8;
                 }
@@ -223,7 +365,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                 if (pdfOptions.showPrice) {
                     doc.setFont("helvetica", "bold");
                     doc.setFontSize(14);
-                    doc.setTextColor(0, 0, 0);
+                    setThemeTextColor();
                     doc.text(`Price: INR ${art.price.toLocaleString('en-IN')}`, 105, bottomY, { align: "center" });
                 }
             }
@@ -339,11 +481,54 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
             {showPdfOptions && catalogToDownload && (
                 <div className="absolute inset-0 z-[100] flex flex-col justify-end overflow-hidden">
                     <div className="absolute inset-0 bg-black/50 backdrop-blur-sm animate-fade-in" onClick={() => setShowPdfOptions(false)}></div>
-                    <div className="bg-white dark:bg-[#1e1e1e] rounded-t-[1.5rem] p-6 relative z-10 animate-fade-in-up shadow-2xl border-t border-gray-200 dark:border-gray-800 pb-12">
+                    <div className="bg-white dark:bg-[#1e1e1e] rounded-t-[1.5rem] p-6 relative z-10 animate-fade-in-up shadow-2xl border-t border-gray-200 dark:border-gray-800 pb-12 max-h-[85vh] overflow-y-auto no-scrollbar">
                         <div className="w-12 h-1.5 bg-gray-300 dark:bg-gray-700 rounded-full mx-auto mb-6"></div>
-                        <h3 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-widest mb-6 text-center">PDF Options</h3>
+                        <h3 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-widest mb-5 text-center">Choose Theme</h3>
 
-                        <div className="space-y-4 mb-8 px-2">
+                        {/* Theme Selector Grid */}
+                        <div className="grid grid-cols-2 gap-3 mb-6">
+                            {THEME_INFO.map(theme => (
+                                <button
+                                    key={theme.id}
+                                    onClick={() => setSelectedTheme(theme.id)}
+                                    className={`relative rounded-xl overflow-hidden border-2 transition-all duration-200 active-scale ${
+                                        selectedTheme === theme.id
+                                            ? 'border-gold-500 shadow-lg shadow-gold-500/20 scale-[1.02]'
+                                            : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                                    }`}
+                                >
+                                    {/* Mini Preview */}
+                                    <div
+                                        className="h-24 flex flex-col items-center justify-center gap-1 p-2"
+                                        style={{ background: theme.bg }}
+                                    >
+                                        {/* Mini image placeholder */}
+                                        <div className="w-10 h-10 rounded-md bg-white/20 border border-white/30 flex items-center justify-center">
+                                            <ImageIcon size={16} style={{ color: theme.fg }} strokeWidth={1.5} />
+                                        </div>
+                                        {/* Mini text lines */}
+                                        <div className="flex flex-col items-center gap-0.5 mt-1">
+                                            <div className="h-[3px] w-12 rounded-full" style={{ background: theme.fg, opacity: 0.8 }}></div>
+                                            <div className="h-[2px] w-8 rounded-full" style={{ background: theme.fg, opacity: 0.5 }}></div>
+                                        </div>
+                                    </div>
+                                    {/* Theme Label */}
+                                    <div className="px-2 py-2 bg-gray-50 dark:bg-[#252525]">
+                                        <p className="text-[10px] font-bold text-gray-800 dark:text-gray-200 uppercase tracking-wider">{theme.name}</p>
+                                        <p className="text-[9px] text-gray-400 dark:text-gray-500">{theme.desc}</p>
+                                    </div>
+                                    {/* Selected Checkmark */}
+                                    {selectedTheme === theme.id && (
+                                        <div className="absolute top-1.5 right-1.5 bg-gold-500 text-white rounded-full p-0.5 shadow">
+                                            <Check size={10} strokeWidth={3} />
+                                        </div>
+                                    )}
+                                </button>
+                            ))}
+                        </div>
+
+                        <h3 className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3">Content Options</h3>
+                        <div className="space-y-3 mb-6 px-1">
                             <label className="flex items-center gap-3 cursor-pointer">
                                 <input type="checkbox" checked={pdfOptions.showCatalogName} onChange={e => setPdfOptions({ ...pdfOptions, showCatalogName: e.target.checked })} className="w-5 h-5 rounded-[7px] text-gold-500 focus:ring-gold-500 border-gray-300 dark:border-gray-600 dark:bg-gray-800" />
                                 <span className="text-sm text-gray-700 dark:text-gray-300">Include Collection Name</span>
