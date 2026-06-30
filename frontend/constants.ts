@@ -202,6 +202,18 @@ export const MOCK_INQUIRIES: Inquiry[] = [
     }
 ];
 
+export const MOCK_USERS: UserProfile[] = [
+    {
+        id: 'admin_1',
+        name: 'Vivek Sahni',
+        email: 'admin@vayu.com',
+        phone: '9999999999',
+        address: 'Mumbai, India',
+        password: 'vayu@123',
+        theme: 'light',
+    },
+];
+
 export const MOCK_TEAM_MEMBERS: UserProfile[] = [
     {
         id: 'user_1',

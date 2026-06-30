@@ -420,7 +420,7 @@ const App: React.FC = () => {
 
     if (isLoading) {
         return (
-            <div className="full-height bg-black flex items-center justify-center">
+            <div className="h-full bg-black flex items-center justify-center">
                 <div className="animate-pulse flex flex-col items-center justify-center">
                     <svg viewBox="0 0 400 400" className="w-48 h-48">
                         <rect width="400" height="400" fill="#000000" rx="20" />

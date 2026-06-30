@@ -1,201 +1,175 @@
 import { Artwork, Catalog, Collection, Invoice, Inquiry, Conversation, Message, InquiryMessage, UserProfile } from '../types';
+import { MOCK_ARTWORKS, MOCK_CATALOGS, MOCK_COLLECTIONS, MOCK_INVOICES, MOCK_INQUIRIES, MOCK_CONVERSATIONS, MOCK_MESSAGES, MOCK_TEAM_MEMBERS, MOCK_USERS } from '../constants';
 
-// Base API path (the Worker will serve under /api)
-const API_BASE = '/api';
+/**
+ * Simple localStorage based data service.
+ * Each entity is stored under its own key as a JSON array.
+ */
+const STORAGE_KEYS = {
+  users: 'vayu_users',
+  artworks: 'vayu_artworks',
+  catalogs: 'vayu_catalogs',
+  collections: 'vayu_collections',
+  invoices: 'vayu_invoices',
+  inquiries: 'vayu_inquiries',
+  conversations: 'vayu_conversations',
+  messages: 'vayu_messages',
+  inquiryMessages: 'vayu_inquiry_messages',
+  team: 'vayu_team',
+};
 
-/** Helper to attach auth token if present */
-function getAuthHeaders(): Record<string, string> {
-  if (typeof window === 'undefined') return {};
-  const token = localStorage.getItem('auth_token');
-  return token ? { Authorization: `Bearer ${token}` } : {};
+function getArray<T>(key: string): T[] {
+  const raw = localStorage.getItem(key);
+  return raw ? JSON.parse(raw) : [];
 }
 
-/** No-op init for compatibility */
+function setArray<T>(key: string, data: T[]): void {
+  localStorage.setItem(key, JSON.stringify(data));
+}
+
 export const db = {
   async init() {
-    // No local initialization needed for KV backend
+    // Seed mock data if storage is empty
+    if (getArray<Artwork>(STORAGE_KEYS.artworks).length === 0) {
+      setArray(STORAGE_KEYS.artworks, MOCK_ARTWORKS);
+      setArray(STORAGE_KEYS.catalogs, MOCK_CATALOGS);
+      setArray(STORAGE_KEYS.collections, MOCK_COLLECTIONS);
+      setArray(STORAGE_KEYS.invoices, MOCK_INVOICES);
+      setArray(STORAGE_KEYS.inquiries, MOCK_INQUIRIES);
+      setArray(STORAGE_KEYS.conversations, MOCK_CONVERSATIONS);
+      setArray(STORAGE_KEYS.messages, MOCK_MESSAGES);
+      setArray(STORAGE_KEYS.team, MOCK_TEAM_MEMBERS);
+    }
+    if (getArray<UserProfile>(STORAGE_KEYS.users).length === 0) {
+      setArray(STORAGE_KEYS.users, MOCK_USERS || []);
+    }
   },
 
   // Users
   async saveUser(user: UserProfile): Promise<void> {
-    await fetch(`${API_BASE}/users`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify(user),
-    });
+    const users = getArray<UserProfile>(STORAGE_KEYS.users);
+    users.push(user);
+    setArray(STORAGE_KEYS.users, users);
   },
   async getUser(phone: string): Promise<UserProfile | null> {
-    const resp = await fetch(`${API_BASE}/users/${encodeURIComponent(phone)}`, {
-      headers: getAuthHeaders(),
-    });
-    if (!resp.ok) return null;
-    return resp.json();
+    const users = getArray<UserProfile>(STORAGE_KEYS.users);
+    return users.find(u => u.phone === phone) || null;
   },
 
   // Artworks
   async getArtworks(): Promise<Artwork[]> {
-    const resp = await fetch(`${API_BASE}/artworks`, { headers: getAuthHeaders() });
-    if (!resp.ok) return [];
-    return resp.json();
+    return getArray<Artwork>(STORAGE_KEYS.artworks);
   },
   async saveArtwork(artwork: Artwork): Promise<void> {
-    await fetch(`${API_BASE}/artworks`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify(artwork),
-    });
+    const arts = getArray<Artwork>(STORAGE_KEYS.artworks);
+    arts.push(artwork);
+    setArray(STORAGE_KEYS.artworks, arts);
   },
   async deleteArtwork(id: string): Promise<void> {
-    await fetch(`${API_BASE}/artworks/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    });
+    const arts = getArray<Artwork>(STORAGE_KEYS.artworks).filter(a => a.id !== id);
+    setArray(STORAGE_KEYS.artworks, arts);
   },
 
   // Catalogs
   async getCatalogs(): Promise<Catalog[]> {
-    const resp = await fetch(`${API_BASE}/catalogs`, { headers: getAuthHeaders() });
-    if (!resp.ok) return [];
-    return resp.json();
+    return getArray<Catalog>(STORAGE_KEYS.catalogs);
   },
   async saveCatalog(catalog: Catalog): Promise<void> {
-    await fetch(`${API_BASE}/catalogs`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify(catalog),
-    });
+    const cats = getArray<Catalog>(STORAGE_KEYS.catalogs);
+    cats.push(catalog);
+    setArray(STORAGE_KEYS.catalogs, cats);
   },
   async deleteCatalog(id: string): Promise<void> {
-    await fetch(`${API_BASE}/catalogs/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    });
+    const cats = getArray<Catalog>(STORAGE_KEYS.catalogs).filter(c => c.id !== id);
+    setArray(STORAGE_KEYS.catalogs, cats);
   },
 
   // Collections
   async getCollections(): Promise<Collection[]> {
-    const resp = await fetch(`${API_BASE}/collections`, { headers: getAuthHeaders() });
-    if (!resp.ok) return [];
-    return resp.json();
+    return getArray<Collection>(STORAGE_KEYS.collections);
   },
   async saveCollection(collection: Collection): Promise<void> {
-    await fetch(`${API_BASE}/collections`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify(collection),
-    });
+    const colls = getArray<Collection>(STORAGE_KEYS.collections);
+    colls.push(collection);
+    setArray(STORAGE_KEYS.collections, colls);
   },
   async deleteCollection(id: string): Promise<void> {
-    await fetch(`${API_BASE}/collections/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    });
+    const colls = getArray<Collection>(STORAGE_KEYS.collections).filter(c => c.id !== id);
+    setArray(STORAGE_KEYS.collections, colls);
   },
 
   // Invoices
   async getInvoices(): Promise<Invoice[]> {
-    const resp = await fetch(`${API_BASE}/invoices`, { headers: getAuthHeaders() });
-    if (!resp.ok) return [];
-    return resp.json();
+    return getArray<Invoice>(STORAGE_KEYS.invoices);
   },
   async saveInvoice(invoice: Invoice): Promise<void> {
-    await fetch(`${API_BASE}/invoices`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify(invoice),
-    });
+    const invs = getArray<Invoice>(STORAGE_KEYS.invoices);
+    invs.push(invoice);
+    setArray(STORAGE_KEYS.invoices, invs);
   },
   async deleteInvoice(id: string): Promise<void> {
-    await fetch(`${API_BASE}/invoices/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    });
+    const invs = getArray<Invoice>(STORAGE_KEYS.invoices).filter(i => i.id !== id);
+    setArray(STORAGE_KEYS.invoices, invs);
   },
 
   // Inquiries
   async getInquiries(): Promise<Inquiry[]> {
-    const resp = await fetch(`${API_BASE}/inquiries`, { headers: getAuthHeaders() });
-    if (!resp.ok) return [];
-    return resp.json();
+    return getArray<Inquiry>(STORAGE_KEYS.inquiries);
   },
   async saveInquiry(inquiry: Inquiry): Promise<void> {
-    await fetch(`${API_BASE}/inquiries`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify(inquiry),
-    });
+    const inqs = getArray<Inquiry>(STORAGE_KEYS.inquiries);
+    inqs.push(inquiry);
+    setArray(STORAGE_KEYS.inquiries, inqs);
   },
   async deleteInquiry(id: string): Promise<void> {
-    await fetch(`${API_BASE}/inquiries/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    });
+    const inqs = getArray<Inquiry>(STORAGE_KEYS.inquiries).filter(i => i.id !== id);
+    setArray(STORAGE_KEYS.inquiries, inqs);
   },
 
   // Conversations
   async getConversations(): Promise<Conversation[]> {
-    const resp = await fetch(`${API_BASE}/conversations`, { headers: getAuthHeaders() });
-    if (!resp.ok) return [];
-    return resp.json();
+    return getArray<Conversation>(STORAGE_KEYS.conversations);
   },
   async saveConversation(conv: Conversation): Promise<void> {
-    await fetch(`${API_BASE}/conversations`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify(conv),
-    });
+    const convs = getArray<Conversation>(STORAGE_KEYS.conversations);
+    convs.push(conv);
+    setArray(STORAGE_KEYS.conversations, convs);
   },
   async deleteConversation(id: string): Promise<void> {
-    await fetch(`${API_BASE}/conversations/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    });
+    const convs = getArray<Conversation>(STORAGE_KEYS.conversations).filter(c => c.id !== id);
+    setArray(STORAGE_KEYS.conversations, convs);
   },
 
   // Messages
   async getMessages(): Promise<Message[]> {
-    const resp = await fetch(`${API_BASE}/messages`, { headers: getAuthHeaders() });
-    if (!resp.ok) return [];
-    return resp.json();
+    return getArray<Message>(STORAGE_KEYS.messages);
   },
   async getMessagesByConversation(conversationId: string): Promise<Message[]> {
-    const resp = await fetch(`${API_BASE}/messages?conversationId=${encodeURIComponent(conversationId)}`, { headers: getAuthHeaders() });
-    if (!resp.ok) return [];
-    return resp.json();
+    return getArray<Message>(STORAGE_KEYS.messages).filter(m => m.conversationId === conversationId);
   },
   async saveMessage(msg: Message): Promise<void> {
-    await fetch(`${API_BASE}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify(msg),
-    });
+    const msgs = getArray<Message>(STORAGE_KEYS.messages);
+    msgs.push(msg);
+    setArray(STORAGE_KEYS.messages, msgs);
   },
 
   // Inquiry Messages
   async getInquiryMessages(): Promise<InquiryMessage[]> {
-    const resp = await fetch(`${API_BASE}/inquiry-messages`, { headers: getAuthHeaders() });
-    if (!resp.ok) return [];
-    return resp.json();
+    return getArray<InquiryMessage>(STORAGE_KEYS.inquiryMessages);
   },
   async saveInquiryMessage(msg: InquiryMessage): Promise<void> {
-    await fetch(`${API_BASE}/inquiry-messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify(msg),
-    });
+    const msgs = getArray<InquiryMessage>(STORAGE_KEYS.inquiryMessages);
+    msgs.push(msg);
+    setArray(STORAGE_KEYS.inquiryMessages, msgs);
   },
 
   // Team Members
   async getTeamMembers(): Promise<UserProfile[]> {
-    const resp = await fetch(`${API_BASE}/team`, { headers: getAuthHeaders() });
-    if (!resp.ok) return [];
-    return resp.json();
+    return getArray<UserProfile>(STORAGE_KEYS.team);
   },
   async saveTeamMember(member: UserProfile): Promise<void> {
-    await fetch(`${API_BASE}/team`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify(member),
-    });
+    const team = getArray<UserProfile>(STORAGE_KEYS.team);
+    team.push(member);
+    setArray(STORAGE_KEYS.team, team);
   },
 };
