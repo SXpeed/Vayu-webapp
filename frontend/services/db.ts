@@ -1,5 +1,4 @@
 import { Artwork, Catalog, Collection, Invoice, Inquiry, Conversation, Message, InquiryMessage, UserProfile } from '../types';
-import { MOCK_ARTWORKS, MOCK_CATALOGS, MOCK_COLLECTIONS, MOCK_INVOICES, MOCK_INQUIRIES, MOCK_CONVERSATIONS, MOCK_MESSAGES, MOCK_TEAM_MEMBERS } from '../constants';
 
 const STORAGE_KEYS = {
   users: 'vayu_users',
@@ -11,12 +10,23 @@ const STORAGE_KEYS = {
   conversations: 'vayu_conversations',
   messages: 'vayu_messages',
   inquiryMessages: 'vayu_inquiry_messages',
-  team: 'vayu_team',
   seedVersion: 'vayu_seed_version',
 };
 
-// Bump this when mock data changes that needs a re-seed (e.g. conversations updated)
-const SEED_VERSION = 2;
+// Bumped to 3: mock/dummy data removed. Migration cleans old mock IDs
+// while preserving any real user-created data.
+const SEED_VERSION = 3;
+
+// Known mock IDs from the old seed data — removed during migration.
+const MOCK_IDS_TO_CLEAR = {
+  artworks: ['a1', 'a2', 'a3', 'a4', 'a5', 'a6'],
+  catalogs: ['c1'],
+  collections: ['col1', 'col2', 'col3'],
+  invoices: ['inv1'],
+  inquiries: ['inq1', 'inq2', 'inq3', 'inq4'],
+  conversations: ['conv_general'],
+  messages: ['msg_general_1', 'msg_1', 'msg_2', 'msg_3', 'msg_4', 'msg_5'],
+};
 
 function getArray<T>(key: string): T[] {
   const raw = localStorage.getItem(key);
@@ -37,17 +47,18 @@ function upsertById<T extends { id: string }>(arr: T[], item: T): T[] {
 export const db = {
   async init() {
     const storedVersion = Number(localStorage.getItem(STORAGE_KEYS.seedVersion) ?? 0);
-    const needsSeed = getArray<Artwork>(STORAGE_KEYS.artworks).length === 0 || storedVersion < SEED_VERSION;
 
-    if (needsSeed) {
-      setArray(STORAGE_KEYS.artworks, MOCK_ARTWORKS);
-      setArray(STORAGE_KEYS.catalogs, MOCK_CATALOGS);
-      setArray(STORAGE_KEYS.collections, MOCK_COLLECTIONS);
-      setArray(STORAGE_KEYS.invoices, MOCK_INVOICES);
-      setArray(STORAGE_KEYS.inquiries, MOCK_INQUIRIES);
-      setArray(STORAGE_KEYS.conversations, MOCK_CONVERSATIONS);
-      setArray(STORAGE_KEYS.messages, MOCK_MESSAGES);
-      setArray(STORAGE_KEYS.team, MOCK_TEAM_MEMBERS);
+    if (storedVersion < SEED_VERSION) {
+      // Migration: remove old mock seed data while preserving real user-created data.
+      setArray(STORAGE_KEYS.artworks, getArray<Artwork>(STORAGE_KEYS.artworks).filter(a => !MOCK_IDS_TO_CLEAR.artworks.includes(a.id)));
+      setArray(STORAGE_KEYS.catalogs, getArray<Catalog>(STORAGE_KEYS.catalogs).filter(c => !MOCK_IDS_TO_CLEAR.catalogs.includes(c.id)));
+      setArray(STORAGE_KEYS.collections, getArray<Collection>(STORAGE_KEYS.collections).filter(c => !MOCK_IDS_TO_CLEAR.collections.includes(c.id)));
+      setArray(STORAGE_KEYS.invoices, getArray<Invoice>(STORAGE_KEYS.invoices).filter(i => !MOCK_IDS_TO_CLEAR.invoices.includes(i.id)));
+      setArray(STORAGE_KEYS.inquiries, getArray<Inquiry>(STORAGE_KEYS.inquiries).filter(i => !MOCK_IDS_TO_CLEAR.inquiries.includes(i.id)));
+      setArray(STORAGE_KEYS.conversations, getArray<Conversation>(STORAGE_KEYS.conversations).filter(c => !MOCK_IDS_TO_CLEAR.conversations.includes(c.id)));
+      setArray(STORAGE_KEYS.messages, getArray<Message>(STORAGE_KEYS.messages).filter(m => !MOCK_IDS_TO_CLEAR.messages.includes(m.id)));
+      // Team members now come from the auth service (Worker/KV), clear old local cache.
+      localStorage.removeItem('vayu_team');
       localStorage.setItem(STORAGE_KEYS.seedVersion, String(SEED_VERSION));
     }
   },
@@ -154,11 +165,4 @@ export const db = {
     setArray(STORAGE_KEYS.inquiryMessages, upsertById(getArray<InquiryMessage>(STORAGE_KEYS.inquiryMessages), msg));
   },
 
-  // Team Members
-  async getTeamMembers(): Promise<UserProfile[]> {
-    return getArray<UserProfile>(STORAGE_KEYS.team);
-  },
-  async saveTeamMember(member: UserProfile): Promise<void> {
-    setArray(STORAGE_KEYS.team, upsertById(getArray<UserProfile>(STORAGE_KEYS.team), member));
-  },
 };

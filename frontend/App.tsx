@@ -19,7 +19,7 @@ const App: React.FC = () => {
     const [theme, setTheme] = useState<'light' | 'dark'>('light');
     const [isLoading, setIsLoading] = useState(true);
     const [selectedArtwork, setSelectedArtwork] = useState<Artwork | null>(null);
-    
+
     // Global State
     const [artworks, setArtworks] = useState<Artwork[]>([]);
     const [catalogs, setCatalogs] = useState<Catalog[]>([]);
@@ -42,7 +42,6 @@ const App: React.FC = () => {
         const loadedConversations = await db.getConversations();
         const loadedMessages = await db.getMessages();
         const loadedInquiryMessages = await db.getInquiryMessages();
-        const loadedTeam = await db.getTeamMembers();
 
         setArtworks(loadedArtworks);
         setCatalogs(loadedCatalogs);
@@ -52,7 +51,25 @@ const App: React.FC = () => {
         setConversations(loadedConversations);
         setAllMessages(loadedMessages);
         setInquiryMessages(loadedInquiryMessages);
-        setTeamMembers(loadedTeam);
+    }, []);
+
+    // Load team members from the auth service (Worker/KV) and map to UserProfile
+    const loadTeamMembers = useCallback(async () => {
+        try {
+            const team = await authService.getTeamMembers();
+            const mapped: UserProfile[] = team.map(u => ({
+                id: u.id,
+                name: u.name,
+                email: u.email,
+                phone: '',
+                address: '',
+                isOnline: false,
+            }));
+            setTeamMembers(mapped);
+        } catch (err) {
+            console.error('Failed to load team members:', err);
+            setTeamMembers([]);
+        }
     }, []);
 
     // Initialize DB and load data
@@ -83,6 +100,7 @@ const App: React.FC = () => {
                 }
 
                 await loadData();
+                await loadTeamMembers();
             } catch (err) {
                 console.error('App initialization error:', err);
             } finally {
@@ -90,7 +108,7 @@ const App: React.FC = () => {
             }
         };
         initApp();
-    }, [loadData]);
+    }, [loadData, loadTeamMembers]);
 
     // Handle Browser/Phone Back Button
     useEffect(() => {
@@ -129,10 +147,11 @@ const App: React.FC = () => {
             if (event.data.type === 'SYNC_REQUIRED') {
                 console.log('Cloud sync triggered, reloading data...');
                 loadData();
+                loadTeamMembers();
             }
         };
         return () => channel.close();
-    }, [loadData]);
+    }, [loadData, loadTeamMembers]);
 
     // Apply Theme
     useEffect(() => {
@@ -158,6 +177,8 @@ const App: React.FC = () => {
         setUserProfile(profile);
         setTheme(savedTheme);
         navigateTo('home');
+        // Load team members after login
+        loadTeamMembers();
     };
 
     const handleUpdateProfile = async (updatedProfile: UserProfile) => {
@@ -166,7 +187,7 @@ const App: React.FC = () => {
     };
 
     const handleToggleTheme = async () => {
-        const newTheme = theme === 'light' ? 'dark' : 'light';
+        const newTheme: 'light' | 'dark' = theme === 'light' ? 'dark' : 'light';
         setTheme(newTheme);
         if (userProfile) {
             const updated = { ...userProfile, theme: newTheme };
@@ -248,9 +269,9 @@ const App: React.FC = () => {
         };
         await db.saveInvoice(invoice);
         setInvoices((prev: Invoice[]) => [invoice, ...prev]);
-        
+
         const invoicedArtIds = new Set(invoice.items.map(item => item.artworkId));
-        
+
         // Update artwork status in DB and state
         const updatedArtworks = artworks.map(art => {
             if (invoicedArtIds.has(art.id)) {
@@ -297,8 +318,8 @@ const App: React.FC = () => {
         const msg: InquiryMessage = {
             id: `inqmsg_${Date.now()}`,
             inquiryId,
-            senderId: userProfile?.id || 'user_1',
-            senderName: userProfile?.name || 'You',
+            senderId: userProfile?.id || authUser?.id || '',
+            senderName: userProfile?.name || authUser?.name || 'You',
             text,
             tags,
             timestamp: Date.now(),
@@ -338,8 +359,8 @@ const App: React.FC = () => {
         const msg: Message = {
             id: `msg_${Date.now()}`,
             conversationId,
-            senderId: userProfile?.id || 'user_1',
-            senderName: userProfile?.name || 'You',
+            senderId: userProfile?.id || authUser?.id || '',
+            senderName: userProfile?.name || authUser?.name || 'You',
             text,
             tags,
             timestamp: Date.now(),
@@ -386,14 +407,15 @@ const App: React.FC = () => {
 
     const handleCreateConversation = async (participantId: string, details?: ConversationDetails): Promise<Conversation> => {
         // Check if conversation already exists
-        const existing = conversations.find(c => c.participantIds.includes(participantId) && c.participantIds.includes(userProfile?.id || 'user_1'));
+        const selfId = userProfile?.id || authUser?.id || '';
+        const existing = conversations.find(c => c.participantIds.includes(participantId) && c.participantIds.includes(selfId));
         if (existing) return existing;
 
         const otherMember = teamMembers.find(m => m.id === participantId);
         const conv: Conversation = {
             id: `conv_${Date.now()}`,
-            participantIds: [userProfile?.id || 'user_1', participantId],
-            participantNames: [userProfile?.name || 'You', otherMember?.name || 'Team Member'],
+            participantIds: [selfId, participantId],
+            participantNames: [userProfile?.name || authUser?.name || 'You', otherMember?.name || 'Team Member'],
             lastMessage: '',
             lastMessageTime: Date.now(),
             unreadCount: 0,
@@ -407,10 +429,10 @@ const App: React.FC = () => {
     };
 
     const handleCreateGroup = async (participantIds: string[], groupName: string): Promise<Conversation> => {
-        const selfId = userProfile?.id || 'user_1';
+        const selfId = userProfile?.id || authUser?.id || '';
         const allParticipantIds = Array.from(new Set([selfId, ...participantIds]));
         const allParticipantNames = allParticipantIds.map(id =>
-            id === selfId ? (userProfile?.name || 'You') : (teamMembers.find(m => m.id === id)?.name || 'Team Member')
+            id === selfId ? (userProfile?.name || authUser?.name || 'You') : (teamMembers.find(m => m.id === id)?.name || 'Team Member')
         );
         const conv: Conversation = {
             id: `conv_${Date.now()}`,
@@ -473,8 +495,8 @@ const App: React.FC = () => {
                         onDeleteInquiry={handleDeleteInquiry}
                         onArtworkClick={handleArtworkClick}
                         inquiryMessages={inquiryMessages}
-                        currentUserId={userProfile?.id || 'user_1'}
-                        currentUserName={userProfile?.name || 'You'}
+                        currentUserId={userProfile?.id || authUser?.id || ''}
+                        currentUserName={userProfile?.name || authUser?.name || 'You'}
                         onSendInquiryMessage={handleSendInquiryMessage}
                     />
                 );
@@ -484,8 +506,8 @@ const App: React.FC = () => {
                         conversations={conversations}
                         messages={allMessages}
                         teamMembers={teamMembers}
-                        currentUserId={userProfile?.id || 'user_1'}
-                        currentUserName={userProfile?.name || 'You'}
+                        currentUserId={userProfile?.id || authUser?.id || ''}
+                        currentUserName={userProfile?.name || authUser?.name || 'You'}
                         onSendMessage={handleSendMessage}
                         onCreateConversation={handleCreateConversation}
                         onCreateGroup={handleCreateGroup}
@@ -496,7 +518,7 @@ const App: React.FC = () => {
                 );
             case 'profile':
                 return userProfile ? (
-                    <ProfileView 
+                    <ProfileView
                         profile={userProfile}
                         onUpdateProfile={handleUpdateProfile}
                         theme={theme}

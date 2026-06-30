@@ -571,11 +571,10 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                 {displayedMessages.map((msg) => {
                     const isMe = msg.senderId === currentUserId;
                     const bubble = (
-                        <div className={`max-w-[80%] rounded-[12px] px-3.5 py-2.5 shadow-sm ${
-                            isMe
-                                ? 'bg-[#FEFFF7] dark:bg-[#2a2a2a] text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-700 rounded-br-[4px]'
-                                : 'bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-800 rounded-bl-[4px]'
-                        }`}>
+                        <div className={`max-w-[80%] rounded-[12px] px-3.5 py-2.5 shadow-sm ${isMe
+                            ? 'bg-[#FEFFF7] dark:bg-[#2a2a2a] text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-700 rounded-br-[4px]'
+                            : 'bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-800 rounded-bl-[4px]'
+                            }`}>
                             {!isMe && (
                                 <p className="text-[9px] font-bold uppercase tracking-widest mb-1 text-gold-600 dark:text-gold-400">{msg.senderName}</p>
                             )}
@@ -654,8 +653,8 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                                 key={tag}
                                 onClick={() => toggleTag(tag)}
                                 className={`text-[9px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wider transition-all active-scale ${selectedTags.has(tag)
-                                        ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950'
-                                        : TAG_COLORS[tag] + ' border border-gray-200 dark:border-gray-700'
+                                    ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950'
+                                    : TAG_COLORS[tag] + ' border border-gray-200 dark:border-gray-700'
                                     }`}
                             >
                                 {tag}
@@ -731,8 +730,8 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                         onClick={handleSend}
                         disabled={!newMessage.trim() && !pendingAttachment}
                         className={`p-2.5 rounded-full transition-all active-scale shrink-0 ${newMessage.trim() || pendingAttachment
-                                ? 'bg-gold-500 dark:bg-gold-500 text-white dark:text-brand-950 shadow-md'
-                                : 'bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-600'
+                            ? 'bg-gold-500 dark:bg-gold-500 text-white dark:text-brand-950 shadow-md'
+                            : 'bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-600'
                             }`}
                     >
                         <Send size={18} />
@@ -803,8 +802,8 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                     <button
                         onClick={() => setMode('direct')}
                         className={`flex-1 py-2 rounded-[7px] text-[10px] font-bold uppercase tracking-widest transition-all active-scale ${mode === 'direct'
-                                ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
-                                : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
+                            ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
+                            : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
                             }`}
                     >
                         Direct Message
@@ -812,8 +811,8 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                     <button
                         onClick={() => setMode('group')}
                         className={`flex-1 py-2 rounded-[7px] text-[10px] font-bold uppercase tracking-widest transition-all active-scale ${mode === 'group'
-                                ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
-                                : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
+                            ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
+                            : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
                             }`}
                     >
                         New Group
@@ -824,7 +823,17 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
             {!selectedMember && mode === 'direct' && (
                 <div className="flex-1 overflow-y-auto p-4 space-y-2 no-scrollbar">
                     <h3 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-1">Team Members</h3>
-                    {teamMembers.map((member, index) => (
+                    {teamMembers.length === 0 ? (
+                        <div className="text-center py-16 px-6 animate-fade-in">
+                            <div className="w-16 h-16 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center mx-auto mb-4 text-gray-400 dark:text-gray-500">
+                                <Users size={28} strokeWidth={1.5} />
+                            </div>
+                            <p className="text-sm font-serif text-gray-700 dark:text-gray-200 mb-1.5">No team members yet</p>
+                            <p className="text-xs text-gray-400 dark:text-gray-500 font-light leading-relaxed">
+                                Ask an admin to add team members from the User Management screen so you can start messaging.
+                            </p>
+                        </div>
+                    ) : teamMembers.map((member, index) => (
                         <div
                             key={member.id}
                             onClick={() => setSelectedMember(member)}
@@ -869,7 +878,14 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                             <span className="text-[9px] bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-[3px] text-gray-600 dark:text-gray-300 uppercase tracking-wider">{selectedGroupMemberIds.size} selected</span>
                         </div>
                         <div className="space-y-2">
-                            {teamMembers.map((member, index) => {
+                            {teamMembers.length === 0 ? (
+                                <div className="text-center py-12 px-6 animate-fade-in">
+                                    <p className="text-sm font-serif text-gray-700 dark:text-gray-200 mb-1.5">No team members to add</p>
+                                    <p className="text-xs text-gray-400 dark:text-gray-500 font-light leading-relaxed">
+                                        Ask an admin to add team members first.
+                                    </p>
+                                </div>
+                            ) : teamMembers.map((member, index) => {
                                 const isSelected = selectedGroupMemberIds.has(member.id);
                                 return (
                                     <div
@@ -907,8 +923,8 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                         onClick={handleCreateGroup}
                         disabled={!canCreateGroup}
                         className={`w-full rounded-[7px] py-3 text-sm font-medium tracking-wide transition-colors shadow-md active-scale ${canCreateGroup
-                                ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 hover:bg-brand-800 dark:hover:bg-gold-400'
-                                : 'bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-600'
+                            ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 hover:bg-brand-800 dark:hover:bg-gold-400'
+                            : 'bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-600'
                             }`}
                     >
                         Create Group

@@ -29,6 +29,14 @@ async function call<T>(path: string, options?: RequestInit): Promise<T> {
   return data as T;
 }
 
+function broadcastSync(): void {
+  try {
+    const ch = new BroadcastChannel('vayu_cloud_sync');
+    ch.postMessage({ type: 'SYNC_REQUIRED' });
+    ch.close();
+  } catch { }
+}
+
 export const authService = {
   async needsSetup(): Promise<boolean> {
     const data = await call<{ needsSetup: boolean }>('/auth/status');
@@ -73,14 +81,21 @@ export const authService = {
     return call<AuthUser[]>('/auth/users');
   },
 
+  async getTeamMembers(): Promise<AuthUser[]> {
+    return call<AuthUser[]>('/auth/team');
+  },
+
   async addUser(name: string, email: string, password: string, role: 'admin' | 'user' = 'user'): Promise<AuthUser> {
-    return call<AuthUser>('/auth/users', {
+    const user = await call<AuthUser>('/auth/users', {
       method: 'POST',
       body: JSON.stringify({ name, email, password, role }),
     });
+    broadcastSync();
+    return user;
   },
 
   async removeUser(id: string): Promise<void> {
     await call(`/auth/users/${id}`, { method: 'DELETE' });
+    broadcastSync();
   },
 };

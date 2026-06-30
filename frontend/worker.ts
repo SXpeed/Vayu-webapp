@@ -204,6 +204,21 @@ export default {
         return json(users);
       }
 
+      // ── GET /auth/team — list all users (any authenticated user) ──
+      // Used by messaging to show team members
+      if (path === '/auth/team' && method === 'GET') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const list = await env.VAYU_KV.list({ prefix: 'auth:user:' });
+        const users: PublicUser[] = [];
+        for (const key of list.keys) {
+          const raw = await env.VAYU_KV.get(key.name);
+          if (raw) users.push(stripPassword(JSON.parse(raw)));
+        }
+        users.sort((a, b) => a.createdAt - b.createdAt);
+        return json(users);
+      }
+
       // ── POST /auth/users — add user (admin only) ───────────────────
       if (path === '/auth/users' && method === 'POST') {
         const session = await getSession(request, env.VAYU_KV);
