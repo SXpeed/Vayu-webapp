@@ -118,6 +118,85 @@ const App: React.FC = () => {
         }
     }, []);
 
+    // One-time migration: push any local-only data to D1
+    // Handles users who created data before D1 sync was implemented.
+    // Returns true if any items were migrated (caller should reload).
+    const migrateLocalToD1 = useCallback(async (): Promise<boolean> => {
+        const MIGRATION_KEY = 'vayu_d1_migrated';
+        if (localStorage.getItem(MIGRATION_KEY)) return false;
+
+        try {
+            const [
+                localArtworks, localCatalogs, localCollections, localInquiries,
+                localConversations, localMessages, localInquiryMessages
+            ] = await Promise.all([
+                db.getArtworks(), db.getCatalogs(), db.getCollections(), db.getInquiries(),
+                db.getConversations(), db.getMessages(), db.getInquiryMessages(),
+            ]);
+
+            const [
+                d1Artworks, d1Catalogs, d1Collections, d1Inquiries,
+                d1Conversations, d1Messages, d1InquiryMessages
+            ] = await Promise.all([
+                artworkService.getArtworks(), catalogService.getCatalogs(),
+                collectionService.getCollections(), inquiryService.getInquiries(),
+                messagingService.getConversations(), messagingService.getMessages(),
+                inquiryService.getInquiryMessages(),
+            ]);
+
+            const idSet = (arr: { id: string }[]) => new Set(arr.map(x => x.id));
+            const d1ArtworkIds = idSet(d1Artworks);
+            const d1CatalogIds = idSet(d1Catalogs);
+            const d1CollectionIds = idSet(d1Collections);
+            const d1InquiryIds = idSet(d1Inquiries);
+            const d1ConvIds = idSet(d1Conversations);
+            const d1MsgIds = idSet(d1Messages);
+            const d1InqMsgIds = idSet(d1InquiryMessages);
+
+            const migrations: Promise<unknown>[] = [];
+
+            for (const art of localArtworks) {
+                if (!d1ArtworkIds.has(art.id))
+                    migrations.push(artworkService.saveArtwork(art).catch(e => console.error('Migration failed (artwork):', e)));
+            }
+            for (const cat of localCatalogs) {
+                if (!d1CatalogIds.has(cat.id))
+                    migrations.push(catalogService.saveCatalog(cat).catch(e => console.error('Migration failed (catalog):', e)));
+            }
+            for (const col of localCollections) {
+                if (!d1CollectionIds.has(col.id))
+                    migrations.push(collectionService.saveCollection(col).catch(e => console.error('Migration failed (collection):', e)));
+            }
+            for (const inq of localInquiries) {
+                if (!d1InquiryIds.has(inq.id))
+                    migrations.push(inquiryService.saveInquiry(inq).catch(e => console.error('Migration failed (inquiry):', e)));
+            }
+            for (const conv of localConversations) {
+                if (!d1ConvIds.has(conv.id))
+                    migrations.push(messagingService.createConversation(conv).catch(e => console.error('Migration failed (conversation):', e)));
+            }
+            for (const msg of localMessages) {
+                if (!d1MsgIds.has(msg.id))
+                    migrations.push(messagingService.sendMessage(msg).catch(e => console.error('Migration failed (message):', e)));
+            }
+            for (const inqMsg of localInquiryMessages) {
+                if (!d1InqMsgIds.has(inqMsg.id))
+                    migrations.push(inquiryService.saveInquiryMessage(inqMsg).catch(e => console.error('Migration failed (inquiry message):', e)));
+            }
+
+            if (migrations.length > 0) {
+                console.log(`D1 migration: pushing ${migrations.length} local-only items to D1...`);
+                await Promise.all(migrations);
+            }
+            localStorage.setItem(MIGRATION_KEY, 'true');
+            console.log('D1 migration complete');
+            return migrations.length > 0;
+        } catch (err) {
+            console.error('D1 migration failed:', err);
+            return false;
+        }
+    }, []);
+
     // Initialize DB and load data — runs ONCE on mount (empty deps)
     useEffect(() => {
         const initApp = async () => {
@@ -143,9 +222,14 @@ const App: React.FC = () => {
                     setCurrentView('home');
                     window.history.pushState({ view: 'home' }, '');
 
-                    // Authenticated — load data from D1
+                    // Authenticated — run one-time migration then load from D1
+                    const migrated = await migrateLocalToD1();
                     await loadData(true);
                     await loadTeamMembers();
+                    if (migrated) {
+                        // Re-load after migration to pick up pushed items
+                        await loadData(true);
+                    }
                 } else {
                     window.history.pushState({ view: 'login' }, '');
                     // Not authenticated — load local data only
@@ -321,9 +405,14 @@ const App: React.FC = () => {
         setUserProfile(profile);
         setTheme(savedTheme);
         navigateTo('home');
-        // Load team members and cloud messaging data after login
+        // Run one-time migration then load team members & cloud data
+        const migrated = await migrateLocalToD1();
         await loadTeamMembers();
         await loadData(true);
+        if (migrated) {
+            // Re-load after migration to pick up pushed items
+            await loadData(true);
+        }
     };
 
     const handleUpdateProfile = async (updatedProfile: UserProfile) => {
