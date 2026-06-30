@@ -1,6 +1,7 @@
 interface Env {
   VAYU_KV: KVNamespace;
   VAYU_R2: R2Bucket;
+  VAYU_DB: D1Database;
 }
 
 interface StoredUser {
@@ -108,6 +109,43 @@ async function getSession(request: Request, kv: KVNamespace): Promise<SessionDat
 function stripPassword(user: StoredUser): PublicUser {
   const { hashedPassword: _h, ...pub } = user;
   return pub as PublicUser;
+}
+
+// ── D1 row → Conversation mapper ───────────────────────────────────────────
+
+function rowToConversation(row: Record<string, unknown>): any {
+  return {
+    id: row.id as string,
+    participantIds: JSON.parse(row.participant_ids as string),
+    participantNames: JSON.parse(row.participant_names as string),
+    lastMessage: row.last_message as string,
+    lastMessageTime: row.last_message_time as number,
+    unreadCount: row.unread_count as number,
+    title: row.title || undefined,
+    reason: row.reason || undefined,
+    note: row.note || undefined,
+    isGroup: !!row.is_group,
+    groupName: row.group_name || undefined,
+    isPinned: !!row.is_pinned,
+    isArchived: !!row.is_archived,
+  };
+}
+
+// ── D1 row → Message mapper ────────────────────────────────────────────────
+
+function rowToMessage(row: Record<string, unknown>): any {
+  return {
+    id: row.id as string,
+    conversationId: row.conversation_id as string,
+    senderId: row.sender_id as string,
+    senderName: row.sender_name as string,
+    text: row.text as string,
+    tags: JSON.parse(row.tags as string),
+    timestamp: row.timestamp as number,
+    status: row.status as string,
+    replyTo: row.reply_to ? JSON.parse(row.reply_to as string) : undefined,
+    attachment: row.attachment ? JSON.parse(row.attachment as string) : undefined,
+  };
 }
 
 // ── Main handler ───────────────────────────────────────────────────────────
@@ -301,6 +339,183 @@ export default {
         const obj = await env.VAYU_R2.head(key);
         if (!obj) return err('File not found', 404);
         await env.VAYU_R2.delete(key);
+        return json({ success: true });
+      }
+
+      // ════════════════════════════════════════════════════════════════════
+      // ── MESSAGING ENDPOINTS (D1-backed) ──────────────────────────────
+      // ════════════════════════════════════════════════════════════════════
+
+      // ── GET /conversations — list conversations for the logged-in user ──
+      if (path === '/conversations' && method === 'GET') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const results = await env.VAYU_DB.prepare(
+          'SELECT * FROM conversations ORDER BY is_pinned DESC, last_message_time DESC'
+        ).all();
+        const rows = results.results || [];
+        // Filter to conversations where the user is a participant
+        const convos = rows
+          .map(rowToConversation)
+          .filter(c => c.participantIds.includes(session.userId));
+        return json(convos);
+      }
+
+      // ── POST /conversations — create a conversation ─────────────────
+      if (path === '/conversations' && method === 'POST') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const body = await request.json();
+        const conv = body as any;
+        if (!conv.id || !conv.participantIds) return err('id and participantIds are required');
+        await env.VAYU_DB.prepare(
+          `INSERT OR REPLACE INTO conversations
+           (id, participant_ids, participant_names, last_message, last_message_time,
+            unread_count, title, reason, note, is_group, group_name, is_pinned, is_archived, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          conv.id,
+          JSON.stringify(conv.participantIds),
+          JSON.stringify(conv.participantNames || []),
+          conv.lastMessage || '',
+          conv.lastMessageTime || Date.now(),
+          conv.unreadCount || 0,
+          conv.title || null,
+          conv.reason || null,
+          conv.note || null,
+          conv.isGroup ? 1 : 0,
+          conv.groupName || null,
+          conv.isPinned ? 1 : 0,
+          conv.isArchived ? 1 : 0,
+          Date.now()
+        ).run();
+        return json(conv, 201);
+      }
+
+      // ── PUT /conversations/:id — update conversation (pin, archive, details) ──
+      if (path.startsWith('/conversations/') && method === 'PUT') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const convId = path.slice('/conversations/'.length);
+        const body = await request.json();
+        const conv = body as any;
+        await env.VAYU_DB.prepare(
+          `UPDATE conversations SET
+             participant_ids = ?, participant_names = ?, last_message = ?,
+             last_message_time = ?, unread_count = ?, title = ?, reason = ?,
+             note = ?, is_group = ?, group_name = ?, is_pinned = ?, is_archived = ?
+           WHERE id = ?`
+        ).bind(
+          JSON.stringify(conv.participantIds),
+          JSON.stringify(conv.participantNames || []),
+          conv.lastMessage || '',
+          conv.lastMessageTime || Date.now(),
+          conv.unreadCount || 0,
+          conv.title || null,
+          conv.reason || null,
+          conv.note || null,
+          conv.isGroup ? 1 : 0,
+          conv.groupName || null,
+          conv.isPinned ? 1 : 0,
+          conv.isArchived ? 1 : 0,
+          convId
+        ).run();
+        return json(conv);
+      }
+
+      // ── GET /messages — fetch messages (optionally by conversation) ──
+      if (path === '/messages' && method === 'GET') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const conversationId = url.searchParams.get('conversationId');
+        let results;
+        if (conversationId) {
+          results = await env.VAYU_DB.prepare(
+            'SELECT * FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC'
+          ).bind(conversationId).all();
+        } else {
+          // Fetch all messages for conversations the user is part of
+          const convResults = await env.VAYU_DB.prepare('SELECT id, participant_ids FROM conversations').all();
+          const convRows = convResults.results || [];
+          const userConvIds = convRows
+            .filter(r => {
+              try { return JSON.parse(r.participant_ids as string).includes(session.userId); }
+              catch { return false; }
+            })
+            .map(r => r.id as string);
+          if (userConvIds.length === 0) return json([]);
+          const placeholders = userConvIds.map(() => '?').join(',');
+          results = await env.VAYU_DB.prepare(
+            `SELECT * FROM messages WHERE conversation_id IN (${placeholders}) ORDER BY timestamp ASC`
+          ).bind(...userConvIds).all();
+        }
+        const messages = (results.results || []).map(rowToMessage);
+        return json(messages);
+      }
+
+      // ── POST /messages — store a new message ────────────────────────
+      if (path === '/messages' && method === 'POST') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const body = await request.json();
+        const msg = body as any;
+        if (!msg.id || !msg.conversationId) return err('id and conversationId are required');
+        await env.VAYU_DB.prepare(
+          `INSERT OR REPLACE INTO messages
+           (id, conversation_id, sender_id, sender_name, text, tags, timestamp,
+            status, reply_to, attachment, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          msg.id,
+          msg.conversationId,
+          msg.senderId,
+          msg.senderName || '',
+          msg.text || '',
+          JSON.stringify(msg.tags || []),
+          msg.timestamp || Date.now(),
+          msg.status || 'sent',
+          msg.replyTo ? JSON.stringify(msg.replyTo) : null,
+          msg.attachment ? JSON.stringify(msg.attachment) : null,
+          Date.now()
+        ).run();
+
+        // Update conversation's last message info
+        const lastMsgPreview = msg.attachment
+          ? (msg.attachment.type === 'image' ? '📷 Photo' : `📎 ${msg.attachment.name}`)
+          : msg.text;
+        await env.VAYU_DB.prepare(
+          `UPDATE conversations SET last_message = ?, last_message_time = ? WHERE id = ?`
+        ).bind(lastMsgPreview, msg.timestamp || Date.now(), msg.conversationId).run();
+
+        return json(msg, 201);
+      }
+
+      // ── PUT /messages/:id/status — update message delivery/read status ──
+      if (path.startsWith('/messages/') && path.endsWith('/status') && method === 'PUT') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const msgId = path.slice('/messages/'.length, -'/status'.length);
+        const body = await request.json();
+        const { status } = body as { status?: string };
+        if (!status) return err('status is required');
+        await env.VAYU_DB.prepare(
+          'UPDATE messages SET status = ? WHERE id = ?'
+        ).bind(status, msgId).run();
+        return json({ success: true });
+      }
+
+      // ── PUT /messages/status-batch — bulk update message status ─────
+      if (path === '/messages/status-batch' && method === 'PUT') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const body = await request.json();
+        const { messageIds, status } = body as { messageIds?: string[]; status?: string };
+        if (!messageIds || !status) return err('messageIds and status are required');
+        for (const id of messageIds) {
+          await env.VAYU_DB.prepare(
+            'UPDATE messages SET status = ? WHERE id = ?'
+          ).bind(status, id).run();
+        }
         return json({ success: true });
       }
 

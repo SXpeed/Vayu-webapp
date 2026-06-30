@@ -19,5 +19,12 @@
       "binding": "VAYU_R2",
       "bucket_name": "vayu-r2-bucket"
     }
+  ],
+  "d1_databases": [
+    {
+      "binding": "VAYU_DB",
+      "database_name": "vayu-messaging-db",
+      "database_id": "33da1221-1883-4220-a193-b4bb40c82d59"
+    }
   ]
 }

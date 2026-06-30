@@ -13,6 +13,7 @@ import { ArtworkDetailView } from './views/ArtworkDetailView';
 import { InquiryView } from './views/InquiryView';
 import { MessagingView } from './views/MessagingView';
 import { db } from './services/db';
+import { messagingService } from './services/messagingService';
 import storageService from './services/storageService';
 
 const App: React.FC = () => {
@@ -40,8 +41,6 @@ const App: React.FC = () => {
         const loadedCollections = await db.getCollections();
         const loadedInvoices = await db.getInvoices();
         const loadedInquiries = await db.getInquiries();
-        const loadedConversations = await db.getConversations();
-        const loadedMessages = await db.getMessages();
         const loadedInquiryMessages = await db.getInquiryMessages();
 
         setArtworks(loadedArtworks);
@@ -49,10 +48,25 @@ const App: React.FC = () => {
         setCollections(loadedCollections);
         setInvoices(loadedInvoices);
         setInquiries(loadedInquiries);
-        setConversations(loadedConversations);
-        setAllMessages(loadedMessages);
         setInquiryMessages(loadedInquiryMessages);
-    }, []);
+
+        // Load conversations & messages from D1 (cloud) when authenticated
+        if (authUser) {
+            try {
+                const loadedConversations = await messagingService.getConversations();
+                const loadedMessages = await messagingService.getMessages();
+                setConversations(loadedConversations);
+                setAllMessages(loadedMessages);
+            } catch (err) {
+                console.error('Failed to load messaging data from D1:', err);
+                setConversations(await db.getConversations());
+                setAllMessages(await db.getMessages());
+            }
+        } else {
+            setConversations(await db.getConversations());
+            setAllMessages(await db.getMessages());
+        }
+    }, [authUser]);
 
     // Load team members from the auth service (Worker/KV) and map to UserProfile
     const loadTeamMembers = useCallback(async () => {
@@ -153,6 +167,34 @@ const App: React.FC = () => {
         };
         return () => channel.close();
     }, [loadData, loadTeamMembers]);
+
+    // ── Polling: fetch conversations & messages from D1 every 5 seconds ──
+    // This enables near-real-time messaging across devices/browsers.
+    useEffect(() => {
+        if (!authUser) return;
+        let cancelled = false;
+
+        const poll = async () => {
+            if (cancelled) return;
+            try {
+                const remoteConversations = await messagingService.getConversations();
+                const remoteMessages = await messagingService.getMessages();
+                if (!cancelled) {
+                    setConversations(remoteConversations);
+                    setAllMessages(remoteMessages);
+                }
+            } catch (err) {
+                // Silent fail — will retry next poll cycle
+            }
+        };
+
+        poll(); // Initial fetch
+        const interval = setInterval(poll, 5000);
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, [authUser]);
 
     // Apply Theme
     useEffect(() => {
@@ -385,6 +427,13 @@ const App: React.FC = () => {
             replyTo,
             attachment,
         };
+        // Save to D1 (cloud) — the worker also updates conversation's last message
+        try {
+            await messagingService.sendMessage(msg);
+        } catch (err) {
+            console.error('Failed to send message to D1:', err);
+        }
+        // Also cache locally for offline/fallback
         await db.saveMessage(msg);
         setAllMessages((prev: Message[]) => [...prev, msg]);
 
@@ -410,6 +459,7 @@ const App: React.FC = () => {
         const conv = conversations.find(c => c.id === conversationId);
         if (!conv) return;
         const updatedConv = { ...conv, isPinned: !conv.isPinned };
+        try { await messagingService.updateConversation(updatedConv); } catch (e) { console.error('D1 sync failed (pin):', e); }
         await db.saveConversation(updatedConv);
         setConversations((prev: Conversation[]) => prev.map(c => c.id === conversationId ? updatedConv : c));
     };
@@ -418,6 +468,7 @@ const App: React.FC = () => {
         const conv = conversations.find(c => c.id === conversationId);
         if (!conv) return;
         const updatedConv = { ...conv, isArchived: !conv.isArchived };
+        try { await messagingService.updateConversation(updatedConv); } catch (e) { console.error('D1 sync failed (archive):', e); }
         await db.saveConversation(updatedConv);
         setConversations((prev: Conversation[]) => prev.map(c => c.id === conversationId ? updatedConv : c));
     };
@@ -440,6 +491,7 @@ const App: React.FC = () => {
             reason: details?.reason,
             note: details?.note,
         };
+        try { await messagingService.createConversation(conv); } catch (e) { console.error('D1 sync failed (create conversation):', e); }
         await db.saveConversation(conv);
         setConversations((prev: Conversation[]) => [conv, ...prev]);
         return conv;
@@ -461,6 +513,7 @@ const App: React.FC = () => {
             isGroup: true,
             groupName,
         };
+        try { await messagingService.createConversation(conv); } catch (e) { console.error('D1 sync failed (create group):', e); }
         await db.saveConversation(conv);
         setConversations((prev: Conversation[]) => [conv, ...prev]);
         return conv;
@@ -470,6 +523,7 @@ const App: React.FC = () => {
         const conv = conversations.find(c => c.id === conversationId);
         if (!conv) return;
         const updatedConv = { ...conv, ...details };
+        try { await messagingService.updateConversation(updatedConv); } catch (e) { console.error('D1 sync failed (update details):', e); }
         await db.saveConversation(updatedConv);
         setConversations((prev: Conversation[]) => prev.map(c => c.id === conversationId ? updatedConv : c));
     };
