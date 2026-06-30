@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vayu-design-v2';
+const CACHE_NAME = 'vayu-design-v4';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',

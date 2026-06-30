@@ -19,6 +19,7 @@ export interface Collection {
     name: string;
     description: string;
     artworkIds: string[];
+    createdAt?: number;
 }
 
 export interface Catalog {

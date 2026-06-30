@@ -55,3 +55,69 @@ CREATE TABLE IF NOT EXISTS artworks (
 
 CREATE INDEX IF NOT EXISTS idx_artworks_created ON artworks(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_artworks_status ON artworks(status);
+
+-- ── Collections table ──────────────────────────────────────────────────────
+-- Groups of artworks (curated sets).
+
+CREATE TABLE IF NOT EXISTS collections (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL DEFAULT '',
+  description TEXT DEFAULT '',
+  artwork_ids TEXT DEFAULT '[]',        -- JSON array of artwork IDs
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_collections_created ON collections(created_at DESC);
+
+-- ── Catalogs table ──────────────────────────────────────────────────────────
+-- Shareable catalogs of artworks with a cover image.
+
+CREATE TABLE IF NOT EXISTS catalogs (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL DEFAULT '',
+  description TEXT DEFAULT '',
+  artwork_ids TEXT DEFAULT '[]',        -- JSON array of artwork IDs
+  cover_image_url TEXT DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_catalogs_created ON catalogs(created_at DESC);
+
+-- ── Inquiries table ─────────────────────────────────────────────────────────
+-- Customer inquiries with linked artworks and status tracking.
+
+CREATE TABLE IF NOT EXISTS inquiries (
+  id TEXT PRIMARY KEY,
+  inquiry_number TEXT NOT NULL DEFAULT '',
+  customer_name TEXT NOT NULL DEFAULT '',
+  customer_phone TEXT DEFAULT '',
+  customer_email TEXT DEFAULT '',
+  artwork_ids TEXT DEFAULT '[]',        -- JSON array of artwork IDs
+  notes TEXT DEFAULT '',
+  source TEXT DEFAULT 'Other',
+  status TEXT DEFAULT 'New',
+  catalog_shared INTEGER DEFAULT 0,
+  date INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_inquiries_date ON inquiries(date DESC);
+CREATE INDEX IF NOT EXISTS idx_inquiries_status ON inquiries(status);
+
+-- ── Inquiry Messages table ──────────────────────────────────────────────────
+-- Chat messages within an inquiry (team discussion about a customer inquiry).
+
+CREATE TABLE IF NOT EXISTS inquiry_messages (
+  id TEXT PRIMARY KEY,
+  inquiry_id TEXT NOT NULL,
+  sender_id TEXT NOT NULL,
+  sender_name TEXT NOT NULL,
+  text TEXT DEFAULT '',
+  tags TEXT DEFAULT '[]',               -- JSON array of tags
+  timestamp INTEGER NOT NULL,
+  status TEXT DEFAULT 'sent',
+  reply_to TEXT,                        -- JSON object or null
+  attachment TEXT,                      -- JSON object or null
+  created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
+);
+
+CREATE INDEX IF NOT EXISTS idx_inquiry_messages_inquiry ON inquiry_messages(inquiry_id, timestamp);

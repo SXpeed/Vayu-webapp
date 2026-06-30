@@ -15,6 +15,9 @@ import { MessagingView } from './views/MessagingView';
 import { db } from './services/db';
 import { messagingService } from './services/messagingService';
 import { artworkService } from './services/artworkService';
+import { collectionService } from './services/collectionService';
+import { catalogService } from './services/catalogService';
+import { inquiryService } from './services/inquiryService';
 import storageService from './services/storageService';
 
 const App: React.FC = () => {
@@ -44,41 +47,55 @@ const App: React.FC = () => {
     // loadData takes isAuthenticated as a parameter instead of reading from
     // state/closure, so it has NO state dependencies and a stable reference.
     const loadData = useCallback(async (isAuthenticated: boolean) => {
-        const loadedCatalogs = await db.getCatalogs();
-        const loadedCollections = await db.getCollections();
+        // Always load invoices from local DB (not cloud-synced)
         const loadedInvoices = await db.getInvoices();
-        const loadedInquiries = await db.getInquiries();
-        const loadedInquiryMessages = await db.getInquiryMessages();
-
-        setCatalogs(loadedCatalogs);
-        setCollections(loadedCollections);
         setInvoices(loadedInvoices);
-        setInquiries(loadedInquiries);
-        setInquiryMessages(loadedInquiryMessages);
 
-        // Load artworks, conversations & messages from D1 (cloud) when authenticated
+        // Load artworks, conversations, messages, collections, catalogs,
+        // inquiries & inquiry messages from D1 (cloud) when authenticated
         if (isAuthenticated) {
             try {
-                const [loadedArtworks, loadedConversations, loadedMessages] = await Promise.all([
+                const [
+                    loadedArtworks, loadedConversations, loadedMessages,
+                    loadedCollections, loadedCatalogs, loadedInquiries, loadedInquiryMessages
+                ] = await Promise.all([
                     artworkService.getArtworks(),
                     messagingService.getConversations(),
                     messagingService.getMessages(),
+                    collectionService.getCollections(),
+                    catalogService.getCatalogs(),
+                    inquiryService.getInquiries(),
+                    inquiryService.getInquiryMessages(),
                 ]);
                 setArtworks(loadedArtworks);
                 setConversations(loadedConversations);
                 setAllMessages(loadedMessages);
+                setCollections(loadedCollections);
+                setCatalogs(loadedCatalogs);
+                setInquiries(loadedInquiries);
+                setInquiryMessages(loadedInquiryMessages);
                 // Cache artworks locally for offline fallback
                 for (const art of loadedArtworks) await db.saveArtwork(art);
             } catch (err) {
                 console.error('Failed to load cloud data from D1:', err);
+                // Fallback to local DB
                 setArtworks(await db.getArtworks());
                 setConversations(await db.getConversations());
                 setAllMessages(await db.getMessages());
+                setCollections(await db.getCollections());
+                setCatalogs(await db.getCatalogs());
+                setInquiries(await db.getInquiries());
+                setInquiryMessages(await db.getInquiryMessages());
             }
         } else {
+            // Not authenticated — load everything from local DB
             setArtworks(await db.getArtworks());
             setConversations(await db.getConversations());
             setAllMessages(await db.getMessages());
+            setCollections(await db.getCollections());
+            setCatalogs(await db.getCatalogs());
+            setInquiries(await db.getInquiries());
+            setInquiryMessages(await db.getInquiryMessages());
         }
     }, []);
 
@@ -218,6 +235,32 @@ const App: React.FC = () => {
         };
     }, [authUser]);
 
+    // ── Polling: fetch inquiry messages from D1 every 15 seconds ──
+    // This enables near-real-time inquiry chat across devices/browsers.
+    useEffect(() => {
+        if (!authUser) return;
+        let cancelled = false;
+
+        const pollInquiry = async () => {
+            if (cancelled) return;
+            try {
+                const remoteInquiryMessages = await inquiryService.getInquiryMessages();
+                if (!cancelled) {
+                    setInquiryMessages(remoteInquiryMessages);
+                }
+            } catch (err) {
+                // Silent fail — will retry next poll cycle
+            }
+        };
+
+        pollInquiry(); // Initial fetch
+        const interval = setInterval(pollInquiry, 15000);
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, [authUser]);
+
     // Apply Theme
     useEffect(() => {
         if (theme === 'dark') {
@@ -301,16 +344,19 @@ const App: React.FC = () => {
             id: `cat_${Date.now()}`,
             createdAt: Date.now(),
         };
+        try { await catalogService.saveCatalog(catalog); } catch (e) { console.error('D1 sync failed (add catalog):', e); }
         await db.saveCatalog(catalog);
         setCatalogs((prev: Catalog[]) => [catalog, ...prev]);
     };
 
     const handleUpdateCatalog = async (updatedCat: Catalog) => {
+        try { await catalogService.updateCatalog(updatedCat); } catch (e) { console.error('D1 sync failed (update catalog):', e); }
         await db.saveCatalog(updatedCat);
         setCatalogs((prev: Catalog[]) => prev.map((c: Catalog) => c.id === updatedCat.id ? updatedCat : c));
     };
 
     const handleDeleteCatalog = async (id: string) => {
+        try { await catalogService.deleteCatalog(id); } catch (e) { console.error('D1 sync failed (delete catalog):', e); }
         await db.deleteCatalog(id);
         setCatalogs((prev: Catalog[]) => prev.filter((c: Catalog) => c.id !== id));
     };
@@ -320,16 +366,19 @@ const App: React.FC = () => {
             ...newCol,
             id: `col_${Date.now()}`
         };
+        try { await collectionService.saveCollection(collection); } catch (e) { console.error('D1 sync failed (add collection):', e); }
         await db.saveCollection(collection);
         setCollections((prev: Collection[]) => [collection, ...prev]);
     };
 
     const handleUpdateCollection = async (updatedCol: Collection) => {
+        try { await collectionService.updateCollection(updatedCol); } catch (e) { console.error('D1 sync failed (update collection):', e); }
         await db.saveCollection(updatedCol);
         setCollections((prev: Collection[]) => prev.map((c: Collection) => c.id === updatedCol.id ? updatedCol : c));
     };
 
     const handleDeleteCollection = async (id: string) => {
+        try { await collectionService.deleteCollection(id); } catch (e) { console.error('D1 sync failed (delete collection):', e); }
         await db.deleteCollection(id);
         setCollections((prev: Collection[]) => prev.filter((c: Collection) => c.id !== id));
     };
@@ -374,16 +423,19 @@ const App: React.FC = () => {
             id: `inq_${Date.now()}`,
             date: Date.now(),
         };
+        try { await inquiryService.saveInquiry(inquiry); } catch (e) { console.error('D1 sync failed (add inquiry):', e); }
         await db.saveInquiry(inquiry);
         setInquiries((prev: Inquiry[]) => [inquiry, ...prev]);
     };
 
     const handleUpdateInquiry = async (updatedInq: Inquiry) => {
+        try { await inquiryService.updateInquiry(updatedInq); } catch (e) { console.error('D1 sync failed (update inquiry):', e); }
         await db.saveInquiry(updatedInq);
         setInquiries((prev: Inquiry[]) => prev.map((i: Inquiry) => i.id === updatedInq.id ? updatedInq : i));
     };
 
     const handleDeleteInquiry = async (id: string) => {
+        try { await inquiryService.deleteInquiry(id); } catch (e) { console.error('D1 sync failed (delete inquiry):', e); }
         await db.deleteInquiry(id);
         setInquiries((prev: Inquiry[]) => prev.filter((i: Inquiry) => i.id !== id));
     };
@@ -401,6 +453,8 @@ const App: React.FC = () => {
             replyTo,
             attachment,
         };
+        // Save to D1 (cloud) and cache locally
+        try { await inquiryService.saveInquiryMessage(msg); } catch (e) { console.error('D1 sync failed (inquiry message):', e); }
         await db.saveInquiryMessage(msg);
         setInquiryMessages((prev: InquiryMessage[]) => [...prev, msg]);
 

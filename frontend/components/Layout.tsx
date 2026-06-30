@@ -18,7 +18,7 @@ const Layout: React.FC<{
     <div className="min-h-screen bg-gray-200 dark:bg-gray-950 flex items-center justify-center md:p-4 transition-colors duration-500">
       <div
         id="app-shell"
-        className="w-full h-[100dvh] md:h-[90vh] md:max-w-md lg:max-w-lg bg-[#faf9f6] dark:bg-[#121212] md:rounded-[7px] md:shadow-2xl relative overflow-hidden flex flex-col md:border-[6px] border-gray-800 dark:border-gray-900 transition-all duration-500"
+        className="w-full h-app md:max-w-md lg:max-w-lg bg-[#faf9f6] dark:bg-[#121212] md:rounded-[7px] md:shadow-2xl relative overflow-hidden flex flex-col md:border-[6px] border-gray-800 dark:border-gray-900 transition-all duration-500"
       >
         {/* Header — only on Home */}
         {currentView === 'home' && (

@@ -166,6 +166,66 @@ function rowToArtwork(row: Record<string, unknown>): any {
   };
 }
 
+// ── D1 row → Collection mapper ─────────────────────────────────────────────
+
+function rowToCollection(row: Record<string, unknown>): any {
+  return {
+    id: row.id as string,
+    name: row.name as string,
+    description: row.description as string,
+    artworkIds: JSON.parse(row.artwork_ids as string),
+    createdAt: row.created_at as number,
+  };
+}
+
+// ── D1 row → Catalog mapper ─────────────────────────────────────────────────
+
+function rowToCatalog(row: Record<string, unknown>): any {
+  return {
+    id: row.id as string,
+    name: row.name as string,
+    description: row.description as string,
+    artworkIds: JSON.parse(row.artwork_ids as string),
+    coverImageUrl: row.cover_image_url as string,
+    createdAt: row.created_at as number,
+  };
+}
+
+// ── D1 row → Inquiry mapper ─────────────────────────────────────────────────
+
+function rowToInquiry(row: Record<string, unknown>): any {
+  return {
+    id: row.id as string,
+    inquiryNumber: row.inquiry_number as string,
+    customerName: row.customer_name as string,
+    customerPhone: row.customer_phone as string,
+    customerEmail: row.customer_email as string,
+    artworkIds: JSON.parse(row.artwork_ids as string),
+    notes: row.notes as string,
+    source: row.source as string,
+    status: row.status as string,
+    catalogShared: !!row.catalog_shared,
+    date: row.date as number,
+  };
+}
+
+// ── D1 row → InquiryMessage mapper ──────────────────────────────────────────
+
+function rowToInquiryMessage(row: Record<string, unknown>): any {
+  return {
+    id: row.id as string,
+    inquiryId: row.inquiry_id as string,
+    senderId: row.sender_id as string,
+    senderName: row.sender_name as string,
+    text: row.text as string,
+    tags: JSON.parse(row.tags as string),
+    timestamp: row.timestamp as number,
+    status: row.status as string,
+    replyTo: row.reply_to ? JSON.parse(row.reply_to as string) : undefined,
+    attachment: row.attachment ? JSON.parse(row.attachment as string) : undefined,
+  };
+}
+
 // ── Main handler ───────────────────────────────────────────────────────────
 
 export default {
@@ -627,6 +687,310 @@ export default {
         }
 
         await env.VAYU_DB.prepare('DELETE FROM artworks WHERE id = ?').bind(artId).run();
+        return json({ success: true });
+      }
+
+      // ════════════════════════════════════════════════════════════════════
+      // ── COLLECTION ENDPOINTS (D1-backed) ──────────────────────────────
+      // ════════════════════════════════════════════════════════════════════
+
+      // ── GET /collections — list all collections ──────────────────────
+      if (path === '/collections' && method === 'GET') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const results = await env.VAYU_DB.prepare(
+          'SELECT * FROM collections ORDER BY created_at DESC'
+        ).all();
+        const collections = (results.results || []).map(rowToCollection);
+        return json(collections);
+      }
+
+      // ── POST /collections — create or upsert a collection ────────────
+      if (path === '/collections' && method === 'POST') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const body = await request.json();
+        const col = body as any;
+        if (!col.id) return err('id is required');
+        await env.VAYU_DB.prepare(
+          `INSERT OR REPLACE INTO collections
+           (id, name, description, artwork_ids, created_at)
+           VALUES (?, ?, ?, ?, ?)`
+        ).bind(
+          col.id,
+          col.name || '',
+          col.description || '',
+          JSON.stringify(col.artworkIds || []),
+          col.createdAt || Date.now()
+        ).run();
+        return json(col, 201);
+      }
+
+      // ── PUT /collections/:id — update a collection ───────────────────
+      if (path.startsWith('/collections/') && method === 'PUT') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const body = await request.json();
+        const col = body as any;
+        await env.VAYU_DB.prepare(
+          `UPDATE collections SET
+             name = ?, description = ?, artwork_ids = ?
+           WHERE id = ?`
+        ).bind(
+          col.name || '',
+          col.description || '',
+          JSON.stringify(col.artworkIds || []),
+          path.slice('/collections/'.length)
+        ).run();
+        return json(col);
+      }
+
+      // ── DELETE /collections/:id — delete a collection ────────────────
+      if (path.startsWith('/collections/') && method === 'DELETE') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const colId = path.slice('/collections/'.length);
+        await env.VAYU_DB.prepare('DELETE FROM collections WHERE id = ?').bind(colId).run();
+        return json({ success: true });
+      }
+
+      // ════════════════════════════════════════════════════════════════════
+      // ── CATALOG ENDPOINTS (D1-backed) ─────────────────────────────────
+      // ════════════════════════════════════════════════════════════════════
+
+      // ── GET /catalogs — list all catalogs ────────────────────────────
+      if (path === '/catalogs' && method === 'GET') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const results = await env.VAYU_DB.prepare(
+          'SELECT * FROM catalogs ORDER BY created_at DESC'
+        ).all();
+        const catalogs = (results.results || []).map(rowToCatalog);
+        return json(catalogs);
+      }
+
+      // ── POST /catalogs — create or upsert a catalog ──────────────────
+      if (path === '/catalogs' && method === 'POST') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const body = await request.json();
+        const cat = body as any;
+        if (!cat.id) return err('id is required');
+        await env.VAYU_DB.prepare(
+          `INSERT OR REPLACE INTO catalogs
+           (id, name, description, artwork_ids, cover_image_url, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        ).bind(
+          cat.id,
+          cat.name || '',
+          cat.description || '',
+          JSON.stringify(cat.artworkIds || []),
+          cat.coverImageUrl || '',
+          cat.createdAt || Date.now()
+        ).run();
+        return json(cat, 201);
+      }
+
+      // ── PUT /catalogs/:id — update a catalog ─────────────────────────
+      if (path.startsWith('/catalogs/') && method === 'PUT') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const body = await request.json();
+        const cat = body as any;
+        await env.VAYU_DB.prepare(
+          `UPDATE catalogs SET
+             name = ?, description = ?, artwork_ids = ?, cover_image_url = ?
+           WHERE id = ?`
+        ).bind(
+          cat.name || '',
+          cat.description || '',
+          JSON.stringify(cat.artworkIds || []),
+          cat.coverImageUrl || '',
+          path.slice('/catalogs/'.length)
+        ).run();
+        return json(cat);
+      }
+
+      // ── DELETE /catalogs/:id — delete a catalog ──────────────────────
+      if (path.startsWith('/catalogs/') && method === 'DELETE') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const catId = path.slice('/catalogs/'.length);
+
+        // Clean up cover image from R2 if it's an uploaded file
+        const result = await env.VAYU_DB.prepare(
+          'SELECT cover_image_url FROM catalogs WHERE id = ?'
+        ).bind(catId).first();
+        if (result && result.cover_image_url) {
+          const coverUrl = result.cover_image_url as string;
+          if (coverUrl.startsWith('/api/files/')) {
+            const key = decodeURIComponent(coverUrl.slice('/api/files/'.length));
+            try { await env.VAYU_R2.delete(key); } catch { }
+          }
+        }
+
+        await env.VAYU_DB.prepare('DELETE FROM catalogs WHERE id = ?').bind(catId).run();
+        return json({ success: true });
+      }
+
+      // ════════════════════════════════════════════════════════════════════
+      // ── INQUIRY ENDPOINTS (D1-backed) ─────────────────────────────────
+      // ════════════════════════════════════════════════════════════════════
+
+      // ── GET /inquiries — list all inquiries ──────────────────────────
+      if (path === '/inquiries' && method === 'GET') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const results = await env.VAYU_DB.prepare(
+          'SELECT * FROM inquiries ORDER BY date DESC'
+        ).all();
+        const inquiries = (results.results || []).map(rowToInquiry);
+        return json(inquiries);
+      }
+
+      // ── POST /inquiries — create or upsert an inquiry ────────────────
+      if (path === '/inquiries' && method === 'POST') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const body = await request.json();
+        const inq = body as any;
+        if (!inq.id) return err('id is required');
+        await env.VAYU_DB.prepare(
+          `INSERT OR REPLACE INTO inquiries
+           (id, inquiry_number, customer_name, customer_phone, customer_email,
+            artwork_ids, notes, source, status, catalog_shared, date)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          inq.id,
+          inq.inquiryNumber || '',
+          inq.customerName || '',
+          inq.customerPhone || '',
+          inq.customerEmail || '',
+          JSON.stringify(inq.artworkIds || []),
+          inq.notes || '',
+          inq.source || 'Other',
+          inq.status || 'New',
+          inq.catalogShared ? 1 : 0,
+          inq.date || Date.now()
+        ).run();
+        return json(inq, 201);
+      }
+
+      // ── PUT /inquiries/:id — update an inquiry ───────────────────────
+      if (path.startsWith('/inquiries/') && method === 'PUT') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const body = await request.json();
+        const inq = body as any;
+        await env.VAYU_DB.prepare(
+          `UPDATE inquiries SET
+             inquiry_number = ?, customer_name = ?, customer_phone = ?,
+             customer_email = ?, artwork_ids = ?, notes = ?, source = ?,
+             status = ?, catalog_shared = ?
+           WHERE id = ?`
+        ).bind(
+          inq.inquiryNumber || '',
+          inq.customerName || '',
+          inq.customerPhone || '',
+          inq.customerEmail || '',
+          JSON.stringify(inq.artworkIds || []),
+          inq.notes || '',
+          inq.source || 'Other',
+          inq.status || 'New',
+          inq.catalogShared ? 1 : 0,
+          path.slice('/inquiries/'.length)
+        ).run();
+        return json(inq);
+      }
+
+      // ── DELETE /inquiries/:id — delete an inquiry ────────────────────
+      if (path.startsWith('/inquiries/') && method === 'DELETE') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const inqId = path.slice('/inquiries/'.length);
+        // Also delete associated inquiry messages
+        await env.VAYU_DB.prepare('DELETE FROM inquiry_messages WHERE inquiry_id = ?').bind(inqId).run();
+        await env.VAYU_DB.prepare('DELETE FROM inquiries WHERE id = ?').bind(inqId).run();
+        return json({ success: true });
+      }
+
+      // ════════════════════════════════════════════════════════════════════
+      // ── INQUIRY MESSAGES ENDPOINTS (D1-backed) ────────────────────────
+      // ════════════════════════════════════════════════════════════════════
+
+      // ── GET /inquiry-messages — fetch inquiry messages ───────────────
+      if (path === '/inquiry-messages' && method === 'GET') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const inquiryId = url.searchParams.get('inquiryId');
+        let results;
+        if (inquiryId) {
+          results = await env.VAYU_DB.prepare(
+            'SELECT * FROM inquiry_messages WHERE inquiry_id = ? ORDER BY timestamp ASC'
+          ).bind(inquiryId).all();
+        } else {
+          results = await env.VAYU_DB.prepare(
+            'SELECT * FROM inquiry_messages ORDER BY timestamp ASC'
+          ).all();
+        }
+        const messages = (results.results || []).map(rowToInquiryMessage);
+        return json(messages);
+      }
+
+      // ── POST /inquiry-messages — store a new inquiry message ─────────
+      if (path === '/inquiry-messages' && method === 'POST') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const body = await request.json();
+        const msg = body as any;
+        if (!msg.id || !msg.inquiryId) return err('id and inquiryId are required');
+        await env.VAYU_DB.prepare(
+          `INSERT OR REPLACE INTO inquiry_messages
+           (id, inquiry_id, sender_id, sender_name, text, tags, timestamp,
+            status, reply_to, attachment, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          msg.id,
+          msg.inquiryId,
+          msg.senderId,
+          msg.senderName || '',
+          msg.text || '',
+          JSON.stringify(msg.tags || []),
+          msg.timestamp || Date.now(),
+          msg.status || 'sent',
+          msg.replyTo ? JSON.stringify(msg.replyTo) : null,
+          msg.attachment ? JSON.stringify(msg.attachment) : null,
+          Date.now()
+        ).run();
+        return json(msg, 201);
+      }
+
+      // ── PUT /inquiry-messages/:id/status — update message status ─────
+      if (path.startsWith('/inquiry-messages/') && path.endsWith('/status') && method === 'PUT') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const msgId = path.slice('/inquiry-messages/'.length, -'/status'.length);
+        const body = await request.json();
+        const { status } = body as { status?: string };
+        if (!status) return err('status is required');
+        await env.VAYU_DB.prepare(
+          'UPDATE inquiry_messages SET status = ? WHERE id = ?'
+        ).bind(status, msgId).run();
+        return json({ success: true });
+      }
+
+      // ── PUT /inquiry-messages/status-batch — bulk update status ──────
+      if (path === '/inquiry-messages/status-batch' && method === 'PUT') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const body = await request.json();
+        const { messageIds, status } = body as { messageIds?: string[]; status?: string };
+        if (!messageIds || !status) return err('messageIds and status are required');
+        for (const id of messageIds) {
+          await env.VAYU_DB.prepare(
+            'UPDATE inquiry_messages SET status = ? WHERE id = ?'
+          ).bind(status, id).run();
+        }
         return json({ success: true });
       }
 

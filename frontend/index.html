@@ -1,34 +1,42 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="theme-color" content="#1a1a1a">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
     <meta name="apple-mobile-web-app-title" content="Vayu Design">
     <meta name="format-detection" content="telephone=no">
     <meta name="mobile-web-app-capable" content="yes">
     <title>Vayu Design for living</title>
-    
+
     <!-- PWA Manifest -->
     <link rel="manifest" href="./manifest.json">
-    <link rel="apple-touch-icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0MDAgNDAwIj48cmVjdCB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgZmlsbD0iIzAwMDAwMCIvPjx0ZXh0IHg9IjIwMCIgeT0iMjEwIiBmb250LWZhbWlseT0ic2VyaWYiIGZvbnQtc2l6ZT0iOTAiIGZpbGw9IiNkNGFmMzciIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtd2VpZ2h0PSJib2xkIj5WQVlVPC90ZXh0Pjx0ZXh0IHg9IjIwMCIgeT0iMjYwIiBmb250LWZhbWlseT0ic2Fucy1zZXJpZiIgZm9udC1zaXplPSIxOCIgZmlsbD0iI2Q0YWYzNyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgbGV0dGVyLXNwYWNpbmc9IjQiPkRFU0lHTiBGT1IgTElWSU5HPC90ZXh0Pjwvc3ZnPg==">
+    <link rel="apple-touch-icon"
+        href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0MDAgNDAwIj48cmVjdCB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgZmlsbD0iIzAwMDAwMCIvPjx0ZXh0IHg9IjIwMCIgeT0iMjEwIiBmb250LWZhbWlseT0ic2VyaWYiIGZvbnQtc2l6ZT0iOTAiIGZpbGw9IiNkNGFmMzciIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtd2VpZ2h0PSJib2xkIj5WQVlVPC90ZXh0Pjx0ZXh0IHg9IjIwMCIgeT0iMjYwIiBmb250LWZhbWlseT0ic2Fucy1zZXJpZiIgZm9udC1zaXplPSIxOCIgZmlsbD0iI2Q0YWYzNyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgbGV0dGVyLXNwYWNpbmc9IjQiPkRFU0lHTiBGT1IgTElWSU5HPC90ZXh0Pjwvc3ZnPg==">
 
     <!-- Luxury Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&display=swap"
+        rel="stylesheet">
 
     <style>
         /* Hide scrollbar for Chrome, Safari and Opera */
         .no-scrollbar::-webkit-scrollbar {
             display: none;
         }
+
         /* Hide scrollbar for IE, Edge and Firefox */
         .no-scrollbar {
-            -ms-overflow-style: none;  /* IE and Edge */
-            scrollbar-width: none;  /* Firefox */
+            -ms-overflow-style: none;
+            /* IE and Edge */
+            scrollbar-width: none;
+            /* Firefox */
         }
 
         /* ===== iOS / iPhone Optimizations ===== */
@@ -41,7 +49,8 @@
         }
 
         body {
-            background-color: #e5e7eb; /* gray-200 */
+            background-color: #e5e7eb;
+            /* gray-200 */
             margin: 0;
             font-family: 'Inter', sans-serif;
             -webkit-tap-highlight-color: transparent;
@@ -55,15 +64,20 @@
         }
 
         /* Allow text selection in inputs/textareas */
-        input, textarea, [contenteditable] {
+        input,
+        textarea,
+        [contenteditable] {
             -webkit-user-select: text;
             user-select: text;
         }
 
         /* Prevent iOS zoom on input focus (font-size must be >= 16px) */
-        input, select, textarea {
+        input,
+        select,
+        textarea {
             font-size: 16px !important;
         }
+
         input[type="text"],
         input[type="email"],
         input[type="tel"],
@@ -85,7 +99,9 @@
          * This is applied via CSS so no component changes are needed.
          */
         @supports (padding-top: env(safe-area-inset-top)) {
-            @media all and (display-mode: standalone), all and (display-mode: fullscreen) {
+            @media all and (display-mode: standalone),
+            all and (display-mode: fullscreen) {
+
                 /* Boost header padding for safe area on iPhone */
                 .pt-8 {
                     padding-top: calc(2rem + env(safe-area-inset-top)) !important;
@@ -95,38 +111,64 @@
 
         /* Custom Animations */
         @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(15px); }
-            to { opacity: 1; transform: translateY(0); }
+            from {
+                opacity: 0;
+                transform: translateY(15px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
+
         @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
+            from {
+                opacity: 0;
+            }
+
+            to {
+                opacity: 1;
+            }
         }
+
         @keyframes scaleIn {
-            from { opacity: 0; transform: scale(0.97); }
-            to { opacity: 1; transform: scale(1); }
+            from {
+                opacity: 0;
+                transform: scale(0.97);
+            }
+
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
         }
+
         .animate-fade-in-up {
             animation: fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
             opacity: 0;
         }
+
         .animate-fade-in {
             animation: fadeIn 0.5s ease-out forwards;
             opacity: 0;
         }
+
         .animate-scale-in {
             animation: scaleIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
             opacity: 0;
         }
+
         .active-scale:active {
             transform: scale(0.96);
         }
     </style>
-    </head>
+</head>
+
 <body>
     <div id="root"></div>
-<script type="module" src="/index.tsx"></script>
-    
+    <script type="module" src="/index.tsx"></script>
+
     <!-- Service Worker Registration for PWA -->
     <script>
         if ('serviceWorker' in navigator) {
@@ -148,46 +190,52 @@
             });
         }
 
-        // Fullscreen API fallback for PWA launched from home screen
+        // Detect standalone PWA mode (launched from home screen)
         function isStandalone() {
             return window.matchMedia('(display-mode: standalone)').matches
                 || window.matchMedia('(display-mode: fullscreen)').matches
                 || window.navigator.standalone === true;
         }
 
-        function requestFullscreen() {
-            const el = document.documentElement;
-            const rfs = el.requestFullscreen
-                || el.webkitRequestFullscreen
-                || el.mozRequestFullScreen
-                || el.msRequestFullscreen;
-            if (rfs) {
-                rfs.call(el).catch(() => {});
-            }
-        }
-
         if (isStandalone()) {
-            // Request fullscreen on first user interaction
-            document.addEventListener('click', function onFirstTouch() {
-                requestFullscreen();
-                document.removeEventListener('click', onFirstTouch);
-            }, { once: true });
-
-            // Re-enter fullscreen if user exits it
-            document.addEventListener('fullscreenchange', () => {
-                if (!document.fullscreenElement && isStandalone()) {
-                    document.addEventListener('click', function onTouch() {
-                        requestFullscreen();
-                        document.removeEventListener('click', onTouch);
-                    }, { once: true });
-                }
-            });
-
             // Lock orientation to portrait if supported
+            // NOTE: We do NOT use the Fullscreen API here — on iOS Safari,
+            // requestFullscreen() hides the native status bar. In standalone
+            // mode the app is already full-screen with the status bar visible
+            // on top, which is the desired behaviour.
             if (screen.orientation && screen.orientation.lock) {
-                screen.orientation.lock('portrait').catch(() => {});
+                screen.orientation.lock('portrait').catch(() => { });
             }
         }
-</script>
+
+        /*
+         * Keyboard / visualViewport fix for iOS Safari.
+         *
+         * On iOS, when the soft keyboard opens, the *layout* viewport (and
+         * therefore `100vh` / `100dvh`) does NOT shrink — only the *visual*
+         * viewport does. This creates a gap between the app content and the
+         * keyboard. We listen to `window.visualViewport` and set a CSS custom
+         * property `--app-height` that tracks the actual visible height, then
+         * the app shell uses it instead of `100dvh`.
+         */
+        (function () {
+            function setAppHeight() {
+                var vh = (window.visualViewport && window.visualViewport.height)
+                    ? window.visualViewport.height
+                    : window.innerHeight;
+                document.documentElement.style.setProperty('--app-height', vh + 'px');
+            }
+            setAppHeight();
+            if (window.visualViewport) {
+                window.visualViewport.addEventListener('resize', setAppHeight);
+                window.visualViewport.addEventListener('scroll', setAppHeight);
+            }
+            window.addEventListener('resize', setAppHeight);
+            window.addEventListener('orientationchange', function () {
+                setTimeout(setAppHeight, 200);
+            });
+        })();
+    </script>
 </body>
+
 </html>
