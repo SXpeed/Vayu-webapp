@@ -21,7 +21,7 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
     return (
         <div className="h-full flex flex-col bg-[#faf9f6] dark:bg-[#121212] transition-colors duration-500 animate-fade-in">
             {/* Header - Compact */}
-            <div className="bg-white dark:bg-[#1a1a1a] px-4 pt-8 pb-3 shadow-sm z-10 border-b border-gray-100 dark:border-gray-800">
+            <div className="bg-white dark:bg-[#1a1a1a] px-4 pb-3 shadow-sm z-10 border-b border-gray-100 dark:border-gray-800" style={{ paddingTop: 'calc(2rem + env(safe-area-inset-top, 0px))' }}>
                 <div className="flex justify-between items-center mb-3">
                     <h1 className="text-xl font-serif text-gray-900 dark:text-white">Inventory</h1>
                     <button
@@ -187,7 +187,7 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
 
     return (
         <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-50 flex flex-col animate-fade-in-up">
-            <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-4 border-b border-gray-100 dark:border-gray-800 pt-8 shadow-sm">
+            <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-4 border-b border-gray-100 dark:border-gray-800 shadow-sm" style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}>
                 <button onClick={onClose} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
                     <X size={20} />
                 </button>

@@ -26,6 +26,23 @@
     padding-bottom: env(safe-area-inset-bottom);
 }
 
+/*
+ * iOS / iPhone safe-area header padding.
+ * Adds 1rem base padding + the notch/Dynamic Island safe area inset.
+ * Works in both Safari browser AND standalone PWA mode.
+ */
+@utility pt-safe-header {
+    padding-top: calc(1rem + env(safe-area-inset-top, 0px));
+}
+
+/*
+ * iOS / iPhone safe-area bottom spacer.
+ * Adds 2rem base padding + the home indicator safe area inset.
+ */
+@utility pb-safe-spacer {
+    padding-bottom: calc(2rem + env(safe-area-inset-bottom, 0px));
+}
+
 @theme {
     --font-sans: 'Inter', sans-serif;
     --font-serif: 'Playfair Display', serif;
