@@ -121,3 +121,20 @@ CREATE TABLE IF NOT EXISTS inquiry_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_inquiry_messages_inquiry ON inquiry_messages(inquiry_id, timestamp);
+
+-- ── Activity Logs table ──────────────────────────────────────────────────────
+-- Tracks user actions (create/update/delete) across all entities for admin audit.
+
+CREATE TABLE IF NOT EXISTS activity_logs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  user_name TEXT NOT NULL,
+  action TEXT NOT NULL,          -- created | updated | deleted | login | logout
+  entity TEXT NOT NULL,          -- user | artwork | catalog | collection | inquiry | conversation | message
+  entity_id TEXT DEFAULT '',
+  details TEXT DEFAULT '',
+  timestamp INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_activity_logs_timestamp ON activity_logs(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_activity_logs_user ON activity_logs(user_id);

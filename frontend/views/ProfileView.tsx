@@ -27,7 +27,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ profile, onUpdateProfi
     return (
         <div className="h-full flex flex-col bg-[#faf9f6] dark:bg-[#121212] transition-colors duration-500 animate-fade-in">
             {/* Header */}
-            <div className="bg-white dark:bg-[#1a1a1a] px-4 pt-8 pb-3 shadow-sm z-10 border-b border-gray-100 dark:border-gray-800 flex justify-between items-center">
+            <div className="bg-white dark:bg-[#1a1a1a] px-4 pb-3 shadow-sm z-10 border-b border-gray-100 dark:border-gray-800 flex justify-between items-center" style={{ paddingTop: 'calc(2rem + env(safe-area-inset-top, 0px))' }}>
                 <h1 className="text-xl font-serif text-gray-900 dark:text-white">Profile</h1>
                 {isEditing ? (
                     <button onClick={handleSave} className="text-gold-600 dark:text-gold-400 font-medium text-xs uppercase tracking-wider flex items-center gap-1 active-scale">

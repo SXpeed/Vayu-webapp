@@ -12,6 +12,7 @@ import { ProfileView } from './views/ProfileView';
 import { ArtworkDetailView } from './views/ArtworkDetailView';
 import { InquiryView } from './views/InquiryView';
 import { MessagingView } from './views/MessagingView';
+import { ActivityLogView } from './views/ActivityLogView';
 import { db } from './services/db';
 import { messagingService } from './services/messagingService';
 import { artworkService } from './services/artworkService';
@@ -99,17 +100,22 @@ const App: React.FC = () => {
         }
     }, []);
 
-    // Load team members from the auth service (Worker/KV) and map to UserProfile
+    // Load team members from the auth service (Worker/KV) and map to UserProfile.
+    // Also merges online presence so the messaging view shows live status.
     const loadTeamMembers = useCallback(async () => {
         try {
-            const team = await authService.getTeamMembers();
+            const [team, presence] = await Promise.all([
+                authService.getTeamMembers(),
+                authService.getPresence().catch(() => ({})),
+            ]);
+            const presenceMap = presence as Record<string, { isOnline?: boolean; lastSeen?: number }>;
             const mapped: UserProfile[] = team.map(u => ({
                 id: u.id,
                 name: u.name,
                 email: u.email,
                 phone: '',
                 address: '',
-                isOnline: false,
+                isOnline: presenceMap[u.id]?.isOnline ?? false,
             }));
             setTeamMembers(mapped);
         } catch (err) {
@@ -276,6 +282,31 @@ const App: React.FC = () => {
         setCurrentView(view);
         window.history.pushState({ view }, '');
     };
+
+    // Presence heartbeat: ping the backend every 30 seconds so the admin
+    // presence panel can show who's currently online. Also marks offline
+    // when the tab is closed or the user navigates away.
+    useEffect(() => {
+        if (!authUser) return;
+        let cancelled = false;
+
+        const beat = async () => {
+            if (cancelled) return;
+            try { await authService.heartbeat(); } catch { /* silent */ }
+        };
+        beat();
+        const interval = setInterval(beat, 30000);
+
+        const onUnload = () => { authService.setOffline(); };
+        window.addEventListener('beforeunload', onUnload);
+
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+            window.removeEventListener('beforeunload', onUnload);
+            authService.setOffline();
+        };
+    }, [authUser]);
 
     // Listen for Cloud Sync events (BroadcastChannel)
     useEffect(() => {
@@ -722,6 +753,21 @@ const App: React.FC = () => {
         setConversations((prev: Conversation[]) => prev.map(c => c.id === conversationId ? updatedConv : c));
     };
 
+    // Update a group conversation's name and participants (admin feature)
+    const handleUpdateGroup = async (conversationId: string, groupName: string, participantIds: string[]) => {
+        const conv = conversations.find(c => c.id === conversationId);
+        if (!conv) return;
+        const selfId = userProfile?.id || authUser?.id || '';
+        const allIds = Array.from(new Set([selfId, ...participantIds]));
+        const allNames = allIds.map(id =>
+            id === selfId ? (userProfile?.name || authUser?.name || 'You') : (teamMembers.find(m => m.id === id)?.name || 'Team Member')
+        );
+        const updatedConv: Conversation = { ...conv, groupName, participantIds: allIds, participantNames: allNames, isGroup: true };
+        try { await messagingService.updateConversation(updatedConv); } catch (e) { console.error('D1 sync failed (update group):', e); }
+        await db.saveConversation(updatedConv);
+        setConversations((prev: Conversation[]) => prev.map(c => c.id === conversationId ? updatedConv : c));
+    };
+
     if (isLoading) {
         return (
             <div className="h-full bg-black flex items-center justify-center">
@@ -773,14 +819,18 @@ const App: React.FC = () => {
                         teamMembers={teamMembers}
                         currentUserId={userProfile?.id || authUser?.id || ''}
                         currentUserName={userProfile?.name || authUser?.name || 'You'}
+                        isAdmin={authUser?.role === 'admin'}
                         onSendMessage={handleSendMessage}
                         onCreateConversation={handleCreateConversation}
                         onCreateGroup={handleCreateGroup}
                         onUpdateConversationDetails={handleUpdateConversationDetails}
+                        onUpdateGroup={handleUpdateGroup}
                         onTogglePinConversation={handleTogglePinConversation}
                         onToggleArchiveConversation={handleToggleArchiveConversation}
                     />
                 );
+            case 'activity':
+                return <ActivityLogView onBack={() => navigateTo('home')} />;
             case 'profile':
                 return userProfile ? (
                     <ProfileView
@@ -797,7 +847,7 @@ const App: React.FC = () => {
     };
 
     return (
-        <Layout currentView={currentView} onNavigate={navigateTo} userProfile={authUser}>
+        <Layout currentView={currentView} onNavigate={navigateTo} userProfile={authUser} onShowActivity={() => navigateTo('activity')}>
             {renderView()}
             {selectedArtwork && (
                 <ArtworkDetailView artwork={selectedArtwork} onClose={handleCloseArtwork} onUpdateArtwork={handleUpdateArtwork} onDeleteArtwork={handleDeleteArtwork} />

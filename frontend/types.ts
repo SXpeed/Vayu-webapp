@@ -139,4 +139,4 @@ export interface InquiryMessage {
     attachment?: MessageAttachment;
 }
 
-export type ViewState = 'login' | 'home' | 'artworks' | 'collections' | 'catalogs' | 'invoice' | 'inquiry' | 'messaging' | 'profile';
+export type ViewState = 'login' | 'home' | 'artworks' | 'collections' | 'catalogs' | 'invoice' | 'inquiry' | 'messaging' | 'profile' | 'activity';

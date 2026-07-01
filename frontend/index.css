@@ -77,3 +77,25 @@
     --color-art-900: #0d0d0d;
     --color-art-950: #000000;
 }
+
+/* Touch-action utility: prevent horizontal scroll interference on carousels */
+.touch-pan-x {
+    touch-action: pan-x;
+}
+
+.touch-pan-y {
+    touch-action: pan-y;
+}
+
+/* Focus-visible ring for keyboard / accessibility navigation */
+.focus-ring:focus-visible {
+    outline: 2px solid var(--color-gold-500);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+/* Smooth scroll snap for carousels on mobile */
+.scroll-snap-x {
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+}

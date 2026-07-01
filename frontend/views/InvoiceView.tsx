@@ -23,7 +23,7 @@ export const InvoiceView: React.FC<InvoiceViewProps> = ({ invoices, artworks, on
 
     return (
         <div className="h-full flex flex-col bg-[#faf9f6] dark:bg-[#121212] transition-colors duration-500 animate-fade-in">
-            <div className="bg-white dark:bg-[#1a1a1a] px-4 pt-8 pb-3 shadow-sm z-10 border-b border-gray-100 dark:border-gray-800">
+            <div className="bg-white dark:bg-[#1a1a1a] px-4 pb-3 shadow-sm z-10 border-b border-gray-100 dark:border-gray-800" style={{ paddingTop: 'calc(2rem + env(safe-area-inset-top, 0px))' }}>
                 <div className="flex justify-between items-center mb-3">
                     <h1 className="text-xl font-serif text-gray-900 dark:text-white">Invoice</h1>
                     <button 

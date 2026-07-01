@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { BottomNav } from '../components/BottomNav';
-import { User, Users } from 'lucide-react';
+import { User, Users, Activity } from 'lucide-react';
 import { AuthUser } from '../services/authService';
 import { ViewState } from '../types';
 import UserManagementPanel from './UserManagementPanel';
@@ -9,8 +9,9 @@ const Layout: React.FC<{
   currentView: ViewState;
   onNavigate: (view: ViewState) => void;
   userProfile?: AuthUser | null;
+  onShowActivity?: () => void;
   children?: React.ReactNode;
-}> = ({ currentView, onNavigate, userProfile, children }) => {
+}> = ({ currentView, onNavigate, userProfile, onShowActivity, children }) => {
   const [showUserMgmt, setShowUserMgmt] = useState(false);
   const isAdmin = userProfile?.role === 'admin';
 
@@ -41,6 +42,15 @@ const Layout: React.FC<{
                     <Users size={16} className="text-brand-900 dark:text-gold-400" />
                   </button>
                 )}
+                {isAdmin && onShowActivity && (
+                  <button
+                    onClick={onShowActivity}
+                    className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale shrink-0"
+                    title="Activity logs"
+                  >
+                    <Activity size={16} className="text-brand-900 dark:text-gold-400" />
+                  </button>
+                )}
                 <button
                   onClick={() => onNavigate('profile')}
                   className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale shrink-0"
@@ -53,7 +63,7 @@ const Layout: React.FC<{
         )}
 
         {/* Main Content */}
-        <main className="flex-1 overflow-y-auto no-scrollbar pb-16 transition-colors duration-500 animate-fade-in">
+        <main className="flex-1 overflow-y-auto no-scrollbar pb-20 transition-colors duration-500 animate-fade-in">
           {children}
         </main>
 

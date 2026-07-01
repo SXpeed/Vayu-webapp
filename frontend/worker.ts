@@ -19,6 +19,8 @@ interface PublicUser {
   email: string;
   role: 'admin' | 'user';
   createdAt: number;
+  isOnline?: boolean;
+  lastSeen?: number;
 }
 
 interface SessionData {
@@ -27,6 +29,56 @@ interface SessionData {
   name: string;
   role: 'admin' | 'user';
   expiresAt: number;
+}
+
+interface ActivityLog {
+  id: string;
+  userId: string;
+  userName: string;
+  action: string;
+  entity: string;
+  entityId: string;
+  details: string;
+  timestamp: number;
+}
+
+// ── Presence helpers ──────────────────────────────────────────────────────
+// Presence is stored in KV with a short TTL. Keys: presence:<userId>
+const PRESENCE_TTL_SECONDS = 45; // Heartbeat every 30s; TTL 45s gives grace
+
+async function setPresence(kv: KVNamespace, userId: string): Promise<void> {
+  await kv.put(`presence:${userId}`, JSON.stringify({ lastSeen: Date.now() }), {
+    expirationTtl: PRESENCE_TTL_SECONDS,
+  });
+}
+
+async function getPresenceMap(kv: KVNamespace): Promise<Record<string, { isOnline: boolean; lastSeen: number }>> {
+  const list = await kv.list({ prefix: 'presence:' });
+  const map: Record<string, { isOnline: boolean; lastSeen: number }> = {};
+  for (const key of list.keys) {
+    const userId = key.name.slice('presence:'.length);
+    const raw = await kv.get(key.name);
+    if (raw) {
+      const data = JSON.parse(raw);
+      map[userId] = { isOnline: true, lastSeen: data.lastSeen || Date.now() };
+    }
+  }
+  return map;
+}
+
+// ── Activity log helper ───────────────────────────────────────────────────
+async function logActivity(db: D1Database, userId: string, userName: string, action: string, entity: string, entityId: string, details: string): Promise<void> {
+  try {
+    await db.prepare(
+      `INSERT OR REPLACE INTO activity_logs (id, user_id, user_name, action, entity, entity_id, details, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      `log_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      userId, userName, action, entity, entityId, details, Date.now()
+    ).run();
+  } catch (e) {
+    console.error('Failed to log activity:', e);
+  }
 }
 
 const CORS: HeadersInit = {
@@ -321,15 +373,22 @@ export default {
       }
 
       // ── GET /auth/team — list all users (any authenticated user) ──
-      // Used by messaging to show team members
+      // Used by messaging to show team members; includes online presence
       if (path === '/auth/team' && method === 'GET') {
         const session = await getSession(request, env.VAYU_KV);
         if (!session) return err('Unauthorized', 401);
         const list = await env.VAYU_KV.list({ prefix: 'auth:user:' });
+        const presenceMap = await getPresenceMap(env.VAYU_KV);
         const users: PublicUser[] = [];
         for (const key of list.keys) {
           const raw = await env.VAYU_KV.get(key.name);
-          if (raw) users.push(stripPassword(JSON.parse(raw)));
+          if (raw) {
+            const pub = stripPassword(JSON.parse(raw));
+            const presence = presenceMap[pub.id];
+            pub.isOnline = !!presence?.isOnline;
+            pub.lastSeen = presence?.lastSeen;
+            users.push(pub);
+          }
         }
         users.sort((a, b) => a.createdAt - b.createdAt);
         return json(users);
@@ -359,6 +418,7 @@ export default {
         await env.VAYU_KV.put(emailKey, id);
         const countRaw = await env.VAYU_KV.get('auth:count');
         await env.VAYU_KV.put('auth:count', String((countRaw ? Number.parseInt(countRaw) : 0) + 1));
+        await logActivity(env.VAYU_DB, session.userId, session.name, 'created', 'user', id, `Created user "${name}" (${email}) with role "${role === 'admin' ? 'admin' : 'user'}"`);
         return json(stripPassword(user), 201);
       }
 
@@ -376,7 +436,100 @@ export default {
         await env.VAYU_KV.delete(`auth:email:${user.email}`);
         const countRaw = await env.VAYU_KV.get('auth:count');
         if (countRaw) await env.VAYU_KV.put('auth:count', String(Math.max(0, Number.parseInt(countRaw) - 1)));
+        await logActivity(env.VAYU_DB, session.userId, session.name, 'deleted', 'user', userId, `Deleted user "${user.name}" (${user.email})`);
         return json({ success: true });
+      }
+
+      // ── PUT /auth/users/:id — edit user name, email, role, password (admin only) ──
+      if (path.startsWith('/auth/users/') && method === 'PUT') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        if (session.role !== 'admin') return err('Forbidden', 403);
+        const userId = path.slice('/auth/users/'.length);
+        const raw = await env.VAYU_KV.get(`auth:user:${userId}`);
+        if (!raw) return err('User not found', 404);
+        const existing: StoredUser = JSON.parse(raw);
+        const editBody = await request.json();
+        const { name, email, role, password } = editBody as {
+          name?: string; email?: string; role?: string; password?: string;
+        };
+        // If email is changing, check for conflicts and update the email index
+        const newEmail = email ? email.toLowerCase().trim() : existing.email;
+        if (newEmail !== existing.email) {
+          const existingId = await env.VAYU_KV.get(`auth:email:${newEmail}`);
+          if (existingId && existingId !== userId) return err('A user with this email already exists', 409);
+          await env.VAYU_KV.delete(`auth:email:${existing.email}`);
+          await env.VAYU_KV.put(`auth:email:${newEmail}`, userId);
+        }
+        const updated: StoredUser = {
+          ...existing,
+          name: name || existing.name,
+          email: newEmail,
+          role: role === 'admin' ? 'admin' : role === 'user' ? 'user' : existing.role,
+          hashedPassword: password ? await hashPassword(password) : existing.hashedPassword,
+        };
+        await env.VAYU_KV.put(`auth:user:${userId}`, JSON.stringify(updated));
+        await logActivity(env.VAYU_DB, session.userId, session.name, 'updated', 'user', userId, `Updated user "${updated.name}" (${updated.email})`);
+        return json(stripPassword(updated));
+      }
+
+      // ── GET /auth/presence — get online status for all users ───────
+      if (path === '/auth/presence' && method === 'GET') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const presenceMap = await getPresenceMap(env.VAYU_KV);
+        return json(presenceMap);
+      }
+
+      // ── POST /auth/presence/heartbeat — update my online presence ──
+      if (path === '/auth/presence/heartbeat' && method === 'POST') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        await setPresence(env.VAYU_KV, session.userId);
+        return json({ success: true });
+      }
+
+      // ── POST /auth/presence/offline — mark me as offline ───────────
+      if (path === '/auth/presence/offline' && method === 'POST') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        await env.VAYU_KV.delete(`presence:${session.userId}`);
+        return json({ success: true });
+      }
+
+      // ── GET /activity-logs — list activity logs (admin only) ───────
+      if (path === '/activity-logs' && method === 'GET') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        if (session.role !== 'admin') return err('Forbidden', 403);
+        const limit = Math.min(Number.parseInt(url.searchParams.get('limit') || '100'), 500);
+        const results = await env.VAYU_DB.prepare(
+          'SELECT * FROM activity_logs ORDER BY timestamp DESC LIMIT ?'
+        ).bind(limit).all();
+        const logs = (results.results || []).map((row): ActivityLog => ({
+          id: row.id as string,
+          userId: row.user_id as string,
+          userName: row.user_name as string,
+          action: row.action as string,
+          entity: row.entity as string,
+          entityId: row.entity_id as string,
+          details: row.details as string,
+          timestamp: row.timestamp as number,
+        }));
+        return json(logs);
+      }
+
+      // ── POST /activity-logs — create an activity log entry ─────────
+      if (path === '/activity-logs' && method === 'POST') {
+        const session = await getSession(request, env.VAYU_KV);
+        if (!session) return err('Unauthorized', 401);
+        const body = await request.json();
+        const { action, entity, entityId, details } = body as {
+          action?: string; entity?: string; entityId?: string; details?: string;
+        };
+        if (!action || !entity) return err('action and entity are required');
+        await logActivity(env.VAYU_DB, session.userId, session.name, action, entity, entityId || '', details || '');
+        return json({ success: true }, 201);
       }
 
       // ── POST /upload — upload file to R2 (auth required) ───────────
@@ -425,18 +578,19 @@ export default {
       // ════════════════════════════════════════════════════════════════════
 
       // ── GET /conversations — list conversations for the logged-in user ──
+      // Admins can pass ?all=true to see ALL conversations (advance view)
       if (path === '/conversations' && method === 'GET') {
         const session = await getSession(request, env.VAYU_KV);
         if (!session) return err('Unauthorized', 401);
+        const showAll = url.searchParams.get('all') === 'true' && session.role === 'admin';
         const results = await env.VAYU_DB.prepare(
           'SELECT * FROM conversations ORDER BY is_pinned DESC, last_message_time DESC'
         ).all();
         const rows = results.results || [];
-        // Filter to conversations where the user is a participant
-        const convos = rows
-          .map(rowToConversation)
-          .filter(c => c.participantIds.includes(session.userId));
-        return json(convos);
+        const convos = rows.map(rowToConversation);
+        // Admin advance view: return all; otherwise filter to user's conversations
+        if (showAll) return json(convos);
+        return json(convos.filter(c => c.participantIds.includes(session.userId)));
       }
 
       // ── POST /conversations — create a conversation ─────────────────
@@ -502,15 +656,22 @@ export default {
       }
 
       // ── GET /messages — fetch messages (optionally by conversation) ──
+      // Admins can pass ?all=true to fetch ALL messages (advance view)
       if (path === '/messages' && method === 'GET') {
         const session = await getSession(request, env.VAYU_KV);
         if (!session) return err('Unauthorized', 401);
         const conversationId = url.searchParams.get('conversationId');
+        const showAll = url.searchParams.get('all') === 'true' && session.role === 'admin';
         let results;
         if (conversationId) {
           results = await env.VAYU_DB.prepare(
             'SELECT * FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC'
           ).bind(conversationId).all();
+        } else if (showAll) {
+          // Admin advance view: fetch ALL messages
+          results = await env.VAYU_DB.prepare(
+            'SELECT * FROM messages ORDER BY timestamp ASC'
+          ).all();
         } else {
           // Fetch all messages for conversations the user is part of
           const convResults = await env.VAYU_DB.prepare('SELECT id, participant_ids FROM conversations').all();

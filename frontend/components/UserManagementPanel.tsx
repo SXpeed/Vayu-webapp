@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, UserPlus, Trash2, Shield, User, Eye, EyeOff } from 'lucide-react';
+import { X, UserPlus, Trash2, Shield, User, Eye, EyeOff, Edit2, Check } from 'lucide-react';
 import { authService, AuthUser } from '../services/authService';
 
 interface Props {
@@ -20,6 +20,15 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState('');
   const [removingId, setRemovingId] = useState<string | null>(null);
+
+  // Edit state
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editRole, setEditRole] = useState<'user' | 'admin'>('user');
+  const [editPassword, setEditPassword] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState('');
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -73,6 +82,52 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
     }
   };
 
+  const startEdit = (u: AuthUser) => {
+    setEditingId(u.id);
+    setEditName(u.name);
+    setEditEmail(u.email);
+    setEditRole(u.role);
+    setEditPassword('');
+    setEditError('');
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditName('');
+    setEditEmail('');
+    setEditRole('user');
+    setEditPassword('');
+    setEditError('');
+  };
+
+  const handleEditSave = async (id: string) => {
+    setEditError('');
+    if (!editName.trim() || !editEmail.trim()) {
+      setEditError('Name and email are required.');
+      return;
+    }
+    if (editPassword && editPassword.length < 6) {
+      setEditError('Password must be at least 6 characters.');
+      return;
+    }
+    setEditSaving(true);
+    try {
+      const data: { name?: string; email?: string; role?: 'admin' | 'user'; password?: string } = {
+        name: editName.trim(),
+        email: editEmail.trim(),
+        role: editRole,
+      };
+      if (editPassword) data.password = editPassword;
+      const updated = await authService.updateUser(id, data);
+      setUsers(prev => prev.map(u => u.id === id ? updated : u));
+      cancelEdit();
+    } catch (e) {
+      setEditError((e as Error).message);
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
   return (
     <div className="absolute inset-0 z-50 flex flex-col bg-[#faf9f6] dark:bg-[#121212] animate-fade-in-up">
       {/* Header */}
@@ -110,31 +165,97 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
             {users.map(u => (
               <div
                 key={u.id}
-                className="bg-white dark:bg-[#1e1e1e] rounded-[7px] border border-gray-100 dark:border-gray-800 p-3 flex items-center gap-3 shadow-sm"
+                className="bg-white dark:bg-[#1e1e1e] rounded-[7px] border border-gray-100 dark:border-gray-800 p-3 shadow-sm"
               >
-                <div className="w-9 h-9 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center shrink-0 text-brand-900 dark:text-gold-400">
-                  {u.role === 'admin' ? <Shield size={16} strokeWidth={1.5} /> : <User size={16} strokeWidth={1.5} />}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-serif text-gray-900 dark:text-gray-100 truncate">{u.name}</p>
-                  <p className="text-[10px] text-gray-400 dark:text-gray-500 truncate">{u.email}</p>
-                </div>
-                <span className={`text-[8px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full shrink-0 ${
-                  u.role === 'admin'
-                    ? 'bg-gold-100 dark:bg-gold-900/30 text-gold-700 dark:text-gold-400'
-                    : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'
-                }`}>
-                  {u.role}
-                </span>
-                {u.id !== currentUserId && (
-                  <button
-                    onClick={() => handleRemove(u.id)}
-                    disabled={removingId === u.id}
-                    className="p-1.5 text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors active-scale disabled:opacity-40 shrink-0"
-                    title="Remove user"
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                {editingId === u.id ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest">Edit User</span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => handleEditSave(u.id)}
+                          disabled={editSaving}
+                          className="p-1.5 text-green-500 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-full transition-colors active-scale disabled:opacity-40 shrink-0"
+                          title="Save changes"
+                        >
+                          <Check size={14} />
+                        </button>
+                        <button
+                          onClick={cancelEdit}
+                          disabled={editSaving}
+                          className="p-1.5 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale disabled:opacity-40 shrink-0"
+                          title="Cancel"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    </div>
+                    {editError && (
+                      <p className="text-[11px] text-red-500 dark:text-red-400 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-[7px]">{editError}</p>
+                    )}
+                    <input
+                      type="text"
+                      value={editName}
+                      onChange={e => setEditName(e.target.value)}
+                      placeholder="Name"
+                      className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[7px] py-1.5 px-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
+                    />
+                    <input
+                      type="email"
+                      value={editEmail}
+                      onChange={e => setEditEmail(e.target.value)}
+                      placeholder="Email"
+                      className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[7px] py-1.5 px-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
+                    />
+                    <input
+                      type="password"
+                      value={editPassword}
+                      onChange={e => setEditPassword(e.target.value)}
+                      placeholder="New password (leave blank to keep)"
+                      className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[7px] py-1.5 px-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
+                    />
+                    <select
+                      value={editRole}
+                      onChange={e => setEditRole(e.target.value as 'user' | 'admin')}
+                      className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[7px] py-1.5 px-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
+                    >
+                      <option value="user">User</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center shrink-0 text-brand-900 dark:text-gold-400">
+                      {u.role === 'admin' ? <Shield size={16} strokeWidth={1.5} /> : <User size={16} strokeWidth={1.5} />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-serif text-gray-900 dark:text-gray-100 truncate">{u.name}</p>
+                      <p className="text-[10px] text-gray-400 dark:text-gray-500 truncate">{u.email}</p>
+                    </div>
+                    <span className={`text-[8px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full shrink-0 ${u.role === 'admin'
+                      ? 'bg-gold-100 dark:bg-gold-900/30 text-gold-700 dark:text-gold-400'
+                      : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'
+                      }`}>
+                      {u.role}
+                    </span>
+                    <button
+                      onClick={() => startEdit(u)}
+                      className="p-1.5 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale shrink-0"
+                      title="Edit user"
+                    >
+                      <Edit2 size={14} />
+                    </button>
+                    {u.id !== currentUserId && (
+                      <button
+                        onClick={() => handleRemove(u.id)}
+                        disabled={removingId === u.id}
+                        className="p-1.5 text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors active-scale disabled:opacity-40 shrink-0"
+                        title="Remove user"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
             ))}

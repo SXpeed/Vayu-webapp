@@ -1,5 +1,5 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit2, Check, CheckCheck, Pin, Archive, MoreVertical, Paperclip, Reply, Loader2 } from 'lucide-react';
+﻿import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit2, Check, CheckCheck, Pin, Archive, MoreVertical, Paperclip, Reply, Loader2, Eye } from 'lucide-react';
 import { Conversation, ConversationDetails, Message, MessageTag, MessageReplyTo, MessageAttachment, UserProfile } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import storageService from '../services/storageService';
@@ -10,12 +10,15 @@ interface MessagingViewProps {
     teamMembers: UserProfile[];
     currentUserId: string;
     currentUserName: string;
+    isAdmin?: boolean;
     onSendMessage: (conversationId: string, text: string, tags: MessageTag[], replyTo?: MessageReplyTo, attachment?: MessageAttachment) => void;
     onCreateConversation: (participantId: string, details?: ConversationDetails) => Promise<Conversation>;
     onCreateGroup: (participantIds: string[], groupName: string) => Promise<Conversation>;
     onUpdateConversationDetails: (conversationId: string, details: ConversationDetails) => void;
+    onUpdateGroup?: (conversationId: string, groupName: string, participantIds: string[]) => void;
     onTogglePinConversation: (conversationId: string) => void;
     onToggleArchiveConversation: (conversationId: string) => void;
+    onAdminAdvanceViewChange?: (enabled: boolean) => void;
 }
 
 export const TAG_COLORS: Record<MessageTag, string> = {
@@ -29,12 +32,20 @@ export const TAG_COLORS: Record<MessageTag, string> = {
 
 export const ALL_TAGS: MessageTag[] = ['General', 'Urgent', 'Follow-up', 'Artwork', 'Inquiry', 'Invoice'];
 
-export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, messages, teamMembers, currentUserId, currentUserName, onSendMessage, onCreateConversation, onCreateGroup, onUpdateConversationDetails, onTogglePinConversation, onToggleArchiveConversation }) => {
+export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, messages, teamMembers, currentUserId, currentUserName, isAdmin, onSendMessage, onCreateConversation, onCreateGroup, onUpdateConversationDetails, onUpdateGroup, onTogglePinConversation, onToggleArchiveConversation, onAdminAdvanceViewChange }) => {
     const [selectedConv, setSelectedConv] = useState<Conversation | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [showNewChat, setShowNewChat] = useState(false);
     const [showArchived, setShowArchived] = useState(false);
     const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+    const [adminAdvanceView, setAdminAdvanceView] = useState(false);
+    const [editingGroup, setEditingGroup] = useState<Conversation | null>(null);
+
+    const toggleAdvanceView = () => {
+        const next = !adminAdvanceView;
+        setAdminAdvanceView(next);
+        onAdminAdvanceViewChange?.(next);
+    };
 
     const onlineMembers = useMemo(() => teamMembers.filter(m => m.isOnline && m.id !== currentUserId), [teamMembers, currentUserId]);
 
@@ -64,11 +75,29 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
             return { name: conv.groupName || 'Group', id: conv.id };
         }
         const idx = conv.participantIds.indexOf(currentUserId);
+        // In admin advance view, the current user may not be a participant.
+        // Show the first participant that isn't the current user, or just the first.
+        if (idx === -1) {
+            return {
+                name: conv.participantNames[0] || 'Unknown',
+                id: conv.participantIds[0] || conv.id,
+            };
+        }
         const otherIdx = idx === 0 ? 1 : 0;
         return {
             name: conv.participantNames[otherIdx] || conv.participantNames[0],
             id: conv.participantIds[otherIdx] || conv.participantIds[0],
         };
+    };
+
+    // In admin advance view, show a descriptive label for conversations the
+    // admin is not part of (e.g. "A ↔ B" for 1-to-1 chats between other users)
+    const getConvDisplayName = (conv: Conversation) => {
+        if (conv.isGroup) return conv.groupName || 'Group';
+        if (adminAdvanceView && !conv.participantIds.includes(currentUserId)) {
+            return conv.participantNames.join(' ↔ ');
+        }
+        return getOtherParticipant(conv).name;
     };
 
     const getMemberOnlineStatus = (memberId: string) => {
@@ -88,6 +117,8 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
         const other = getOtherParticipant(conv);
         const isOnline = getMemberOnlineStatus(other.id);
         const isMenuOpen = openMenuId === conv.id;
+        const displayName = getConvDisplayName(conv);
+        const isForeign = adminAdvanceView && !conv.participantIds.includes(currentUserId);
         return (
             <div key={conv.id} className="relative">
                 <div
@@ -113,7 +144,7 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                             </div>
                         )}
                         <div className="flex justify-between items-baseline">
-                            <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm truncate">{other.name}</h3>
+                            <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm truncate">{displayName}</h3>
                             <span className="text-[9px] text-gray-400 dark:text-gray-500 shrink-0 ml-2">{formatTime(conv.lastMessageTime)}</span>
                         </div>
                         <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-1 font-light">{conv.lastMessage}</p>
@@ -132,18 +163,30 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                 </div>
                 {isMenuOpen && (
                     <div className="absolute right-2 top-full mt-1 z-20 bg-white dark:bg-[#262626] rounded-[7px] shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden animate-scale-in">
-                        <button
-                            onClick={(e) => { e.stopPropagation(); onTogglePinConversation(conv.id); setOpenMenuId(null); }}
-                            className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
-                        >
-                            <Pin size={14} /> {conv.isPinned ? 'Unpin' : 'Pin'}
-                        </button>
-                        <button
-                            onClick={(e) => { e.stopPropagation(); onToggleArchiveConversation(conv.id); setOpenMenuId(null); }}
-                            className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors border-t border-gray-100 dark:border-gray-700 whitespace-nowrap"
-                        >
-                            <Archive size={14} /> {conv.isArchived ? 'Unarchive' : 'Archive'}
-                        </button>
+                        {conv.isGroup && onUpdateGroup && (
+                            <button
+                                onClick={(e) => { e.stopPropagation(); setOpenMenuId(null); setEditingGroup(conv); }}
+                                className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
+                            >
+                                <Edit2 size={14} /> Edit Group
+                            </button>
+                        )}
+                        {!isForeign && (
+                            <>
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); onTogglePinConversation(conv.id); setOpenMenuId(null); }}
+                                    className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
+                                >
+                                    <Pin size={14} /> {conv.isPinned ? 'Unpin' : 'Pin'}
+                                </button>
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); onToggleArchiveConversation(conv.id); setOpenMenuId(null); }}
+                                    className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors border-t border-gray-100 dark:border-gray-700 whitespace-nowrap"
+                                >
+                                    <Archive size={14} /> {conv.isArchived ? 'Unarchive' : 'Archive'}
+                                </button>
+                            </>
+                        )}
                     </div>
                 )}
             </div>
@@ -156,12 +199,26 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
             <div className="bg-white dark:bg-[#1a1a1a] px-4 pt-8 pb-3 shadow-sm z-10 border-b border-gray-100 dark:border-gray-800">
                 <div className="flex justify-between items-center mb-3">
                     <h1 className="text-xl font-serif text-gray-900 dark:text-white">Messages</h1>
-                    <button
-                        onClick={() => setShowNewChat(true)}
-                        className="bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 p-1.5 rounded-full shadow-md hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors active-scale"
-                    >
-                        <Plus size={20} />
-                    </button>
+                    <div className="flex items-center gap-2">
+                        {isAdmin && (
+                            <button
+                                onClick={toggleAdvanceView}
+                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all active-scale ${adminAdvanceView
+                                    ? 'bg-gold-500 text-white dark:text-brand-950 shadow-md'
+                                    : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
+                                    }`}
+                                title="Show all conversations across the team"
+                            >
+                                <Eye size={14} /> Advance
+                            </button>
+                        )}
+                        <button
+                            onClick={() => setShowNewChat(true)}
+                            className="bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 p-1.5 rounded-full shadow-md hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors active-scale"
+                        >
+                            <Plus size={20} />
+                        </button>
+                    </div>
                 </div>
                 <div className="relative">
                     <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-gray-500" size={16} />
@@ -296,6 +353,21 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                     </FullScreenPortal>
                 );
             })()}
+
+            {/* Edit Group Modal */}
+            {editingGroup && onUpdateGroup && (
+                <FullScreenPortal>
+                    <EditGroupModal
+                        conversation={editingGroup}
+                        teamMembers={teamMembers.filter(m => m.id !== currentUserId)}
+                        onClose={() => setEditingGroup(null)}
+                        onSave={(groupName, participantIds) => {
+                            onUpdateGroup(editingGroup.id, groupName, participantIds);
+                            setEditingGroup(null);
+                        }}
+                    />
+                </FullScreenPortal>
+            )}
 
             {/* New Chat Modal */}
             {showNewChat && (
@@ -750,6 +822,98 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
 
 // ─── New Chat Modal ────────────────────────────────────────
 
+interface EditGroupModalProps {
+    conversation: Conversation;
+    teamMembers: UserProfile[];
+    onClose: () => void;
+    onSave: (groupName: string, participantIds: string[]) => void;
+}
+
+const EditGroupModal: React.FC<EditGroupModalProps> = ({ conversation, teamMembers, onClose, onSave }) => {
+    const [groupName, setGroupName] = useState(conversation.groupName || '');
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set(conversation.participantIds));
+
+    useEffect(() => {
+        setGroupName(conversation.groupName || '');
+        setSelectedIds(new Set(conversation.participantIds));
+    }, [conversation.id]);
+
+    const toggleMember = (id: string) => {
+        const next = new Set(selectedIds);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        setSelectedIds(next);
+    };
+
+    const canSave = groupName.trim().length > 0 && selectedIds.size >= 2;
+
+    return (
+        <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-[60] flex flex-col animate-fade-in-up">
+            <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-4 border-b border-gray-100 dark:border-gray-800 pt-8 shadow-sm z-10">
+                <button onClick={onClose} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
+                    <X size={20} />
+                </button>
+                <h2 className="text-base font-serif text-gray-900 dark:text-white">Edit Group</h2>
+                <div className="w-9"></div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-5 no-scrollbar">
+                <div>
+                    <label className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Group Name</label>
+                    <input
+                        value={groupName}
+                        onChange={(e) => setGroupName(e.target.value)}
+                        placeholder="e.g. Sales Team"
+                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[7px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                    />
+                </div>
+                <div>
+                    <div className="flex items-center justify-between mb-3 px-1">
+                        <h3 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest">Members</h3>
+                        <span className="text-[9px] bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-[3px] text-gray-600 dark:text-gray-300 uppercase tracking-wider">{selectedIds.size} selected</span>
+                    </div>
+                    <div className="space-y-2">
+                        {teamMembers.map((member, index) => {
+                            const isSelected = selectedIds.has(member.id);
+                            return (
+                                <div
+                                    key={member.id}
+                                    onClick={() => toggleMember(member.id)}
+                                    className={`rounded-[7px] shadow-sm p-3 flex items-center gap-3 border animate-fade-in-up cursor-pointer active-scale ${isSelected ? "border-gold-500 bg-gold-50/50 dark:bg-gold-900/10" : "bg-white dark:bg-[#1e1e1e] border-gray-100 dark:border-gray-800"}`}
+                                    style={{ animationDelay: `${index * 50}ms` }}
+                                >
+                                    <div className="relative">
+                                        <div className="w-11 h-11 rounded-full bg-gray-50 dark:bg-gray-800 flex items-center justify-center text-brand-900 dark:text-gold-400">
+                                            <User size={20} strokeWidth={1.5} />
+                                        </div>
+                                        {member.isOnline && (
+                                            <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 rounded-full border-2 border-white dark:border-[#1e1e1e]"></div>
+                                        )}
+                                    </div>
+                                    <div className="flex-1">
+                                        <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm">{member.name}</h3>
+                                        <p className={"text-[9px] uppercase tracking-widest font-medium " + (member.isOnline ? "text-green-500" : "text-gray-400 dark:text-gray-500")}>
+                                            {member.isOnline ? "Online" : "Offline"}
+                                        </p>
+                                    </div>
+                                    <div className={"w-5 h-5 rounded-full border flex items-center justify-center transition-colors shrink-0 " + (isSelected ? "bg-gold-500 border-gold-500 text-white" : "border-gray-300 dark:border-gray-600")}>
+                                        {isSelected && <Check size={12} />}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+                <button
+                    onClick={() => canSave && onSave(groupName.trim(), Array.from(selectedIds))}
+                    disabled={!canSave}
+                    className={"w-full rounded-[7px] py-3 text-sm font-medium tracking-wide transition-colors shadow-md active-scale " + (canSave ? "bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 hover:bg-brand-800 dark:hover:bg-gold-400" : "bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-600")}
+                >
+                    Save Changes
+                </button>
+            </div>
+        </div>
+    );
+};
 interface NewChatModalProps {
     teamMembers: UserProfile[];
     existingConvIds: string[];

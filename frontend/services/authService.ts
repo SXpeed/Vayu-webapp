@@ -4,6 +4,23 @@ export interface AuthUser {
   email: string;
   role: 'admin' | 'user';
   createdAt: number;
+  isOnline?: boolean;
+  lastSeen?: number;
+}
+
+export interface ActivityLog {
+  id: string;
+  userId: string;
+  userName: string;
+  action: string;
+  entity: string;
+  entityId: string;
+  details: string;
+  timestamp: number;
+}
+
+export interface PresenceMap {
+  [userId: string]: { isOnline: boolean; lastSeen: number };
 }
 
 const TOKEN_KEY = 'vayu_token';
@@ -101,8 +118,35 @@ export const authService = {
     return user;
   },
 
+  async updateUser(id: string, data: { name?: string; email?: string; role?: 'admin' | 'user'; password?: string }): Promise<AuthUser> {
+    const user = await call<AuthUser>(`/auth/users/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+    broadcastSync();
+    return user;
+  },
+
   async removeUser(id: string): Promise<void> {
     await call(`/auth/users/${id}`, { method: 'DELETE' });
     broadcastSync();
+  },
+
+  async getPresence(): Promise<PresenceMap> {
+    return call<PresenceMap>('/auth/presence');
+  },
+
+  async heartbeat(): Promise<void> {
+    await call('/auth/presence/heartbeat', { method: 'POST' });
+  },
+
+  async setOffline(): Promise<void> {
+    try {
+      await call('/auth/presence/offline', { method: 'POST' });
+    } catch { /* silent */ }
+  },
+
+  async getActivityLogs(limit = 100): Promise<ActivityLog[]> {
+    return call<ActivityLog[]>(`/activity-logs?limit=${limit}`);
   },
 };
