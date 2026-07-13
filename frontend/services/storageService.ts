@@ -1,3 +1,5 @@
+import { parseApiResponse } from './apiClient';
+
 const TOKEN_KEY = 'vayu_token';
 
 export interface UploadResult {
@@ -10,14 +12,13 @@ const storageService = {
         const token = localStorage.getItem(TOKEN_KEY);
         const formData = new FormData();
         formData.append('file', file);
+        // No Content-Type header here — the browser sets the multipart boundary.
         const res = await fetch('/api/upload', {
             method: 'POST',
             headers: token ? { Authorization: `Bearer ${token}` } : {},
             body: formData,
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error((data as { error?: string }).error ?? 'Upload failed');
-        return data as UploadResult;
+        return parseApiResponse<UploadResult>(res);
     },
 
     async delete(key: string): Promise<void> {
@@ -26,10 +27,7 @@ const storageService = {
             method: 'DELETE',
             headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
-        if (!res.ok) {
-            const data = await res.json().catch(() => ({ error: 'Delete failed' }));
-            throw new Error((data as { error?: string }).error ?? 'Delete failed');
-        }
+        await parseApiResponse<{ success?: boolean }>(res);
     },
 };
 

@@ -85,7 +85,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
 
         <form
           onSubmit={isSetup ? handleSetup : handleLogin}
-          className="space-y-6 bg-white dark:bg-[#1e1e1e] p-8 rounded-[7px] shadow-sm border border-gray-100 dark:border-gray-800 animate-fade-in-up"
+          className="space-y-6 bg-white dark:bg-[#1e1e1e] p-8 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 animate-fade-in-up"
           style={{ animationDelay: '100ms' }}
         >
           <div className="text-center mb-6">
@@ -100,7 +100,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
           </div>
 
           {error && (
-            <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-3 rounded-[7px] text-xs text-center">
+            <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-[6px] rounded-[6px] text-xs text-center">
               {error}
             </div>
           )}
@@ -155,7 +155,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 rounded-[7px] py-3 text-sm font-medium tracking-wide hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors mt-8 shadow-md active-scale disabled:opacity-50"
+            className="w-full bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 rounded-[6px] py-3 text-sm font-medium tracking-wide hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors mt-8 shadow-md active-scale disabled:opacity-50"
           >
             {submitLabel}
           </button>

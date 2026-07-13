@@ -36,7 +36,13 @@ export default defineConfig(({ mode }) => {
           //Target your Node.js backend
           '/api-proxy': 'http://localhost:5000',
           '/ws-proxy': {target: 'ws://localhost:5000', ws: true},
-          '/api': { target: 'http://127.0.0.1:8787', changeOrigin: true },
+          // Dev API target: the deployed Worker by default, so `npm run dev`
+          // works without running `wrangler dev`. Set VITE_API_PROXY in .env
+          // (e.g. http://127.0.0.1:8787) to use a local worker instead.
+          '/api': {
+            target: env.VITE_API_PROXY || 'https://vayu-webapp.gulshanprajapati1998.workers.dev',
+            changeOrigin: true,
+          },
         },
       },
       preview: {

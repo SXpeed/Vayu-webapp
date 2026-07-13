@@ -2,6 +2,21 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+html,
+body,
+#root {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    position: fixed;
+    /* Lock the root viewport so iOS Safari overscroll/rubber-banding
+       cannot reveal any blank space below the app shell. */
+    overscroll-behavior: none;
+    -webkit-overflow-scrolling: auto;
+    margin: 0;
+    padding: 0;
+}
+
 .full-height {
     height: 100dvh;
 }
@@ -11,10 +26,21 @@
     height: var(--app-height, 100dvh);
 }
 
+/* min-height variant of .h-app — keeps the outer wrapper from being
+   taller (100vh) than the inner app-shell on iOS Safari, which was
+   the cause of the blank space appearing during top overscroll. */
+.min-h-app {
+    min-height: var(--app-height, 100dvh);
+}
+
 /* On desktop, use a fixed height instead of visualViewport tracking */
 @media (min-width: 768px) {
     .h-app {
         height: 90vh;
+    }
+
+    .min-h-app {
+        min-height: 100vh;
     }
 }
 

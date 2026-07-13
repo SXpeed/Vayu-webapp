@@ -1,27 +1,6 @@
 import { Conversation, Message, MessageStatus } from '../types';
 
-const TOKEN_KEY = 'vayu_token';
-
-function getToken(): string | null {
-    return localStorage.getItem(TOKEN_KEY);
-}
-
-function authHeaders(): Record<string, string> {
-    const token = getToken();
-    const base: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) base['Authorization'] = `Bearer ${token}`;
-    return base;
-}
-
-async function call<T>(path: string, options?: RequestInit): Promise<T> {
-    const res = await fetch(`/api${path}`, {
-        ...options,
-        headers: { ...authHeaders(), ...(options?.headers ?? {}) },
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error((data as { error?: string }).error ?? 'Request failed');
-    return data as T;
-}
+import { apiCall as call } from './apiClient';
 
 export const messagingService = {
     // ── Conversations ──────────────────────────────────────────────────
@@ -41,6 +20,12 @@ export const messagingService = {
         return call<Conversation>(`/conversations/${conv.id}`, {
             method: 'PUT',
             body: JSON.stringify(conv),
+        });
+    },
+
+    async deleteConversation(conversationId: string): Promise<void> {
+        await call<{ success: boolean }>(`/conversations/${conversationId}`, {
+            method: 'DELETE',
         });
     },
 

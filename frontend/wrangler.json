@@ -3,6 +3,7 @@
   "name": "vayu-webapp",
   "workers_dev": true,
   "compatibility_date": "2026-06-24",
+  "compatibility_flags": ["nodejs_compat"],
   "main": "worker.ts",
   "assets": {
     "directory": "dist",

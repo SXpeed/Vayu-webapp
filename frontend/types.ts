@@ -4,12 +4,16 @@ export interface Artwork {
     id: string;
     customId: string; // User defined ID
     title: string;
+    artist?: string;
+    artworkYear?: string;
+    descriptionTitle?: string;
     description: string;
     dimensions: string;
     medium: string;
     status: ArtworkStatus;
     location: string;
     price: number;
+    plusGst?: boolean;
     imageUrls: string[]; // Changed from imageUrl to imageUrls array
     createdAt: number;
 }
@@ -19,6 +23,7 @@ export interface Collection {
     name: string;
     description: string;
     artworkIds: string[];
+    coverImageUrl?: string;
     createdAt?: number;
 }
 
@@ -30,6 +35,22 @@ export interface Catalog {
     coverImageUrl: string;
     createdAt: number;
 }
+
+export interface PdfOptions {
+    showCatalogName: boolean;
+    showTitle: boolean;
+    showTitleNote: boolean;
+    showDimensions: boolean;
+    showPrice: boolean;
+    showDescription: boolean;
+    logoSelection: 'Select 1' | 'Select 2';
+    logoPlacement: 'Top Left' | 'Top Right';
+    pageOptions: string[];
+    customLogo1?: string;
+    customLogo2?: string;
+}
+
+export type CatalogTheme = 1 | 2 | 3 | 4 | 5;
 
 export interface InvoiceItem {
     artworkId: string;

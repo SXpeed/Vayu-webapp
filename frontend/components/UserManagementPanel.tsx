@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { X, UserPlus, Trash2, Shield, User, Eye, EyeOff, Edit2, Check } from 'lucide-react';
 import { authService, AuthUser } from '../services/authService';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface Props {
   currentUserId: string;
@@ -20,6 +21,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState('');
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AuthUser | null>(null);
 
   // Edit state
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -131,7 +133,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
   return (
     <div className="absolute inset-0 z-50 flex flex-col bg-[#faf9f6] dark:bg-[#121212] animate-fade-in-up">
       {/* Header */}
-      <div className="bg-white dark:bg-[#1a1a1a] px-4 pt-8 pb-4 shadow-sm border-b border-gray-100 dark:border-gray-800 flex items-center justify-between">
+      <div className="bg-white dark:bg-[#1a1a1a] px-[6px] pt-[calc(2rem+env(safe-area-inset-top,0px))] pb-4 shadow-sm border-b border-gray-100 dark:border-gray-800 flex items-center justify-between">
         <div>
           <h2 className="text-base font-serif text-gray-900 dark:text-white">User Management</h2>
           <p className="text-[10px] text-gray-400 dark:text-gray-500 uppercase tracking-widest mt-0.5">
@@ -146,7 +148,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-5 no-scrollbar">
+      <div className="flex-1 overflow-y-auto p-[6px] space-y-5 no-scrollbar">
         {/* Current users */}
         <section>
           <h3 className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-2 px-1">
@@ -165,7 +167,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
             {users.map(u => (
               <div
                 key={u.id}
-                className="bg-white dark:bg-[#1e1e1e] rounded-[7px] border border-gray-100 dark:border-gray-800 p-3 shadow-sm"
+                className="bg-white dark:bg-[#1e1e1e] rounded-[6px] border border-gray-100 dark:border-gray-800 p-[6px] shadow-sm"
               >
                 {editingId === u.id ? (
                   <div className="space-y-3">
@@ -191,40 +193,40 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
                       </div>
                     </div>
                     {editError && (
-                      <p className="text-[11px] text-red-500 dark:text-red-400 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-[7px]">{editError}</p>
+                      <p className="text-[11px] text-red-500 dark:text-red-400 bg-red-50 dark:bg-red-900/20 px-[6px] py-2 rounded-[6px]">{editError}</p>
                     )}
                     <input
                       type="text"
                       value={editName}
                       onChange={e => setEditName(e.target.value)}
                       placeholder="Name"
-                      className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[7px] py-1.5 px-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
+                      className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-1.5 px-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
                     />
                     <input
                       type="email"
                       value={editEmail}
                       onChange={e => setEditEmail(e.target.value)}
                       placeholder="Email"
-                      className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[7px] py-1.5 px-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
+                      className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-1.5 px-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
                     />
                     <input
                       type="password"
                       value={editPassword}
                       onChange={e => setEditPassword(e.target.value)}
                       placeholder="New password (leave blank to keep)"
-                      className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[7px] py-1.5 px-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
+                      className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-1.5 px-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
                     />
                     <select
                       value={editRole}
                       onChange={e => setEditRole(e.target.value as 'user' | 'admin')}
-                      className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[7px] py-1.5 px-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
+                      className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-1.5 px-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
                     >
                       <option value="user">User</option>
                       <option value="admin">Admin</option>
                     </select>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-[6px]">
                     <div className="w-9 h-9 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center shrink-0 text-brand-900 dark:text-gold-400">
                       {u.role === 'admin' ? <Shield size={16} strokeWidth={1.5} /> : <User size={16} strokeWidth={1.5} />}
                     </div>
@@ -247,7 +249,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
                     </button>
                     {u.id !== currentUserId && (
                       <button
-                        onClick={() => handleRemove(u.id)}
+                        onClick={() => setDeleteTarget(u)}
                         disabled={removingId === u.id}
                         className="p-1.5 text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors active-scale disabled:opacity-40 shrink-0"
                         title="Remove user"
@@ -267,9 +269,9 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
           <h3 className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-2 px-1 flex items-center gap-1">
             <UserPlus size={11} /> Add User
           </h3>
-          <form onSubmit={handleAdd} className="bg-white dark:bg-[#1e1e1e] rounded-[7px] border border-gray-100 dark:border-gray-800 p-4 space-y-4 shadow-sm">
+          <form onSubmit={handleAdd} className="bg-white dark:bg-[#1e1e1e] rounded-[6px] border border-gray-100 dark:border-gray-800 p-[6px] space-y-4 shadow-sm">
             {addError && (
-              <p className="text-[11px] text-red-500 dark:text-red-400 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-[7px]">
+              <p className="text-[11px] text-red-500 dark:text-red-400 bg-red-50 dark:bg-red-900/20 px-[6px] py-2 rounded-[6px]">
                 {addError}
               </p>
             )}
@@ -284,7 +286,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
                 value={name}
                 onChange={e => setName(e.target.value)}
                 placeholder="Jane Doe"
-                className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[7px] py-2 px-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-2 px-[6px] text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
               />
             </div>
 
@@ -298,7 +300,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
                 value={email}
                 onChange={e => setEmail(e.target.value)}
                 placeholder="jane@vayu.com"
-                className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[7px] py-2 px-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-2 px-[6px] text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
               />
             </div>
 
@@ -313,7 +315,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="Min 6 characters"
-                  className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[7px] py-2 px-3 pr-9 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                  className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-2 px-[6px] pr-9 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
                 />
                 <button
                   type="button"
@@ -333,7 +335,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
                 id="um-role"
                 value={role}
                 onChange={e => setRole(e.target.value as 'user' | 'admin')}
-                className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[7px] py-2 px-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-2 px-[6px] text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
               >
                 <option value="user">User</option>
                 <option value="admin">Admin</option>
@@ -343,7 +345,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
             <button
               type="submit"
               disabled={adding}
-              className="w-full bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 rounded-[7px] py-2.5 text-sm font-medium tracking-wide hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors shadow-sm active-scale disabled:opacity-50 flex items-center justify-center gap-2"
+              className="w-full bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 rounded-[6px] py-2.5 text-sm font-medium tracking-wide hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors shadow-sm active-scale disabled:opacity-50 flex items-center justify-center gap-2"
             >
               <UserPlus size={16} />
               {adding ? 'Adding…' : 'Add User'}
@@ -351,6 +353,17 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
           </form>
         </section>
       </div>
+
+      <ConfirmDialog
+        isOpen={!!deleteTarget}
+        title="Remove User"
+        message={`Are you sure you want to remove "${deleteTarget?.name}"? This action cannot be undone.`}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => {
+          if (deleteTarget) handleRemove(deleteTarget.id);
+          setDeleteTarget(null);
+        }}
+      />
     </div>
   );
 };

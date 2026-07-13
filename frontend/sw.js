@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vayu-design-v7';
+const CACHE_NAME = 'vayu-design-v10';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -42,7 +42,7 @@ self.addEventListener('fetch', (event) => {
       caches.match(event.request).then((cached) => {
         if (cached) return cached;
         return fetch(event.request).then((response) => {
-          if (response && response.ok) {
+          if (response?.ok) {
             const responseClone = response.clone();
             caches.open(CACHE_NAME).then((cache) => {
               cache.put(event.request, responseClone);
@@ -59,7 +59,7 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(event.request)
       .then((response) => {
-        if (!response || !response.ok) { return response; }
+        if (!response?.ok) { return response; }
         // Clone the response and cache it
         const responseClone = response.clone();
         if (event.request.url.startsWith('http') && responseClone.ok) {
@@ -92,4 +92,33 @@ self.addEventListener('activate', (event) => {
       return self.clients.claim();
     })
   );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if (client.url.includes(self.registration.scope) && 'focus' in client) {
+          return client.focus();
+        }
+      }
+      if (clients.openWindow) {
+        return clients.openWindow('/');
+      }
+    })
+  );
+});
+
+self.addEventListener('push', (event) => {
+  const data = event.data ? event.data.json() : {};
+  const title = data.title || 'New Notification';
+  const options = {
+    body: data.body || 'You have a new message.',
+    icon: '/vayu-logo.png',
+    badge: '/vayu-logo.png',
+    vibrate: [200, 100, 200],
+    data: { url: data.url || '/' }
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
 });

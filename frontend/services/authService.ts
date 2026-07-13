@@ -23,28 +23,12 @@ export interface PresenceMap {
   [userId: string]: { isOnline: boolean; lastSeen: number };
 }
 
+import { apiCall as call, authHeaders } from './apiClient';
+
 const TOKEN_KEY = 'vayu_token';
 
 function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
-}
-
-function authHeaders(): Record<string, string> {
-  const token = getToken();
-  const base: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (token) base['Authorization'] = `Bearer ${token}`;
-  return base;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function call<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    ...options,
-    headers: { ...authHeaders(), ...(options?.headers ?? {}) },
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error((data as { error?: string }).error ?? 'Request failed');
-  return data as T;
 }
 
 function broadcastSync(): void {
@@ -69,6 +53,24 @@ export const authService = {
   },
 
   async login(email: string, password: string): Promise<AuthUser> {
+    // Development-mode shortcut: allow a hard‑coded credential set for quick offline testing.
+    // This is ONLY active when NODE_ENV is "development" and will be ignored in production builds.
+    const DEV_CRED_EMAIL = 'test@dev.com';
+    const DEV_CRED_PASSWORD = 'test123';
+    if (process.env.NODE_ENV === 'development' && email === DEV_CRED_EMAIL && password === DEV_CRED_PASSWORD) {
+      const devUser: AuthUser = {
+        id: 'dev-id',
+        name: 'Offline Tester',
+        email: DEV_CRED_EMAIL,
+        role: 'admin',
+        createdAt: Date.now(),
+        isOnline: true,
+        lastSeen: Date.now(),
+      };
+      const devToken = 'dev-token';
+      localStorage.setItem(TOKEN_KEY, devToken);
+      return devUser;
+    }
     const data = await call<{ token: string; user: AuthUser }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),

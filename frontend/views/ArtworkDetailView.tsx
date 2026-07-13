@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowLeft, MapPin, Ruler, Palette, Tag, Info, Edit2, X, ChevronLeft, ChevronRight, Image as ImageIcon, Trash2 } from 'lucide-react';
+import { ArrowLeft, Edit2, X, Image as ImageIcon } from 'lucide-react';
 import { Artwork } from '../types';
 import { ArtworkFormModal } from './ArtworksView';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 
 // Helper function to extract dominant color from an image URL
 const getDominantColor = (imageUrl: string): Promise<string> => {
@@ -37,6 +38,7 @@ const getDominantColor = (imageUrl: string): Promise<string> => {
 
                 resolve(`rgba(${r}, ${g}, ${b}, 0.4)`);
             } catch (e) {
+                console.warn('Failed to get dominant color', e);
                 resolve('rgba(0,0,0,0.1)');
             }
         };
@@ -78,29 +80,29 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
         setIsEditing(false);
     };
 
+    const [confirmOpen, setConfirmOpen] = useState(false);
+
     const handleDelete = () => {
-        if (window.confirm(`Are you sure you want to delete "${artwork.title}"?`)) {
-            onDeleteArtwork(artwork.id);
-            onClose(); // Close the detail view after deletion
-        }
+        setConfirmOpen(true);
     };
 
-    const scrollPrev = (ref: React.RefObject<HTMLDivElement>) => {
-        if (ref.current) {
-            ref.current.scrollBy({ left: -ref.current.clientWidth, behavior: 'smooth' });
-        }
-    };
 
-    const scrollNext = (ref: React.RefObject<HTMLDivElement>) => {
-        if (ref.current) {
-            ref.current.scrollBy({ left: ref.current.clientWidth, behavior: 'smooth' });
-        }
-    };
+
+    let artistText = '';
+    if (artwork.artist) {
+        artistText = artwork.artist;
+        if (artwork.artworkYear) artistText += `, ${artwork.artworkYear}`;
+        artistText += ' • ';
+    }
+
+    let statusClass = 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-400';
+    if (artwork.status === 'Available') statusClass = 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400';
+    else if (artwork.status === 'Sold') statusClass = 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400';
 
     return (
         <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-[60] flex flex-col animate-fade-in-up">
             {/* Header with Back & Edit Buttons */}
-            <div className="px-3 pb-2 flex justify-between items-center bg-[#faf9f6] dark:bg-[#121212] shrink-0 z-20" style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}>
+            <div className="px-[6px] pb-2 flex justify-between items-center bg-[#faf9f6] dark:bg-[#121212] shrink-0 z-20" style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}>
                 <button
                     onClick={onClose}
                     className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale"
@@ -140,13 +142,18 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                             }}
                         >
                             {artwork.imageUrls.map((url, idx) => (
-                                <div key={idx} className="w-full h-full flex items-center justify-center snap-center shrink-0">
-                                    <img
-                                        src={url}
-                                        alt={`${artwork.title} - ${idx + 1}`}
-                                        className="w-full h-full object-cover cursor-pointer"
+                                <div key={url} className="w-full h-full flex items-center justify-center snap-center shrink-0">
+                                    <button
+                                        type="button"
                                         onClick={() => setIsFullScreen(true)}
-                                    />
+                                        className="w-full h-full p-0 border-none bg-transparent cursor-pointer"
+                                    >
+                                        <img
+                                            src={url}
+                                            alt={`${artwork.title} - ${idx + 1}`}
+                                            className="w-full h-full object-cover"
+                                        />
+                                    </button>
                                 </div>
                             ))}
                         </div>
@@ -158,14 +165,17 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                 </div>
 
                 {/* Details Section */}
-                <div className="p-4 bg-[#faf9f6] dark:bg-[#121212] relative z-30 space-y-4 -mt-4 rounded-t-[7px]">
+                <div className="p-[6px] bg-[#faf9f6] dark:bg-[#121212] relative z-30 space-y-4 -mt-4 rounded-t-[7px]">
 
                     <div className="flex justify-between items-start">
                         <div className="flex-1 min-w-0 mr-3">
                             <h1 className="text-lg font-serif text-gray-900 dark:text-white leading-snug">{artwork.title}</h1>
-                            <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest mt-0.5">{artwork.customId}</p>
+                            <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest mt-0.5">
+                                {artistText}
+                                {artwork.customId}
+                            </p>
                         </div>
-                        <p className="text-base font-semibold text-gold-600 dark:text-gold-400 shrink-0">₹{artwork.price.toLocaleString('en-IN')}</p>
+                        <p className="text-base font-semibold text-gold-600 dark:text-gold-400 shrink-0">₹{artwork.price.toLocaleString('en-IN')}{artwork.plusGst ? ' + GST' : ''}</p>
                     </div>
 
                     <div className="w-full h-px bg-gray-100 dark:bg-gray-800"></div>
@@ -185,10 +195,7 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                         </div>
                         <div>
                             <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-0.5">Status</p>
-                            <span className={`text-[9px] px-1.5 py-0.5 rounded-[3px] font-medium uppercase tracking-wider ${artwork.status === 'Available' ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400' :
-                                artwork.status === 'Sold' ? 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400' :
-                                    'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-400'
-                                }`}>
+                            <span className={`text-[9px] px-1.5 py-0.5 rounded-[3px] font-medium uppercase tracking-wider ${statusClass}`}>
                                 {artwork.status}
                             </span>
                         </div>
@@ -198,7 +205,7 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                         <>
                             <div className="w-full h-px bg-gray-100 dark:bg-gray-800"></div>
                             <div>
-                                <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-1">About this piece</p>
+                                <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-1">{artwork.descriptionTitle || "About this piece"}</p>
                                 <p className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed font-light whitespace-pre-wrap">
                                     {artwork.description}
                                 </p>
@@ -219,7 +226,7 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                         style={{ background: `radial-gradient(circle at center, ${glowColor.replace(/[\d.]+\)$/g, '0.3)')} 0%, transparent 80%)` }}
                     />
 
-                    <div className="px-3 pb-2 z-20 flex justify-between items-center" style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}>
+                    <div className="px-[6px] pb-2 z-20 flex justify-between items-center" style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}>
                         <div className="w-9"></div>
                         {artwork.imageUrls.length > 1 ? (
                             <span className="text-xs text-gray-500 dark:text-gray-400 font-medium tracking-widest">
@@ -244,7 +251,7 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                         }}
                     >
                         {artwork.imageUrls.map((url, idx) => (
-                            <div key={idx} className="w-full h-full flex items-center justify-center snap-center shrink-0 p-4">
+                            <div key={url} className="w-full h-full flex items-center justify-center snap-center shrink-0 p-[6px]">
                                 <img
                                     src={url}
                                     alt={`${artwork.title} - ${idx + 1}`}
@@ -266,6 +273,18 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                     onDelete={handleDelete}
                 />
             )}
+
+            <ConfirmDialog
+                isOpen={confirmOpen}
+                title="Delete Artwork"
+                message={`Are you sure you want to delete "${artwork.title}"?`}
+                onClose={() => setConfirmOpen(false)}
+                onConfirm={() => {
+                    onDeleteArtwork(artwork.id);
+                    setConfirmOpen(false);
+                    onClose(); // Close the detail view after deletion
+                }}
+            />
         </div>
     );
 };

@@ -1,7 +1,8 @@
-﻿import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit2, Check, CheckCheck, Pin, Archive, MoreVertical, Paperclip, Reply, Loader2, Eye } from 'lucide-react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit2, Check, CheckCheck, Pin, Archive, MoreVertical, Paperclip, Reply, Loader2, Eye, Trash2 } from 'lucide-react';
 import { Conversation, ConversationDetails, Message, MessageTag, MessageReplyTo, MessageAttachment, UserProfile } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import storageService from '../services/storageService';
 
 interface MessagingViewProps {
@@ -13,11 +14,12 @@ interface MessagingViewProps {
     isAdmin?: boolean;
     onSendMessage: (conversationId: string, text: string, tags: MessageTag[], replyTo?: MessageReplyTo, attachment?: MessageAttachment) => void;
     onCreateConversation: (participantId: string, details?: ConversationDetails) => Promise<Conversation>;
-    onCreateGroup: (participantIds: string[], groupName: string) => Promise<Conversation>;
+    onCreateGroup: (participantIds: string[], groupName: string, details?: ConversationDetails) => Promise<Conversation>;
     onUpdateConversationDetails: (conversationId: string, details: ConversationDetails) => void;
-    onUpdateGroup?: (conversationId: string, groupName: string, participantIds: string[]) => void;
+    onUpdateGroup?: (conversationId: string, groupName: string, participantIds: string[], details?: ConversationDetails) => void;
     onTogglePinConversation: (conversationId: string) => void;
     onToggleArchiveConversation: (conversationId: string) => void;
+    onDeleteConversation?: (conversationId: string) => void;
     onAdminAdvanceViewChange?: (enabled: boolean) => void;
 }
 
@@ -32,7 +34,7 @@ export const TAG_COLORS: Record<MessageTag, string> = {
 
 export const ALL_TAGS: MessageTag[] = ['General', 'Urgent', 'Follow-up', 'Artwork', 'Inquiry', 'Invoice'];
 
-export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, messages, teamMembers, currentUserId, currentUserName, isAdmin, onSendMessage, onCreateConversation, onCreateGroup, onUpdateConversationDetails, onUpdateGroup, onTogglePinConversation, onToggleArchiveConversation, onAdminAdvanceViewChange }) => {
+export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, messages, teamMembers, currentUserId, currentUserName, isAdmin, onSendMessage, onCreateConversation, onCreateGroup, onUpdateConversationDetails, onUpdateGroup, onTogglePinConversation, onToggleArchiveConversation, onDeleteConversation, onAdminAdvanceViewChange }) => {
     const [selectedConv, setSelectedConv] = useState<Conversation | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [showNewChat, setShowNewChat] = useState(false);
@@ -40,6 +42,30 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
     const [openMenuId, setOpenMenuId] = useState<string | null>(null);
     const [adminAdvanceView, setAdminAdvanceView] = useState(false);
     const [editingGroup, setEditingGroup] = useState<Conversation | null>(null);
+    const [deleteConvId, setDeleteConvId] = useState<string | null>(null);
+
+    React.useEffect(() => {
+        const handlePopState = (e: PopStateEvent) => {
+            if (e.state?.modal !== 'message') {
+                setSelectedConv(null);
+            }
+        };
+        globalThis.addEventListener('popstate', handlePopState);
+        return () => globalThis.removeEventListener('popstate', handlePopState);
+    }, []);
+
+    const handleConvClick = (conv: Conversation) => {
+        setSelectedConv(conv);
+        globalThis.history.pushState({ view: 'messaging', modal: 'message' }, '');
+    };
+
+    const handleCloseModal = () => {
+        if (globalThis.history.state?.modal === 'message') {
+            globalThis.history.back();
+        } else {
+            setSelectedConv(null);
+        }
+    };
 
     const toggleAdvanceView = () => {
         const next = !adminAdvanceView;
@@ -121,9 +147,10 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
         const isForeign = adminAdvanceView && !conv.participantIds.includes(currentUserId);
         return (
             <div key={conv.id} className="relative">
-                <div
-                    onClick={() => { setOpenMenuId(null); setSelectedConv(conv); }}
-                    className="bg-white dark:bg-[#1e1e1e] rounded-[7px] shadow-sm p-3 flex items-center gap-2 border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
+                <button
+                    type="button"
+                    onClick={() => { setOpenMenuId(null); handleConvClick(conv); }}
+                    className="w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm p-[6px] flex items-center gap-2 border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
                     style={{ animationDelay: `${150 + index * 50}ms` }}
                 >
                     <div className="relative shrink-0">
@@ -160,13 +187,13 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                     >
                         <MoreVertical size={16} />
                     </button>
-                </div>
+                </button>
                 {isMenuOpen && (
-                    <div className="absolute right-2 top-full mt-1 z-20 bg-white dark:bg-[#262626] rounded-[7px] shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden animate-scale-in">
+                    <div className="absolute right-2 top-full mt-1 z-20 bg-white dark:bg-[#262626] rounded-[6px] shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden animate-scale-in">
                         {conv.isGroup && onUpdateGroup && (
                             <button
                                 onClick={(e) => { e.stopPropagation(); setOpenMenuId(null); setEditingGroup(conv); }}
-                                className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
+                                className="w-full flex items-center gap-2 px-[6px] py-2.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
                             >
                                 <Edit2 size={14} /> Edit Group
                             </button>
@@ -175,16 +202,24 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                             <>
                                 <button
                                     onClick={(e) => { e.stopPropagation(); onTogglePinConversation(conv.id); setOpenMenuId(null); }}
-                                    className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
+                                    className="w-full flex items-center gap-2 px-[6px] py-2.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
                                 >
                                     <Pin size={14} /> {conv.isPinned ? 'Unpin' : 'Pin'}
                                 </button>
                                 <button
                                     onClick={(e) => { e.stopPropagation(); onToggleArchiveConversation(conv.id); setOpenMenuId(null); }}
-                                    className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors border-t border-gray-100 dark:border-gray-700 whitespace-nowrap"
+                                    className="w-full flex items-center gap-2 px-[6px] py-2.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors border-t border-gray-100 dark:border-gray-700 whitespace-nowrap"
                                 >
                                     <Archive size={14} /> {conv.isArchived ? 'Unarchive' : 'Archive'}
                                 </button>
+                                {conv.isArchived && onDeleteConversation && (
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); setDeleteConvId(conv.id); setOpenMenuId(null); }}
+                                        className="w-full flex items-center gap-2 px-[6px] py-2.5 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors border-t border-gray-100 dark:border-gray-700 whitespace-nowrap"
+                                    >
+                                        <Trash2 size={14} /> Delete
+                                    </button>
+                                )}
                             </>
                         )}
                     </div>
@@ -196,14 +231,14 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
     return (
         <div className="h-full flex flex-col bg-[#faf9f6] dark:bg-[#121212] transition-colors duration-500 animate-fade-in">
             {/* Header */}
-            <div className="bg-white dark:bg-[#1a1a1a] px-4 pt-8 pb-3 shadow-sm z-10 border-b border-gray-100 dark:border-gray-800">
-                <div className="flex justify-between items-center mb-3">
+            <div className="bg-white dark:bg-[#1a1a1a] px-[6px] pt-[calc(1.75rem+env(safe-area-inset-top,0px))] pb-[6px] shadow-sm z-10 border-b border-gray-100 dark:border-gray-800">
+                <div className="flex justify-between items-center mb-[6px]">
                     <h1 className="text-xl font-serif text-gray-900 dark:text-white">Messages</h1>
                     <div className="flex items-center gap-2">
                         {isAdmin && (
                             <button
                                 onClick={toggleAdvanceView}
-                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all active-scale ${adminAdvanceView
+                                className={`flex items-center gap-1.5 px-[6px] py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all active-scale ${adminAdvanceView
                                     ? 'bg-gold-500 text-white dark:text-brand-950 shadow-md'
                                     : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
                                     }`}
@@ -227,31 +262,62 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                         placeholder="Search conversations..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[7px] py-2 pl-9 pr-4 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                        autoComplete="off"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 pl-9 pr-4 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
                     />
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 no-scrollbar pb-28">
+            <div className="flex-1 overflow-y-auto p-[6px] space-y-4 no-scrollbar pb-8">
                 {/* Group Chats */}
                 {groupConversations.length > 0 && (
                     <div className="space-y-2 animate-fade-in-up">
                         {groupConversations.map((group) => (
-                            <button
-                                key={group.id}
-                                onClick={() => setSelectedConv(group)}
-                                className="w-full bg-white dark:bg-[#1e1e1e] rounded-[7px] shadow-sm p-3 flex items-center gap-3 border border-gold-300 dark:border-gold-700 active-scale text-left"
-                            >
-                                <div className="w-11 h-11 rounded-full bg-gold-500/10 dark:bg-gold-900/20 flex items-center justify-center text-gold-600 dark:text-gold-400 shrink-0">
-                                    <Users size={20} strokeWidth={1.5} />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                    <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm">{group.groupName || 'Group'}</h3>
-                                    <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-1 font-light">
-                                        {group.participantIds.length} members • {group.lastMessage || 'No messages yet'}
-                                    </p>
-                                </div>
-                            </button>
+                            <div key={group.id} className="relative">
+                                <button
+                                    type="button"
+                                    onClick={() => { setOpenMenuId(null); handleConvClick(group); }}
+                                    className="w-full bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm p-[6px] flex items-center gap-[6px] border border-gold-300 dark:border-gold-700 text-left cursor-pointer"
+                                >
+                                    <div className="w-11 h-11 rounded-full bg-gold-500/10 dark:bg-gold-900/20 flex items-center justify-center text-gold-600 dark:text-gold-400 shrink-0">
+                                        <Users size={20} strokeWidth={1.5} />
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm">{group.groupName || 'Group'}</h3>
+                                        <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-1 font-light">
+                                            {group.participantIds.length} members • {group.lastMessage || 'No messages yet'}
+                                        </p>
+                                    </div>
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === group.id ? null : group.id); }}
+                                        className="p-1.5 text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale shrink-0"
+                                    >
+                                        <MoreVertical size={16} />
+                                    </button>
+                                </button>
+                                {openMenuId === group.id && (
+                                    <div className="absolute right-2 top-full mt-1 z-20 bg-white dark:bg-[#262626] rounded-[6px] shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden animate-scale-in">
+                                        {onUpdateGroup && (
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); setOpenMenuId(null); setEditingGroup(group); }}
+                                                className="w-full flex items-center gap-2 px-[6px] py-2.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
+                                            >
+                                                <Edit2 size={14} /> Edit Group
+                                            </button>
+                                        )}
+                                        {onDeleteConversation && (
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); setDeleteConvId(group.id); setOpenMenuId(null); }}
+                                                className="w-full flex items-center gap-2 px-[6px] py-2.5 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors border-t border-gray-100 dark:border-gray-700 whitespace-nowrap"
+                                            >
+                                                <Trash2 size={14} /> Delete
+                                            </button>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
                         ))}
                     </div>
                 )}
@@ -259,8 +325,8 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                 {/* Online Members */}
                 {onlineMembers.length > 0 && (
                     <div className="animate-fade-in-up" style={{ animationDelay: '50ms' }}>
-                        <h2 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-1">Online Now</h2>
-                        <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
+                        <h2 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-[6px] px-1">Online Now</h2>
+                        <div className="flex gap-[6px] overflow-x-auto no-scrollbar pb-1">
                             {onlineMembers.map((member) => (
                                 <div key={member.id} className="flex flex-col items-center gap-1.5 shrink-0">
                                     <div className="relative">
@@ -279,7 +345,7 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                 {/* Pinned Conversations */}
                 {pinnedConversations.length > 0 && (
                     <div className="animate-fade-in-up" style={{ animationDelay: '80ms' }}>
-                        <h2 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-1 flex items-center gap-1">
+                        <h2 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-[6px] px-1 flex items-center gap-1">
                             <Pin size={10} /> Pinned
                         </h2>
                         <div className="space-y-2">
@@ -290,7 +356,7 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
 
                 {/* Conversations List */}
                 <div>
-                    <h2 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-1 animate-fade-in-up" style={{ animationDelay: '100ms' }}>Conversations</h2>
+                    <h2 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-[6px] px-1 animate-fade-in-up" style={{ animationDelay: '100ms' }}>Conversations</h2>
                     <div className="space-y-2">
                         {filteredConversations.map((conv, index) => renderConversationRow(conv, index))}
                         {filteredConversations.length === 0 && pinnedConversations.length === 0 && (
@@ -316,13 +382,13 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
             {showArchived && (
                 <FullScreenPortal>
                     <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-50 flex flex-col animate-fade-in-up">
-                        <div className="bg-white dark:bg-[#1a1a1a] flex items-center gap-3 p-4 border-b border-gray-100 dark:border-gray-800 pt-8 shadow-sm z-10">
+                        <div className="bg-white dark:bg-[#1a1a1a] flex items-center gap-[6px] p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm z-10">
                             <button onClick={() => setShowArchived(false)} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
                                 <ArrowLeft size={20} />
                             </button>
                             <h2 className="text-base font-serif text-gray-900 dark:text-white">Archived</h2>
                         </div>
-                        <div className="flex-1 overflow-y-auto p-4 space-y-2 no-scrollbar">
+                        <div className="flex-1 overflow-y-auto p-[6px] space-y-2 no-scrollbar">
                             {archivedConversations.map((conv, index) => renderConversationRow(conv, index))}
                             {archivedConversations.length === 0 && (
                                 <div className="text-center text-gray-400 dark:text-gray-500 mt-10 font-light text-sm">
@@ -346,7 +412,7 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                             currentUserName={currentUserName}
                             otherParticipant={getOtherParticipant(liveConv)}
                             isOnline={getMemberOnlineStatus(getOtherParticipant(liveConv).id)}
-                            onClose={() => setSelectedConv(null)}
+                            onClose={handleCloseModal}
                             onSendMessage={onSendMessage}
                             onUpdateConversationDetails={onUpdateConversationDetails}
                         />
@@ -361,8 +427,8 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                         conversation={editingGroup}
                         teamMembers={teamMembers.filter(m => m.id !== currentUserId)}
                         onClose={() => setEditingGroup(null)}
-                        onSave={(groupName, participantIds) => {
-                            onUpdateGroup(editingGroup.id, groupName, participantIds);
+                        onSave={(groupName, participantIds, details) => {
+                            onUpdateGroup(editingGroup.id, groupName, participantIds, details);
                             setEditingGroup(null);
                         }}
                     />
@@ -379,12 +445,27 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                         onSelectMember={async (memberId, details) => {
                             const conv = await onCreateConversation(memberId, details);
                             setShowNewChat(false);
-                            setSelectedConv(conv);
+                            handleConvClick(conv);
                         }}
-                        onCreateGroup={async (participantIds, groupName) => {
-                            const conv = await onCreateGroup(participantIds, groupName);
+                        onCreateGroup={async (participantIds, groupName, details) => {
+                            const conv = await onCreateGroup(participantIds, groupName, details);
                             setShowNewChat(false);
-                            setSelectedConv(conv);
+                            handleConvClick(conv);
+                        }}
+                    />
+                </FullScreenPortal>
+            )}
+
+            {deleteConvId && (
+                <FullScreenPortal>
+                    <ConfirmDialog
+                        isOpen={!!deleteConvId}
+                        title="Delete Conversation"
+                        message="Are you sure you want to delete this conversation? This action cannot be undone."
+                        onClose={() => setDeleteConvId(null)}
+                        onConfirm={() => {
+                            if (onDeleteConversation) onDeleteConversation(deleteConvId);
+                            setDeleteConvId(null);
                         }}
                     />
                 </FullScreenPortal>
@@ -428,7 +509,20 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
     const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        const scrollToBottom = () => {
+            setTimeout(() => {
+                if (messagesEndRef.current) {
+                    const container = messagesEndRef.current.parentElement;
+                    if (container) {
+                        container.scrollTop = container.scrollHeight;
+                    }
+                }
+            }, 100);
+        };
+        scrollToBottom();
+
+        window.visualViewport?.addEventListener('resize', scrollToBottom);
+        return () => window.visualViewport?.removeEventListener('resize', scrollToBottom);
     }, [messages, isOtherTyping]);
 
     useEffect(() => {
@@ -519,10 +613,109 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
         return messages.filter(m => m.text.toLowerCase().includes(q));
     }, [messages, chatSearchQuery]);
 
+    let statusTextColor = 'text-gray-400 dark:text-gray-500';
+    if (isOtherTyping) statusTextColor = 'text-gold-600 dark:text-gold-400';
+    else if (isOnline) statusTextColor = 'text-green-500';
+
+    let statusText = 'Offline';
+    if (conversation.isGroup) statusText = `${conversation.participantIds.length} members`;
+    else if (isOtherTyping) statusText = 'Typing...';
+    else if (isOnline) statusText = 'Online';
+
+    const renderMessageStatusIcon = (status?: string) => {
+        if (status === 'read') return <CheckCheck size={12} className="text-sky-500 dark:text-sky-400" />;
+        if (status === 'delivered') return <CheckCheck size={12} />;
+        return <Check size={12} />;
+    };
+
+    const renderConversationDetails = () => {
+        if (isEditingDetails) {
+            return (
+                <div className="py-3 space-y-2 animate-fade-in">
+                    <input
+                        value={detailsForm.title}
+                        onChange={(e) => setDetailsForm(prev => ({ ...prev, title: e.target.value }))}
+                        placeholder="Title"
+                        autoComplete="off"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 px-[6px] text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                    />
+                    <input
+                        value={detailsForm.reason}
+                        onChange={(e) => setDetailsForm(prev => ({ ...prev, reason: e.target.value }))}
+                        placeholder="Why are we starting this?"
+                        autoComplete="off"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 px-[6px] text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                    />
+                    <textarea
+                        value={detailsForm.note}
+                        onChange={(e) => setDetailsForm(prev => ({ ...prev, note: e.target.value }))}
+                        placeholder="Note"
+                        rows={2}
+                        autoComplete="off"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 px-[6px] text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors resize-none"
+                    />
+                    <div className="flex justify-end gap-2 pt-1">
+                        <button
+                            onClick={() => setIsEditingDetails(false)}
+                            className="text-[10px] font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 px-[6px] py-1.5 rounded-[6px] hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors active-scale"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={handleSaveDetails}
+                            className="text-[10px] font-medium uppercase tracking-wider text-white dark:text-brand-950 bg-brand-900 dark:bg-gold-500 px-[6px] py-1.5 rounded-[6px] flex items-center gap-1 hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors active-scale"
+                        >
+                            <Check size={12} /> Save
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+        
+        if (conversation.title || conversation.reason || conversation.note) {
+            return (
+                <div className="py-2.5 flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                        {conversation.title && (
+                            <p className="text-xs font-serif text-gray-900 dark:text-white truncate">{conversation.title}</p>
+                        )}
+                        {conversation.reason && (
+                            <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">{conversation.reason}</p>
+                        )}
+                        {conversation.note && (
+                            <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5 italic">{conversation.note}</p>
+                        )}
+                    </div>
+                    <button
+                        onClick={() => setIsEditingDetails(true)}
+                        className="p-1.5 text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale shrink-0"
+                    >
+                        <Edit2 size={14} />
+                    </button>
+                </div>
+            );
+        }
+        
+        return (
+            <button
+                onClick={() => setIsEditingDetails(true)}
+                className="py-2.5 w-full text-left text-[10px] font-medium text-gold-600 dark:text-gold-400 uppercase tracking-wider flex items-center gap-1.5 active-scale"
+            >
+                <Plus size={12} /> Add title, reason &amp; note
+            </button>
+        );
+    };
+
     return (
         <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-50 flex flex-col animate-fade-in-up">
             {/* Chat Header */}
-            <div className="bg-white dark:bg-[#1a1a1a] flex items-center gap-3 p-4 border-b border-gray-100 dark:border-gray-800 pt-8 shadow-sm z-10">
+            <div className="bg-white dark:bg-[#1a1a1a] flex items-center gap-[6px] p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm z-10">
                 <button onClick={onClose} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
                     <ArrowLeft size={20} />
                 </button>
@@ -537,8 +730,8 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                 </div>
                 <div className="flex-1">
                     <h2 className="text-sm font-serif text-gray-900 dark:text-white">{otherParticipant.name}</h2>
-                    <p className={`text-[9px] uppercase tracking-widest font-medium ${isOtherTyping ? 'text-gold-600 dark:text-gold-400' : isOnline ? 'text-green-500' : 'text-gray-400 dark:text-gray-500'}`}>
-                        {conversation.isGroup ? `${conversation.participantIds.length} members` : isOtherTyping ? 'Typing...' : isOnline ? 'Online' : 'Offline'}
+                    <p className={`text-[9px] uppercase tracking-widest font-medium ${statusTextColor}`}>
+                        {statusText}
                     </p>
                 </div>
                 <button
@@ -551,7 +744,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
 
             {/* In-chat Search */}
             {showSearch && (
-                <div className="bg-white dark:bg-[#1a1a1a] border-b border-gray-100 dark:border-gray-800 px-4 py-2 animate-fade-in">
+                <div className="bg-white dark:bg-[#1a1a1a] border-b border-gray-100 dark:border-gray-800 px-[6px] py-2 animate-fade-in">
                     <div className="relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500" size={14} />
                         <input
@@ -559,7 +752,10 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                             onChange={(e) => setChatSearchQuery(e.target.value)}
                             placeholder="Search in this chat..."
                             autoFocus
-                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[7px] py-2 pl-8 pr-8 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
+                            autoComplete="off"
+                            autoCorrect="off"
+                            spellCheck={false}
+                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 pl-8 pr-8 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
                         />
                         {chatSearchQuery && (
                             <button onClick={() => setChatSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
@@ -571,75 +767,12 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
             )}
 
             {/* Conversation Details (title / reason / note) */}
-            <div className="bg-white dark:bg-[#1a1a1a] border-b border-gray-100 dark:border-gray-800 px-4">
-                {isEditingDetails ? (
-                    <div className="py-3 space-y-2 animate-fade-in">
-                        <input
-                            value={detailsForm.title}
-                            onChange={(e) => setDetailsForm(prev => ({ ...prev, title: e.target.value }))}
-                            placeholder="Title"
-                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[7px] py-2 px-3 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
-                        />
-                        <input
-                            value={detailsForm.reason}
-                            onChange={(e) => setDetailsForm(prev => ({ ...prev, reason: e.target.value }))}
-                            placeholder="Why are we starting this?"
-                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[7px] py-2 px-3 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
-                        />
-                        <textarea
-                            value={detailsForm.note}
-                            onChange={(e) => setDetailsForm(prev => ({ ...prev, note: e.target.value }))}
-                            placeholder="Note"
-                            rows={2}
-                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[7px] py-2 px-3 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors resize-none"
-                        />
-                        <div className="flex justify-end gap-2 pt-1">
-                            <button
-                                onClick={() => setIsEditingDetails(false)}
-                                className="text-[10px] font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 px-3 py-1.5 rounded-[7px] hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors active-scale"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={handleSaveDetails}
-                                className="text-[10px] font-medium uppercase tracking-wider text-white dark:text-brand-950 bg-brand-900 dark:bg-gold-500 px-3 py-1.5 rounded-[7px] flex items-center gap-1 hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors active-scale"
-                            >
-                                <Check size={12} /> Save
-                            </button>
-                        </div>
-                    </div>
-                ) : (conversation.title || conversation.reason || conversation.note) ? (
-                    <div className="py-2.5 flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                            {conversation.title && (
-                                <p className="text-xs font-serif text-gray-900 dark:text-white truncate">{conversation.title}</p>
-                            )}
-                            {conversation.reason && (
-                                <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">{conversation.reason}</p>
-                            )}
-                            {conversation.note && (
-                                <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5 italic">{conversation.note}</p>
-                            )}
-                        </div>
-                        <button
-                            onClick={() => setIsEditingDetails(true)}
-                            className="p-1.5 text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale shrink-0"
-                        >
-                            <Edit2 size={14} />
-                        </button>
-                    </div>
-                ) : (
-                    <button
-                        onClick={() => setIsEditingDetails(true)}
-                        className="py-2.5 w-full text-left text-[10px] font-medium text-gold-600 dark:text-gold-400 uppercase tracking-wider flex items-center gap-1.5 active-scale"
-                    >
-                        <Plus size={12} /> Add title, reason &amp; note
-                    </button>
-                )}
+            <div className="bg-white dark:bg-[#1a1a1a] border-b border-gray-100 dark:border-gray-800 px-[6px]">
+                {renderConversationDetails()}
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-3 no-scrollbar">
+            <div className="flex-1 overflow-y-auto p-[6px] space-y-3 no-scrollbar pb-20">
                 {displayedMessages.length === 0 && chatSearchQuery.trim() && (
                     <div className="text-center text-gray-400 dark:text-gray-500 mt-10 font-light text-sm">
                         No messages match "{chatSearchQuery}".
@@ -665,8 +798,8 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                                 msg.attachment.type === 'image' ? (
                                     <img src={msg.attachment.url} alt={msg.attachment.name} className="rounded-[8px] max-w-full max-h-48 object-cover mb-1.5" />
                                 ) : (
-                                    <div className={`flex items-center gap-2 mb-1.5 p-2 rounded-[7px] ${isMe ? 'bg-gold-500/10 dark:bg-gray-700/50' : 'bg-gray-50 dark:bg-gray-800'}`}>
-                                        <Paperclip size={14} className={isMe ? 'text-gold-600 dark:text-gold-400' : 'text-gold-600 dark:text-gold-400'} />
+                                    <div className={`flex items-center gap-2 mb-1.5 p-2 rounded-[6px] ${isMe ? 'bg-gold-500/10 dark:bg-gray-700/50' : 'bg-gray-50 dark:bg-gray-800'}`}>
+                                        <Paperclip size={14} className="text-gold-600 dark:text-gold-400" />
                                         <span className="text-[11px] truncate">{msg.attachment.name}</span>
                                     </div>
                                 )
@@ -682,13 +815,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                                 )}
                                 <span className={`flex items-center gap-1 text-[9px] shrink-0 ml-auto ${isMe ? 'text-gray-500 dark:text-gray-500' : 'text-gray-400 dark:text-gray-500'}`}>
                                     {formatMessageTime(msg.timestamp)}
-                                    {isMe && (
-                                        msg.status === 'read'
-                                            ? <CheckCheck size={12} className="text-sky-500 dark:text-sky-400" />
-                                            : msg.status === 'delivered'
-                                                ? <CheckCheck size={12} />
-                                                : <Check size={12} />
-                                    )}
+                                    {isMe && renderMessageStatusIcon(msg.status)}
                                 </span>
                             </div>
                         </div>
@@ -711,7 +838,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                 })}
                 {isOtherTyping && (
                     <div className="flex justify-start">
-                        <div className="bg-white dark:bg-[#1e1e1e] border border-gray-100 dark:border-gray-800 rounded-[12px] rounded-bl-[4px] px-4 py-3 shadow-sm flex items-center gap-1">
+                        <div className="bg-white dark:bg-[#1e1e1e] border border-gray-100 dark:border-gray-800 rounded-[12px] rounded-bl-[4px] px-[6px] py-3 shadow-sm flex items-center gap-1">
                             <span className="w-1.5 h-1.5 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></span>
                             <span className="w-1.5 h-1.5 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
                             <span className="w-1.5 h-1.5 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
@@ -723,7 +850,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
 
             {/* Tag Picker */}
             {showTagPicker && (
-                <div className="px-4 py-2 bg-white dark:bg-[#1a1a1a] border-t border-gray-100 dark:border-gray-800 animate-fade-in">
+                <div className="px-[6px] py-2 bg-white dark:bg-[#1a1a1a] border-t border-gray-100 dark:border-gray-800 animate-fade-in">
                     <div className="flex gap-1.5 flex-wrap">
                         {ALL_TAGS.map(tag => (
                             <button
@@ -742,9 +869,9 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
             )}
 
             {/* Message Input */}
-            <div className="bg-white dark:bg-[#1a1a1a] px-4 py-3 border-t border-gray-100 dark:border-gray-800 pb-safe">
+            <div className="bg-white dark:bg-[#1a1a1a] px-[6px] py-[9px] border-t border-gray-100 dark:border-gray-800 transition-colors">
                 {replyingTo && (
-                    <div className="flex items-center justify-between gap-2 mb-2 pl-3 pr-2 py-1.5 bg-gray-100 dark:bg-[#2a2a2a] rounded-[7px] border-l-2 border-gold-500 animate-fade-in">
+                    <div className="flex items-center justify-between gap-2 mb-2 pl-3 pr-2 py-1.5 bg-gray-100 dark:bg-[#2a2a2a] rounded-[6px] border-l-2 border-gold-500 animate-fade-in">
                         <div className="min-w-0">
                             <p className="text-[9px] font-bold text-gold-600 dark:text-gold-400">Replying to {replyingTo.senderName}</p>
                             <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate">{replyingTo.text}</p>
@@ -755,7 +882,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                     </div>
                 )}
                 {pendingAttachment && (
-                    <div className="flex items-center justify-between gap-2 mb-2 p-2 bg-gray-100 dark:bg-[#2a2a2a] rounded-[7px] animate-fade-in">
+                    <div className="flex items-center justify-between gap-2 mb-2 p-2 bg-gray-100 dark:bg-[#2a2a2a] rounded-[6px] animate-fade-in">
                         <div className="flex items-center gap-2 min-w-0">
                             {pendingAttachment.type === 'image' ? (
                                 <img src={pendingAttachment.url} alt={pendingAttachment.name} className="w-10 h-10 rounded-[4px] object-cover shrink-0" />
@@ -781,10 +908,10 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                         ))}
                     </div>
                 )}
-                <div className="flex items-end gap-2">
+                <div className="flex items-center gap-2">
                     <button
                         onClick={() => setShowTagPicker(!showTagPicker)}
-                        className={`p-2 rounded-full transition-colors active-scale shrink-0 ${showTagPicker ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800'
+                        className={`p-2.5 rounded-full transition-colors active-scale shrink-0 ${showTagPicker ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800'
                             }`}
                     >
                         <Tag size={18} />
@@ -792,7 +919,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                     <button
                         onClick={() => fileInputRef.current?.click()}
                         disabled={isUploading}
-                        className="p-2 rounded-full text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors active-scale shrink-0 disabled:opacity-60"
+                        className="p-2.5 rounded-full text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors active-scale shrink-0 disabled:opacity-60"
                     >
                         {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
                     </button>
@@ -801,8 +928,19 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                         value={newMessage}
                         onChange={(e) => setNewMessage(e.target.value)}
                         onKeyDown={handleKeyDown}
+                        onFocus={() => {
+                            setTimeout(() => {
+                                window.scrollTo(0, 0);
+                                document.body.scrollTop = 0;
+                            }, 50);
+                        }}
                         placeholder="Type a message..."
-                        className="flex-1 bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-full py-2.5 px-4 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                        autoComplete="off"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        data-form-type="other"
+                        data-1p-ignore
+                        className="flex-1 bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
                     />
                     <button
                         onClick={handleSend}
@@ -826,16 +964,22 @@ interface EditGroupModalProps {
     conversation: Conversation;
     teamMembers: UserProfile[];
     onClose: () => void;
-    onSave: (groupName: string, participantIds: string[]) => void;
+    onSave: (groupName: string, participantIds: string[], details: ConversationDetails) => void;
 }
 
 const EditGroupModal: React.FC<EditGroupModalProps> = ({ conversation, teamMembers, onClose, onSave }) => {
     const [groupName, setGroupName] = useState(conversation.groupName || '');
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set(conversation.participantIds));
+    const [title, setTitle] = useState(conversation.title || '');
+    const [reason, setReason] = useState(conversation.reason || '');
+    const [note, setNote] = useState(conversation.note || '');
 
     useEffect(() => {
         setGroupName(conversation.groupName || '');
         setSelectedIds(new Set(conversation.participantIds));
+        setTitle(conversation.title || '');
+        setReason(conversation.reason || '');
+        setNote(conversation.note || '');
     }, [conversation.id]);
 
     const toggleMember = (id: string) => {
@@ -849,25 +993,29 @@ const EditGroupModal: React.FC<EditGroupModalProps> = ({ conversation, teamMembe
 
     return (
         <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-[60] flex flex-col animate-fade-in-up">
-            <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-4 border-b border-gray-100 dark:border-gray-800 pt-8 shadow-sm z-10">
+            <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm z-10">
                 <button onClick={onClose} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
                     <X size={20} />
                 </button>
                 <h2 className="text-base font-serif text-gray-900 dark:text-white">Edit Group</h2>
                 <div className="w-9"></div>
             </div>
-            <div className="flex-1 overflow-y-auto p-4 space-y-5 no-scrollbar">
+            <div className="flex-1 overflow-y-auto p-[6px] space-y-5 no-scrollbar">
                 <div>
-                    <label className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Group Name</label>
+                    <label htmlFor="edit-group-name" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Group Name</label>
                     <input
+                        id="edit-group-name"
                         value={groupName}
                         onChange={(e) => setGroupName(e.target.value)}
                         placeholder="e.g. Sales Team"
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[7px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                        autoComplete="off"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
                     />
                 </div>
                 <div>
-                    <div className="flex items-center justify-between mb-3 px-1">
+                    <div className="flex items-center justify-between mb-[6px] px-1">
                         <h3 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest">Members</h3>
                         <span className="text-[9px] bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-[3px] text-gray-600 dark:text-gray-300 uppercase tracking-wider">{selectedIds.size} selected</span>
                     </div>
@@ -875,10 +1023,11 @@ const EditGroupModal: React.FC<EditGroupModalProps> = ({ conversation, teamMembe
                         {teamMembers.map((member, index) => {
                             const isSelected = selectedIds.has(member.id);
                             return (
-                                <div
+                                <button
+                                    type="button"
                                     key={member.id}
                                     onClick={() => toggleMember(member.id)}
-                                    className={`rounded-[7px] shadow-sm p-3 flex items-center gap-3 border animate-fade-in-up cursor-pointer active-scale ${isSelected ? "border-gold-500 bg-gold-50/50 dark:bg-gold-900/10" : "bg-white dark:bg-[#1e1e1e] border-gray-100 dark:border-gray-800"}`}
+                                    className={`w-full text-left rounded-[6px] shadow-sm p-[6px] flex items-center gap-[6px] border animate-fade-in-up cursor-pointer active-scale ${isSelected ? "border-gold-500 bg-gold-50/50 dark:bg-gold-900/10" : "bg-white dark:bg-[#1e1e1e] border-gray-100 dark:border-gray-800"}`}
                                     style={{ animationDelay: `${index * 50}ms` }}
                                 >
                                     <div className="relative">
@@ -898,15 +1047,50 @@ const EditGroupModal: React.FC<EditGroupModalProps> = ({ conversation, teamMembe
                                     <div className={"w-5 h-5 rounded-full border flex items-center justify-center transition-colors shrink-0 " + (isSelected ? "bg-gold-500 border-gold-500 text-white" : "border-gray-300 dark:border-gray-600")}>
                                         {isSelected && <Check size={12} />}
                                     </div>
-                                </div>
+                                </button>
                             );
                         })}
                     </div>
                 </div>
+
+                <div>
+                    <label htmlFor="create-announcement-title" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Title</label>
+                    <input
+                        id="create-announcement-title"
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                        placeholder="e.g. End of Month Sales"
+                        autoComplete="off"
+                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                    />
+                </div>
+                <div>
+                    <label htmlFor="create-announcement-reason" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Why are we starting this?</label>
+                    <input
+                        id="create-announcement-reason"
+                        value={reason}
+                        onChange={(e) => setReason(e.target.value)}
+                        placeholder="e.g. To hit our targets"
+                        autoComplete="off"
+                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                    />
+                </div>
+                <div>
+                    <label htmlFor="create-announcement-note" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Note</label>
+                    <textarea
+                        id="create-announcement-note"
+                        value={note}
+                        onChange={(e) => setNote(e.target.value)}
+                        placeholder="Any additional details..."
+                        rows={3}
+                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors resize-none"
+                    />
+                </div>
+
                 <button
-                    onClick={() => canSave && onSave(groupName.trim(), Array.from(selectedIds))}
+                    onClick={() => canSave && onSave(groupName.trim(), Array.from(selectedIds), { title: title.trim() || undefined, reason: reason.trim() || undefined, note: note.trim() || undefined })}
                     disabled={!canSave}
-                    className={"w-full rounded-[7px] py-3 text-sm font-medium tracking-wide transition-colors shadow-md active-scale " + (canSave ? "bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 hover:bg-brand-800 dark:hover:bg-gold-400" : "bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-600")}
+                    className={"w-full rounded-[6px] py-3 text-sm font-medium tracking-wide transition-colors shadow-md active-scale " + (canSave ? "bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 hover:bg-brand-800 dark:hover:bg-gold-400" : "bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-600")}
                 >
                     Save Changes
                 </button>
@@ -919,7 +1103,7 @@ interface NewChatModalProps {
     existingConvIds: string[];
     onClose: () => void;
     onSelectMember: (memberId: string, details: ConversationDetails) => void;
-    onCreateGroup: (participantIds: string[], groupName: string) => void;
+    onCreateGroup: (participantIds: string[], groupName: string, details: ConversationDetails) => void;
 }
 
 const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvIds, onClose, onSelectMember, onCreateGroup }) => {
@@ -949,12 +1133,20 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
 
     const handleCreateGroup = () => {
         if (!canCreateGroup) return;
-        onCreateGroup(Array.from(selectedGroupMemberIds), groupName.trim());
+        onCreateGroup(Array.from(selectedGroupMemberIds), groupName.trim(), {
+            title: formData.title?.trim() || undefined,
+            reason: formData.reason?.trim() || undefined,
+            note: formData.note?.trim() || undefined,
+        });
     };
+
+    let headerTitle = 'New Message';
+    if (selectedMember) headerTitle = 'Start Conversation';
+    else if (mode === 'group') headerTitle = 'New Group';
 
     return (
         <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-[60] flex flex-col animate-fade-in-up">
-            <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-4 border-b border-gray-100 dark:border-gray-800 pt-8 shadow-sm z-10">
+            <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm z-10">
                 <button
                     onClick={() => selectedMember ? setSelectedMember(null) : onClose()}
                     className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale"
@@ -962,16 +1154,16 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                     {selectedMember ? <ArrowLeft size={20} /> : <X size={20} />}
                 </button>
                 <h2 className="text-base font-serif text-gray-900 dark:text-white">
-                    {selectedMember ? 'Start Conversation' : mode === 'group' ? 'New Group' : 'New Message'}
+                    {headerTitle}
                 </h2>
                 <div className="w-9"></div>
             </div>
 
             {!selectedMember && (
-                <div className="bg-white dark:bg-[#1a1a1a] border-b border-gray-100 dark:border-gray-800 px-4 pb-3 flex gap-2">
+                <div className="bg-white dark:bg-[#1a1a1a] border-b border-gray-100 dark:border-gray-800 px-[6px] pb-[6px] flex gap-2">
                     <button
                         onClick={() => setMode('direct')}
-                        className={`flex-1 py-2 rounded-[7px] text-[10px] font-bold uppercase tracking-widest transition-all active-scale ${mode === 'direct'
+                        className={`flex-1 py-2 rounded-[6px] text-[10px] font-bold uppercase tracking-widest transition-all active-scale ${mode === 'direct'
                             ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
                             : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
                             }`}
@@ -980,7 +1172,7 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                     </button>
                     <button
                         onClick={() => setMode('group')}
-                        className={`flex-1 py-2 rounded-[7px] text-[10px] font-bold uppercase tracking-widest transition-all active-scale ${mode === 'group'
+                        className={`flex-1 py-2 rounded-[6px] text-[10px] font-bold uppercase tracking-widest transition-all active-scale ${mode === 'group'
                             ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
                             : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
                             }`}
@@ -991,8 +1183,8 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
             )}
 
             {!selectedMember && mode === 'direct' && (
-                <div className="flex-1 overflow-y-auto p-4 space-y-2 no-scrollbar">
-                    <h3 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-1">Team Members</h3>
+                <div className="flex-1 overflow-y-auto p-[6px] space-y-2 no-scrollbar">
+                    <h3 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-[6px] px-1">Team Members</h3>
                     {teamMembers.length === 0 ? (
                         <div className="text-center py-16 px-6 animate-fade-in">
                             <div className="w-16 h-16 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center mx-auto mb-4 text-gray-400 dark:text-gray-500">
@@ -1004,10 +1196,11 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                             </p>
                         </div>
                     ) : teamMembers.map((member, index) => (
-                        <div
+                        <button
+                            type="button"
                             key={member.id}
                             onClick={() => setSelectedMember(member)}
-                            className="bg-white dark:bg-[#1e1e1e] rounded-[7px] shadow-sm p-3 flex items-center gap-3 border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
+                            className="w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm p-[6px] flex items-center gap-[6px] border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
                             style={{ animationDelay: `${index * 50}ms` }}
                         >
                             <div className="relative">
@@ -1025,25 +1218,26 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                                 </p>
                             </div>
                             <MessageCircle size={18} className="text-gray-400 dark:text-gray-500" />
-                        </div>
+                        </button>
                     ))}
                 </div>
             )}
 
             {!selectedMember && mode === 'group' && (
-                <div className="flex-1 overflow-y-auto p-4 space-y-5 no-scrollbar">
+                <div className="flex-1 overflow-y-auto p-[6px] space-y-5 no-scrollbar">
                     <div>
-                        <label className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Group Name</label>
+                        <label htmlFor="create-group-name" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Group Name</label>
                         <input
+                            id="create-group-name"
                             value={groupName}
                             onChange={(e) => setGroupName(e.target.value)}
                             placeholder="e.g. Sales Team"
-                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[7px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
                         />
                     </div>
 
                     <div>
-                        <div className="flex items-center justify-between mb-3 px-1">
+                        <div className="flex items-center justify-between mb-[6px] px-1">
                             <h3 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest">Add Members</h3>
                             <span className="text-[9px] bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-[3px] text-gray-600 dark:text-gray-300 uppercase tracking-wider">{selectedGroupMemberIds.size} selected</span>
                         </div>
@@ -1058,10 +1252,11 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                             ) : teamMembers.map((member, index) => {
                                 const isSelected = selectedGroupMemberIds.has(member.id);
                                 return (
-                                    <div
+                                    <button
+                                        type="button"
                                         key={member.id}
                                         onClick={() => toggleGroupMember(member.id)}
-                                        className={`rounded-[7px] shadow-sm p-3 flex items-center gap-3 border animate-fade-in-up cursor-pointer active-scale ${isSelected ? 'border-gold-500 bg-gold-50/50 dark:bg-gold-900/10' : 'bg-white dark:bg-[#1e1e1e] border-gray-100 dark:border-gray-800'
+                                        className={`w-full text-left rounded-[6px] shadow-sm p-[6px] flex items-center gap-[6px] border animate-fade-in-up cursor-pointer active-scale ${isSelected ? 'border-gold-500 bg-gold-50/50 dark:bg-gold-900/10' : 'bg-white dark:bg-[#1e1e1e] border-gray-100 dark:border-gray-800'
                                             }`}
                                         style={{ animationDelay: `${index * 50}ms` }}
                                     >
@@ -1083,16 +1278,48 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                                             }`}>
                                             {isSelected && <Check size={12} />}
                                         </div>
-                                    </div>
+                                    </button>
                                 );
                             })}
                         </div>
                     </div>
 
+                    <div>
+                        <label htmlFor="create-group-title" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Title</label>
+                        <input
+                            id="create-group-title"
+                            value={formData.title}
+                            onChange={(e) => setFormData(prev => ({ ...prev, title: e.target.value }))}
+                            placeholder="What's this conversation about?"
+                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                        />
+                    </div>
+                    <div>
+                        <label htmlFor="create-group-reason" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Why are we starting this?</label>
+                        <input
+                            id="create-group-reason"
+                            value={formData.reason}
+                            onChange={(e) => setFormData(prev => ({ ...prev, reason: e.target.value }))}
+                            placeholder="Reason for reaching out"
+                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                        />
+                    </div>
+                    <div>
+                        <label htmlFor="create-group-note" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Note</label>
+                        <textarea
+                            id="create-group-note"
+                            value={formData.note}
+                            onChange={(e) => setFormData(prev => ({ ...prev, note: e.target.value }))}
+                            placeholder="Any extra context (optional)"
+                            rows={3}
+                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors resize-none"
+                        />
+                    </div>
+
                     <button
                         onClick={handleCreateGroup}
                         disabled={!canCreateGroup}
-                        className={`w-full rounded-[7px] py-3 text-sm font-medium tracking-wide transition-colors shadow-md active-scale ${canCreateGroup
+                        className={`w-full rounded-[6px] py-3 text-sm font-medium tracking-wide transition-colors shadow-md active-scale ${canCreateGroup
                             ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 hover:bg-brand-800 dark:hover:bg-gold-400'
                             : 'bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-600'
                             }`}
@@ -1103,8 +1330,8 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
             )}
 
             {selectedMember && (
-                <div className="flex-1 overflow-y-auto p-4 space-y-5 no-scrollbar">
-                    <div className="flex items-center gap-3 bg-white dark:bg-[#1e1e1e] rounded-[7px] p-3 border border-gray-100 dark:border-gray-800">
+                <div className="flex-1 overflow-y-auto p-[6px] space-y-5 no-scrollbar">
+                    <div className="flex items-center gap-[6px] bg-white dark:bg-[#1e1e1e] rounded-[6px] p-[6px] border border-gray-100 dark:border-gray-800">
                         <div className="w-11 h-11 rounded-full bg-gray-50 dark:bg-gray-800 flex items-center justify-center text-brand-900 dark:text-gold-400 shrink-0">
                             <User size={20} strokeWidth={1.5} />
                         </div>
@@ -1117,39 +1344,42 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                     </div>
 
                     <div>
-                        <label className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Title</label>
+                        <label htmlFor="create-dm-title" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Title</label>
                         <input
+                            id="create-dm-title"
                             value={formData.title}
                             onChange={(e) => setFormData(prev => ({ ...prev, title: e.target.value }))}
                             placeholder="What's this conversation about?"
-                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[7px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
                         />
                     </div>
 
                     <div>
-                        <label className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Why are we starting this?</label>
+                        <label htmlFor="create-dm-reason" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Why are we starting this?</label>
                         <input
+                            id="create-dm-reason"
                             value={formData.reason}
                             onChange={(e) => setFormData(prev => ({ ...prev, reason: e.target.value }))}
                             placeholder="Reason for reaching out"
-                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[7px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
                         />
                     </div>
 
                     <div>
-                        <label className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Note</label>
+                        <label htmlFor="create-dm-note" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Note</label>
                         <textarea
+                            id="create-dm-note"
                             value={formData.note}
                             onChange={(e) => setFormData(prev => ({ ...prev, note: e.target.value }))}
                             placeholder="Any extra context (optional)"
                             rows={3}
-                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[7px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors resize-none"
+                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors resize-none"
                         />
                     </div>
 
                     <button
                         onClick={handleStart}
-                        className="w-full bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 rounded-[7px] py-3 text-sm font-medium tracking-wide hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors shadow-md active-scale"
+                        className="w-full bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 rounded-[6px] py-3 text-sm font-medium tracking-wide hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors shadow-md active-scale"
                     >
                         Start Conversation
                     </button>

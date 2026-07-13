@@ -16,17 +16,14 @@ const Layout: React.FC<{
   const isAdmin = userProfile?.role === 'admin';
 
   return (
-    <div className="min-h-screen bg-gray-200 dark:bg-gray-950 flex items-center justify-center md:p-4 transition-colors duration-500">
+    <div className="min-h-app bg-white dark:bg-[#1a1a1a] md:bg-gray-200 md:dark:bg-gray-950 flex items-start md:items-center justify-center md:p-[6px] transition-colors duration-500">
       <div
         id="app-shell"
-        className="w-full h-app md:max-w-md lg:max-w-lg bg-[#faf9f6] dark:bg-[#121212] md:rounded-[7px] md:shadow-2xl relative overflow-hidden flex flex-col md:border-[6px] border-gray-800 dark:border-gray-900 transition-all duration-500"
+        className="w-full h-app md:max-w-md lg:max-w-lg bg-[#faf9f6] dark:bg-[#121212] md:rounded-[6px] md:shadow-2xl relative overflow-hidden flex flex-col md:border-[6px] border-gray-800 dark:border-gray-900 transition-colors duration-500"
       >
         {/* Header — only on Home */}
         {currentView === 'home' && (
-          <header
-            className="bg-white dark:bg-[#1a1a1a] px-4 pb-3 shadow-sm border-b border-gray-100 dark:border-gray-800 animate-fade-in-up"
-            style={{ paddingTop: 'calc(2rem + env(safe-area-inset-top, 0px))' }}
-          >
+          <header className="bg-white dark:bg-[#1a1a1a] px-[6px] pb-3 shadow-sm border-b border-gray-100 dark:border-gray-800 animate-fade-in-up" style={{ paddingTop: 'calc(2rem + env(safe-area-inset-top, 0px))' }}>
             <div className="flex justify-between items-start">
               <div>
                 <h1 className="text-xl font-serif mb-0 tracking-wide text-gold-600 dark:text-gold-400">Vayu</h1>
@@ -34,27 +31,16 @@ const Layout: React.FC<{
               </div>
               <div className="flex items-center gap-2 mt-1">
                 {isAdmin && (
-                  <button
-                    onClick={() => setShowUserMgmt(true)}
-                    className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale shrink-0"
-                    title="Manage users"
-                  >
+                  <button onClick={() => setShowUserMgmt(true)} className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale shrink-0" title="Manage users">
                     <Users size={16} className="text-brand-900 dark:text-gold-400" />
                   </button>
                 )}
                 {isAdmin && onShowActivity && (
-                  <button
-                    onClick={onShowActivity}
-                    className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale shrink-0"
-                    title="Activity logs"
-                  >
+                  <button onClick={onShowActivity} className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale shrink-0" title="Activity logs">
                     <Activity size={16} className="text-brand-900 dark:text-gold-400" />
                   </button>
                 )}
-                <button
-                  onClick={() => onNavigate('profile')}
-                  className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale shrink-0"
-                >
+                <button onClick={() => onNavigate('profile')} className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale shrink-0">
                   <User size={18} className="text-brand-900 dark:text-gold-400" />
                 </button>
               </div>
@@ -63,7 +49,7 @@ const Layout: React.FC<{
         )}
 
         {/* Main Content */}
-        <main className="flex-1 overflow-y-auto no-scrollbar pb-20 transition-colors duration-500 animate-fade-in">
+        <main className="flex-1 overflow-y-auto no-scrollbar transition-colors duration-500 animate-fade-in overscroll-contain" style={{ WebkitOverflowScrolling: 'touch' }}>
           {children}
         </main>
 

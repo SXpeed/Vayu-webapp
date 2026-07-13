@@ -4,12 +4,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport"
-        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <meta name="theme-color" content="#1a1a1a">
+        content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+    <!-- Single theme-color; the inline theme script below keeps it in sync
+         with the user's app-level theme preference (from localStorage). -->
+    <meta name="theme-color" content="#faf9f6">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-    <meta name="theme-color" content="#1a1a1a" media="(prefers-color-scheme: dark)">
     <meta name="apple-mobile-web-app-title" content="Vayu Design">
     <meta name="format-detection" content="telephone=no">
     <meta name="mobile-web-app-capable" content="yes">
@@ -26,6 +26,21 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&display=swap"
         rel="stylesheet">
+
+    <script>
+        // Apply theme immediately to prevent flash during React mount
+        try {
+            const savedTheme = localStorage.getItem('vayu_theme') || 'light';
+            if (savedTheme === 'dark') {
+                document.documentElement.classList.add('dark');
+                document.querySelector('meta[name="theme-color"]').setAttribute('content', '#121212');
+            } else {
+                document.querySelector('meta[name="theme-color"]').setAttribute('content', '#faf9f6');
+            }
+        } catch (e) {
+            console.warn('Failed to apply theme', e);
+        }
+    </script>
 
     <style>
         /* Hide scrollbar for Chrome, Safari and Opera */
@@ -44,15 +59,19 @@
         /* ===== iOS / iPhone Optimizations ===== */
 
         html {
-            /* Prevent overscroll bounce on iOS */
+            /* Prevent overscroll bounce / rubber-banding on iOS.
+               `none` is stronger than `contain` and stops the top-overscroll
+               that was revealing blank space below the app shell. */
             overscroll-behavior: none;
-            /* Smooth momentum scrolling */
-            -webkit-overflow-scrolling: touch;
+            /* Fix the layout viewport so it can't be shifted by overscroll. */
+            position: fixed;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
         }
 
         body {
-            background-color: #e5e7eb;
-            /* gray-200 */
+            background-color: #faf9f6;
             margin: 0;
             font-family: 'Inter', sans-serif;
             -webkit-tap-highlight-color: transparent;
@@ -61,8 +80,13 @@
             user-select: none;
             /* Prevent iOS callout on long-press */
             -webkit-touch-callout: none;
-            /* Prevent pull-to-refresh */
-            overscroll-behavior-y: contain;
+            /* Prevent pull-to-refresh and scroll-chaining to the root */
+            overscroll-behavior: contain;
+            /* Keep the body inside the fixed html viewport */
+            position: fixed;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
         }
 
         /* Allow text selection in inputs/textareas */
@@ -73,26 +97,27 @@
             user-select: text;
         }
 
-        /* Prevent iOS zoom on input focus (font-size must be >= 16px) */
-        input,
-        select,
-        textarea {
-            font-size: 16px !important;
+        /* Dark mode fallback for body before React loads */
+        html.dark body {
+            background-color: #121212;
         }
 
+        /* Prevent double-tap-to-zoom completely on the app
+           (merged into the primary `body` rule at line 73 to avoid duplicate selector) */
+
+        /* Prevent iOS zoom on input focus (font-size must be >= 16px) */
         input[type="text"],
         input[type="email"],
         input[type="tel"],
         input[type="number"],
         input[type="search"],
         input[type="password"],
+        input[type="date"],
+        input[type="time"],
+        input[type="datetime-local"],
         textarea,
         select {
             font-size: 16px !important;
-        }
-
-        .dark body {
-            background-color: #000000;
         }
 
         /* 
@@ -180,39 +205,24 @@
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                // Unregister old service workers first to clear stale cache
                 navigator.serviceWorker.getRegistrations().then((registrations) => {
-                    for (let registration of registrations) {
-                        registration.unregister();
-                    }
-                    console.log('Old ServiceWorkers unregistered, re-registering fresh...');
-                    navigator.serviceWorker.register('./sw.js')
-                        .then((registration) => {
-                            console.log('ServiceWorker registration successful with scope: ', registration.scope);
-                        })
-                        .catch((err) => {
-                            console.log('ServiceWorker registration failed: ', err);
-                        });
+                    // Only unregister service workers that are NOT our current sw.js
+                    // (e.g. old ones from different scopes) to avoid killing the
+                    // active worker on every page load.
+                    const unregisterPromises = registrations
+                        .filter((reg) => !reg.active || !reg.active.scriptURL.includes('sw.js'))
+                        .map((reg) => reg.unregister());
+                    Promise.all(unregisterPromises).then(() => {
+                        navigator.serviceWorker.register('./sw.js')
+                            .then((registration) => {
+                                console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                            })
+                            .catch((err) => {
+                                console.log('ServiceWorker registration failed: ', err);
+                            });
+                    });
                 });
             });
-        }
-
-        // Detect standalone PWA mode (launched from home screen)
-        function isStandalone() {
-            return window.matchMedia('(display-mode: standalone)').matches
-                || window.matchMedia('(display-mode: fullscreen)').matches
-                || window.navigator.standalone === true;
-        }
-
-        if (isStandalone()) {
-            // Lock orientation to portrait if supported
-            // NOTE: We do NOT use the Fullscreen API here — on iOS Safari,
-            // requestFullscreen() hides the native status bar. In standalone
-            // mode the app is already full-screen with the status bar visible
-            // on top, which is the desired behaviour.
-            if (screen.orientation && screen.orientation.lock) {
-                screen.orientation.lock('portrait').catch(() => { });
-            }
         }
 
         /*
@@ -227,21 +237,45 @@
          */
         (function () {
             function setAppHeight() {
-                var vh = (window.visualViewport && window.visualViewport.height)
-                    ? window.visualViewport.height
-                    : window.innerHeight;
+                var vh = (globalThis.visualViewport && globalThis.visualViewport.height)
+                    ? globalThis.visualViewport.height
+                    : globalThis.innerHeight;
                 document.documentElement.style.setProperty('--app-height', vh + 'px');
+                if (globalThis.scrollY > 0) {
+                    globalThis.scrollTo(0, 0);
+                }
             }
             setAppHeight();
-            if (window.visualViewport) {
-                window.visualViewport.addEventListener('resize', setAppHeight);
-                window.visualViewport.addEventListener('scroll', setAppHeight);
+            if (globalThis.visualViewport) {
+                globalThis.visualViewport.addEventListener('resize', setAppHeight);
+                globalThis.visualViewport.addEventListener('scroll', setAppHeight);
             }
-            window.addEventListener('resize', setAppHeight);
-            window.addEventListener('orientationchange', function () {
+            globalThis.addEventListener('resize', setAppHeight);
+            globalThis.addEventListener('orientationchange', function () {
                 setTimeout(setAppHeight, 200);
             });
         })();
+    </script>
+
+    <!-- Orientation lock: uses top-level await, so this script is a module -->
+    <script type="module">
+        function isStandalone() {
+            return globalThis.matchMedia('(display-mode: standalone)').matches
+                || globalThis.matchMedia('(display-mode: fullscreen)').matches
+                || globalThis.navigator.standalone === true;
+        }
+
+        // NOTE: We do NOT use the Fullscreen API here — on iOS Safari,
+        // requestFullscreen() hides the native status bar. In standalone
+        // mode the app is already full-screen with the status bar visible
+        // on top, which is the desired behaviour.
+        if (isStandalone() && screen.orientation?.lock) {
+            try {
+                await screen.orientation.lock('portrait');
+            } catch (e) {
+                console.warn('Orientation lock skipped', e);
+            }
+        }
     </script>
 </body>
 

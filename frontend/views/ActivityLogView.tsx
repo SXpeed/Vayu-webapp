@@ -93,8 +93,8 @@ export function ActivityLogView({ onBack }: ActivityLogViewProps) {
         <div className="h-full flex flex-col bg-[#faf9f6] dark:bg-[#121212] transition-colors duration-500 animate-fade-in">
             {/* Header */}
             <div className="sticky top-0 z-10 bg-white dark:bg-[#1a1a1a] shadow-sm border-b border-gray-100 dark:border-gray-800">
-                <div className="px-4 pb-3" style={{ paddingTop: 'calc(2rem + env(safe-area-inset-top, 0px))' }}>
-                    <div className="flex items-center gap-3 mb-3">
+                <div className="px-[6px] pb-[6px]" style={{ paddingTop: 'calc(1.75rem + env(safe-area-inset-top, 0px))' }}>
+                    <div className="flex items-center gap-[6px] mb-[6px]">
                         <button
                             onClick={onBack}
                             className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale shrink-0"
@@ -139,13 +139,16 @@ export function ActivityLogView({ onBack }: ActivityLogViewProps) {
                                 placeholder="Search activity…"
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
-                                className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[7px] py-2 pl-9 pr-4 text-xs text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                                autoComplete="off"
+                                autoCorrect="off"
+                                spellCheck={false}
+                                className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 pl-9 pr-4 text-xs text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
                             />
                         </div>
                         <select
                             value={actionFilter}
                             onChange={(e) => setActionFilter(e.target.value)}
-                            className="bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[7px] px-3 py-2 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors cursor-pointer"
+                            className="bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] px-[6px] py-2 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors cursor-pointer"
                         >
                             <option value="all" className="dark:bg-gray-800">All Actions</option>
                             {actionTypes.map((action) => (
@@ -159,7 +162,7 @@ export function ActivityLogView({ onBack }: ActivityLogViewProps) {
             </div>
 
             {/* Body */}
-            <div className="flex-1 overflow-y-auto no-scrollbar p-4 pb-24">
+            <div className="flex-1 overflow-y-auto no-scrollbar p-[6px] pb-0">
                 {isLoading && logs.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-20 text-gray-400 dark:text-gray-500">
                         <div className="w-8 h-8 border-2 border-gold-500/30 border-t-gold-500 rounded-full animate-spin mb-4" />
@@ -170,7 +173,7 @@ export function ActivityLogView({ onBack }: ActivityLogViewProps) {
                         <p className="text-red-500 dark:text-red-400 mb-4 text-sm">{error}</p>
                         <button
                             onClick={loadLogs}
-                            className="px-5 py-2.5 bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 rounded-[7px] text-xs font-medium uppercase tracking-wider hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors active-scale shadow-md"
+                            className="px-5 py-2.5 bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 rounded-[6px] text-xs font-medium uppercase tracking-wider hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors active-scale shadow-md"
                         >
                             Retry
                         </button>
@@ -187,17 +190,17 @@ export function ActivityLogView({ onBack }: ActivityLogViewProps) {
                     </div>
                 ) : (
                     <>
-                        <p className="text-[9px] text-gray-400 dark:text-gray-500 mb-3 uppercase tracking-widest font-medium px-1">
+                        <p className="text-[9px] text-gray-400 dark:text-gray-500 mb-[6px] uppercase tracking-widest font-medium px-1">
                             Showing {filteredLogs.length} of {logs.length} {logs.length === 1 ? 'entry' : 'entries'}
                         </p>
                         <div className="space-y-2">
                             {filteredLogs.map((log, index) => (
                                 <div
                                     key={log.id}
-                                    className="bg-white dark:bg-[#1e1e1e] border border-gray-100 dark:border-gray-800 rounded-[7px] p-3.5 shadow-sm animate-fade-in-up"
+                                    className="bg-white dark:bg-[#1e1e1e] border border-gray-100 dark:border-gray-800 rounded-[6px] p-3.5 shadow-sm animate-fade-in-up"
                                     style={{ animationDelay: `${Math.min(index * 30, 300)}ms` }}
                                 >
-                                    <div className="flex items-start gap-3">
+                                    <div className="flex items-start gap-[6px]">
                                         {/* Action icon */}
                                         <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm ${getActionBgColor(log.action)} ${getActionColor(log.action)}`}>
                                             {getActionIcon(log.action)}

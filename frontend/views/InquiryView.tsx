@@ -1,8 +1,15 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Plus, X, MessageSquare, MessageCircle, Send, Search, ArrowLeft, Edit2, Trash2, Phone, Mail, Image as ImageIcon, User, Clock, Tag, BookOpen, CheckCircle2, XCircle, Check, CheckCheck, Paperclip, Reply } from 'lucide-react';
-import { Inquiry, Artwork, ViewState, InquiryMessage, MessageReplyTo, MessageAttachment, MessageTag } from '../types';
+import { Inquiry, Artwork, InquiryMessage, MessageReplyTo, MessageAttachment, MessageTag } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { TAG_COLORS, ALL_TAGS } from './MessagingView';
+
+const renderArtworkStatusColor = (status: string) => {
+    if (status === 'Available') return 'bg-green-500';
+    if (status === 'Sold') return 'bg-red-500';
+    return 'bg-yellow-500';
+};
 
 interface InquiryViewProps {
     inquiries: Inquiry[];
@@ -13,7 +20,7 @@ interface InquiryViewProps {
     onArtworkClick: (artwork: Artwork) => void;
     inquiryMessages: InquiryMessage[];
     currentUserId: string;
-    currentUserName: string;
+
     onSendInquiryMessage: (inquiryId: string, text: string, tags: MessageTag[], replyTo?: MessageReplyTo, attachment?: MessageAttachment) => void;
 }
 
@@ -34,12 +41,35 @@ const SOURCE_COLORS: Record<Inquiry['source'], string> = {
     'Other': 'bg-gray-50 dark:bg-gray-900/20 text-gray-700 dark:text-gray-400',
 };
 
-export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, onAddInquiry, onUpdateInquiry, onDeleteInquiry, onArtworkClick, inquiryMessages, currentUserId, currentUserName, onSendInquiryMessage }) => {
+export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, onAddInquiry, onUpdateInquiry, onDeleteInquiry, onArtworkClick, inquiryMessages, currentUserId, onSendInquiryMessage }) => {
     const [isAdding, setIsAdding] = useState(false);
     const [selectedInquiry, setSelectedInquiry] = useState<Inquiry | null>(null);
     const [chatInquiry, setChatInquiry] = useState<Inquiry | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [filterTab, setFilterTab] = useState<'active' | 'closed' | 'shared'>('active');
+
+    useEffect(() => {
+        const handlePopState = (e: PopStateEvent) => {
+            if (e.state?.modal !== 'inquiry') {
+                setSelectedInquiry(null);
+            }
+        };
+        globalThis.addEventListener('popstate', handlePopState);
+        return () => globalThis.removeEventListener('popstate', handlePopState);
+    }, []);
+
+    const handleInquiryClick = (inquiry: Inquiry) => {
+        setSelectedInquiry(inquiry);
+        globalThis.history.pushState({ view: 'inquiry', modal: 'inquiry' }, '');
+    };
+
+    const handleCloseModal = () => {
+        if (globalThis.history.state?.modal === 'inquiry') {
+            globalThis.history.back();
+        } else {
+            setSelectedInquiry(null);
+        }
+    };
 
     const filteredInquiries = useMemo(() => {
         let list = inquiries;
@@ -70,11 +100,16 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
     const closedCount = useMemo(() => inquiries.filter(i => i.status === 'Closed').length, [inquiries]);
     const sharedCount = useMemo(() => inquiries.filter(i => i.catalogShared).length, [inquiries]);
 
+    const getFilterTabLabel = () => {
+        if (filterTab === 'active') return 'Active';
+        if (filterTab === 'closed') return 'Closed';
+        return 'Catalog Shared';
+    };
 
     return (
         <div className="h-full flex flex-col bg-[#faf9f6] dark:bg-[#121212] transition-colors duration-500 animate-fade-in">
-            <div className="bg-white dark:bg-[#1a1a1a] px-4 pt-8 pb-3 shadow-sm z-10 border-b border-gray-100 dark:border-gray-800">
-                <div className="flex justify-between items-center mb-3">
+            <div className="bg-white dark:bg-[#1a1a1a] px-[6px] pt-[calc(1.75rem+env(safe-area-inset-top,0px))] pb-[6px] shadow-sm z-10 border-b border-gray-100 dark:border-gray-800">
+                <div className="flex justify-between items-center mb-[6px]">
                     <h1 className="text-xl font-serif text-gray-900 dark:text-white">Inquiry</h1>
                     <button
                         onClick={() => setIsAdding(true)}
@@ -90,62 +125,69 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                         placeholder="Search inquiries..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[7px] py-2 pl-9 pr-4 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                        autoComplete="off"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 pl-9 pr-4 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
                     />
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 no-scrollbar pb-28">
+            <div className="flex-1 overflow-y-auto p-[6px] space-y-4 no-scrollbar pb-20">
                 {/* Filter Buttons */}
                 <div className="flex gap-2 animate-fade-in-up" style={{ animationDelay: '50ms' }}>
                     <button
                         onClick={() => setFilterTab('active')}
-                        className={`flex-1 py-2.5 rounded-[7px] text-[10px] font-bold uppercase tracking-widest transition-all duration-300 active-scale ${filterTab === 'active'
-                                ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
-                                : 'bg-white dark:bg-[#1e1e1e] text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
+                        className={`flex-1 py-2.5 rounded-[6px] text-[10px] font-bold uppercase tracking-widest transition-all duration-300 active-scale ${filterTab === 'active'
+                            ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
+                            : 'bg-white dark:bg-[#1e1e1e] text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
                             }`}
                     >
                         Active ({activeCount})
                     </button>
                     <button
                         onClick={() => setFilterTab('closed')}
-                        className={`flex-1 py-2.5 rounded-[7px] text-[10px] font-bold uppercase tracking-widest transition-all duration-300 active-scale ${filterTab === 'closed'
-                                ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
-                                : 'bg-white dark:bg-[#1e1e1e] text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
+                        className={`flex-1 py-2.5 rounded-[6px] text-[10px] font-bold uppercase tracking-widest transition-all duration-300 active-scale ${filterTab === 'closed'
+                            ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
+                            : 'bg-white dark:bg-[#1e1e1e] text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
                             }`}
                     >
                         Closed ({closedCount})
                     </button>
                     <button
                         onClick={() => setFilterTab('shared')}
-                        className={`flex-1 py-2.5 rounded-[7px] text-[10px] font-bold uppercase tracking-widest transition-all duration-300 active-scale ${filterTab === 'shared'
-                                ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
-                                : 'bg-white dark:bg-[#1e1e1e] text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
+                        className={`flex-1 py-2.5 rounded-[6px] text-[10px] font-bold uppercase tracking-widest transition-all duration-300 active-scale ${filterTab === 'shared'
+                            ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
+                            : 'bg-white dark:bg-[#1e1e1e] text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
                             }`}
                     >
                         Shared ({sharedCount})
                     </button>
                 </div>
 
-                <h2 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-1 animate-fade-in-up" style={{ animationDelay: '100ms' }}>
-                    {filterTab === 'active' ? 'Active' : filterTab === 'closed' ? 'Closed' : 'Catalog Shared'} Inquiries
+                <h2 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-[6px] px-1 animate-fade-in-up" style={{ animationDelay: '100ms' }}>
+                    {getFilterTabLabel()} Inquiries
                 </h2>
 
                 <div className="space-y-2">
                     {filteredInquiries.map((inquiry, index) => {
-                        const linkedArtworks = inquiry.artworkIds.map(id => artworks.find(a => a.id === id)).filter(Boolean) as Artwork[];
-                        const coverImage = linkedArtworks[0]?.imageUrls?.[0];
+                        const coverArtwork = inquiry.artworkIds
+                            .map(id => artworks.find(a => a.id === id))
+                            .find((a): a is Artwork => !!a);
+                        const coverImage = coverArtwork?.imageUrls?.[0];
                         return (
-                            <div
+                            <button
                                 key={inquiry.id}
-                                onClick={() => setSelectedInquiry(inquiry)}
-                                className={`bg-white dark:bg-[#1e1e1e] rounded-[7px] shadow-sm p-3 border animate-fade-in-up cursor-pointer active-scale ${inquiry.status === 'Closed' ? 'border-gray-200 dark:border-gray-800 opacity-70' : 'border-gray-100 dark:border-gray-800'
+                                type="button"
+                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleInquiryClick(inquiry); }}
+                                onClick={() => handleInquiryClick(inquiry)}
+                                className={`w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm p-[6px] border animate-fade-in-up cursor-pointer active-scale ${inquiry.status === 'Closed' ? 'border-gray-200 dark:border-gray-800 opacity-70' : 'border-gray-100 dark:border-gray-800'
                                     }`}
                                 style={{ animationDelay: `${250 + index * 50}ms` }}
                             >
                                 {/* Top Row: Avatar + Name + Status */}
                                 <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-3">
+                                    <div className="flex items-center gap-[6px]">
                                         {coverImage ? (
                                             <img src={coverImage} alt={inquiry.customerName} className="w-10 h-10 rounded-full object-cover" />
                                         ) : (
@@ -165,6 +207,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                                             {inquiry.status}
                                         </span>
                                         <button
+                                            type="button"
                                             onClick={(e) => { e.stopPropagation(); setChatInquiry(inquiry); }}
                                             className="p-2 text-gray-400 dark:text-gray-500 hover:text-gold-600 dark:hover:text-gold-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale"
                                         >
@@ -198,7 +241,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                                         </p>
                                     )}
                                 </div>
-                            </div>
+                            </button>
                         );
                     })}
                     {filteredInquiries.length === 0 && (
@@ -228,7 +271,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                     <InquiryDetailModal
                         inquiry={selectedInquiry}
                         artworks={artworks}
-                        onClose={() => setSelectedInquiry(null)}
+                        onClose={handleCloseModal}
                         onUpdateInquiry={(updated) => {
                             onUpdateInquiry(updated);
                             setSelectedInquiry(updated);
@@ -248,7 +291,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                         inquiry={chatInquiry}
                         messages={inquiryMessages.filter(m => m.inquiryId === chatInquiry.id)}
                         currentUserId={currentUserId}
-                        currentUserName={currentUserName}
+
                         onClose={() => setChatInquiry(null)}
                         onSendMessage={(text, tags, replyTo, attachment) => onSendInquiryMessage(chatInquiry.id, text, tags, replyTo, attachment)}
                     />
@@ -264,7 +307,7 @@ interface InquiryChatModalProps {
     inquiry: Inquiry;
     messages: InquiryMessage[];
     currentUserId: string;
-    currentUserName: string;
+
     onClose: () => void;
     onSendMessage: (text: string, tags: MessageTag[], replyTo?: MessageReplyTo, attachment?: MessageAttachment) => void;
 }
@@ -281,7 +324,14 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        setTimeout(() => {
+            if (messagesEndRef.current) {
+                const container = messagesEndRef.current.parentElement;
+                if (container) {
+                    container.scrollTop = container.scrollHeight;
+                }
+            }
+        }, 50);
     }, [messages]);
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -328,6 +378,12 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
 
     const formatMessageTime = (timestamp: number) => new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+    const renderMessageStatusIcon = (status?: string) => {
+        if (status === 'read') return <CheckCheck size={12} className="text-sky-500 dark:text-sky-400" />;
+        if (status === 'delivered') return <CheckCheck size={12} />;
+        return <Check size={12} />;
+    };
+
     const displayedMessages = useMemo(() => {
         if (!chatSearchQuery.trim()) return messages;
         const q = chatSearchQuery.toLowerCase();
@@ -336,7 +392,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
 
     return (
         <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-50 flex flex-col animate-fade-in-up">
-            <div className="bg-white dark:bg-[#1a1a1a] flex items-center gap-3 p-4 border-b border-gray-100 dark:border-gray-800 pt-8 shadow-sm z-10">
+            <div className="bg-white dark:bg-[#1a1a1a] flex items-center gap-[6px] p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm z-10">
                 <button onClick={onClose} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
                     <ArrowLeft size={20} />
                 </button>
@@ -356,7 +412,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
             </div>
 
             {showSearch && (
-                <div className="bg-white dark:bg-[#1a1a1a] border-b border-gray-100 dark:border-gray-800 px-4 py-2 animate-fade-in">
+                <div className="bg-white dark:bg-[#1a1a1a] border-b border-gray-100 dark:border-gray-800 px-[6px] py-2 animate-fade-in">
                     <div className="relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500" size={14} />
                         <input
@@ -364,7 +420,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                             onChange={(e) => setChatSearchQuery(e.target.value)}
                             placeholder="Search in this chat..."
                             autoFocus
-                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[7px] py-2 pl-8 pr-8 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
+                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 pl-8 pr-8 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
                         />
                         {chatSearchQuery && (
                             <button onClick={() => setChatSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
@@ -375,7 +431,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                 </div>
             )}
 
-            <div className="flex-1 overflow-y-auto p-4 space-y-3 no-scrollbar">
+            <div className="flex-1 overflow-y-auto p-[6px] space-y-3 no-scrollbar">
                 {messages.length === 0 && (
                     <div className="text-center text-gray-400 dark:text-gray-500 mt-10 font-light text-sm">
                         No messages yet for this inquiry.
@@ -389,11 +445,10 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                 {displayedMessages.map((msg) => {
                     const isMe = msg.senderId === currentUserId;
                     const bubble = (
-                        <div className={`max-w-[80%] rounded-[12px] px-3.5 py-2.5 shadow-sm ${
-                            isMe
-                                ? 'bg-[#FEFFF7] dark:bg-[#2a2a2a] text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-700 rounded-br-[4px]'
-                                : 'bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-800 rounded-bl-[4px]'
-                        }`}>
+                        <div className={`max-w-[80%] rounded-[12px] px-3.5 py-2.5 shadow-sm ${isMe
+                            ? 'bg-[#FEFFF7] dark:bg-[#2a2a2a] text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-700 rounded-br-[4px]'
+                            : 'bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-800 rounded-bl-[4px]'
+                            }`}>
                             {!isMe && (
                                 <p className="text-[9px] font-bold uppercase tracking-widest mb-1 text-gold-600 dark:text-gold-400">{msg.senderName}</p>
                             )}
@@ -407,8 +462,8 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                                 msg.attachment.type === 'image' ? (
                                     <img src={msg.attachment.url} alt={msg.attachment.name} className="rounded-[8px] max-w-full max-h-48 object-cover mb-1.5" />
                                 ) : (
-                                    <div className={`flex items-center gap-2 mb-1.5 p-2 rounded-[7px] ${isMe ? 'bg-gold-500/10 dark:bg-gray-700/50' : 'bg-gray-50 dark:bg-gray-800'}`}>
-                                        <Paperclip size={14} className={isMe ? 'text-gold-600 dark:text-gold-400' : 'text-gold-600 dark:text-gold-400'} />
+                                    <div className={`flex items-center gap-2 mb-1.5 p-2 rounded-[6px] ${isMe ? 'bg-gold-500/10 dark:bg-gray-700/50' : 'bg-gray-50 dark:bg-gray-800'}`}>
+                                        <Paperclip size={14} className="text-gold-600 dark:text-gold-400" />
                                         <span className="text-[11px] truncate">{msg.attachment.name}</span>
                                     </div>
                                 )
@@ -424,13 +479,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                                 )}
                                 <span className={`flex items-center gap-1 text-[9px] shrink-0 ml-auto ${isMe ? 'text-gray-500 dark:text-gray-500' : 'text-gray-400 dark:text-gray-500'}`}>
                                     {formatMessageTime(msg.timestamp)}
-                                    {isMe && (
-                                        msg.status === 'read'
-                                            ? <CheckCheck size={12} className="text-sky-500 dark:text-sky-400" />
-                                            : msg.status === 'delivered'
-                                                ? <CheckCheck size={12} />
-                                                : <Check size={12} />
-                                    )}
+                                    {isMe && renderMessageStatusIcon(msg.status)}
                                 </span>
                             </div>
                         </div>
@@ -456,15 +505,15 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
 
             {/* Tag Picker */}
             {showTagPicker && (
-                <div className="px-4 py-2 bg-white dark:bg-[#1a1a1a] border-t border-gray-100 dark:border-gray-800 animate-fade-in">
+                <div className="px-[6px] py-2 bg-white dark:bg-[#1a1a1a] border-t border-gray-100 dark:border-gray-800 animate-fade-in">
                     <div className="flex gap-1.5 flex-wrap">
                         {ALL_TAGS.map(tag => (
                             <button
                                 key={tag}
                                 onClick={() => toggleTag(tag)}
                                 className={`text-[9px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wider transition-all active-scale ${selectedTags.has(tag)
-                                        ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950'
-                                        : TAG_COLORS[tag] + ' border border-gray-200 dark:border-gray-700'
+                                    ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950'
+                                    : TAG_COLORS[tag] + ' border border-gray-200 dark:border-gray-700'
                                     }`}
                             >
                                 {tag}
@@ -474,7 +523,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                 </div>
             )}
 
-            <div className="bg-white dark:bg-[#1a1a1a] px-4 py-3 border-t border-gray-100 dark:border-gray-800 pb-safe">
+            <div className="bg-white dark:bg-[#1a1a1a] px-[6px] py-[9px] border-t border-gray-100 dark:border-gray-800 transition-colors">
                 {selectedTags.size > 0 && (
                     <div className="flex gap-1 mb-2 flex-wrap">
                         {Array.from(selectedTags).map(tag => (
@@ -486,7 +535,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                     </div>
                 )}
                 {replyingTo && (
-                    <div className="flex items-center justify-between gap-2 mb-2 pl-3 pr-2 py-1.5 bg-gray-100 dark:bg-[#2a2a2a] rounded-[7px] border-l-2 border-gold-500 animate-fade-in">
+                    <div className="flex items-center justify-between gap-2 mb-2 pl-3 pr-2 py-1.5 bg-gray-100 dark:bg-[#2a2a2a] rounded-[6px] border-l-2 border-gold-500 animate-fade-in">
                         <div className="min-w-0">
                             <p className="text-[9px] font-bold text-gold-600 dark:text-gold-400">Replying to {replyingTo.senderName}</p>
                             <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate">{replyingTo.text}</p>
@@ -497,7 +546,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                     </div>
                 )}
                 {pendingAttachment && (
-                    <div className="flex items-center justify-between gap-2 mb-2 p-2 bg-gray-100 dark:bg-[#2a2a2a] rounded-[7px] animate-fade-in">
+                    <div className="flex items-center justify-between gap-2 mb-2 p-2 bg-gray-100 dark:bg-[#2a2a2a] rounded-[6px] animate-fade-in">
                         <div className="flex items-center gap-2 min-w-0">
                             {pendingAttachment.type === 'image' ? (
                                 <img src={pendingAttachment.url} alt={pendingAttachment.name} className="w-10 h-10 rounded-[4px] object-cover shrink-0" />
@@ -516,14 +565,14 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                 <div className="flex items-end gap-2">
                     <button
                         onClick={() => setShowTagPicker(!showTagPicker)}
-                        className={`p-2 rounded-full transition-colors active-scale shrink-0 ${showTagPicker ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800'
+                        className={`p-2.5 rounded-full transition-colors active-scale shrink-0 ${showTagPicker ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800'
                             }`}
                     >
                         <Tag size={18} />
                     </button>
                     <button
                         onClick={() => fileInputRef.current?.click()}
-                        className="p-2 rounded-full text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors active-scale shrink-0"
+                        className="p-2.5 rounded-full text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors active-scale shrink-0"
                     >
                         <Paperclip size={18} />
                     </button>
@@ -532,15 +581,21 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                         value={text}
                         onChange={(e) => setText(e.target.value)}
                         onKeyDown={handleKeyDown}
+                        onFocus={() => {
+                            setTimeout(() => {
+                                window.scrollTo(0, 0);
+                                document.body.scrollTop = 0;
+                            }, 50);
+                        }}
                         placeholder="Type a message..."
-                        className="flex-1 bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-full py-2.5 px-4 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                        className="flex-1 bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-full py-2.5 px-[6px] text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
                     />
                     <button
                         onClick={handleSend}
                         disabled={!text.trim() && !pendingAttachment}
                         className={`p-2.5 rounded-full transition-all active-scale shrink-0 ${text.trim() || pendingAttachment
-                                ? 'bg-gold-500 dark:bg-gold-500 text-white dark:text-brand-950 shadow-md'
-                                : 'bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-600'
+                            ? 'bg-gold-500 dark:bg-gold-500 text-white dark:text-brand-950 shadow-md'
+                            : 'bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-600'
                             }`}
                     >
                         <Send size={18} />
@@ -565,7 +620,7 @@ interface InquiryDetailModalProps {
 const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, artworks, onClose, onUpdateInquiry, onDeleteInquiry, onArtworkClick }) => {
     const [isEditing, setIsEditing] = useState(false);
 
-    const linkedArtworks = inquiry.artworkIds.map(id => artworks.find(a => a.id === id)).filter(Boolean) as Artwork[];
+    const linkedArtworks = inquiry.artworkIds.map(id => artworks.find(a => a.id === id)).filter((a): a is Artwork => !!a);
 
     const handleSaveEdit = (updatedData: any) => {
         onUpdateInquiry({
@@ -576,10 +631,10 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, artwor
         setIsEditing(false);
     };
 
+    const [confirmOpen, setConfirmOpen] = useState(false);
+
     const handleDelete = () => {
-        if (window.confirm(`Are you sure you want to delete inquiry "${inquiry.inquiryNumber}"?`)) {
-            onDeleteInquiry();
-        }
+        setConfirmOpen(true);
     };
 
     const handleToggleStatus = () => {
@@ -593,11 +648,11 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, artwor
 
     return (
         <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-50 flex flex-col animate-fade-in-up">
-            <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-4 border-b border-gray-100 dark:border-gray-800 pt-8 shadow-sm z-10">
+            <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm z-10">
                 <button onClick={onClose} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full flex items-center gap-2 transition-colors active-scale">
                     <ArrowLeft size={20} />
                 </button>
-                <h2 className="text-base font-serif text-gray-900 dark:text-white truncate px-4">{inquiry.inquiryNumber}</h2>
+                <h2 className="text-base font-serif text-gray-900 dark:text-white truncate px-[6px]">{inquiry.inquiryNumber}</h2>
                 <div className="flex items-center gap-2">
                     <button onClick={() => setIsEditing(true)} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
                         <Edit2 size={18} />
@@ -608,14 +663,14 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, artwor
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 no-scrollbar pb-24">
+            <div className="flex-1 overflow-y-auto p-[6px] no-scrollbar pb-20">
                 {/* Action Buttons - Active/Close & Catalog Shared */}
-                <div className="flex gap-3 mb-4 animate-fade-in-up" style={{ animationDelay: '50ms' }}>
+                <div className="flex gap-[6px] mb-4 animate-fade-in-up" style={{ animationDelay: '50ms' }}>
                     <button
                         onClick={handleToggleStatus}
-                        className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-[7px] text-[10px] font-bold uppercase tracking-widest transition-all duration-300 active-scale shadow-sm ${inquiry.status === 'Closed'
-                                ? 'bg-green-500 dark:bg-green-600 text-white hover:bg-green-600 dark:hover:bg-green-500'
-                                : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 hover:border-red-300 dark:hover:border-red-700'
+                        className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-[6px] text-[10px] font-bold uppercase tracking-widest transition-all duration-300 active-scale shadow-sm ${inquiry.status === 'Closed'
+                            ? 'bg-green-500 dark:bg-green-600 text-white hover:bg-green-600 dark:hover:bg-green-500'
+                            : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 hover:border-red-300 dark:hover:border-red-700'
                             }`}
                     >
                         {inquiry.status === 'Closed' ? (
@@ -633,9 +688,9 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, artwor
 
                     <button
                         onClick={handleToggleCatalogShared}
-                        className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-[7px] text-[10px] font-bold uppercase tracking-widest transition-all duration-300 active-scale shadow-sm ${inquiry.catalogShared
-                                ? 'bg-gold-500 text-white hover:bg-gold-600'
-                                : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:bg-gold-50 dark:hover:bg-gold-900/15 hover:text-gold-600 dark:hover:text-gold-400 hover:border-gold-300 dark:hover:border-gold-700'
+                        className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-[6px] text-[10px] font-bold uppercase tracking-widest transition-all duration-300 active-scale shadow-sm ${inquiry.catalogShared
+                            ? 'bg-gold-500 text-white hover:bg-gold-600'
+                            : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:bg-gold-50 dark:hover:bg-gold-900/15 hover:text-gold-600 dark:hover:text-gold-400 hover:border-gold-300 dark:hover:border-gold-700'
                             }`}
                     >
                         <BookOpen size={16} strokeWidth={2.5} />
@@ -644,7 +699,7 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, artwor
                 </div>
 
                 {/* Customer Info Card */}
-                <div className="bg-white dark:bg-[#1e1e1e] p-6 rounded-[7px] shadow-sm border border-gray-100 dark:border-gray-800 mb-4 animate-fade-in-up" style={{ animationDelay: '100ms' }}>
+                <div className="bg-white dark:bg-[#1e1e1e] p-6 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 mb-4 animate-fade-in-up" style={{ animationDelay: '100ms' }}>
                     <div className="flex justify-between items-start mb-6">
                         <div>
                             <h3 className="text-[9px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-1">Customer</h3>
@@ -660,30 +715,30 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, artwor
 
                     <div className="space-y-3 mb-6">
                         {inquiry.customerPhone && (
-                            <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-400">
+                            <div className="flex items-center gap-[6px] text-sm text-gray-600 dark:text-gray-400">
                                 <Phone size={14} className="text-gold-500" />
                                 <span>{inquiry.customerPhone}</span>
                             </div>
                         )}
                         {inquiry.customerEmail && (
-                            <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-400">
+                            <div className="flex items-center gap-[6px] text-sm text-gray-600 dark:text-gray-400">
                                 <Mail size={14} className="text-gold-500" />
                                 <span>{inquiry.customerEmail}</span>
                             </div>
                         )}
-                        <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-400">
+                        <div className="flex items-center gap-[6px] text-sm text-gray-600 dark:text-gray-400">
                             <Tag size={14} className="text-gold-500" />
                             <span className={`text-[10px] px-2 py-0.5 rounded-[3px] font-medium uppercase tracking-wider ${SOURCE_COLORS[inquiry.source]}`}>{inquiry.source}</span>
                         </div>
-                        <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-400">
+                        <div className="flex items-center gap-[6px] text-sm text-gray-600 dark:text-gray-400">
                             <Clock size={14} className="text-gold-500" />
                             <span>{new Date(inquiry.date).toLocaleDateString()} at {new Date(inquiry.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                         </div>
-                        <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-400">
+                        <div className="flex items-center gap-[6px] text-sm text-gray-600 dark:text-gray-400">
                             <BookOpen size={14} className="text-gold-500" />
                             <span className={`text-[10px] px-2 py-0.5 rounded-[3px] font-medium uppercase tracking-wider ${inquiry.catalogShared
-                                    ? 'bg-gold-500/10 dark:bg-gold-900/20 text-gold-700 dark:text-gold-400'
-                                    : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'
+                                ? 'bg-gold-500/10 dark:bg-gold-900/20 text-gold-700 dark:text-gold-400'
+                                : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'
                                 }`}>
                                 {inquiry.catalogShared ? 'Catalog Shared' : 'Not Shared'}
                             </span>
@@ -701,12 +756,12 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, artwor
 
                 {/* Interested Artworks */}
                 {linkedArtworks.length > 0 && (
-                    <div className="bg-white dark:bg-[#1e1e1e] p-6 rounded-[7px] shadow-sm border border-gray-100 dark:border-gray-800 animate-fade-in-up" style={{ animationDelay: '150ms' }}>
+                    <div className="bg-white dark:bg-[#1e1e1e] p-6 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 animate-fade-in-up" style={{ animationDelay: '150ms' }}>
                         <h3 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-4">Interested In ({linkedArtworks.length})</h3>
                         <div className="space-y-3">
-                            {linkedArtworks.map((art, idx) => (
-                                <div key={idx} className="flex justify-between items-center">
-                                    <div className="flex items-center gap-3">
+                            {linkedArtworks.map((art) => (
+                                <div key={art.id} className="flex justify-between items-center">
+                                    <div className="flex items-center gap-[6px]">
                                         {art.imageUrls && art.imageUrls.length > 0 ? (
                                             <img src={art.imageUrls[0]} alt={art.title} className="w-10 h-10 rounded-[3px] object-cover" />
                                         ) : (
@@ -723,7 +778,7 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, artwor
                                     </div>
                                     <div className="text-right">
                                         <p className="font-medium text-sm text-gray-900 dark:text-white">₹{art.price.toLocaleString('en-IN')}</p>
-                                        <div className={`w-1.5 h-1.5 rounded-full ml-auto mt-1 ${art.status === 'Available' ? 'bg-green-500' : art.status === 'Sold' ? 'bg-red-500' : 'bg-yellow-500'}`}></div>
+                                        <div className={`w-1.5 h-1.5 rounded-full ml-auto mt-1 ${renderArtworkStatusColor(art.status)}`}></div>
                                     </div>
                                 </div>
                             ))}
@@ -741,6 +796,17 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, artwor
                     />
                 )}
             </div>
+
+            <ConfirmDialog
+                isOpen={confirmOpen}
+                title="Delete Inquiry"
+                message={`Are you sure you want to delete inquiry "${inquiry.inquiryNumber}"?`}
+                onClose={() => setConfirmOpen(false)}
+                onConfirm={() => {
+                    onDeleteInquiry();
+                    setConfirmOpen(false);
+                }}
+            />
         </div>
     );
 };
@@ -762,7 +828,7 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
     const [notes, setNotes] = useState(initialData?.notes || '');
     const [source, setSource] = useState<Inquiry['source']>(initialData?.source || 'Walk-in');
     const [status, setStatus] = useState<Inquiry['status']>(initialData?.status || 'New');
-    const [catalogShared, setCatalogShared] = useState(initialData?.catalogShared ?? false);
+    const [catalogShared] = useState(initialData?.catalogShared ?? false);
     const [selectedArtworkIds, setSelectedArtworkIds] = useState<Set<string>>(new Set(initialData?.artworkIds || []));
 
     const toggleArtwork = (id: string) => {
@@ -790,7 +856,7 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
 
     return (
         <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-[70] flex flex-col animate-fade-in-up">
-            <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-4 border-b border-gray-100 dark:border-gray-800 pt-8 shadow-sm z-10">
+            <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm z-10">
                 <button onClick={onClose} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
                     <X size={20} />
                 </button>
@@ -800,13 +866,14 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                 </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 no-scrollbar flex flex-col gap-6">
+            <div className="flex-1 overflow-y-auto p-[6px] no-scrollbar flex flex-col gap-6">
                 {/* Customer Info */}
-                <div className="bg-white dark:bg-[#1e1e1e] p-5 rounded-[7px] shadow-sm border border-gray-100 dark:border-gray-800 space-y-5 animate-fade-in-up" style={{ animationDelay: '50ms' }}>
+                <div className="bg-white dark:bg-[#1e1e1e] p-5 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 space-y-5 animate-fade-in-up" style={{ animationDelay: '50ms' }}>
                     <h3 className="font-bold text-gray-900 dark:text-gray-100 text-[10px] uppercase tracking-widest">Customer Details</h3>
                     <div>
-                        <label className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Name *</label>
+                        <label htmlFor="customerName" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Name *</label>
                         <input
+                            id="customerName"
                             value={customerName}
                             onChange={e => setCustomerName(e.target.value)}
                             className="w-full bg-transparent border-b border-gray-300 dark:border-gray-700 py-1.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
@@ -814,8 +881,9 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                         />
                     </div>
                     <div>
-                        <label className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Phone</label>
+                        <label htmlFor="customerPhone" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Phone</label>
                         <input
+                            id="customerPhone"
                             type="tel"
                             value={customerPhone}
                             onChange={e => setCustomerPhone(e.target.value)}
@@ -824,8 +892,9 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                         />
                     </div>
                     <div>
-                        <label className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Email</label>
+                        <label htmlFor="customerEmail" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Email</label>
                         <input
+                            id="customerEmail"
                             type="email"
                             value={customerEmail}
                             onChange={e => setCustomerEmail(e.target.value)}
@@ -833,10 +902,11 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                             placeholder="customer@example.com"
                         />
                     </div>
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-2 gap-[6px]">
                         <div>
-                            <label className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Source</label>
+                            <label htmlFor="inquirySource" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Source</label>
                             <select
+                                id="inquirySource"
                                 value={source}
                                 onChange={e => setSource(e.target.value as Inquiry['source'])}
                                 className="w-full bg-transparent border-b border-gray-300 dark:border-gray-700 py-1.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
@@ -850,8 +920,9 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                             </select>
                         </div>
                         <div>
-                            <label className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Status</label>
+                            <label htmlFor="inquiryStatus" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Status</label>
                             <select
+                                id="inquiryStatus"
                                 value={status}
                                 onChange={e => setStatus(e.target.value as Inquiry['status'])}
                                 className="w-full bg-transparent border-b border-gray-300 dark:border-gray-700 py-1.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
@@ -867,19 +938,19 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                 </div>
 
                 {/* Notes */}
-                <div className="bg-white dark:bg-[#1e1e1e] p-5 rounded-[7px] shadow-sm border border-gray-100 dark:border-gray-800 animate-fade-in-up" style={{ animationDelay: '100ms' }}>
-                    <h3 className="font-bold text-gray-900 dark:text-gray-100 text-[10px] uppercase tracking-widest mb-3">Notes</h3>
+                <div className="bg-white dark:bg-[#1e1e1e] p-5 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 animate-fade-in-up" style={{ animationDelay: '100ms' }}>
+                    <h3 className="font-bold text-gray-900 dark:text-gray-100 text-[10px] uppercase tracking-widest mb-[6px]">Notes</h3>
                     <textarea
                         value={notes}
                         onChange={e => setNotes(e.target.value)}
                         rows={3}
-                        className="w-full bg-transparent border border-gray-200 dark:border-gray-700 rounded-[7px] p-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors resize-none"
+                        className="w-full bg-transparent border border-gray-200 dark:border-gray-700 rounded-[6px] p-[6px] text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors resize-none"
                         placeholder="Add any notes about this inquiry..."
                     />
                 </div>
 
                 {/* Select Artworks */}
-                <div className="bg-white dark:bg-[#1e1e1e] p-5 rounded-[7px] shadow-sm border border-gray-100 dark:border-gray-800 animate-fade-in-up" style={{ animationDelay: '150ms' }}>
+                <div className="bg-white dark:bg-[#1e1e1e] p-5 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 animate-fade-in-up" style={{ animationDelay: '150ms' }}>
                     <div className="flex justify-between items-center mb-4">
                         <h3 className="font-bold text-gray-900 dark:text-gray-100 text-[10px] uppercase tracking-widest">Interested Artworks</h3>
                         <span className="text-[9px] bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-[3px] text-gray-600 dark:text-gray-300 uppercase tracking-wider">{selectedArtworkIds.size} selected</span>
@@ -893,10 +964,12 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                             const isSelected = selectedArtworkIds.has(art.id);
                             const coverImage = art.imageUrls?.[0];
                             return (
-                                <div
+                                <button
                                     key={art.id}
+                                    type="button"
+                                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleArtwork(art.id); }}
                                     onClick={() => toggleArtwork(art.id)}
-                                    className={`flex items-center p-2 rounded-[7px] border transition-colors cursor-pointer active-scale animate-scale-in ${isSelected ? 'border-gold-500 bg-gold-50/50 dark:bg-gold-900/10' : 'border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50'
+                                    className={`w-full text-left flex items-center p-2 rounded-[6px] border transition-colors cursor-pointer active-scale animate-scale-in ${isSelected ? 'border-gold-500 bg-gold-50/50 dark:bg-gold-900/10' : 'border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50'
                                         }`}
                                     style={{ animationDelay: `${200 + index * 30}ms` }}
                                 >
@@ -923,7 +996,7 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                                             {isSelected && <span className="text-[8px] font-bold">✓</span>}
                                         </div>
                                     </div>
-                                </div>
+                                </button>
                             );
                         })}
                     </div>
