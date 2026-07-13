@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "vayu-design-for-living",
+  "name": "vayu-webapp",
   "compatibility_date": "2026-07-13",
   "observability": {
     "enabled": true
