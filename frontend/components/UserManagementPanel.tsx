@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, UserPlus, Trash2, Shield, User, Eye, EyeOff, Edit2, Check } from 'lucide-react';
+import { X, UserPlus, Trash2, Shield, User, Eye, EyeOff, Edit2, Check, Bell, BellOff } from 'lucide-react';
 import { authService, AuthUser } from '../services/authService';
 import { ConfirmDialog } from './ConfirmDialog';
 
@@ -231,7 +231,14 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
                       {u.role === 'admin' ? <Shield size={16} strokeWidth={1.5} /> : <User size={16} strokeWidth={1.5} />}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-serif text-gray-900 dark:text-gray-100 truncate">{u.name}</p>
+                      <p className="text-sm font-serif text-gray-900 dark:text-gray-100 truncate flex items-center gap-1.5">
+                        {u.name}
+                        {u.notificationsEnabled ? (
+                          <Bell size={12} className="text-gold-500 shrink-0" title="Notifications Enabled" />
+                        ) : (
+                          <BellOff size={12} className="text-gray-400 dark:text-gray-600 shrink-0" title="Notifications Disabled" />
+                        )}
+                      </p>
                       <p className="text-[10px] text-gray-400 dark:text-gray-500 truncate">{u.email}</p>
                     </div>
                     <span className={`text-[8px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full shrink-0 ${u.role === 'admin'

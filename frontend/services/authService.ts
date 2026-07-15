@@ -6,6 +6,7 @@ export interface AuthUser {
   createdAt: number;
   isOnline?: boolean;
   lastSeen?: number;
+  notificationsEnabled?: boolean;
 }
 
 export interface ActivityLog {

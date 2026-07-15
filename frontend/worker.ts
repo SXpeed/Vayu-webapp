@@ -25,6 +25,7 @@ interface PublicUser {
   createdAt: number;
   isOnline?: boolean;
   lastSeen?: number;
+  notificationsEnabled?: boolean;
 }
 
 interface SessionData {
@@ -525,11 +526,23 @@ async function handleAuthUsersList(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
   if (session.role !== 'admin') return err('Forbidden', 403);
+  
   const list = await ctx.env.VAYU_KV.list({ prefix: 'auth:user:' });
+  const pushSubs = await ctx.env.VAYU_KV.list({ prefix: 'push:sub:' });
+  const usersWithPush = new Set<string>();
+  for (const key of pushSubs.keys) {
+    const parts = key.name.split(':');
+    if (parts.length >= 3) usersWithPush.add(parts[2]);
+  }
+
   const users: PublicUser[] = [];
   for (const key of list.keys) {
     const raw = await ctx.env.VAYU_KV.get(key.name);
-    if (raw) users.push(stripPassword(JSON.parse(raw)));
+    if (raw) {
+      const pub = stripPassword(JSON.parse(raw));
+      pub.notificationsEnabled = usersWithPush.has(pub.id);
+      users.push(pub);
+    }
   }
   users.sort((a, b) => a.createdAt - b.createdAt);
   return json(users);
