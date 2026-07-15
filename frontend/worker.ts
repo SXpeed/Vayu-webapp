@@ -347,7 +347,8 @@ async function notifyConversationMessage(env: Env, msg: any, session: SessionDat
     const recipients = participantIds.filter(id => id !== senderId);
     if (recipients.length === 0) return;
     const senderName = msg.senderName || session.name;
-    const title = conv.is_group && conv.group_name ? `${senderName} · ${conv.group_name}` : senderName;
+    const groupName = conv.group_name as string;
+    const title = conv.is_group && groupName ? `${senderName} · ${groupName}` : senderName;
     await sendPushToUsers(env, recipients, {
       title,
       body: attachmentPreviewText(msg),
@@ -365,9 +366,13 @@ async function notifyInquiryMessage(env: Env, msg: any, session: SessionData): P
     const inq = await env.VAYU_DB.prepare(
       'SELECT inquiry_number, customer_name FROM inquiries WHERE id = ?'
     ).bind(msg.inquiryId).first();
-    const label = inq
-      ? `Inquiry ${inq.inquiry_number || ''}${inq.customer_name ? ` · ${inq.customer_name}` : ''}`.trim()
-      : 'Inquiry';
+    let label = 'Inquiry';
+    if (inq) {
+      const inquiryNumber = (inq.inquiry_number as string) || '';
+      const customerName = inq.customer_name as string;
+      const suffix = customerName ? ` · ${customerName}` : '';
+      label = `Inquiry ${inquiryNumber}${suffix}`.trim();
+    }
     const senderName = msg.senderName || session.name;
     const senderId = msg.senderId || session.userId;
     await sendPushToAllExcept(env, senderId, {
@@ -384,8 +389,9 @@ async function notifyInquiryMessage(env: Env, msg: any, session: SessionData): P
 /** Notify the rest of the team when a new inquiry is logged. */
 async function notifyNewInquiry(env: Env, inq: any, session: SessionData): Promise<void> {
   try {
+    const customerSuffix = inq.customerName ? ` — ${inq.customerName}` : '';
     await sendPushToAllExcept(env, session.userId, {
-      title: `New inquiry${inq.customerName ? ` — ${inq.customerName}` : ''}`,
+      title: `New inquiry${customerSuffix}`,
       body: inq.notes || `Source: ${inq.source || 'Other'}`,
       tag: `inquiry-${inq.id}`,
       data: { view: 'inquiry', inquiryId: inq.id },
@@ -526,7 +532,7 @@ async function handleAuthUsersList(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
   if (session.role !== 'admin') return err('Forbidden', 403);
-  
+
   const list = await ctx.env.VAYU_KV.list({ prefix: 'auth:user:' });
   const pushSubs = await ctx.env.VAYU_KV.list({ prefix: 'push:sub:' });
   const usersWithPush = new Set<string>();
