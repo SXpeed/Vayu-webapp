@@ -20,6 +20,7 @@ import { useAuth } from './hooks/useAuth';
 import { useEntityData } from './hooks/useEntityData';
 import { useHandlers } from './hooks/useHandlers';
 import { pushService } from './services/pushService';
+import { syncService } from './services/syncService';
 
 /** View requested by a push-notification click when the app was closed (e.g. /?view=messaging). */
 const getPushLaunchView = (): 'messaging' | 'inquiry' | null => {
@@ -121,6 +122,11 @@ const App: React.FC = () => {
         };
         initApp();
         // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // ── Background & periodic sync registration ───────────────────────────
+    useEffect(() => {
+        syncService.init();
     }, []);
 
     // ── Navigate when a push notification is clicked while the app is open ─

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vayu-design-v12';
+const CACHE_NAME = 'vayu-design-v13';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -69,6 +69,56 @@ self.addEventListener('fetch', (event) => {
         return caches.match(event.request);
       })
   );
+});
+
+// ── Background Sync & Periodic Background Sync ─────────────────────────────
+
+// Ask any open app windows to re-fetch data from the API. The app listens on
+// this channel in useEntityData and reloads all entities on SYNC_REQUIRED.
+const broadcastSyncRequired = () => {
+  try {
+    const channel = new BroadcastChannel('vayu_cloud_sync');
+    channel.postMessage({ type: 'SYNC_REQUIRED' });
+    channel.close();
+  } catch (err) {
+    console.warn('SW: sync broadcast failed:', err);
+  }
+};
+
+// Re-fetch the app shell into the cache so the next cold launch is fresh.
+const refreshAppShell = async () => {
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    await Promise.all(ASSETS_TO_CACHE.map(async (asset) => {
+      const response = await fetch(asset, { cache: 'no-cache' });
+      if (response && response.ok) {
+        await cache.put(asset, response);
+      }
+    }));
+  } catch (err) {
+    console.warn('SW: app shell refresh failed:', err);
+  }
+};
+
+// One-off Background Sync: queued by the app when it goes offline; the
+// browser fires it as soon as connectivity returns, even if the tab is
+// backgrounded, so data refreshes the moment we're back online.
+self.addEventListener('sync', (event) => {
+  if (event.tag === 'vayu-sync') {
+    event.waitUntil(
+      refreshAppShell().then(() => broadcastSyncRequired())
+    );
+  }
+});
+
+// Periodic Background Sync: browser-scheduled refresh for installed PWAs
+// (Chromium only; the interval is ultimately decided by the browser).
+self.addEventListener('periodicsync', (event) => {
+  if (event.tag === 'vayu-periodic-sync') {
+    event.waitUntil(
+      refreshAppShell().then(() => broadcastSyncRequired())
+    );
+  }
 });
 
 // ── Web Push notifications ─────────────────────────────────────────────────

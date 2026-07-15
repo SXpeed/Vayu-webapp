@@ -239,9 +239,14 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
 
         pollInquiry();
         const interval = setInterval(pollInquiry, 15000);
+        const onVisibilityChange = () => {
+            if (document.visibilityState === 'visible') pollInquiry();
+        };
+        document.addEventListener('visibilitychange', onVisibilityChange);
         return () => {
             cancelled = true;
             clearInterval(interval);
+            document.removeEventListener('visibilitychange', onVisibilityChange);
         };
     }, [authUser, applyIfChanged]);
 
@@ -272,9 +277,14 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
 
         pollEntities();
         const interval = setInterval(pollEntities, 15000);
+        const onVisibilityChange = () => {
+            if (document.visibilityState === 'visible') pollEntities();
+        };
+        document.addEventListener('visibilitychange', onVisibilityChange);
         return () => {
             cancelled = true;
             clearInterval(interval);
+            document.removeEventListener('visibilitychange', onVisibilityChange);
         };
     }, [authUser, applyIfChanged]);
 
