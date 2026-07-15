@@ -161,11 +161,7 @@ const App: React.FC = () => {
         return (
             <div className="h-full bg-black flex items-center justify-center">
                 <div className="animate-pulse flex flex-col items-center justify-center">
-                    <svg viewBox="0 0 400 400" className="w-48 h-48">
-                        <rect width="400" height="400" fill="#000000" rx="20" />
-                        <text x="200" y="210" fontFamily="Playfair Display, serif" fontSize="90" fill="#d4af37" textAnchor="middle" fontWeight="bold">VAYU</text>
-                        <text x="200" y="260" fontFamily="Inter, sans-serif" fontSize="18" fill="#d4af37" textAnchor="middle" letterSpacing="4">DESIGN FOR LIVING</text>
-                    </svg>
+                    <img src="/icon.png" alt="Vayu Logo" className="w-48 h-48 object-contain rounded-[20px]" />
                 </div>
             </div>
         );

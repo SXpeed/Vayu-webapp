@@ -9,7 +9,7 @@ function copyStaticFiles(): Plugin {
   return {
     name: 'copy-static-files',
     closeBundle() {
-      const filesToCopy = ['sw.js'];
+      const filesToCopy = ['sw.js', 'icon.png'];
       for (const file of filesToCopy) {
         const src = path.resolve(__dirname, file);
         const dest = path.resolve(__dirname, 'dist', file);
@@ -17,6 +17,18 @@ function copyStaticFiles(): Plugin {
           fs.copyFileSync(src, dest);
           console.log(`Copied ${file} to dist/`);
         }
+      }
+
+      // PWA install-UI screenshots, referenced by manifest.json as
+      // ./screenshots/*.png (the manifest is emitted at the dist root).
+      const shotsSrc = path.resolve(__dirname, 'screenshots');
+      if (fs.existsSync(shotsSrc)) {
+        const shotsDest = path.resolve(__dirname, 'dist', 'screenshots');
+        fs.mkdirSync(shotsDest, { recursive: true });
+        for (const file of fs.readdirSync(shotsSrc)) {
+          fs.copyFileSync(path.resolve(shotsSrc, file), path.resolve(shotsDest, file));
+        }
+        console.log('Copied screenshots/ to dist/');
       }
 
       // NOTE: Do NOT delete .wasm files from dist/assets — the ONNX Runtime
