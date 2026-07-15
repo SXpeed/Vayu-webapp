@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Plus, X, Check, Image as ImageIcon, Search, Edit2, Trash2, Camera, Loader2 } from 'lucide-react';
 import { Collection, Artwork } from '../types';
-import storageService from '../services/storageService';
+import storageService, { getThumbUrl } from '../services/storageService';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ArtworkFormModal } from './ArtworksView';
 
@@ -95,7 +95,7 @@ export const CollectionsView: React.FC<CollectionsViewProps> = ({ collections, a
                         >
                             <div className="w-28 h-full relative shrink-0 bg-gray-50 dark:bg-gray-800">
                                 {coverImage ? (
-                                    <img src={coverImage} alt={collection.name} className="w-full h-full object-cover" />
+                                    <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={collection.name} className="w-full h-full object-cover" />
                                 ) : (
                                     <div className="w-full h-full flex items-center justify-center text-gray-300 dark:text-gray-600">
                                         <ImageIcon size={28} strokeWidth={1} />
@@ -235,7 +235,7 @@ export const CollectionDetailModal: React.FC<CollectionDetailModalProps> = ({ co
             <div className="flex-1 overflow-y-auto no-scrollbar pb-20">
                 <div className="w-full aspect-[21/9] relative bg-gray-100 dark:bg-gray-800 animate-fade-in group">
                     {coverImage ? (
-                        <img src={coverImage} alt={collection.name} className="w-full h-full object-cover" />
+                        <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={collection.name} className="w-full h-full object-cover" />
                     ) : (
                         <div className="w-full h-full flex items-center justify-center text-gray-300 dark:text-gray-600">
                             <ImageIcon size={40} strokeWidth={1} />
@@ -284,7 +284,7 @@ export const CollectionDetailModal: React.FC<CollectionDetailModalProps> = ({ co
                             >
                                 <div className="w-28 h-full relative shrink-0 bg-gray-50 dark:bg-gray-800">
                                     {artwork.imageUrls.length > 0 ? (
-                                        <img src={artwork.imageUrls[0]} alt={artwork.title} className="w-full h-full object-cover" />
+                                        <img loading="lazy" decoding="async" src={getThumbUrl(artwork.imageUrls[0])} alt={artwork.title} className="w-full h-full object-cover" />
                                     ) : (
                                         <div className="w-full h-full flex items-center justify-center text-gray-300 dark:text-gray-600">
                                             <ImageIcon size={28} strokeWidth={1} />
@@ -457,7 +457,7 @@ export const CollectionFormModal: React.FC<CollectionFormModalProps> = ({ initia
                                     style={{ animationDelay: `${index * 30}ms` }}
                                 >
                                     {coverImage ? (
-                                        <img src={coverImage} alt={art.title} className="w-full h-32 object-cover" />
+                                        <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={art.title} className="w-full h-32 object-cover" />
                                     ) : (
                                         <div className="w-full h-32 flex items-center justify-center text-gray-300 dark:text-gray-600">
                                             <ImageIcon size={20} strokeWidth={1.5} />

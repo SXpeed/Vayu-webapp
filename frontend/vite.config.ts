@@ -18,6 +18,10 @@ function copyStaticFiles(): Plugin {
           console.log(`Copied ${file} to dist/`);
         }
       }
+
+      // NOTE: Do NOT delete .wasm files from dist/assets — the ONNX Runtime
+      // WASM (ort-wasm-simd-threaded.jsep.wasm) is required at runtime for
+      // @imgly/background-removal to perform in-browser inference.
     }
   };
 }

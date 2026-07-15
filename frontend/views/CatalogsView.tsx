@@ -1,9 +1,10 @@
 import React, { useState, useRef } from 'react';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Plus, X, Edit2, Trash2, Download, Image as ImageIcon, Check, Search, Loader2, Camera } from 'lucide-react';
+import { toast } from 'react-hot-toast';
 import { Catalog, Artwork, PdfOptions, CatalogTheme } from '../types';
-import { jsPDF } from 'jspdf';
-import storageService from '../services/storageService';
+import type { jsPDF } from 'jspdf';
+import storageService, { getThumbUrl } from '../services/storageService';
 import { ArtworkFormModal } from './ArtworksView';
 
 interface CatalogsViewProps {
@@ -17,7 +18,6 @@ interface CatalogsViewProps {
 }
 
 import { CatalogStudioView } from './CatalogStudio/CatalogStudioView';
-import { removeBackgroundAndCrop } from '../services/imageCutoutService';
 
 export const THEME_INFO: { id: CatalogTheme; name: string; desc: string; bg: string; fg: string; accent: string }[] = [
     { id: 1, name: 'Classic', desc: 'White & gradient', bg: '#ffffff', fg: '#1a1a1a', accent: '#e0e0e0' },
@@ -66,7 +66,7 @@ const scaleDownIfNeeded = (canvas: HTMLCanvasElement, img: HTMLImageElement, isP
     return canvas;
 };
 
-const getBase64ImageWithGradient = (url: string, radiusPx: number = 0, isLogo = false): Promise<{
+const getBase64ImageWithGradient = (url: string, radiusPx: number = 0, isLogo = false, addShadow = false): Promise<{
     dataUrl: string,
     width: number,
     height: number,
@@ -90,7 +90,20 @@ const getBase64ImageWithGradient = (url: string, radiusPx: number = 0, isLogo = 
             if (radiusPx > 0) {
                 applyRoundedCorners(ctx, canvas, img);
             }
+            if (addShadow) {
+                ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+                ctx.shadowBlur = 15;
+                ctx.shadowOffsetX = 0;
+                ctx.shadowOffsetY = 8;
+            }
+
             ctx.drawImage(img, 0, 0);
+
+            if (addShadow) {
+                // Reset shadow so it doesn't affect subsequent drawings if any
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
+            }
 
             const usePng = isLogo || isPng;
             const exportFormat = usePng ? 'image/png' : 'image/jpeg';
@@ -131,20 +144,11 @@ interface ThemePalette {
 const PAGE_W = 210;
 const PAGE_H = 297;
 
-const getThemePalette = (themeId: CatalogTheme): ThemePalette => {
-    let bg: [number, number, number] = [250, 248, 244];
-    if (themeId === 2 || themeId === 5) bg = [224, 224, 224];
-    if (themeId === 3) bg = [255, 255, 255];
-    if (themeId === 4) bg = [42, 42, 42];
-    const isDark = themeId === 4;
-    return {
-        bg,
-        isDark,
-        ink: isDark ? [250, 250, 250] : [38, 32, 27],
-        softInk: isDark ? [180, 180, 180] : [90, 82, 74],
-        gold: isDark ? [201, 168, 76] : [156, 96, 48],
-        lineColor: isDark ? [80, 80, 80] : [135, 126, 116],
-    };
+const hexToRgb = (hex: string): [number, number, number] | null => {
+    const m = /^#([0-9a-f]{6})$/i.exec(hex.trim());
+    if (!m) return null;
+    const n = Number.parseInt(m[1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 };
 
 const generateTheme2Background = (): string => {
@@ -161,36 +165,173 @@ const generateTheme2Background = (): string => {
     return canvas.toDataURL('image/jpeg', 0.95);
 };
 
-const drawPageBackground = (doc: jsPDF, themeId: CatalogTheme, theme2BgDataUrl: string, bg: [number, number, number]) => {
-    if ((themeId === 2 || themeId === 5) && theme2BgDataUrl) {
-        doc.addImage(theme2BgDataUrl, 'JPEG', 0, 0, PAGE_W, PAGE_H, 'theme2bg', 'FAST');
-    } else {
-        doc.setFillColor(...bg);
-        doc.rect(0, 0, PAGE_W, PAGE_H, 'F');
+const generateDynamicBackground = (bg: [number, number, number], style: NonNullable<PdfOptions['gradientStyle']>): string | null => {
+    if (style === 'Solid') return null;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 840;
+    canvas.height = 1188;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    const baseColor = `rgb(${bg[0]}, ${bg[1]}, ${bg[2]})`;
+    const lighterColor = `rgb(${Math.min(255, bg[0] + 30)}, ${Math.min(255, bg[1] + 30)}, ${Math.min(255, bg[2] + 30)})`;
+    const darkerColor = `rgb(${Math.max(0, bg[0] - 20)}, ${Math.max(0, bg[1] - 20)}, ${Math.max(0, bg[2] - 20)})`;
+    const deeperColor = `rgb(${Math.max(0, bg[0] - 45)}, ${Math.max(0, bg[1] - 45)}, ${Math.max(0, bg[2] - 45)})`;
+
+    if (style === 'Linear') {
+        const grad = ctx.createLinearGradient(0, 0, 0, 1188);
+        grad.addColorStop(0, lighterColor);
+        grad.addColorStop(1, darkerColor);
+        ctx.fillStyle = grad;
+    } else if (style === 'Radial') {
+        const grad = ctx.createRadialGradient(420, 594, 0, 420, 594, 700);
+        grad.addColorStop(0, lighterColor);
+        grad.addColorStop(1, darkerColor);
+        ctx.fillStyle = grad;
+    } else if (style === 'Diagonal') {
+        // Corner-to-corner sweep: light top-left to dark bottom-right.
+        const grad = ctx.createLinearGradient(0, 0, 840, 1188);
+        grad.addColorStop(0, lighterColor);
+        grad.addColorStop(0.5, baseColor);
+        grad.addColorStop(1, darkerColor);
+        ctx.fillStyle = grad;
+    } else if (style === 'Vignette') {
+        // Base color in the middle, edges falling into deep shadow.
+        const grad = ctx.createRadialGradient(420, 594, 200, 420, 594, 1150);
+        grad.addColorStop(0, baseColor);
+        grad.addColorStop(0.65, darkerColor);
+        grad.addColorStop(1, deeperColor);
+        ctx.fillStyle = grad;
+    } else if (style === 'Spotlight') {
+        // Light falling from the top of the page, fading into shadow below.
+        const brighterColor = `rgb(${Math.min(255, bg[0] + 50)}, ${Math.min(255, bg[1] + 50)}, ${Math.min(255, bg[2] + 50)})`;
+        const grad = ctx.createRadialGradient(420, 120, 0, 420, 120, 1300);
+        grad.addColorStop(0, brighterColor);
+        grad.addColorStop(0.45, baseColor);
+        grad.addColorStop(1, deeperColor);
+        ctx.fillStyle = grad;
+    }
+
+    ctx.fillRect(0, 0, 840, 1188);
+    return canvas.toDataURL('image/jpeg', 0.95);
+};
+
+const drawPageBackground = (doc: jsPDF, themeId: CatalogTheme, theme2BgDataUrl: string, palette: ThemePalette, options: PdfOptions, pageH: number) => {
+    let customBgUrl = null;
+    if (options.gradientStyle && options.gradientStyle !== 'Solid') {
+        customBgUrl = generateDynamicBackground(palette.bg, options.gradientStyle);
+    }
+
+    // Solid fill first, then bleed the background image 0.5mm past every page
+    // edge — placing it at exactly the page size leaves a white hairline at the
+    // page edge in most PDF viewers due to rasterization rounding.
+    doc.setFillColor(...palette.bg);
+    doc.rect(0, 0, PAGE_W, pageH, 'F');
+
+    if (customBgUrl) {
+        doc.addImage(customBgUrl, 'JPEG', -0.5, -0.5, PAGE_W + 1, pageH + 1, `bg_${options.gradientStyle}_${palette.bg.join('')}_${Math.round(pageH)}`, 'FAST');
+    } else if ((themeId === 2 || themeId === 5) && theme2BgDataUrl && (!options.gradientStyle || options.gradientStyle === 'Solid') && (!options.colorPalette || options.colorPalette === 'Default')) {
+        doc.addImage(theme2BgDataUrl, 'JPEG', -0.5, -0.5, PAGE_W + 1, pageH + 1, 'theme2bg', 'FAST');
     }
 };
 
-/** Themes that show the product as a background-removed cutout on their own page background. */
-const themeUsesCutout = (themeId: CatalogTheme): boolean => themeId === 4 || themeId === 5;
+/** Named color-palette presets selectable from the studio. Each entry returns
+ *  a complete ThemePalette so the caller can short-circuit. */
+const NAMED_PALETTE_PRESETS: Record<string, () => ThemePalette> = {
+    'Dark Elegance': () => ({ bg: [24, 24, 27], isDark: true, ink: [240, 240, 240], softInk: [170, 170, 170], gold: [212, 175, 55], lineColor: [60, 60, 60] }),
+    'Warm Earth': () => ({ bg: [244, 237, 228], isDark: false, ink: [58, 48, 40], softInk: [110, 95, 80], gold: [184, 115, 51], lineColor: [190, 175, 160] }),
+    'Cool Minimal': () => ({ bg: [248, 249, 250], isDark: false, ink: [33, 37, 41], softInk: [108, 117, 125], gold: [108, 117, 125], lineColor: [222, 226, 230] }),
+    'Midnight Blue': () => ({ bg: [15, 23, 42], isDark: true, ink: [241, 245, 249], softInk: [148, 163, 184], gold: [203, 172, 102], lineColor: [51, 65, 85] }),
+};
 
-const loadImageInfo = async (imgUrl: string | undefined, themeId: CatalogTheme): Promise<PdfImageInfo | null> => {
+/** Build a ThemePalette from a custom hex color, deriving readable text colors
+ *  from its brightness. Returns null when the string isn't a usable hex value. */
+const buildPaletteFromHex = (hex: string): ThemePalette | null => {
+    const rgb = hexToRgb(hex);
+    if (!rgb) return null;
+    const lum = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255;
+    const dark = lum < 0.5;
+    return {
+        bg: rgb,
+        isDark: dark,
+        ink: dark ? [250, 250, 250] : [38, 32, 27],
+        softInk: dark ? [180, 180, 180] : [90, 82, 74],
+        gold: dark ? [201, 168, 76] : [156, 96, 48],
+        lineColor: dark ? [110, 110, 110] : [135, 126, 116],
+    };
+};
+
+const getThemePalette = (themeId: CatalogTheme, options?: PdfOptions): ThemePalette => {
+    // 1. Custom hex color takes precedence over everything else.
+    if (options?.colorPalette?.startsWith('#')) {
+        const fromHex = buildPaletteFromHex(options.colorPalette);
+        if (fromHex) return fromHex;
+    }
+
+    // 2. Named presets (Dark Elegance, Warm Earth, …).
+    if (options?.colorPalette && NAMED_PALETTE_PRESETS[options.colorPalette]) {
+        const fromPreset = NAMED_PALETTE_PRESETS[options.colorPalette]();
+        if (fromPreset) return fromPreset;
+    }
+
+    // 3. Fall back to the built-in theme defaults.
+    const bg: [number, number, number] =
+        themeId === 4 ? [42, 42, 42]
+            : (themeId === 2 || themeId === 5) ? [224, 224, 224]
+                : themeId === 3 ? [255, 255, 255]
+                    : [250, 248, 244];
+
+    const isDark = themeId === 4;
+
+    return {
+        bg,
+        isDark,
+        ink: isDark ? [250, 250, 250] : [38, 32, 27],
+        softInk: isDark ? [180, 180, 180] : [90, 82, 74],
+        gold: isDark ? [201, 168, 76] : [156, 96, 48],
+        lineColor: isDark ? [80, 80, 80] : [135, 126, 116],
+    };
+};
+
+/** Cutout is on by default for theme 5 (Gradient Cutout); the studio checkbox
+ *  overrides in either direction for any theme. */
+const shouldRemoveBackground = (options: PdfOptions, themeId: CatalogTheme): boolean =>
+    options.removeBackground ?? themeId === 5;
+
+const loadImageInfo = async (
+    imgUrl: string | undefined,
+    themeId: CatalogTheme,
+    options: PdfOptions,
+    onProgress?: (message: string) => void
+): Promise<PdfImageInfo | null> => {
     if (!imgUrl) return null;
     try {
-        if (themeUsesCutout(themeId)) {
+        let finalUrl = imgUrl;
+        let isCutout = false;
+
+        if (shouldRemoveBackground(options, themeId)) {
             try {
-                return await removeBackgroundAndCrop(imgUrl);
+                const { removeBackgroundImageLocal } = await import('../services/imageCutoutService');
+                const info = await removeBackgroundImageLocal(imgUrl, onProgress);
+                finalUrl = info.dataUrl;
+                isCutout = true;
             } catch (e) {
                 console.error("Background removal failed, falling back to original image", e);
-                return await getBase64ImageWithGradient(imgUrl, 0);
+                toast.error('Background removal failed — using the original photo.');
             }
         }
-        return await getBase64ImageWithGradient(imgUrl, themeId === 1 ? 0 : 20);
+
+        // Pass to canvas logic to add rounded corners or shadow if needed
+        return await getBase64ImageWithGradient(finalUrl, isCutout ? 0 : (themeId === 1 ? 0 : 20), false, options.imageShadow);
     } catch (e) {
         console.error("Failed to load image for PDF", e);
         return null;
     }
 };
 
+// Fit the image inside the page's image box at its natural aspect ratio,
+// centered — pages are uniform A4.
 const drawProductImage = (doc: jsPDF, imgInfo: PdfImageInfo | null, imgBoxH: number) => {
     if (!imgInfo) return;
     const imgX = 2, imgY = 2, imgBoxW = PAGE_W - 4;
@@ -206,10 +347,10 @@ const drawProductImage = (doc: jsPDF, imgInfo: PdfImageInfo | null, imgBoxH: num
     }
     const drawX = imgX + (imgBoxW - drawW) / 2;
     const drawY = imgY + (imgBoxH - drawH) / 2;
-    
+
     const alias = imgInfo.format === 'PNG' ? `img_${Math.random().toString(36).substring(2)}` : undefined;
     const compression = imgInfo.format === 'PNG' ? undefined : 'FAST';
-    
+
     doc.addImage(imgInfo.dataUrl, imgInfo.format, drawX, drawY, drawW, drawH, alias, compression as any);
 };
 
@@ -217,8 +358,10 @@ const drawFallbackLetter = (doc: jsPDF, options: PdfOptions, i: number, gold: [n
     doc.setFont("times", "normal");
     doc.setFontSize(24);
     doc.setTextColor(...gold);
-    const letterX = options.logoPlacement === 'Top Right' ? PAGE_W + 6 : -6;
-    doc.text(`${String.fromCodePoint(65 + i)}.`, letterX, 6,
+    const marginX = 5;
+    const marginY = 9;
+    const letterX = options.logoPlacement === 'Top Right' ? PAGE_W - marginX : marginX;
+    doc.text(`${String.fromCodePoint(65 + i)}.`, letterX, marginY,
         options.logoPlacement === 'Top Right' ? { align: 'right' } : undefined);
 };
 
@@ -229,14 +372,21 @@ const drawLogo = async (doc: jsPDF, logoUrl: string | undefined, options: PdfOpt
     }
     try {
         const logoInfo = await getBase64ImageWithGradient(logoUrl, 0, true);
-        const logoSize = 48;
-        const logoX = options.logoPlacement === 'Top Right' ? PAGE_W + 6 - logoSize : -6;
-        const logoY = -6;
+        const logoSize = 32.4; // Maximum bounding box dimension (reduced by 10% from 36)
+        const marginX = 5;
+        const marginY = 5;
+
         let lw = logoInfo.width, lh = logoInfo.height;
         const lr = Math.min(logoSize / lw, logoSize / lh);
-        lw *= lr; lh *= lr;
-        const lxOff = logoX + (logoSize - lw) / 2;
-        const lyOff = logoY + (logoSize - lh) / 2;
+        lw *= lr;
+        lh *= lr;
+
+        let lxOff = marginX;
+        if (options.logoPlacement === 'Top Right') {
+            lxOff = PAGE_W - marginX - lw;
+        }
+        let lyOff = marginY;
+
         doc.addImage(logoInfo.dataUrl, logoInfo.format, lxOff, lyOff, lw, lh, 'logoAlias', 'FAST');
     } catch (e) {
         console.warn('Logo processing failed', e);
@@ -244,19 +394,21 @@ const drawLogo = async (doc: jsPDF, logoUrl: string | undefined, options: PdfOpt
     }
 };
 
-const drawPageBorder = (doc: jsPDF) => {
+const drawPageBorder = (doc: jsPDF, pageH: number) => {
     doc.setDrawColor(210, 202, 192);
     doc.setLineWidth(0.25);
-    doc.rect(2, 2, PAGE_W - 4, PAGE_H - 4);
+    doc.rect(2, 2, PAGE_W - 4, pageH - 4);
 };
 
-const drawPage0Text = (doc: jsPDF, art: Artwork, options: PdfOptions, catalogName: string, palette: ThemePalette) => {
-    const { ink, softInk, gold, lineColor } = palette;
+const drawPage0Text = (doc: jsPDF, art: Artwork, options: PdfOptions, catalogName: string, palette: ThemePalette, pageH: number) => {
+    const { ink, gold, lineColor } = palette;
+    // Anchor the text block to the bottom of the (image-sized) page.
+    const yOff = pageH - PAGE_H;
     doc.setDrawColor(...lineColor);
     doc.setLineWidth(0.25);
-    doc.line(13, 252, PAGE_W - 13, 252);
+    doc.line(13, 252 + yOff, PAGE_W - 13, 252 + yOff);
 
-    let currentY = 258;
+    let currentY = 258 + yOff;
     if (options.showCatalogName) {
         doc.setFont("times", "italic");
         doc.setFontSize(12);
@@ -273,19 +425,24 @@ const drawPage0Text = (doc: jsPDF, art: Artwork, options: PdfOptions, catalogNam
         doc.setFontSize(20);
         doc.setTextColor(...ink);
         doc.text(art.title.toUpperCase(), 13, currentY, { charSpace: 2.2 });
-        currentY += 7;
+        currentY += 9;
     }
 
     if (options.showTitleNote && art.medium) {
-        doc.setFont("times", "italic");
+        doc.setFont("times", "normal");
+        doc.setFontSize(14);
+        doc.setTextColor(...gold);
+        doc.text("MEDIUM", 13, currentY);
+
+        doc.setFont("times", "normal");
         doc.setFontSize(16);
-        doc.setTextColor(...softInk);
-        doc.text(art.medium, 13, currentY);
-        currentY += 7;
+        doc.setTextColor(...ink);
+        doc.text(art.medium, 46, currentY);
+
+        currentY += 9;
     }
 
-    // Extra space before details
-    currentY += 4;
+
 
     if (options.showDimensions && art.dimensions) {
         doc.setFont("times", "normal");
@@ -309,7 +466,7 @@ const drawPage0Text = (doc: jsPDF, art: Artwork, options: PdfOptions, catalogNam
         doc.setFontSize(16);
         doc.setTextColor(...ink);
         doc.text(art.customId || '', 144, currentY);
-        
+
         currentY += 9;
     }
 
@@ -323,27 +480,29 @@ const drawPage0Text = (doc: jsPDF, art: Artwork, options: PdfOptions, catalogNam
         doc.setFontSize(16);
         doc.setTextColor(...ink);
         const formattedPrice = `${Number(art.price || 0).toLocaleString('en-IN')}${art.plusGst ? ' +GST' : ''}`;
-        doc.text(formattedPrice, 28, currentY);
+        doc.text(formattedPrice, 46, currentY);
     }
 };
 
-const drawPage1Text = (doc: jsPDF, art: Artwork, options: PdfOptions, palette: ThemePalette) => {
+const drawPage1Text = (doc: jsPDF, art: Artwork, options: PdfOptions, palette: ThemePalette, pageH: number) => {
     if (!(options.showDescription && art.description)) return;
     const { ink, gold, lineColor } = palette;
+    // Anchor the text block to the bottom of the (image-sized) page.
+    const yOff = pageH - PAGE_H;
     doc.setDrawColor(...lineColor);
     doc.setLineWidth(0.25);
-    doc.line(13, 252, PAGE_W - 13, 252);
+    doc.line(13, 252 + yOff, PAGE_W - 13, 252 + yOff);
 
     doc.setFont("times", "normal");
     doc.setFontSize(16);
     doc.setTextColor(...gold);
-    doc.text("DESCRIPTION", 13, 258, { charSpace: 2 });
+    doc.text("DESCRIPTION", 13, 258 + yOff, { charSpace: 2 });
 
     doc.setFont("times", "normal");
     doc.setFontSize(14);
     doc.setTextColor(...ink);
     const splitDesc = doc.splitTextToSize(art.description, PAGE_W - 26);
-    doc.text(splitDesc, 13, 268);
+    doc.text(splitDesc, 13, 268 + yOff);
 };
 
 interface PageDrawContext {
@@ -355,6 +514,7 @@ interface PageDrawContext {
     theme2BgDataUrl: string;
     catalogName: string;
     catalogCoverUrl: string;
+    onProgress?: (message: string) => void;
 };
 
 const drawSinglePage = async (
@@ -363,16 +523,19 @@ const drawSinglePage = async (
     pageIndex: number,
     pagesAdded: number
 ): Promise<number> => {
-    const { doc, art, artIndex, options, themeId, theme2BgDataUrl, catalogName, catalogCoverUrl } = ctx;
+    const { doc, art, artIndex, options, themeId, theme2BgDataUrl, catalogName, catalogCoverUrl, onProgress } = ctx;
 
+    const imgInfo = await loadImageInfo(imgUrl, themeId, options, onProgress);
+    const palette = getThemePalette(themeId, options);
+
+    const hasBottomText = pageIndex === 0 || (pageIndex === 1 && options.showDescription && art.description);
+
+    // Uniform A4 pages; the image fits inside the image box above the text zone.
     if (artIndex > 0 || pagesAdded > 0) doc.addPage();
     const pagesAddedNow = pagesAdded + 1;
 
-    const imgInfo = await loadImageInfo(imgUrl, themeId);
-    const palette = getThemePalette(themeId);
-    drawPageBackground(doc, themeId, theme2BgDataUrl, palette.bg);
+    drawPageBackground(doc, themeId, theme2BgDataUrl, palette, options, PAGE_H);
 
-    const hasBottomText = pageIndex === 0 || (pageIndex === 1 && options.showDescription && art.description);
     const imgBoxH = hasBottomText ? 250 : PAGE_H - 4;
     drawProductImage(doc, imgInfo, imgBoxH);
 
@@ -380,12 +543,12 @@ const drawSinglePage = async (
     const logoUrl = customLogo || catalogCoverUrl;
     await drawLogo(doc, logoUrl, options, artIndex, palette.gold);
 
-    drawPageBorder(doc);
+    drawPageBorder(doc, PAGE_H);
 
     if (pageIndex === 0) {
-        drawPage0Text(doc, art, options, catalogName, palette);
+        drawPage0Text(doc, art, options, catalogName, palette, PAGE_H);
     } else if (pageIndex === 1) {
-        drawPage1Text(doc, art, options, palette);
+        drawPage1Text(doc, art, options, palette, PAGE_H);
     }
 
     return pagesAddedNow;
@@ -398,11 +561,13 @@ const drawArtworkPages = async (
     options: PdfOptions,
     themeId: CatalogTheme,
     theme2BgDataUrl: string,
-    catalog: Catalog
+    catalog: Catalog,
+    onProgress?: (message: string) => void
 ) => {
     const ctx: PageDrawContext = {
         doc, art, artIndex, options, themeId, theme2BgDataUrl,
-        catalogName: catalog.name, catalogCoverUrl: catalog.coverImageUrl
+        catalogName: catalog.name, catalogCoverUrl: catalog.coverImageUrl,
+        onProgress
     };
     let pagesAdded = 0;
     const pageOpts = options.pageOptions || [];
@@ -411,8 +576,10 @@ const drawArtworkPages = async (
         pagesAdded = await drawSinglePage(ctx, art.imageUrls?.[0], 0, pagesAdded);
     }
     if (pageOpts.includes('2nd Image')) {
+        // Only add the 2nd page when the artwork actually has a 2nd image —
+        // never emit an image-less page just to carry the description.
         const imgUrl = art.imageUrls && art.imageUrls.length > 1 ? art.imageUrls[1] : undefined;
-        if (imgUrl || (options.showDescription && art.description)) {
+        if (imgUrl) {
             pagesAdded = await drawSinglePage(ctx, imgUrl, 1, pagesAdded);
         }
     }
@@ -429,6 +596,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
     const [isAdding, setIsAdding] = useState(false);
     const [selectedCatalog, setSelectedCatalog] = useState<Catalog | null>(null);
     const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+    const [pdfProgress, setPdfProgress] = useState<string | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
 
     React.useEffect(() => {
@@ -470,8 +638,11 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
     const handleGeneratePDF = async (options: PdfOptions, themeId: CatalogTheme) => {
         if (!catalogToDownload || isGeneratingPDF) return;
         setIsGeneratingPDF(true);
+        setPdfProgress('Preparing…');
 
         try {
+            // Loaded on demand so jsPDF stays out of the initial bundle.
+            const { jsPDF } = await import('jspdf');
             const doc = new jsPDF();
             const catalogArtworks = artworks.filter(a => catalogToDownload.artworkIds.includes(a.id));
 
@@ -484,17 +655,24 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
             const theme2BgDataUrl = generateTheme2Background();
 
             for (let i = 0; i < catalogArtworks.length; i++) {
-                await drawArtworkPages(doc, catalogArtworks[i], i, options, themeId, theme2BgDataUrl, catalogToDownload);
+                const prefix = `Image ${i + 1} of ${catalogArtworks.length}`;
+                setPdfProgress(prefix);
+                await drawArtworkPages(
+                    doc, catalogArtworks[i], i, options, themeId, theme2BgDataUrl, catalogToDownload,
+                    (message) => setPdfProgress(`${prefix} — ${message}`)
+                );
             }
 
+            setPdfProgress('Saving PDF…');
             doc.save(`${catalogToDownload.name.replace(/\s+/g, '_')}.pdf`);
         } catch (error) {
             console.error("Error generating PDF:", error);
             alert("Failed to generate PDF.");
         } finally {
+            // Stay in the studio after generating so options can be tweaked
+            // and the PDF regenerated without re-opening it.
             setIsGeneratingPDF(false);
-            setShowCatalogStudio(false);
-            setCatalogToDownload(null);
+            setPdfProgress(null);
         }
     };
 
@@ -535,7 +713,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                         style={{ animationDelay: `${index * 50}ms` }}
                     >
                         <div className="w-28 h-full relative shrink-0 bg-gray-50 dark:bg-gray-800">
-                            <img src={catalog.coverImageUrl} alt={catalog.name} className="w-full h-full object-cover" />
+                            <img loading="lazy" decoding="async" src={getThumbUrl(catalog.coverImageUrl)} alt={catalog.name} className="w-full h-full object-cover" />
                         </div>
                         <div className="p-[6px] flex flex-col justify-between flex-1">
                             <div>
@@ -607,6 +785,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                     onClose={() => setShowCatalogStudio(false)}
                     onGeneratePDF={(options, themeId) => handleGeneratePDF(options, themeId)}
                     isGeneratingPDF={isGeneratingPDF}
+                    generationProgress={pdfProgress}
                 />
             )}
         </div>
@@ -709,7 +888,7 @@ export const CatalogDetailModal: React.FC<CatalogDetailModalProps> = ({ catalog,
 
             <div className="flex-1 overflow-y-auto no-scrollbar pb-20">
                 <div className="w-full aspect-[21/9] relative animate-fade-in group">
-                    <img src={catalog.coverImageUrl} alt={catalog.name} className="w-full h-full object-cover" />
+                    <img loading="lazy" decoding="async" src={getThumbUrl(catalog.coverImageUrl)} alt={catalog.name} className="w-full h-full object-cover" />
                     {/* Gradient removed as per user request */}
 
                     <button
@@ -744,7 +923,7 @@ export const CatalogDetailModal: React.FC<CatalogDetailModalProps> = ({ catalog,
                         >
                             <div className="w-28 h-full relative shrink-0 bg-gray-50 dark:bg-gray-800">
                                 {artwork.imageUrls.length > 0 ? (
-                                    <img src={artwork.imageUrls[0]} alt={artwork.title} className="w-full h-full object-cover" />
+                                    <img loading="lazy" decoding="async" src={getThumbUrl(artwork.imageUrls[0])} alt={artwork.title} className="w-full h-full object-cover" />
                                 ) : (
                                     <div className="w-full h-full flex items-center justify-center text-gray-300 dark:text-gray-600">
                                         <ImageIcon size={28} strokeWidth={1} />
@@ -921,7 +1100,7 @@ export const CatalogFormModal: React.FC<CatalogFormModalProps> = ({ initialData,
                                     style={{ animationDelay: `${index * 30}ms` }}
                                 >
                                     {coverImage ? (
-                                        <img src={coverImage} alt={art.title} className="w-full h-32 object-cover" />
+                                        <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={art.title} className="w-full h-32 object-cover" />
                                     ) : (
                                         <div className="w-full h-32 flex items-center justify-center text-gray-300 dark:text-gray-600">
                                             <ImageIcon size={20} strokeWidth={1.5} />

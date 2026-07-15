@@ -1,3 +1,4 @@
+import { getThumbUrl } from '../services/storageService';
 import React, { useState, useMemo } from 'react';
 import { Plus, X, FileText, CheckCircle2, Image as ImageIcon, Info, Search, ArrowLeft, Edit2, Trash2 } from 'lucide-react';
 import { Invoice, Artwork, InvoiceItem } from '../types';
@@ -241,7 +242,7 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({ invoice,
                                 <div key={item.artworkId} className="flex justify-between items-center">
                                     <div className="flex items-center gap-[6px]">
                                         {art?.imageUrls?.length ? (
-                                            <img src={art.imageUrls[0]} alt={item.title} className="w-10 h-10 rounded-[3px] object-cover" />
+                                            <img loading="lazy" decoding="async" src={getThumbUrl(art.imageUrls[0])} alt={item.title} className="w-10 h-10 rounded-[3px] object-cover" />
                                         ) : (
                                             <div className="w-10 h-10 rounded-[3px] bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-gray-400">
                                                 <ImageIcon size={14} />
@@ -431,7 +432,7 @@ export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData,
                                     style={{ animationDelay: `${150 + index * 30}ms` }}
                                 >
                                     {coverImage ? (
-                                        <img src={coverImage} alt={art.title} className="w-10 h-10 rounded-[3px] object-cover mr-3" />
+                                        <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={art.title} className="w-10 h-10 rounded-[3px] object-cover mr-3" />
                                     ) : (
                                         <div className="w-10 h-10 rounded-[3px] bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-gray-400 mr-3">
                                             <ImageIcon size={14} />

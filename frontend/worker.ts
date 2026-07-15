@@ -1,19 +1,12 @@
-import webpush from 'web-push';
-
-const VAPID_PUBLIC_KEY = 'BJEA9asM3-1QWxLYPlAl8YERsdYA_TuWuGi4je3Txs3rHESUgY1fGzqMYELT_WKV4od-_Lm3I3F2THD9KXHvm2g';
-const VAPID_PRIVATE_KEY = 'MUmNN-obSvGPXXRkP2Z66hekDkXIsG5rDF-WOthYKZU';
-
-webpush.setVapidDetails(
-  'mailto:admin@vayu-webapp.com',
-  VAPID_PUBLIC_KEY,
-  VAPID_PRIVATE_KEY
-);
+import { getOrCreateVapidKeys, sendWebPush, type StoredPushSubscription } from './webpush';
 
 interface Env {
   VAYU_KV: KVNamespace;
   VAYU_R2: R2Bucket;
   VAYU_DB: D1Database;
 }
+
+type FormField = File | string | null;
 
 interface StoredUser {
   id: string;
@@ -53,33 +46,6 @@ interface ActivityLog {
   timestamp: number;
 }
 
-async function sendPushNotification(db: D1Database, userIds: string[], payload: string): Promise<void> {
-  if (!userIds || userIds.length === 0) return;
-  const placeholders = userIds.map(() => '?').join(',');
-  const results = await db.prepare(
-    `SELECT endpoint, auth, p256dh, id FROM push_subscriptions WHERE user_id IN (${placeholders})`
-  ).bind(...userIds).all();
-
-  const subs = results.results || [];
-  for (const sub of subs) {
-    try {
-      await webpush.sendNotification({
-        endpoint: sub.endpoint as string,
-        keys: {
-          auth: sub.auth as string,
-          p256dh: sub.p256dh as string
-        }
-      }, payload);
-    } catch (err: any) {
-      // If subscription is gone, remove it from DB
-      if (err.statusCode === 404 || err.statusCode === 410) {
-        await db.prepare('DELETE FROM push_subscriptions WHERE id = ?').bind(sub.id).run();
-      }
-      console.error('Push error:', err);
-    }
-  }
-}
-
 // ── Presence helpers ──────────────────────────────────────────────────────
 // Presence is stored in KV with a short TTL. Keys: presence:<userId>
 const PRESENCE_TTL_SECONDS = 45; // Heartbeat every 30s; TTL 45s gives grace
@@ -111,7 +77,7 @@ async function logActivity(db: D1Database, userId: string, userName: string, act
       `INSERT OR REPLACE INTO activity_logs (id, user_id, user_name, action, entity, entity_id, details, timestamp)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
-      `log_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      `log_${Date.now()}_${crypto.randomUUID()}`,
       userId, userName, action, entity, entityId, details, Date.now()
     ).run();
   } catch (e) {
@@ -304,6 +270,175 @@ function rowToInquiryMessage(row: Record<string, unknown>): any {
   };
 }
 
+// ── Web Push notifications ─────────────────────────────────────────────────
+// Subscriptions live in KV under `push:sub:<userId>:<endpointHash>`.
+// Turning notifications ON subscribes the device; OFF removes it.
+
+const VAPID_SUBJECT = 'mailto:roshni@viveksahnidesign.com';
+
+interface PushPayload {
+  title: string;
+  body: string;
+  tag?: string;
+  data?: { view?: string;[k: string]: unknown };
+}
+
+async function endpointHash(endpoint: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(endpoint));
+  return Array.from(new Uint8Array(digest).slice(0, 12))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+async function deliverPush(env: Env, subs: Array<{ key: string; sub: StoredPushSubscription }>, payload: PushPayload): Promise<void> {
+  if (subs.length === 0) return;
+  const vapid = await getOrCreateVapidKeys(env.VAYU_KV);
+  const body = JSON.stringify(payload);
+  await Promise.allSettled(subs.map(async ({ key, sub }) => {
+    try {
+      const status = await sendWebPush(sub, body, vapid, VAPID_SUBJECT);
+      // 404/410 mean the browser dropped the subscription — clean it up.
+      if (status === 404 || status === 410) await env.VAYU_KV.delete(key);
+    } catch (e) {
+      console.error('Push delivery failed:', e);
+    }
+  }));
+}
+
+async function collectSubs(env: Env, prefix: string): Promise<Array<{ key: string; sub: StoredPushSubscription }>> {
+  const list = await env.VAYU_KV.list({ prefix });
+  const subs: Array<{ key: string; sub: StoredPushSubscription }> = [];
+  for (const key of list.keys) {
+    const raw = await env.VAYU_KV.get(key.name);
+    if (raw) subs.push({ key: key.name, sub: JSON.parse(raw) });
+  }
+  return subs;
+}
+
+async function sendPushToUsers(env: Env, userIds: string[], payload: PushPayload): Promise<void> {
+  const subs: Array<{ key: string; sub: StoredPushSubscription }> = [];
+  for (const userId of new Set(userIds)) {
+    subs.push(...await collectSubs(env, `push:sub:${userId}:`));
+  }
+  await deliverPush(env, subs, payload);
+}
+
+async function sendPushToAllExcept(env: Env, exceptUserId: string, payload: PushPayload): Promise<void> {
+  const all = await collectSubs(env, 'push:sub:');
+  const subs = all.filter(({ sub }) => sub.userId !== exceptUserId);
+  await deliverPush(env, subs, payload);
+}
+
+function attachmentPreviewText(msg: any): string {
+  if (!msg.attachment) return msg.text || 'New message';
+  return msg.attachment.type === 'image' ? '📷 Photo' : `📎 ${msg.attachment.name || 'Attachment'}`;
+}
+
+/** Notify the other participants of a conversation about a new message. */
+async function notifyConversationMessage(env: Env, msg: any, session: SessionData): Promise<void> {
+  try {
+    const conv = await env.VAYU_DB.prepare(
+      'SELECT participant_ids, is_group, group_name FROM conversations WHERE id = ?'
+    ).bind(msg.conversationId).first();
+    if (!conv) return;
+    const participantIds: string[] = JSON.parse(conv.participant_ids as string);
+    const senderId = msg.senderId || session.userId;
+    const recipients = participantIds.filter(id => id !== senderId);
+    if (recipients.length === 0) return;
+    const senderName = msg.senderName || session.name;
+    const title = conv.is_group && conv.group_name ? `${senderName} · ${conv.group_name}` : senderName;
+    await sendPushToUsers(env, recipients, {
+      title,
+      body: attachmentPreviewText(msg),
+      tag: `conv-${msg.conversationId}`,
+      data: { view: 'messaging', conversationId: msg.conversationId },
+    });
+  } catch (e) {
+    console.error('Push notify (message) failed:', e);
+  }
+}
+
+/** Notify the rest of the team about a new message on an inquiry. */
+async function notifyInquiryMessage(env: Env, msg: any, session: SessionData): Promise<void> {
+  try {
+    const inq = await env.VAYU_DB.prepare(
+      'SELECT inquiry_number, customer_name FROM inquiries WHERE id = ?'
+    ).bind(msg.inquiryId).first();
+    const label = inq
+      ? `Inquiry ${inq.inquiry_number || ''}${inq.customer_name ? ` · ${inq.customer_name}` : ''}`.trim()
+      : 'Inquiry';
+    const senderName = msg.senderName || session.name;
+    const senderId = msg.senderId || session.userId;
+    await sendPushToAllExcept(env, senderId, {
+      title: `${senderName} — ${label}`,
+      body: attachmentPreviewText(msg),
+      tag: `inquiry-${msg.inquiryId}`,
+      data: { view: 'inquiry', inquiryId: msg.inquiryId },
+    });
+  } catch (e) {
+    console.error('Push notify (inquiry message) failed:', e);
+  }
+}
+
+/** Notify the rest of the team when a new inquiry is logged. */
+async function notifyNewInquiry(env: Env, inq: any, session: SessionData): Promise<void> {
+  try {
+    await sendPushToAllExcept(env, session.userId, {
+      title: `New inquiry${inq.customerName ? ` — ${inq.customerName}` : ''}`,
+      body: inq.notes || `Source: ${inq.source || 'Other'}`,
+      tag: `inquiry-${inq.id}`,
+      data: { view: 'inquiry', inquiryId: inq.id },
+    });
+  } catch (e) {
+    console.error('Push notify (new inquiry) failed:', e);
+  }
+}
+
+async function handlePushPublicKey(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const vapid = await getOrCreateVapidKeys(ctx.env.VAYU_KV);
+  return json({ publicKey: vapid.publicKey });
+}
+
+async function handlePushSubscribe(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const body = await ctx.request.json() as {
+    endpoint?: string; keys?: { p256dh?: string; auth?: string };
+  };
+  if (!body.endpoint?.startsWith('https://') || !body.keys?.p256dh || !body.keys?.auth) {
+    return err('A valid push subscription (endpoint, keys.p256dh, keys.auth) is required');
+  }
+  const id = await endpointHash(body.endpoint);
+  // A device endpoint belongs to whoever is logged in on it — remove any
+  // mapping of this endpoint to other users (e.g. after switching accounts).
+  const existing = await ctx.env.VAYU_KV.list({ prefix: 'push:sub:' });
+  for (const key of existing.keys) {
+    if (key.name.endsWith(`:${id}`) && key.name !== `push:sub:${session.userId}:${id}`) {
+      await ctx.env.VAYU_KV.delete(key.name);
+    }
+  }
+  const sub: StoredPushSubscription = {
+    userId: session.userId,
+    endpoint: body.endpoint,
+    keys: { p256dh: body.keys.p256dh, auth: body.keys.auth },
+    createdAt: Date.now(),
+  };
+  await ctx.env.VAYU_KV.put(`push:sub:${session.userId}:${id}`, JSON.stringify(sub));
+  return json({ success: true }, 201);
+}
+
+async function handlePushUnsubscribe(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const body = await ctx.request.json() as { endpoint?: string };
+  if (!body.endpoint) return err('endpoint is required');
+  const id = await endpointHash(body.endpoint);
+  await ctx.env.VAYU_KV.delete(`push:sub:${session.userId}:${id}`);
+  return json({ success: true });
+}
+
 // ── Route infrastructure ───────────────────────────────────────────────────
 
 interface Ctx {
@@ -312,6 +447,7 @@ interface Ctx {
   url: URL;
   path: string;
   method: string;
+  execCtx: ExecutionContext;
 }
 
 type RouteHandler = (ctx: Ctx) => Promise<Response>;
@@ -563,7 +699,7 @@ async function handleUpload(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
   const formData = await ctx.request.formData();
-  const file = formData.get('file') as File | string | null;
+  const file = formData.get('file') as FormField;
   if (!file || typeof file === 'string') return err('No file provided');
   if (file.size > 100 * 1024 * 1024) return err('File too large (max 100MB)');
   const ext = file.name.split('.').pop()?.toLowerCase() || '';
@@ -571,19 +707,72 @@ async function handleUpload(ctx: Ctx): Promise<Response> {
   await ctx.env.VAYU_R2.put(key, file.stream(), {
     httpMetadata: { contentType: file.type || 'application/octet-stream' },
   });
-  return json({ key, url: `/api/files/${key}` });
+
+  // Optional small preview generated client-side, stored alongside the
+  // original under a derivable key so grids can load it without schema changes.
+  const thumb = formData.get('thumb') as FormField;
+  if (thumb && typeof thumb !== 'string') {
+    await ctx.env.VAYU_R2.put(`${key}__thumb`, thumb.stream(), {
+      httpMetadata: { contentType: thumb.type || 'image/jpeg' },
+    });
+  }
+
+  return json({ key, url: `/api/files/${key}`, thumbUrl: `/api/files/${key}__thumb` });
 }
 
 async function handleFileGet(ctx: Ctx): Promise<Response> {
   const key = decodeURIComponent(ctx.path.slice('/files/'.length));
   if (!key) return err('File not found', 404);
-  const obj = await ctx.env.VAYU_R2.get(key);
+  let obj = await ctx.env.VAYU_R2.get(key);
+  // Thumbnail requested but none exists (older uploads): serve the original.
+  if (!obj && key.endsWith('__thumb')) {
+    obj = await ctx.env.VAYU_R2.get(key.slice(0, -'__thumb'.length));
+  }
   if (!obj) return err('File not found', 404);
   const headers = new Headers();
   obj.writeHttpMetadata(headers);
   headers.set('Cache-Control', 'public, max-age=31536000, immutable');
   headers.set('Access-Control-Allow-Origin', '*');
   return new Response(obj.body, { status: 200, headers });
+}
+
+// Backfill support: originals uploaded before thumbnails existed.
+async function handleFilesMissingThumbs(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+
+  const originals: string[] = [];
+  const thumbs = new Set<string>();
+  let cursor: string | undefined;
+  do {
+    const res = await ctx.env.VAYU_R2.list({ prefix: 'uploads/', cursor, limit: 1000 });
+    for (const obj of res.objects) {
+      if (obj.key.endsWith('__thumb')) thumbs.add(obj.key);
+      else originals.push(obj.key);
+    }
+    cursor = res.truncated ? res.cursor : undefined;
+  } while (cursor);
+
+  const missing = originals.filter(k => !thumbs.has(`${k}__thumb`));
+  return json({ missing });
+}
+
+async function handleThumbBackfillUpload(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const formData = await ctx.request.formData();
+  const key = formData.get('key') as string | null;
+  const thumb = formData.get('thumb') as FormField;
+  if (!key || typeof key !== 'string' || !thumb || typeof thumb === 'string') {
+    return err('key and thumb are required');
+  }
+  // Only attach thumbnails to files that actually exist.
+  const original = await ctx.env.VAYU_R2.head(key);
+  if (!original) return err('File not found', 404);
+  await ctx.env.VAYU_R2.put(`${key}__thumb`, thumb.stream(), {
+    httpMetadata: { contentType: thumb.type || 'image/jpeg' },
+  });
+  return json({ success: true });
 }
 
 async function handleFileDelete(ctx: Ctx): Promise<Response> {
@@ -593,7 +782,8 @@ async function handleFileDelete(ctx: Ctx): Promise<Response> {
   if (!key) return err('File not found', 404);
   const obj = await ctx.env.VAYU_R2.head(key);
   if (!obj) return err('File not found', 404);
-  await ctx.env.VAYU_R2.delete(key);
+  // Delete the thumbnail variant too (no-op when none exists).
+  await ctx.env.VAYU_R2.delete([key, `${key}__thumb`]);
   return json({ success: true });
 }
 
@@ -727,6 +917,10 @@ async function handleMessagesCreate(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json();
   const msg = body as any;
   if (!msg.id || !msg.conversationId) return err('id and conversationId are required');
+  // Detect re-syncs/migrations of existing messages so they don't re-notify.
+  const alreadyExists = await ctx.env.VAYU_DB.prepare(
+    'SELECT 1 FROM messages WHERE id = ?'
+  ).bind(msg.id).first();
   await ctx.env.VAYU_DB.prepare(
     `INSERT OR REPLACE INTO messages
      (id, conversation_id, sender_id, sender_name, text, tags, timestamp,
@@ -753,27 +947,11 @@ async function handleMessagesCreate(ctx: Ctx): Promise<Response> {
     `UPDATE conversations SET last_message = ?, last_message_time = ? WHERE id = ?`
   ).bind(lastMsgPreview, msg.timestamp || Date.now(), msg.conversationId).run();
 
-  // ── Web Push Notification ──
-  await notifyConversationParticipants(ctx, msg, session.userId, lastMsgPreview);
+  if (!alreadyExists) {
+    ctx.execCtx.waitUntil(notifyConversationMessage(ctx.env, msg, session));
+  }
 
   return json(msg, 201);
-}
-
-async function notifyConversationParticipants(ctx: Ctx, msg: any, senderId: string, lastMsgPreview: string): Promise<void> {
-  const convRow = await ctx.env.VAYU_DB.prepare(
-    'SELECT participant_ids, group_name, is_group FROM conversations WHERE id = ?'
-  ).bind(msg.conversationId).first();
-  if (!convRow?.participant_ids) return;
-  try {
-    const pIds = JSON.parse(convRow.participant_ids as string);
-    const targets = pIds.filter((id: string) => id !== senderId);
-    if (targets.length === 0) return;
-    const title = convRow.is_group ? `${convRow.group_name}` : `Message from ${msg.senderName}`;
-    const body = convRow.is_group ? `${msg.senderName}: ${lastMsgPreview}` : lastMsgPreview;
-    await sendPushNotification(ctx.env.VAYU_DB, targets, JSON.stringify({ title, body, url: '/' }));
-  } catch (e) {
-    console.error('Push error', e);
-  }
 }
 
 async function handleMessageStatusUpdate(ctx: Ctx): Promise<Response> {
@@ -1039,6 +1217,10 @@ async function handleInquiriesCreate(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json();
   const inq = body as any;
   if (!inq.id) return err('id is required');
+  // Detect re-syncs/migrations of existing inquiries so they don't re-notify.
+  const alreadyExists = await ctx.env.VAYU_DB.prepare(
+    'SELECT 1 FROM inquiries WHERE id = ?'
+  ).bind(inq.id).first();
   await ctx.env.VAYU_DB.prepare(
     `INSERT OR REPLACE INTO inquiries
      (id, inquiry_number, customer_name, customer_phone, customer_email,
@@ -1057,23 +1239,12 @@ async function handleInquiriesCreate(ctx: Ctx): Promise<Response> {
     inq.catalogShared ? 1 : 0,
     inq.date || Date.now()
   ).run();
-  // ── Web Push Notification ──
-  await notifyAdminsOfInquiry(ctx, session.userId, `New Inquiry: ${inq.inquiryNumber}`, `From ${inq.customerName}`);
-  return json(inq, 201);
-}
 
-async function notifyAdminsOfInquiry(ctx: Ctx, senderId: string, title: string, body: string): Promise<void> {
-  const adminResults = await ctx.env.VAYU_KV.get('users');
-  if (!adminResults) return;
-  try {
-    const users = JSON.parse(adminResults) as StoredUser[];
-    const adminIds = users.filter(u => u.role === 'admin' && u.id !== senderId).map(u => u.id);
-    if (adminIds.length > 0) {
-      await sendPushNotification(ctx.env.VAYU_DB, adminIds, JSON.stringify({ title, body, url: '/' }));
-    }
-  } catch (e) {
-    console.error('Push error', e);
+  if (!alreadyExists) {
+    ctx.execCtx.waitUntil(notifyNewInquiry(ctx.env, inq, session));
   }
+
+  return json(inq, 201);
 }
 
 async function handleInquiriesUpdate(ctx: Ctx): Promise<Response> {
@@ -1138,6 +1309,10 @@ async function handleInquiryMessagesCreate(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json();
   const msg = body as any;
   if (!msg.id || !msg.inquiryId) return err('id and inquiryId are required');
+  // Detect re-syncs/migrations of existing messages so they don't re-notify.
+  const alreadyExists = await ctx.env.VAYU_DB.prepare(
+    'SELECT 1 FROM inquiry_messages WHERE id = ?'
+  ).bind(msg.id).first();
   await ctx.env.VAYU_DB.prepare(
     `INSERT OR REPLACE INTO inquiry_messages
      (id, inquiry_id, sender_id, sender_name, text, tags, timestamp,
@@ -1156,10 +1331,11 @@ async function handleInquiryMessagesCreate(ctx: Ctx): Promise<Response> {
     msg.attachment ? JSON.stringify(msg.attachment) : null,
     Date.now()
   ).run();
-  // ── Web Push Notification ──
-  const inquiryAttachPreview = msg.attachment?.type === 'image' ? '📷 Photo' : `📎 ${msg.attachment?.name}`;
-  const lastMsgPreview = msg.attachment ? inquiryAttachPreview : msg.text;
-  await notifyAdminsOfInquiry(ctx, session.userId, `Inquiry Message from ${msg.senderName}`, lastMsgPreview);
+
+  if (!alreadyExists) {
+    ctx.execCtx.waitUntil(notifyInquiryMessage(ctx.env, msg, session));
+  }
+
   return json(msg, 201);
 }
 
@@ -1190,37 +1366,6 @@ async function handleInquiryMessageStatusBatch(ctx: Ctx): Promise<Response> {
   return json({ success: true });
 }
 
-// ── Push subscription route handlers ────────────────────────────────────────
-
-async function handlePushSubscribe(ctx: Ctx): Promise<Response> {
-  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
-  if (!session) return err('Unauthorized', 401);
-  const body = await ctx.request.json();
-  const { endpoint, keys } = body as any;
-  if (!endpoint || !keys) return err('Invalid subscription object');
-
-  const subId = crypto.randomUUID();
-  await ctx.env.VAYU_DB.prepare(
-    'INSERT INTO push_subscriptions (id, user_id, endpoint, auth, p256dh, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-  ).bind(subId, session.userId, endpoint, keys.auth, keys.p256dh, Date.now()).run();
-
-  return json({ success: true });
-}
-
-async function handlePushUnsubscribe(ctx: Ctx): Promise<Response> {
-  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
-  if (!session) return err('Unauthorized', 401);
-  const body = await ctx.request.json();
-  const { endpoint } = body as any;
-  if (!endpoint) return err('Endpoint required');
-
-  await ctx.env.VAYU_DB.prepare(
-    'DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?'
-  ).bind(session.userId, endpoint).run();
-
-  return json({ success: true });
-}
-
 // ── Route table ─────────────────────────────────────────────────────────────
 
 const isExact = (p: string) => (path: string) => path === p;
@@ -1248,6 +1393,8 @@ const routes: Route[] = [
 
   // Upload & files
   { method: 'POST', match: isExact('/upload'), handler: handleUpload },
+  { method: 'GET', match: isExact('/files-missing-thumbs'), handler: handleFilesMissingThumbs },
+  { method: 'POST', match: isExact('/files-thumbs'), handler: handleThumbBackfillUpload },
   { method: 'GET', match: isPrefix('/files/'), handler: handleFileGet },
   { method: 'DELETE', match: isPrefix('/files/'), handler: handleFileDelete },
 
@@ -1291,13 +1438,14 @@ const routes: Route[] = [
   { method: 'PUT', match: (p) => p.startsWith('/inquiry-messages/') && p.endsWith('/status'), handler: handleInquiryMessageStatusUpdate },
   { method: 'PUT', match: isExact('/inquiry-messages/status-batch'), handler: handleInquiryMessageStatusBatch },
 
-  // Push subscriptions
-  { method: 'POST', match: isExact('/push/subscribe'), handler: handlePushSubscribe },
-  { method: 'POST', match: isExact('/push/unsubscribe'), handler: handlePushUnsubscribe },
-
   // Settings
   { method: 'GET', match: isExact('/settings'), handler: handleSettingsGet },
   { method: 'POST', match: isExact('/settings'), handler: handleSettingsUpdate },
+
+  // Push notifications
+  { method: 'GET', match: isExact('/push/public-key'), handler: handlePushPublicKey },
+  { method: 'POST', match: isExact('/push/subscribe'), handler: handlePushSubscribe },
+  { method: 'POST', match: isExact('/push/unsubscribe'), handler: handlePushUnsubscribe },
 ];
 
 // ── App Settings ──────────────────────────────────────────────────────────
@@ -1321,14 +1469,14 @@ async function handleSettingsUpdate(ctx: Ctx) {
 // ── Main handler ───────────────────────────────────────────────────────────
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, execCtx: ExecutionContext): Promise<Response> {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS });
     }
 
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api/, '');
-    const ctx: Ctx = { request, env, url, path, method: request.method };
+    const ctx: Ctx = { request, env, url, path, method: request.method, execCtx };
 
     try {
       for (const route of routes) {

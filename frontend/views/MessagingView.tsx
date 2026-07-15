@@ -3,7 +3,7 @@ import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit
 import { Conversation, ConversationDetails, Message, MessageTag, MessageReplyTo, MessageAttachment, UserProfile } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
-import storageService from '../services/storageService';
+import storageService, { getThumbUrl } from '../services/storageService';
 
 interface MessagingViewProps {
     conversations: Conversation[];
@@ -189,35 +189,35 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                     </button>
                 </button>
                 {isMenuOpen && (
-                    <div className="absolute right-2 top-full mt-1 z-20 bg-white dark:bg-[#262626] rounded-[6px] shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden animate-scale-in">
+                    <div className="absolute right-10 top-1/2 -translate-y-1/2 z-20 bg-white dark:bg-[#262626] rounded-[6px] shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden animate-scale-in flex flex-col min-w-[110px]">
                         {conv.isGroup && onUpdateGroup && (
                             <button
                                 onClick={(e) => { e.stopPropagation(); setOpenMenuId(null); setEditingGroup(conv); }}
-                                className="w-full flex items-center gap-2 px-[6px] py-2.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
+                                className="w-full flex items-center gap-2 px-2 py-1.5 text-[11px] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
                             >
-                                <Edit2 size={14} /> Edit Group
+                                <Edit2 size={12} /> Edit Group
                             </button>
                         )}
                         {!isForeign && (
                             <>
                                 <button
                                     onClick={(e) => { e.stopPropagation(); onTogglePinConversation(conv.id); setOpenMenuId(null); }}
-                                    className="w-full flex items-center gap-2 px-[6px] py-2.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
+                                    className="w-full flex items-center gap-2 px-2 py-1.5 text-[11px] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
                                 >
-                                    <Pin size={14} /> {conv.isPinned ? 'Unpin' : 'Pin'}
+                                    <Pin size={12} /> {conv.isPinned ? 'Unpin' : 'Pin'}
                                 </button>
                                 <button
                                     onClick={(e) => { e.stopPropagation(); onToggleArchiveConversation(conv.id); setOpenMenuId(null); }}
-                                    className="w-full flex items-center gap-2 px-[6px] py-2.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors border-t border-gray-100 dark:border-gray-700 whitespace-nowrap"
+                                    className="w-full flex items-center gap-2 px-2 py-1.5 text-[11px] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors border-t border-gray-100 dark:border-gray-700 whitespace-nowrap"
                                 >
-                                    <Archive size={14} /> {conv.isArchived ? 'Unarchive' : 'Archive'}
+                                    <Archive size={12} /> {conv.isArchived ? 'Unarchive' : 'Archive'}
                                 </button>
                                 {conv.isArchived && onDeleteConversation && (
                                     <button
                                         onClick={(e) => { e.stopPropagation(); setDeleteConvId(conv.id); setOpenMenuId(null); }}
-                                        className="w-full flex items-center gap-2 px-[6px] py-2.5 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors border-t border-gray-100 dark:border-gray-700 whitespace-nowrap"
+                                        className="w-full flex items-center gap-2 px-2 py-1.5 text-[11px] text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors border-t border-gray-100 dark:border-gray-700 whitespace-nowrap"
                                     >
-                                        <Trash2 size={14} /> Delete
+                                        <Trash2 size={12} /> Delete
                                     </button>
                                 )}
                             </>
@@ -298,21 +298,21 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                                     </button>
                                 </button>
                                 {openMenuId === group.id && (
-                                    <div className="absolute right-2 top-full mt-1 z-20 bg-white dark:bg-[#262626] rounded-[6px] shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden animate-scale-in">
+                                    <div className="absolute right-10 top-1/2 -translate-y-1/2 z-20 bg-white dark:bg-[#262626] rounded-[6px] shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden animate-scale-in flex flex-col min-w-[110px]">
                                         {onUpdateGroup && (
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); setOpenMenuId(null); setEditingGroup(group); }}
-                                                className="w-full flex items-center gap-2 px-[6px] py-2.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
+                                                className="w-full flex items-center gap-2 px-2 py-1.5 text-[11px] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
                                             >
-                                                <Edit2 size={14} /> Edit Group
+                                                <Edit2 size={12} /> Edit Group
                                             </button>
                                         )}
                                         {onDeleteConversation && (
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); setDeleteConvId(group.id); setOpenMenuId(null); }}
-                                                className="w-full flex items-center gap-2 px-[6px] py-2.5 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors border-t border-gray-100 dark:border-gray-700 whitespace-nowrap"
+                                                className="w-full flex items-center gap-2 px-2 py-1.5 text-[11px] text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors border-t border-gray-100 dark:border-gray-700 whitespace-nowrap"
                                             >
-                                                <Trash2 size={14} /> Delete
+                                                <Trash2 size={12} /> Delete
                                             </button>
                                         )}
                                     </div>
@@ -796,7 +796,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                             )}
                             {msg.attachment && (
                                 msg.attachment.type === 'image' ? (
-                                    <img src={msg.attachment.url} alt={msg.attachment.name} className="rounded-[8px] max-w-full max-h-48 object-cover mb-1.5" />
+                                    <img loading="lazy" decoding="async" src={getThumbUrl(msg.attachment.url)} alt={msg.attachment.name} className="rounded-[8px] max-w-full max-h-48 object-cover mb-1.5" />
                                 ) : (
                                     <div className={`flex items-center gap-2 mb-1.5 p-2 rounded-[6px] ${isMe ? 'bg-gold-500/10 dark:bg-gray-700/50' : 'bg-gray-50 dark:bg-gray-800'}`}>
                                         <Paperclip size={14} className="text-gold-600 dark:text-gold-400" />
@@ -885,7 +885,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                     <div className="flex items-center justify-between gap-2 mb-2 p-2 bg-gray-100 dark:bg-[#2a2a2a] rounded-[6px] animate-fade-in">
                         <div className="flex items-center gap-2 min-w-0">
                             {pendingAttachment.type === 'image' ? (
-                                <img src={pendingAttachment.url} alt={pendingAttachment.name} className="w-10 h-10 rounded-[4px] object-cover shrink-0" />
+                                <img loading="lazy" decoding="async" src={getThumbUrl(pendingAttachment.url)} alt={pendingAttachment.name} className="w-10 h-10 rounded-[4px] object-cover shrink-0" />
                             ) : (
                                 <div className="w-10 h-10 rounded-[4px] bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-gray-500 dark:text-gray-400 shrink-0">
                                     <Paperclip size={16} />

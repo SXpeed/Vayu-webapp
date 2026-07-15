@@ -1,3 +1,4 @@
+import { getThumbUrl } from '../services/storageService';
 import React, { useMemo } from 'react';
 import { Artwork, Catalog, Invoice, ViewState, UserProfile } from '../types';
 import { Image as ImageIcon, BookOpen, MessageCircle, Receipt, TrendingUp, Palette, ArrowRight } from 'lucide-react';
@@ -107,7 +108,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                                     style={{ animationDelay: `${300 + index * 50}ms` }}
                                 >
                                     {coverImage ? (
-                                        <img src={coverImage} alt={art.title} className="w-full h-36 object-cover" />
+                                        <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={art.title} className="w-full h-36 object-cover" />
                                     ) : (
                                         <div className="w-full h-36 bg-gray-50 dark:bg-gray-800 flex items-center justify-center text-gray-300 dark:text-gray-600">
                                             <ImageIcon size={28} strokeWidth={1} />
@@ -150,7 +151,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                                     className="w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm overflow-hidden border border-gray-100 dark:border-gray-800 flex h-24 animate-scale-in cursor-pointer active-scale" 
                                     style={{ animationDelay: `${400 + index * 50}ms` }}
                                 >
-                                    <img src={catalog.coverImageUrl} alt={catalog.name} className="w-24 h-full object-cover" />
+                                    <img loading="lazy" decoding="async" src={getThumbUrl(catalog.coverImageUrl)} alt={catalog.name} className="w-24 h-full object-cover" />
                                     <div className="p-[6px] flex flex-col justify-center flex-1">
                                         <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm line-clamp-1">{catalog.name}</h3>
                                         <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1 line-clamp-1 font-light">{catalog.description}</p>

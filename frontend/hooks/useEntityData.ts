@@ -7,7 +7,6 @@ import { collectionService } from '../services/collectionService';
 import { catalogService } from '../services/catalogService';
 import { inquiryService } from '../services/inquiryService';
 import { authService, AuthUser } from '../services/authService';
-import { toast } from 'react-hot-toast';
 
 /**
  * Manages all entity state (artworks, catalogs, collections, invoices,
@@ -25,17 +24,20 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
     const [inquiryMessages, setInquiryMessages] = useState<InquiryMessage[]>([]);
     const [teamMembers, setTeamMembers] = useState<UserProfile[]>([]);
 
-    // True Web Push is now handled by Service Worker (sw.js) upon receiving push events.
-    // Local showNativeNotification has been removed.
-    const knownMessageIds = useRef<Set<string>>(new Set());
-    const knownInqMsgIds = useRef<Set<string>>(new Set());
-    const knownInqIds = useRef<Set<string>>(new Set());
-    const hasInitialLoaded = useRef(false);
+    // Serialized snapshot of the last payload applied per entity key. Polling
+    // compares against this and skips setState when nothing changed, so the
+    // app doesn't re-render every poll tick.
+    const lastPayloads = useRef<Record<string, string>>({});
+    const applyIfChanged = useCallback(<T,>(key: string, data: T, setter: (value: T) => void) => {
+        const serialized = JSON.stringify(data);
+        if (lastPayloads.current[key] === serialized) return;
+        lastPayloads.current[key] = serialized;
+        setter(data);
+    }, []);
 
     // loadData takes isAuthenticated as a parameter instead of reading from
     // state/closure, so it has NO state dependencies and a stable reference.
     const loadData = useCallback(async (isAuthenticated: boolean) => {
-        hasInitialLoaded.current = false;
         const loadedInvoices = await db.getInvoices();
         setInvoices(loadedInvoices);
 
@@ -53,50 +55,34 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
                     inquiryService.getInquiries(),
                     inquiryService.getInquiryMessages(),
                 ]);
-                setArtworks(loadedArtworks);
-                setConversations(loadedConversations);
-                setAllMessages(loadedMessages);
-                knownMessageIds.current = new Set(loadedMessages.map(m => m.id));
-                setCollections(loadedCollections);
-                setCatalogs(loadedCatalogs);
-                setInquiries(loadedInquiries);
-                knownInqIds.current = new Set(loadedInquiries.map(i => i.id));
-                setInquiryMessages(loadedInquiryMessages);
-                knownInqMsgIds.current = new Set(loadedInquiryMessages.map(m => m.id));
+                applyIfChanged('artworks', loadedArtworks, setArtworks);
+                applyIfChanged('conversations', loadedConversations, setConversations);
+                applyIfChanged('messages', loadedMessages, setAllMessages);
+                applyIfChanged('collections', loadedCollections, setCollections);
+                applyIfChanged('catalogs', loadedCatalogs, setCatalogs);
+                applyIfChanged('inquiries', loadedInquiries, setInquiries);
+                applyIfChanged('inquiryMessages', loadedInquiryMessages, setInquiryMessages);
                 for (const art of loadedArtworks) await db.saveArtwork(art);
             } catch (err) {
                 console.error('Failed to load cloud data from D1:', err);
                 setArtworks(await db.getArtworks());
                 setConversations(await db.getConversations());
-                const msgs = await db.getMessages();
-                setAllMessages(msgs);
-                knownMessageIds.current = new Set(msgs.map(m => m.id));
+                setAllMessages(await db.getMessages());
                 setCollections(await db.getCollections());
                 setCatalogs(await db.getCatalogs());
-                const inqs = await db.getInquiries();
-                setInquiries(inqs);
-                knownInqIds.current = new Set(inqs.map(i => i.id));
-                const inqMsgs = await db.getInquiryMessages();
-                setInquiryMessages(inqMsgs);
-                knownInqMsgIds.current = new Set(inqMsgs.map(m => m.id));
+                setInquiries(await db.getInquiries());
+                setInquiryMessages(await db.getInquiryMessages());
             }
         } else {
             setArtworks(await db.getArtworks());
             setConversations(await db.getConversations());
-            const msgs = await db.getMessages();
-            setAllMessages(msgs);
-            knownMessageIds.current = new Set(msgs.map(m => m.id));
+            setAllMessages(await db.getMessages());
             setCollections(await db.getCollections());
             setCatalogs(await db.getCatalogs());
-            const inqs = await db.getInquiries();
-            setInquiries(inqs);
-            knownInqIds.current = new Set(inqs.map(i => i.id));
-            const inqMsgs = await db.getInquiryMessages();
-            setInquiryMessages(inqMsgs);
-            knownInqMsgIds.current = new Set(inqMsgs.map(m => m.id));
+            setInquiries(await db.getInquiries());
+            setInquiryMessages(await db.getInquiryMessages());
         }
-        hasInitialLoaded.current = true;
-    }, []);
+    }, [applyIfChanged]);
 
     const loadTeamMembers = useCallback(async () => {
         try {
@@ -198,29 +184,23 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
         return () => channel.close();
     }, [loadData, loadTeamMembers, authUserRef]);
 
-    // Polling: conversations & messages every 15 seconds
+    // Polling: conversations & messages every 15 seconds.
+    // Skips work while the tab is hidden and re-polls immediately when it
+    // becomes visible again; setState only fires when the payload changed.
     useEffect(() => {
         if (!authUser) return;
         let cancelled = false;
 
         const poll = async () => {
-            if (cancelled) return;
+            if (cancelled || document.visibilityState === 'hidden') return;
             try {
-                const remoteConversations = await messagingService.getConversations();
-                const remoteMessages = await messagingService.getMessages();
+                const [remoteConversations, remoteMessages] = await Promise.all([
+                    messagingService.getConversations(),
+                    messagingService.getMessages(),
+                ]);
                 if (!cancelled) {
-                    setConversations(remoteConversations);
-                    setAllMessages(remoteMessages);
-
-                    remoteMessages.forEach(rm => {
-                        if (rm.senderId !== authUser.id && !knownMessageIds.current.has(rm.id)) {
-                            if (hasInitialLoaded.current) {
-                                const title = `New message from ${rm.senderName || 'someone'}`;
-                                toast.success(title, { icon: '💬' });
-                            }
-                        }
-                        knownMessageIds.current.add(rm.id);
-                    });
+                    applyIfChanged('conversations', remoteConversations, setConversations);
+                    applyIfChanged('messages', remoteMessages, setAllMessages);
                 }
             } catch (err) {
                 console.warn('Failed to poll messages:', err);
@@ -229,11 +209,16 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
 
         poll();
         const interval = setInterval(poll, 15000);
+        const onVisibilityChange = () => {
+            if (document.visibilityState === 'visible') poll();
+        };
+        document.addEventListener('visibilitychange', onVisibilityChange);
         return () => {
             cancelled = true;
             clearInterval(interval);
+            document.removeEventListener('visibilitychange', onVisibilityChange);
         };
-    }, [authUser]);
+    }, [authUser, applyIfChanged]);
 
     // Polling: inquiry messages every 15 seconds
     useEffect(() => {
@@ -241,21 +226,11 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
         let cancelled = false;
 
         const pollInquiry = async () => {
-            if (cancelled) return;
+            if (cancelled || document.visibilityState === 'hidden') return;
             try {
                 const remoteInquiryMessages = await inquiryService.getInquiryMessages();
                 if (!cancelled) {
-                    setInquiryMessages(remoteInquiryMessages);
-
-                    remoteInquiryMessages.forEach(rm => {
-                        if (rm.senderId !== authUser.id && !knownInqMsgIds.current.has(rm.id)) {
-                            if (hasInitialLoaded.current) {
-                                const title = `New inquiry message from ${rm.senderName || 'someone'}`;
-                                toast.success(title, { icon: '📩' });
-                            }
-                        }
-                        knownInqMsgIds.current.add(rm.id);
-                    });
+                    applyIfChanged('inquiryMessages', remoteInquiryMessages, setInquiryMessages);
                 }
             } catch (err) {
                 console.warn('Failed to poll inquiry messages:', err);
@@ -268,7 +243,7 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
             cancelled = true;
             clearInterval(interval);
         };
-    }, [authUser]);
+    }, [authUser, applyIfChanged]);
 
     // Polling: artworks, collections, catalogs & inquiries every 15 seconds
     useEffect(() => {
@@ -276,7 +251,7 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
         let cancelled = false;
 
         const pollEntities = async () => {
-            if (cancelled) return;
+            if (cancelled || document.visibilityState === 'hidden') return;
             try {
                 const [remoteArtworks, remoteCollections, remoteCatalogs, remoteInquiries] = await Promise.all([
                     artworkService.getArtworks(),
@@ -285,20 +260,10 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
                     inquiryService.getInquiries(),
                 ]);
                 if (!cancelled) {
-                    setArtworks(remoteArtworks);
-                    setCollections(remoteCollections);
-                    setCatalogs(remoteCatalogs);
-                    setInquiries(remoteInquiries);
-
-                    remoteInquiries.forEach(inq => {
-                        if (!knownInqIds.current.has(inq.id)) {
-                            if (hasInitialLoaded.current) {
-                                const title = `New inquiry: ${inq.customerName || inq.inquiryNumber}`;
-                                toast.success(title, { icon: '🔔' });
-                            }
-                        }
-                        knownInqIds.current.add(inq.id);
-                    });
+                    applyIfChanged('artworks', remoteArtworks, setArtworks);
+                    applyIfChanged('collections', remoteCollections, setCollections);
+                    applyIfChanged('catalogs', remoteCatalogs, setCatalogs);
+                    applyIfChanged('inquiries', remoteInquiries, setInquiries);
                 }
             } catch (err) {
                 console.warn('Failed to poll entities:', err);
@@ -311,7 +276,7 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
             cancelled = true;
             clearInterval(interval);
         };
-    }, [authUser]);
+    }, [authUser, applyIfChanged]);
 
     return {
         artworks, setArtworks,

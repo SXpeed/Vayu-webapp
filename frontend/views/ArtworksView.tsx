@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Plus, Search, Image as ImageIcon, X, Trash2, Loader2, Camera, Folder } from 'lucide-react';
 import { Artwork } from '../types';
-import storageService from '../services/storageService';
+import storageService, { getThumbUrl } from '../services/storageService';
 
 
 interface ArtworksViewProps {
@@ -72,7 +72,7 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
                         >
                             <div className="w-28 h-full relative shrink-0 bg-gray-50 dark:bg-gray-800">
                                 {artwork.imageUrls.length > 0 ? (
-                                    <img src={artwork.imageUrls[0]} alt={artwork.title} className="w-full h-full object-cover" />
+                                    <img loading="lazy" decoding="async" src={getThumbUrl(artwork.imageUrls[0])} alt={artwork.title} className="w-full h-full object-cover" />
                                 ) : (
                                     <div className="w-full h-full flex items-center justify-center text-gray-300 dark:text-gray-600">
                                         <ImageIcon size={28} strokeWidth={1} />
@@ -258,7 +258,7 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
                         <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2 snap-x">
                             {formData.imageUrls.map((url: string, idx: number) => (
                                 <div key={url} className="relative w-32 h-32 shrink-0 rounded-[6px] overflow-hidden snap-start border border-gray-200 dark:border-gray-700 shadow-sm animate-scale-in" style={{ animationDelay: `${idx * 50}ms` }}>
-                                    <img src={url} alt={`Preview ${idx + 1}`} className="w-full h-full object-cover" />
+                                    <img loading="lazy" decoding="async" src={getThumbUrl(url)} alt={`Preview ${idx + 1}`} className="w-full h-full object-cover" />
                                     <button
                                         type="button"
                                         onClick={() => handleRemoveImage(idx)}

@@ -48,6 +48,17 @@ export interface PdfOptions {
     pageOptions: string[];
     customLogo1?: string;
     customLogo2?: string;
+    removeBackground?: boolean;
+    imageShadow?: boolean;
+    /** 'Default' (follow theme), a hex color like '#0f172a', or a legacy named palette. */
+    colorPalette?: string;
+    /** Hue (0–330) of the last main color picked in the studio. */
+    colorHue?: number;
+    /** Intensity (0–100) of the color intensity slider. */
+    colorIntensity?: number;
+    /** Up to 6 most recently used page colors. */
+    recentColors?: string[];
+    gradientStyle?: 'Solid' | 'Linear' | 'Radial' | 'Diagonal' | 'Vignette' | 'Spotlight';
 }
 
 export type CatalogTheme = 1 | 2 | 3 | 4 | 5;

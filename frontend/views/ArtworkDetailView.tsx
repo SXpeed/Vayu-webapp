@@ -3,6 +3,7 @@ import { ArrowLeft, Edit2, X, Image as ImageIcon } from 'lucide-react';
 import { Artwork } from '../types';
 import { ArtworkFormModal } from './ArtworksView';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { ZoomableImage } from '../components/ZoomableImage';
 
 // Helper function to extract dominant color from an image URL
 const getDominantColor = (imageUrl: string): Promise<string> => {
@@ -151,6 +152,8 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                                         <img
                                             src={url}
                                             alt={`${artwork.title} - ${idx + 1}`}
+                                            loading="lazy"
+                                            decoding="async"
                                             className="w-full h-full object-cover"
                                         />
                                     </button>
@@ -251,8 +254,8 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                         }}
                     >
                         {artwork.imageUrls.map((url, idx) => (
-                            <div key={url} className="w-full h-full flex items-center justify-center snap-center shrink-0 p-[6px]">
-                                <img
+                            <div key={url} className="w-full h-full snap-center shrink-0 p-[6px] flex items-center justify-center relative">
+                                <ZoomableImage
                                     src={url}
                                     alt={`${artwork.title} - ${idx + 1}`}
                                     className="max-w-full max-h-full object-contain drop-shadow-2xl"

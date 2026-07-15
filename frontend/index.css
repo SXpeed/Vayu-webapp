@@ -2,6 +2,32 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Self-hosted variable fonts (latin subset) — no render-blocking request to
+   Google Fonts, and they work offline in the PWA. */
+@font-face {
+    font-family: 'Inter';
+    font-style: normal;
+    font-weight: 300 600;
+    font-display: swap;
+    src: url('./assets/fonts/Inter-var.woff2') format('woff2');
+}
+
+@font-face {
+    font-family: 'Playfair Display';
+    font-style: normal;
+    font-weight: 400 700;
+    font-display: swap;
+    src: url('./assets/fonts/PlayfairDisplay-var.woff2') format('woff2');
+}
+
+@font-face {
+    font-family: 'Playfair Display';
+    font-style: italic;
+    font-weight: 400 700;
+    font-display: swap;
+    src: url('./assets/fonts/PlayfairDisplay-italic-var.woff2') format('woff2');
+}
+
 html,
 body,
 #root {
@@ -19,6 +45,41 @@ body,
 
 .full-height {
     height: 100dvh;
+}
+
+/* Hue slider for the Catalog Studio custom page color */
+.hue-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 10px;
+    border-radius: 9999px;
+    outline: none;
+    background: linear-gradient(to right,
+            hsl(0, 45%, 82%), hsl(60, 45%, 82%), hsl(120, 45%, 82%),
+            hsl(180, 45%, 82%), hsl(240, 45%, 82%), hsl(300, 45%, 82%),
+            hsl(360, 45%, 82%));
+}
+
+.hue-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid #c9a84c;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    cursor: pointer;
+}
+
+.hue-slider::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid #c9a84c;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    cursor: pointer;
 }
 
 /* App height that tracks visualViewport — fixes iOS keyboard gap */

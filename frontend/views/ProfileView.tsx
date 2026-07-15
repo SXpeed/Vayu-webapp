@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import toast from 'react-hot-toast';
 import { UserProfile } from '../types';
-import { Moon, Sun, LogOut, Check } from 'lucide-react';
+import { Moon, Sun, LogOut, Check, Bell, BellOff } from 'lucide-react';
+import { pushService } from '../services/pushService';
 
 interface ProfileViewProps {
     profile: UserProfile;
@@ -13,6 +15,39 @@ interface ProfileViewProps {
 export const ProfileView: React.FC<ProfileViewProps> = ({ profile, onUpdateProfile, theme, onToggleTheme, onLogout }) => {
     const [formData, setFormData] = useState<UserProfile>(profile);
     const [isEditing, setIsEditing] = useState(false);
+
+    // ── Push notifications ──────────────────────────────────────────────
+    const pushSupported = pushService.isSupported();
+    const [pushEnabled, setPushEnabled] = useState(false);
+    const [pushBusy, setPushBusy] = useState(false);
+
+    useEffect(() => {
+        pushService.isEnabled().then(setPushEnabled).catch(() => setPushEnabled(false));
+    }, []);
+
+    const handleTogglePush = async () => {
+        if (pushBusy) return;
+        if (!pushSupported) {
+            toast.error('Notifications are not supported in this browser');
+            return;
+        }
+        setPushBusy(true);
+        try {
+            if (pushEnabled) {
+                await pushService.disable();
+                setPushEnabled(false);
+                toast('Notifications turned off');
+            } else {
+                await pushService.enable();
+                setPushEnabled(true);
+                toast.success('Notifications turned on');
+            }
+        } catch (e) {
+            toast.error((e as Error).message || 'Could not update notification settings');
+        } finally {
+            setPushBusy(false);
+        }
+    };
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         const { name, value } = e.target;
@@ -109,6 +144,27 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ profile, onUpdateProfi
                             className={`w-10 h-5 rounded-full p-0.5 transition-colors duration-300 ease-in-out active-scale ${theme === 'dark' ? 'bg-gold-500' : 'bg-gray-300'}`}
                         >
                             <div className={`w-4 h-4 bg-white rounded-full shadow-md transform transition-transform duration-300 ease-in-out ${theme === 'dark' ? 'translate-x-5' : 'translate-x-0'}`}></div>
+                        </button>
+                    </div>
+
+                    <div className="w-full h-px bg-gray-100 dark:bg-gray-800"></div>
+
+                    <div className="flex justify-between items-center py-1">
+                        <div className="flex items-center gap-[6px] text-gray-700 dark:text-gray-300">
+                            {pushEnabled ? <Bell size={18} /> : <BellOff size={18} />}
+                            <div>
+                                <span className="font-medium text-sm">Notifications</span>
+                                {!pushSupported && (
+                                    <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-wider">Not supported in this browser</p>
+                                )}
+                            </div>
+                        </div>
+                        <button
+                            onClick={handleTogglePush}
+                            disabled={!pushSupported || pushBusy}
+                            className={`w-10 h-5 rounded-full p-0.5 transition-colors duration-300 ease-in-out active-scale ${pushEnabled ? 'bg-gold-500' : 'bg-gray-300'} ${(!pushSupported || pushBusy) ? 'opacity-50' : ''}`}
+                        >
+                            <div className={`w-4 h-4 bg-white rounded-full shadow-md transform transition-transform duration-300 ease-in-out ${pushEnabled ? 'translate-x-5' : 'translate-x-0'}`}></div>
                         </button>
                     </div>
 

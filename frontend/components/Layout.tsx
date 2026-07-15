@@ -1,9 +1,35 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import Lenis from 'lenis';
 import { BottomNav } from '../components/BottomNav';
 import { User, Users, Activity } from 'lucide-react';
 import { AuthUser } from '../services/authService';
 import { ViewState } from '../types';
 import UserManagementPanel from './UserManagementPanel';
+
+/** Smooth (Lenis) scrolling on the main content scroller. Wheel/desktop only —
+ * touch stays native so iOS momentum scrolling is untouched. Nested scrollable
+ * elements (chat lists, modals) keep native behavior via the prevent check. */
+const useSmoothScroll = (ref: React.RefObject<HTMLElement | null>) => {
+    useEffect(() => {
+        const wrapper = ref.current;
+        if (!wrapper) return;
+        if (globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+        const lenis = new Lenis({
+            wrapper,
+            content: wrapper,
+            autoRaf: true,
+            duration: 0.9,
+            prevent: (node) =>
+                node !== wrapper &&
+                node instanceof HTMLElement &&
+                node.scrollHeight > node.clientHeight &&
+                /(auto|scroll)/.test(getComputedStyle(node).overflowY),
+        });
+
+        return () => lenis.destroy();
+    }, [ref]);
+};
 
 const Layout: React.FC<{
   currentView: ViewState;
@@ -14,6 +40,8 @@ const Layout: React.FC<{
 }> = ({ currentView, onNavigate, userProfile, onShowActivity, children }) => {
   const [showUserMgmt, setShowUserMgmt] = useState(false);
   const isAdmin = userProfile?.role === 'admin';
+  const mainRef = useRef<HTMLElement>(null);
+  useSmoothScroll(mainRef);
 
   return (
     <div className="min-h-app bg-white dark:bg-[#1a1a1a] md:bg-gray-200 md:dark:bg-gray-950 flex items-start md:items-center justify-center md:p-[6px] transition-colors duration-500">
@@ -49,7 +77,7 @@ const Layout: React.FC<{
         )}
 
         {/* Main Content */}
-        <main className="flex-1 overflow-y-auto no-scrollbar transition-colors duration-500 animate-fade-in overscroll-contain" style={{ WebkitOverflowScrolling: 'touch' }}>
+        <main ref={mainRef} className="flex-1 overflow-y-auto no-scrollbar transition-colors duration-500 animate-fade-in overscroll-contain" style={{ WebkitOverflowScrolling: 'touch' }}>
           {children}
         </main>
 

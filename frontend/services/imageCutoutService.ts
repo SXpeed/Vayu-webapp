@@ -1,180 +1,118 @@
-import { removeBackground } from "@imgly/background-removal";
+import { removeBackground } from '@imgly/background-removal';
 
-/**
- * Produces "cutout" product images for PDF themes that place the product on
- * their own page background (themes 4 & 5): removes the photo background with
- * @imgly/background-removal (runs fully in-browser), then crops the resulting
- * transparent PNG down to the visible content plus a small margin.
- */
-
-export interface CutoutImage {
+export interface PdfImageInfo {
     dataUrl: string;
     width: number;
     height: number;
-    format: 'PNG';
+    format: string;
 }
 
-const IMGLY_CONFIG = {
-    publicPath: "https://staticimgly.com/@imgly/background-removal-data/1.7.0/dist/",
-    debug: false,
-    output: {
-        format: "image/png",
-        quality: 1,
-    },
-} as const;
+/** Progress messages ("Downloading AI model 45%", "Removing background…"). */
+export type CutoutProgress = (message: string) => void;
+
+// Let the library resolve its own CDN URL based on its internal PACKAGE_VERSION.
+// Do NOT hardcode publicPath — the library already uses the correct default.
 
 const CROP_PADDING_PX = 30;
 const ALPHA_THRESHOLD = 10;
 
-// Background removal takes seconds per image, so cache results: regenerating
-// a PDF after tweaking studio options reuses them. Upload URLs are immutable
-// (unique key per upload), so entries never go stale. Bounded FIFO to keep
-// memory in check on mobile.
-const MAX_CACHE_ENTRIES = 24;
-const cutoutCache = new Map<string, CutoutImage>();
+const cutoutCache = new Map<string, PdfImageInfo>();
+const MAX_CACHE = 20;
 
-function loadImageFromBlob(blob: Blob): Promise<HTMLImageElement> {
+function loadImage(src: string): Promise<HTMLImageElement> {
     return new Promise((resolve, reject) => {
-        const url = URL.createObjectURL(blob);
-        const image = new Image();
-
-        image.onload = () => {
-            URL.revokeObjectURL(url);
-            resolve(image);
-        };
-
-        image.onerror = () => {
-            URL.revokeObjectURL(url);
-            reject(new Error("Image could not be loaded."));
-        };
-
-        image.src = url;
-    });
-}
-
-function canvasToBlob(canvas: HTMLCanvasElement, type = "image/png", quality = 1): Promise<Blob> {
-    return new Promise((resolve, reject) => {
-        canvas.toBlob(
-            (blob) => {
-                if (blob) {
-                    resolve(blob);
-                } else {
-                    reject(new Error("Canvas export failed."));
-                }
-            },
-            type,
-            quality
-        );
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('Failed to load processed image'));
+        img.src = src;
     });
 }
 
 function blobToDataURL(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
-
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = () => reject(new Error("Could not convert blob to data URL."));
-
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error('Could not read processed image'));
         reader.readAsDataURL(blob);
     });
 }
 
-/** Find the bounding box of non-transparent pixels and crop to it (plus padding). */
-async function cropTransparentPNG(blob: Blob, padding = CROP_PADDING_PX): Promise<Blob> {
-    const image = await loadImageFromBlob(blob);
+/** Crop the transparent PNG down to its visible content plus a small margin,
+ *  so the cutout fills the PDF image box instead of floating in dead space. */
+function cropToContent(img: HTMLImageElement): HTMLCanvasElement | null {
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0);
 
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return blob;
-
-    canvas.width = image.width;
-    canvas.height = image.height;
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(image, 0, 0);
-
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imageData.data;
-
-    let minX = canvas.width;
-    let minY = canvas.height;
-    let maxX = -1;
-    let maxY = -1;
-
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    let minX = canvas.width, minY = canvas.height, maxX = -1, maxY = -1;
     for (let y = 0; y < canvas.height; y++) {
         for (let x = 0; x < canvas.width; x++) {
-            const index = (y * canvas.width + x) * 4;
-            const alpha = data[index + 3];
-
-            if (alpha > ALPHA_THRESHOLD) {
-                minX = Math.min(minX, x);
-                minY = Math.min(minY, y);
-                maxX = Math.max(maxX, x);
-                maxY = Math.max(maxY, y);
+            if (data[(y * canvas.width + x) * 4 + 3] > ALPHA_THRESHOLD) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
             }
         }
     }
+    if (maxX === -1) return null; // fully transparent — keep original
 
-    // Fully transparent image — nothing to crop to.
-    if (maxX === -1 || maxY === -1) {
-        return blob;
-    }
+    minX = Math.max(0, minX - CROP_PADDING_PX);
+    minY = Math.max(0, minY - CROP_PADDING_PX);
+    maxX = Math.min(canvas.width - 1, maxX + CROP_PADDING_PX);
+    maxY = Math.min(canvas.height - 1, maxY + CROP_PADDING_PX);
 
-    minX = Math.max(0, minX - padding);
-    minY = Math.max(0, minY - padding);
-    maxX = Math.min(canvas.width - 1, maxX + padding);
-    maxY = Math.min(canvas.height - 1, maxY + padding);
-
-    const croppedWidth = maxX - minX + 1;
-    const croppedHeight = maxY - minY + 1;
-
-    const croppedCanvas = document.createElement("canvas");
-    const croppedCtx = croppedCanvas.getContext("2d");
-    if (!croppedCtx) return blob;
-
-    croppedCanvas.width = croppedWidth;
-    croppedCanvas.height = croppedHeight;
-
-    croppedCtx.clearRect(0, 0, croppedWidth, croppedHeight);
-
-    croppedCtx.drawImage(
-        canvas,
-        minX,
-        minY,
-        croppedWidth,
-        croppedHeight,
-        0,
-        0,
-        croppedWidth,
-        croppedHeight
-    );
-
-    return canvasToBlob(croppedCanvas, "image/png");
+    const w = maxX - minX + 1;
+    const h = maxY - minY + 1;
+    const cropped = document.createElement('canvas');
+    cropped.width = w;
+    cropped.height = h;
+    const cctx = cropped.getContext('2d');
+    if (!cctx) return null;
+    cctx.drawImage(canvas, minX, minY, w, h, 0, 0, w, h);
+    return cropped;
 }
 
-export async function removeBackgroundAndCrop(imgUrl: string): Promise<CutoutImage> {
+export async function removeBackgroundImageLocal(imgUrl: string, onProgress?: CutoutProgress): Promise<PdfImageInfo> {
     const cached = cutoutCache.get(imgUrl);
     if (cached) return cached;
 
-    const transparentBlob = await removeBackground(imgUrl, IMGLY_CONFIG);
-    const croppedBlob = await cropTransparentPNG(transparentBlob);
-    const [dataUrl, finalImage] = await Promise.all([
-        blobToDataURL(croppedBlob),
-        loadImageFromBlob(croppedBlob),
-    ]);
+    const absoluteUrl = new URL(imgUrl, globalThis.location.href).href;
 
-    const result: CutoutImage = {
-        dataUrl,
-        width: finalImage.width,
-        height: finalImage.height,
-        format: 'PNG',
-    };
+    const transparentBlob = await removeBackground(absoluteUrl, {
+        progress: (key: string, current: number, total: number) => {
+            if (!onProgress) return;
+            if (key.startsWith('fetch:') && total > 0) {
+                const pct = Math.round((current / total) * 100);
+                onProgress(`Downloading AI model ${pct}%`);
+            } else {
+                onProgress('Removing background…');
+            }
+        },
+    });
+    onProgress?.('Removing background…');
 
-    if (cutoutCache.size >= MAX_CACHE_ENTRIES) {
-        const oldestKey = cutoutCache.keys().next().value;
-        if (oldestKey !== undefined) cutoutCache.delete(oldestKey);
+    const rawDataUrl = await blobToDataURL(transparentBlob);
+    const img = await loadImage(rawDataUrl);
+
+    const croppedCanvas = cropToContent(img);
+    const info: PdfImageInfo = croppedCanvas
+        ? {
+            dataUrl: croppedCanvas.toDataURL('image/png'),
+            width: croppedCanvas.width,
+            height: croppedCanvas.height,
+            format: 'PNG',
+        }
+        : { dataUrl: rawDataUrl, width: img.width, height: img.height, format: 'PNG' };
+
+    if (cutoutCache.size >= MAX_CACHE) {
+        const firstKey = cutoutCache.keys().next().value;
+        if (firstKey) cutoutCache.delete(firstKey);
     }
-    cutoutCache.set(imgUrl, result);
-
-    return result;
+    cutoutCache.set(imgUrl, info);
+    return info;
 }

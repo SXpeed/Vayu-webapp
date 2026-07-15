@@ -1,13 +1,7 @@
-const CACHE_NAME = 'vayu-design-v10';
+const CACHE_NAME = 'vayu-design-v12';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
-];
-
-// Google Fonts to cache for offline use
-const FONT_ORIGINS = [
-  'https://fonts.googleapis.com',
-  'https://fonts.gstatic.com',
 ];
 
 self.addEventListener('install', (event) => {
@@ -24,7 +18,6 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// Network-first strategy with API exclusion and font caching
 self.addEventListener('fetch', (event) => {
   // Only handle GET requests
   if (event.request.method !== 'GET') return;
@@ -36,8 +29,10 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-first strategy for Google Fonts (they rarely change)
-  if (FONT_ORIGINS.some(origin => event.request.url.startsWith(origin))) {
+  // Cache-first for Vite's content-hashed build assets: the filename changes
+  // whenever the content does, so a cached copy can never be stale. This makes
+  // repeat launches load instantly instead of re-downloading over the network.
+  if (url.origin === self.location.origin && url.pathname.startsWith('/assets/')) {
     event.respondWith(
       caches.match(event.request).then((cached) => {
         if (cached) return cached;
@@ -49,13 +44,13 @@ self.addEventListener('fetch', (event) => {
             });
           }
           return response;
-        }).catch(() => cached);
+        });
       })
     );
     return;
   }
 
-  // Network-first strategy for everything else
+  // Network-first strategy for everything else (index.html, sw.js, manifest)
   event.respondWith(
     fetch(event.request)
       .then((response) => {
@@ -76,6 +71,44 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
+// ── Web Push notifications ─────────────────────────────────────────────────
+
+self.addEventListener('push', (event) => {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch (e) {
+    payload = { title: 'Vayu Design', body: event.data ? event.data.text() : '' };
+  }
+  const title = payload.title || 'Vayu Design';
+  const options = {
+    body: payload.body || '',
+    tag: payload.tag || undefined,
+    renotify: !!payload.tag,
+    data: payload.data || {},
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const view = event.notification.data && event.notification.data.view;
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+      // Focus an existing app window and let the app navigate itself.
+      for (const client of windowClients) {
+        if ('focus' in client) {
+          client.postMessage({ type: 'PUSH_NAVIGATE', view });
+          return client.focus();
+        }
+      }
+      // No window open: launch the app with the target view in the URL.
+      const url = view ? `./?view=${encodeURIComponent(view)}` : './';
+      return self.clients.openWindow(url);
+    })
+  );
+});
+
 self.addEventListener('activate', (event) => {
   // Clean up old caches
   event.waitUntil(
@@ -92,33 +125,4 @@ self.addEventListener('activate', (event) => {
       return self.clients.claim();
     })
   );
-});
-
-self.addEventListener('notificationclick', (event) => {
-  event.notification.close();
-  event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-      for (const client of clientList) {
-        if (client.url.includes(self.registration.scope) && 'focus' in client) {
-          return client.focus();
-        }
-      }
-      if (clients.openWindow) {
-        return clients.openWindow('/');
-      }
-    })
-  );
-});
-
-self.addEventListener('push', (event) => {
-  const data = event.data ? event.data.json() : {};
-  const title = data.title || 'New Notification';
-  const options = {
-    body: data.body || 'You have a new message.',
-    icon: '/vayu-logo.png',
-    badge: '/vayu-logo.png',
-    vibrate: [200, 100, 200],
-    data: { url: data.url || '/' }
-  };
-  event.waitUntil(self.registration.showNotification(title, options));
 });
