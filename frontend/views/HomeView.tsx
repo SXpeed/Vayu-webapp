@@ -1,7 +1,7 @@
 import { getThumbUrl } from '../services/storageService';
 import React, { useMemo } from 'react';
 import { Artwork, Catalog, Invoice, ViewState, UserProfile } from '../types';
-import { Image as ImageIcon, BookOpen, MessageCircle, Receipt, TrendingUp, Palette, ArrowRight } from 'lucide-react';
+import { Image as ImageIcon, BookOpen, MessageCircle, Receipt, TrendingUp, Palette, ArrowRight, IndianRupee } from 'lucide-react';
 
 interface HomeViewProps {
     artworks: Artwork[];
@@ -46,14 +46,14 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                 <section className="animate-fade-in-up" style={{ animationDelay: '200ms' }}>
                     <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-[6px] px-[6px]">Quick Actions</h2>
                     <div className="grid grid-cols-4 gap-[6px]">
-                        <button 
-                            onClick={() => onNavigate('artworks')}
+                        <button
+                            onClick={() => onNavigate('payments')}
                             className="bg-white dark:bg-[#1e1e1e] p-[6px] rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 flex flex-col items-center justify-center gap-2 hover:border-gold-500 dark:hover:border-gold-500 transition-colors active-scale"
                         >
                             <div className="text-brand-900 dark:text-gold-400">
-                                <ImageIcon size={22} strokeWidth={1.5} />
+                                <IndianRupee size={22} strokeWidth={1.5} />
                             </div>
-                            <span className="text-[9px] font-medium text-gray-600 dark:text-gray-300 uppercase tracking-wider">Inventory</span>
+                            <span className="text-[9px] font-medium text-gray-600 dark:text-gray-300 uppercase tracking-wider">Payments</span>
                         </button>
                         <button 
                             onClick={() => onNavigate('catalogs')}

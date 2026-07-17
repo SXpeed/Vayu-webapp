@@ -171,4 +171,21 @@ export interface InquiryMessage {
     attachment?: MessageAttachment;
 }
 
-export type ViewState = 'login' | 'home' | 'artworks' | 'collections' | 'catalogs' | 'invoice' | 'inquiry' | 'messaging' | 'profile' | 'activity';
+export type ViewState = 'login' | 'home' | 'artworks' | 'collections' | 'catalogs' | 'invoice' | 'inquiry' | 'messaging' | 'profile' | 'activity' | 'payments';
+
+export interface PaymentLink {
+    id: string;
+    shortUrl: string;
+    amount: number; // paise
+    description: string;
+    customerName: string;
+    customerPhone: string;
+    customerEmail: string;
+    status: 'created' | 'paid' | 'partially_paid' | 'expired' | 'cancelled' | string;
+    createdAt: number;
+    createdBy: string;
+    createdByName: string;
+    paidAt?: number;
+    paymentId?: string;
+    paymentMethod?: string;
+}

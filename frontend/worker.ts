@@ -4,6 +4,10 @@ interface Env {
   VAYU_KV: KVNamespace;
   VAYU_R2: R2Bucket;
   VAYU_DB: D1Database;
+  // Razorpay credentials — set via `wrangler secret put <NAME>`.
+  RAZORPAY_KEY_ID?: string;
+  RAZORPAY_KEY_SECRET?: string;
+  RAZORPAY_WEBHOOK_SECRET?: string;
 }
 
 type FormField = File | string | null;
@@ -444,6 +448,204 @@ async function handlePushUnsubscribe(ctx: Ctx): Promise<Response> {
   const id = await endpointHash(body.endpoint);
   await ctx.env.VAYU_KV.delete(`push:sub:${session.userId}:${id}`);
   return json({ success: true });
+}
+
+// ── Razorpay payment links ──────────────────────────────────────────────────
+// Links are created via the Razorpay Payment Links API and tracked in KV
+// under `payment:link:<plinkId>`. Razorpay calls POST /payments/webhook when
+// a link is paid; we verify the HMAC signature, mark the record paid, and
+// push-notify the whole team.
+
+interface StoredPaymentLink {
+  id: string;
+  shortUrl: string;
+  amount: number; // paise
+  description: string;
+  customerName: string;
+  customerPhone: string;
+  customerEmail: string;
+  status: string; // created | paid | partially_paid | expired | cancelled
+  createdAt: number;
+  createdBy: string;
+  createdByName: string;
+  paidAt?: number;
+  paymentId?: string;
+  paymentMethod?: string;
+}
+
+function formatRupees(paise: number): string {
+  return `₹${(paise / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+}
+
+async function handlePaymentLinkCreate(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const body = await ctx.request.json() as {
+    amount?: number; description?: string;
+    customerName?: string; customerPhone?: string; customerEmail?: string;
+    notifySms?: boolean; notifyEmail?: boolean;
+  };
+  const amountPaise = Math.round(Number(body.amount) * 100);
+  if (!Number.isFinite(amountPaise) || amountPaise < 100) {
+    return err('A valid amount of at least ₹1 is required');
+  }
+  if (!body.customerName?.trim()) return err('Customer name is required');
+
+  const { RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET } = ctx.env;
+  if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+    return err('Razorpay is not configured. Ask your admin to set the RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET secrets.', 503);
+  }
+
+  const customer: Record<string, string> = { name: body.customerName.trim() };
+  if (body.customerPhone?.trim()) customer.contact = body.customerPhone.trim();
+  if (body.customerEmail?.trim()) customer.email = body.customerEmail.trim();
+
+  const res = await fetch('https://api.razorpay.com/v1/payment_links', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Basic ${btoa(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`)}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      amount: amountPaise,
+      currency: 'INR',
+      description: body.description?.trim() || 'Vayu Design',
+      customer,
+      notify: {
+        sms: !!body.notifySms && !!customer.contact,
+        email: !!body.notifyEmail && !!customer.email,
+      },
+      reminder_enable: true,
+      notes: { created_by: session.name, app: 'vayu-webapp' },
+    }),
+  });
+
+  const data = await res.json() as any;
+  if (!res.ok) {
+    const reason = data?.error?.description || `Razorpay error (${res.status})`;
+    return err(reason, 502);
+  }
+
+  const record: StoredPaymentLink = {
+    id: data.id,
+    shortUrl: data.short_url,
+    amount: amountPaise,
+    description: body.description?.trim() || '',
+    customerName: customer.name,
+    customerPhone: customer.contact || '',
+    customerEmail: customer.email || '',
+    status: data.status || 'created',
+    createdAt: Date.now(),
+    createdBy: session.userId,
+    createdByName: session.name,
+  };
+  await ctx.env.VAYU_KV.put(`payment:link:${record.id}`, JSON.stringify(record));
+  await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'created', 'payment link', record.id,
+    `Created payment link of ${formatRupees(amountPaise)} for "${record.customerName}"`);
+  return json(record, 201);
+}
+
+async function handlePaymentLinksList(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const list = await ctx.env.VAYU_KV.list({ prefix: 'payment:link:' });
+  const links: StoredPaymentLink[] = [];
+  for (const key of list.keys) {
+    const raw = await ctx.env.VAYU_KV.get(key.name);
+    if (raw) links.push(JSON.parse(raw));
+  }
+  links.sort((a, b) => b.createdAt - a.createdAt);
+  return json(links);
+}
+
+/** Constant-time hex string comparison. */
+function timingSafeEqualHex(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+async function verifyRazorpaySignature(rawBody: string, signature: string, secret: string): Promise<boolean> {
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(rawBody)));
+  const expected = Array.from(mac).map(b => b.toString(16).padStart(2, '0')).join('');
+  return timingSafeEqualHex(expected, signature);
+}
+
+async function handlePaymentWebhook(ctx: Ctx): Promise<Response> {
+  const secret = ctx.env.RAZORPAY_WEBHOOK_SECRET;
+  if (!secret) return err('Webhook not configured', 503);
+  const signature = ctx.request.headers.get('x-razorpay-signature');
+  if (!signature) return err('Missing signature', 400);
+  const rawBody = await ctx.request.text();
+  if (!await verifyRazorpaySignature(rawBody, signature, secret)) {
+    return err('Invalid signature', 401);
+  }
+
+  const event = JSON.parse(rawBody);
+  const plink = event?.payload?.payment_link?.entity;
+  if (!plink?.id) return json({ received: true });
+
+  const kvKey = `payment:link:${plink.id}`;
+  const raw = await ctx.env.VAYU_KV.get(kvKey);
+  const record: StoredPaymentLink | null = raw ? JSON.parse(raw) : null;
+
+  const statusByEvent: Record<string, string> = {
+    'payment_link.paid': 'paid',
+    'payment_link.partially_paid': 'partially_paid',
+    'payment_link.expired': 'expired',
+    'payment_link.cancelled': 'cancelled',
+  };
+  const newStatus = statusByEvent[event.event];
+  if (!newStatus) return json({ received: true });
+
+  // Razorpay retries webhooks — don't re-notify a link we already marked paid.
+  const alreadyPaid = record?.status === 'paid';
+
+  // Links created outside the app (e.g. Razorpay dashboard) still get a
+  // record on payment, so the history stays complete.
+  const updated: StoredPaymentLink = record ?? {
+    id: plink.id,
+    shortUrl: plink.short_url || '',
+    amount: plink.amount || 0,
+    description: plink.description || '',
+    customerName: plink.customer?.name || '',
+    customerPhone: plink.customer?.contact || '',
+    customerEmail: plink.customer?.email || '',
+    status: newStatus,
+    createdAt: plink.created_at ? plink.created_at * 1000 : Date.now(),
+    createdBy: '',
+    createdByName: '',
+  };
+  updated.status = newStatus;
+  if (event.event === 'payment_link.paid') {
+    const payment = event?.payload?.payment?.entity;
+    updated.paidAt = Date.now();
+    updated.paymentId = payment?.id || '';
+    updated.paymentMethod = payment?.method || '';
+  }
+  await ctx.env.VAYU_KV.put(kvKey, JSON.stringify(updated));
+
+  if (event.event === 'payment_link.paid' && !alreadyPaid) {
+    const amount = updated.amount;
+    const name = updated.customerName || 'customer';
+    ctx.execCtx.waitUntil(Promise.all([
+      sendPushToAllExcept(ctx.env, '', {
+        title: 'Payment received ✓',
+        body: `${formatRupees(amount)} from ${name}${record?.description ? ` — ${record.description}` : ''}`,
+        tag: `payment-${plink.id}`,
+        data: { view: 'payments', paymentLinkId: plink.id },
+      }),
+      logActivity(ctx.env.VAYU_DB, 'razorpay', 'Razorpay', 'received', 'payment', plink.id,
+        `Payment of ${formatRupees(amount)} received from "${name}"`),
+    ]));
+  }
+
+  return json({ received: true });
 }
 
 // ── Route infrastructure ───────────────────────────────────────────────────
@@ -1465,6 +1667,11 @@ const routes: Route[] = [
   { method: 'GET', match: isExact('/push/public-key'), handler: handlePushPublicKey },
   { method: 'POST', match: isExact('/push/subscribe'), handler: handlePushSubscribe },
   { method: 'POST', match: isExact('/push/unsubscribe'), handler: handlePushUnsubscribe },
+
+  // Razorpay payment links
+  { method: 'POST', match: isExact('/payments/link'), handler: handlePaymentLinkCreate },
+  { method: 'GET', match: isExact('/payments/links'), handler: handlePaymentLinksList },
+  { method: 'POST', match: isExact('/payments/webhook'), handler: handlePaymentWebhook },
 ];
 
 // ── App Settings ──────────────────────────────────────────────────────────

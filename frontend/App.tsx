@@ -22,10 +22,14 @@ import { useHandlers } from './hooks/useHandlers';
 import { pushService } from './services/pushService';
 import { syncService } from './services/syncService';
 
+/** Views a push-notification click may deep-link into. */
+const PUSH_VIEWS = ['messaging', 'inquiry', 'payments'] as const;
+type PushView = typeof PUSH_VIEWS[number];
+
 /** View requested by a push-notification click when the app was closed (e.g. /?view=messaging). */
-const getPushLaunchView = (): 'messaging' | 'inquiry' | null => {
+const getPushLaunchView = (): PushView | null => {
     const view = new URLSearchParams(globalThis.location.search).get('view');
-    return view === 'messaging' || view === 'inquiry' ? view : null;
+    return (PUSH_VIEWS as readonly string[]).includes(view || '') ? view as PushView : null;
 };
 
 // Code-split: only Login and Home are needed for first paint; every other
@@ -40,6 +44,7 @@ const ArtworkDetailView = lazy(() => import('./views/ArtworkDetailView').then(m 
 const InquiryView = lazy(() => import('./views/InquiryView').then(m => ({ default: m.InquiryView })));
 const MessagingView = lazy(() => import('./views/MessagingView').then(m => ({ default: m.MessagingView })));
 const ActivityLogView = lazy(() => import('./views/ActivityLogView').then(m => ({ default: m.ActivityLogView })));
+const PaymentsView = lazy(() => import('./views/PaymentsView').then(m => ({ default: m.PaymentsView })));
 
 const ViewFallback = () => (
     <div className="h-full flex items-center justify-center">
@@ -134,8 +139,8 @@ const App: React.FC = () => {
         if (!('serviceWorker' in navigator)) return;
         const onSwMessage = (event: MessageEvent) => {
             const { type, view } = (event.data || {}) as { type?: string; view?: string };
-            if (type === 'PUSH_NAVIGATE' && (view === 'messaging' || view === 'inquiry')) {
-                navigateTo(view);
+            if (type === 'PUSH_NAVIGATE' && (PUSH_VIEWS as readonly string[]).includes(view || '')) {
+                navigateTo(view as PushView);
             }
         };
         navigator.serviceWorker.addEventListener('message', onSwMessage);
@@ -216,6 +221,8 @@ const App: React.FC = () => {
                 );
             case 'activity':
                 return <ActivityLogView onBack={() => navigateTo('home')} />;
+            case 'payments':
+                return <PaymentsView />;
             case 'profile':
                 return userProfile ? (
                     <ProfileView
