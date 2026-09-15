@@ -32,7 +32,7 @@ function broadcastSyncRequired(): void {
 async function getReadyRegistration(): Promise<SyncCapableRegistration | null> {
     if (!('serviceWorker' in navigator)) return null;
     try {
-        return await navigator.serviceWorker.ready as SyncCapableRegistration;
+        return await navigator.serviceWorker.ready;
     } catch {
         return null;
     }

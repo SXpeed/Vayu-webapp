@@ -4,9 +4,9 @@ const ASSETS_TO_CACHE = [
   './index.html',
 ];
 
-self.addEventListener('install', (event) => {
+globalThis.addEventListener('install', (event) => {
   // Skip waiting to activate immediately
-  self.skipWaiting();
+  globalThis.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
@@ -18,7 +18,7 @@ self.addEventListener('install', (event) => {
   );
 });
 
-self.addEventListener('fetch', (event) => {
+globalThis.addEventListener('fetch', (event) => {
   // Only handle GET requests
   if (event.request.method !== 'GET') return;
 
@@ -32,7 +32,7 @@ self.addEventListener('fetch', (event) => {
   // Cache-first for Vite's content-hashed build assets: the filename changes
   // whenever the content does, so a cached copy can never be stale. This makes
   // repeat launches load instantly instead of re-downloading over the network.
-  if (url.origin === self.location.origin && url.pathname.startsWith('/assets/')) {
+  if (url.origin === globalThis.location.origin && url.pathname.startsWith('/assets/')) {
     event.respondWith(
       caches.match(event.request).then((cached) => {
         if (cached) return cached;
@@ -91,7 +91,7 @@ const refreshAppShell = async () => {
     const cache = await caches.open(CACHE_NAME);
     await Promise.all(ASSETS_TO_CACHE.map(async (asset) => {
       const response = await fetch(asset, { cache: 'no-cache' });
-      if (response && response.ok) {
+      if (response?.ok) {
         await cache.put(asset, response);
       }
     }));
@@ -103,7 +103,7 @@ const refreshAppShell = async () => {
 // One-off Background Sync: queued by the app when it goes offline; the
 // browser fires it as soon as connectivity returns, even if the tab is
 // backgrounded, so data refreshes the moment we're back online.
-self.addEventListener('sync', (event) => {
+globalThis.addEventListener('sync', (event) => {
   if (event.tag === 'vayu-sync') {
     event.waitUntil(
       refreshAppShell().then(() => broadcastSyncRequired())
@@ -113,7 +113,7 @@ self.addEventListener('sync', (event) => {
 
 // Periodic Background Sync: browser-scheduled refresh for installed PWAs
 // (Chromium only; the interval is ultimately decided by the browser).
-self.addEventListener('periodicsync', (event) => {
+globalThis.addEventListener('periodicsync', (event) => {
   if (event.tag === 'vayu-periodic-sync') {
     event.waitUntil(
       refreshAppShell().then(() => broadcastSyncRequired())
@@ -123,7 +123,7 @@ self.addEventListener('periodicsync', (event) => {
 
 // ── Web Push notifications ─────────────────────────────────────────────────
 
-self.addEventListener('push', (event) => {
+globalThis.addEventListener('push', (event) => {
   let payload = {};
   try {
     payload = event.data ? event.data.json() : {};
@@ -137,14 +137,14 @@ self.addEventListener('push', (event) => {
     renotify: !!payload.tag,
     data: payload.data || {},
   };
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(globalThis.registration.showNotification(title, options));
 });
 
-self.addEventListener('notificationclick', (event) => {
+globalThis.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const view = event.notification.data && event.notification.data.view;
+  const view = event.notification.data?.view;
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+    globalThis.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
       // Focus an existing app window and let the app navigate itself.
       for (const client of windowClients) {
         if ('focus' in client) {
@@ -154,25 +154,23 @@ self.addEventListener('notificationclick', (event) => {
       }
       // No window open: launch the app with the target view in the URL.
       const url = view ? `./?view=${encodeURIComponent(view)}` : './';
-      return self.clients.openWindow(url);
+      return globalThis.clients.openWindow(url);
     })
   );
 });
 
-self.addEventListener('activate', (event) => {
+globalThis.addEventListener('activate', (event) => {
   // Clean up old caches
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
-            return caches.delete(cacheName);
-          }
-        })
+        cacheNames
+          .filter((cacheName) => cacheName !== CACHE_NAME)
+          .map((cacheName) => caches.delete(cacheName))
       );
     }).then(() => {
       // Take control of all clients immediately
-      return self.clients.claim();
+      return globalThis.clients.claim();
     })
   );
 });

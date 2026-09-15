@@ -65,8 +65,8 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
       setEmail('');
       setPassword('');
       setRole('user');
-    } catch (e) {
-      setAddError((e as Error).message);
+    } catch (err) {
+      setAddError((err as Error).message);
     } finally {
       setAdding(false);
     }
@@ -234,9 +234,9 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
                       <p className="text-sm font-serif text-gray-900 dark:text-gray-100 truncate flex items-center gap-1.5">
                         {u.name}
                         {u.notificationsEnabled ? (
-                          <Bell size={12} className="text-gold-500 shrink-0" title="Notifications Enabled" />
+                          <span title="Notifications Enabled" className="shrink-0 inline-flex"><Bell size={12} className="text-gold-500" aria-hidden="true" /><span className="sr-only">Notifications enabled</span></span>
                         ) : (
-                          <BellOff size={12} className="text-gray-400 dark:text-gray-600 shrink-0" title="Notifications Disabled" />
+                          <span title="Notifications Disabled" className="shrink-0 inline-flex"><BellOff size={12} className="text-gray-400 dark:text-gray-600" aria-hidden="true" /><span className="sr-only">Notifications disabled</span></span>
                         )}
                       </p>
                       <p className="text-[10px] text-gray-400 dark:text-gray-500 truncate">{u.email}</p>

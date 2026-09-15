@@ -7,8 +7,8 @@
  * proxy them to the local Node JS server backend server.
  */
 (function() {
-  const originalFetch = window.fetch;
-  const originalWebSocket = window.WebSocket;
+  const originalFetch = globalThis.fetch;
+  const originalWebSocket = globalThis.WebSocket;
 
   // Function to validate VertexGenAi endpoints
   function isValidUrl(url) {
@@ -59,23 +59,32 @@
       }
 
       return false;
-    } catch (e) {
+    } catch {
+      // Unparseable URLs are never Vertex AI endpoints.
       return false;
     }
+  }
+
+  /** URL string from a string, URL or Request; null for anything else. */
+  function urlString(url) {
+    if (typeof url === 'string') return url;
+    if (url instanceof URL) return url.href;
+    if (url instanceof Request) return url.url;
+    return null;
   }
 
   console.log('[Vertex AI Proxy Shim] Initialized. Intercepting for Cloud AI API URLs');
 
   
-  window.WebSocket = function(url, protocols) {
-    const inputUrl = typeof url === 'string' ? url : (url instanceof URL ? url.href : null);
+  globalThis.WebSocket = function(url, protocols) {
+    const inputUrl = urlString(url);
 
     if (inputUrl && isValidUrl(inputUrl)) {
       
       console.log('[Vertex AI Proxy Shim] Intercepted Vertex WebSocket request:', inputUrl);
       const targetUrl = encodeURIComponent(inputUrl);
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const host = window.location.host;
+      const protocol = globalThis.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const host = globalThis.location.host;
       const proxyUrl = `${protocol}//${host}/ws-proxy?target=${targetUrl}`;
       return new originalWebSocket(proxyUrl, protocols);
     }
@@ -83,15 +92,15 @@
   };
 
   // Copy propertires to ensure compatibility
-  window.WebSocket.prototype = originalWebSocket.prototype;
-  window.WebSocket.CONNECTING = originalWebSocket.CONNECTING;
-  window.WebSocket.OPEN = originalWebSocket.OPEN;
-  window.WebSocket.CLOSING = originalWebSocket.CLOSING;
-  window.WebSocket.CLOSED = originalWebSocket.CLOSED;
+  globalThis.WebSocket.prototype = originalWebSocket.prototype;
+  globalThis.WebSocket.CONNECTING = originalWebSocket.CONNECTING;
+  globalThis.WebSocket.OPEN = originalWebSocket.OPEN;
+  globalThis.WebSocket.CLOSING = originalWebSocket.CLOSING;
+  globalThis.WebSocket.CLOSED = originalWebSocket.CLOSED;
 
-  window.fetch = async function(url, options) {
+  globalThis.fetch = async function(url, options) {
 
-    const inputUrl = typeof url === 'string' ? url : (url instanceof Request ? url.url : null);
+    const inputUrl = urlString(url);
     const normalizedUrl = (typeof inputUrl === 'string') ? inputUrl.split('?')[0] : null;
     // Check if the URL matches the patterns of Vertex AI APIs.
     if (normalizedUrl && isValidUrl(normalizedUrl)) {

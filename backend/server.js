@@ -12,6 +12,8 @@ import rateLimit from 'express-rate-limit';
 import { WebSocketServer, WebSocket } from 'ws';
 
 const app = express();
+// Don't advertise the framework/version in response headers.
+app.disable('x-powered-by');
 app.use(express.json({limit: process?.env?.API_PAYLOAD_MAX_SIZE || "7mb"}));
 
 const PORT = process?.env?.API_BACKEND_PORT || 5000;
@@ -121,11 +123,12 @@ const auth = new GoogleAuth({
 });
 
 function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return str.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
 }
 
 function parsePattern(pattern) {
-  const paramRegex = /\{\{(.*?)\}\}/g;
+  // [^{}] keeps each attempt from rescanning later braces (linear time).
+  const paramRegex = /\{\{([^{}]*)\}\}/g;
   const params = [];
   const parts = [];
   let lastIndex = 0;
@@ -134,8 +137,7 @@ function parsePattern(pattern) {
   while ((match = paramRegex.exec(pattern)) !== null) {
     params.push(match[1]);
     const literalPart = pattern.substring(lastIndex, match.index);
-    parts.push(escapeRegex(literalPart));
-    parts.push(`(?<${match[1]}>[^/]+)`);
+    parts.push(escapeRegex(literalPart), `(?<${match[1]}>[^/]+)`);
     lastIndex = paramRegex.lastIndex;
   }
   parts.push(escapeRegex(pattern.substring(lastIndex)));
@@ -162,7 +164,7 @@ async function getAccessToken(res) {
   } catch (error) {
     console.error('[Node Proxy] Authentication error:', error);
     if (!res) return null;
-    if (error.code === 'ERR_GCLOUD_NOT_LOGGED_IN' || (error.message && error.message.includes('Could not load the default credentials'))) {
+    if (error.code === 'ERR_GCLOUD_NOT_LOGGED_IN' || error.message?.includes('Could not load the default credentials')) {
       res.status(401).json({
         error: 'Authentication Required',
         message: 'Google Cloud Application Default Credentials not found or invalid. Please run "gcloud auth application-default login" and try again.',
@@ -243,7 +245,7 @@ app.post('/api-proxy', async (req, res) => {
     const apiFetchOptions = {
       method: method || 'POST',
       headers: {...apiHeaders, ...headers},
-      body: body ? body : undefined,
+      body: body || undefined,
     };
 
     // 5. Make the call to the API
@@ -272,9 +274,7 @@ app.post('/api-proxy', async (req, res) => {
         if (res.writableEnded) return; // Prevent writing after res.end()
 
         try {
-          if (!apiClient.transformFn) {
-            res.write(encodedChunk);
-          } else {
+          if (apiClient.transformFn) {
             const decodedChunk = decoder.decode(encodedChunk, { stream: true });
             deltaChunk = deltaChunk + decodedChunk;
 
@@ -330,22 +330,34 @@ const server = app.listen(PORT, API_BACKEND_HOST, () => {
 
 const wss = new WebSocketServer({ noServer: true });
 
+const LIVE_API_TARGET = 'wss://aiplatform.googleapis.com//ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent';
+
+/** Regional upstream URL for the Live API target the shim sends; null for anything else. */
+function resolveUpstreamWsUrl(target) {
+  if (target !== LIVE_API_TARGET) return null;
+  const location = GOOGLE_CLOUD_LOCATION === 'global' ? 'us-central1' : GOOGLE_CLOUD_LOCATION;
+  return `wss://${location}-aiplatform.googleapis.com//ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent`;
+}
+
 server.on('upgrade', async (request, socket, head) => {
   const url = new URL(request.url, `http://${request.headers.host}`);
 
-  if (url.pathname === '/ws-proxy') {
-    
-    let targetUrl = url.searchParams.get('target');
-    if (!targetUrl) {
+  if (url.pathname !== '/ws-proxy') {
+    // Path did not match
+    socket.destroy();
+    return;
+  }
+
+  {
+    const target = url.searchParams.get('target');
+    if (!target) {
       console.log('[Node Proxy] Missing target URL');
       socket.destroy();
       return;
     }
 
-    if (targetUrl === 'wss://aiplatform.googleapis.com//ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent') {
-      const location = GOOGLE_CLOUD_LOCATION === 'global' ? 'us-central1' : GOOGLE_CLOUD_LOCATION;
-      targetUrl = `wss://${location}-aiplatform.googleapis.com//ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent`;
-    } else {
+    const targetUrl = resolveUpstreamWsUrl(target);
+    if (!targetUrl) {
       console.log('[Node Proxy] Invalid target URL');
       socket.destroy();
       return;
@@ -357,7 +369,7 @@ server.on('upgrade', async (request, socket, head) => {
       accessToken = await getAccessToken();
       if (!accessToken) throw new Error('No token');
     } catch (err) {
-      console.log('[Node Proxy] Authentication failed');
+      console.log('[Node Proxy] Authentication failed:', err);
       socket.destroy();
       return;
     }
@@ -409,9 +421,7 @@ server.on('upgrade', async (request, socket, head) => {
           }
         });
 
-        ws.on('message', (data, isBinary) => {
-          const logMsg = isBinary ? '<Binary Data>' : data.toString();
-
+        ws.on('message', (data) => {
           let dataJson = {};
           try {
             dataJson = JSON.parse(data.toString());
@@ -458,10 +468,6 @@ server.on('upgrade', async (request, socket, head) => {
     };
 
     upstreamWs.once('open', onUpstreamOpen);
-
-  } else {
-    // Path did not match
-    socket.destroy();
   }
 });
 

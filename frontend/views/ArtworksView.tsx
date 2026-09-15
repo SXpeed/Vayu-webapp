@@ -147,7 +147,7 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
         location: initialData?.location || '',
         price: initialData?.price?.toString() || '',
         plusGst: initialData?.plusGst || false,
-        imageUrls: initialData?.imageUrls || [] as string[]
+        imageUrls: initialData?.imageUrls ?? []
     });
     const [showUploadOptions, setShowUploadOptions] = useState(false);
 

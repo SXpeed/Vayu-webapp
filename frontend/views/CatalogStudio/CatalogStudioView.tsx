@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import localforage from 'localforage';
 import { Catalog, Artwork, PdfOptions, CatalogTheme } from '../../types';
-import { ChevronLeft, Star, FileText, Check, Layout, Type, Box, Tag, Folder, Upload, AlignLeft, Scissors, Image as ImageIcon, Palette, Paintbrush } from 'lucide-react';
+import { ChevronLeft, FileText, Check, Layout, Type, Box, Tag, Folder, Upload, AlignLeft, Scissors, Image as ImageIcon, Palette, Paintbrush } from 'lucide-react';
 import { THEME_INFO } from '../CatalogsView'; // We will need to export THEME_INFO from CatalogsView
 import storageService from '../../services/storageService';
+
+/** Stable keys for the six recent-color swatches (filled or empty). */
+const RECENT_COLOR_SLOTS = ['slot-1', 'slot-2', 'slot-3', 'slot-4', 'slot-5', 'slot-6'];
 import { settingsService } from '../../services/settingsService';
 
 /** The 12 main color-wheel hues (every 30°), applied at the chosen intensity. */
@@ -142,7 +145,7 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
     /** Remember a color in the 6-slot recently-used row. */
     const addRecentColor = (hex: string) => {
         setOptions(prev => {
-            const recentColors = [hex, ...(prev.recentColors || []).filter(c => c !== hex)].slice(0, 6);
+            const recentColors = [hex, ...(prev.recentColors ?? []).filter(c => c !== hex)].slice(0, 6);
             const next = { ...prev, recentColors };
             localforage.setItem('vayu-pdf-options', next).catch(console.error);
             return next;
@@ -378,12 +381,12 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                             {/* Recently used colors + hex code entry */}
                             <div className="flex items-center gap-2">
                                 <div className="flex gap-1.5">
-                                    {Array.from({ length: 6 }).map((_, idx) => {
-                                        const recent = (options.recentColors || [])[idx];
+                                    {RECENT_COLOR_SLOTS.map((slotId, idx) => {
+                                        const recent = options.recentColors?.[idx];
                                         if (!recent) {
                                             return (
                                                 <div
-                                                    key={`empty-${idx}`}
+                                                    key={slotId}
                                                     className="w-5 h-5 rounded-full shrink-0 border border-dashed border-gray-200 dark:border-gray-700"
                                                 />
                                             );
@@ -392,7 +395,7 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                                         return (
                                             <button
                                                 type="button"
-                                                key={`${recent}-${idx}`}
+                                                key={recent}
                                                 onClick={() => applyColor(recent)}
                                                 aria-label={`Recent color ${recent}`}
                                                 className={`w-5 h-5 rounded-full shrink-0 border flex items-center justify-center cursor-pointer active-scale ${

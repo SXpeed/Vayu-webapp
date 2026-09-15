@@ -16,6 +16,8 @@ interface StoredUser {
   id: string;
   name: string;
   email: string;
+  phone?: string;
+  address?: string;
   hashedPassword: string;
   role: 'admin' | 'user';
   createdAt: number;
@@ -25,6 +27,8 @@ interface PublicUser {
   id: string;
   name: string;
   email: string;
+  phone?: string;
+  address?: string;
   role: 'admin' | 'user';
   createdAt: number;
   isOnline?: boolean;
@@ -116,7 +120,7 @@ function b64(arr: Uint8Array): string {
 }
 
 function fromB64(s: string): Uint8Array {
-  return new Uint8Array(atob(s).split('').map(c => c.codePointAt(0)!));
+  return Uint8Array.from(atob(s), c => c.codePointAt(0) ?? 0);
 }
 
 async function hashPassword(password: string): Promise<string> {
@@ -153,10 +157,14 @@ function generateToken(): string {
 
 // ── Session helpers ────────────────────────────────────────────────────────
 
-async function getSession(request: Request, kv: KVNamespace): Promise<SessionData | null> {
+function bearerToken(request: Request): string | null {
   const auth = request.headers.get('Authorization');
-  if (!auth?.startsWith('Bearer ')) return null;
-  const token = auth.slice(7).trim();
+  return auth?.startsWith('Bearer ') ? auth.slice(7).trim() : null;
+}
+
+async function getSession(request: Request, kv: KVNamespace): Promise<SessionData | null> {
+  const token = bearerToken(request);
+  if (!token) return null;
   const raw = await kv.get(`auth:session:${token}`);
   if (!raw) return null;
   const session: SessionData = JSON.parse(raw);
@@ -168,8 +176,9 @@ async function getSession(request: Request, kv: KVNamespace): Promise<SessionDat
 }
 
 function stripPassword(user: StoredUser): PublicUser {
-  const { hashedPassword: _h, ...pub } = user;
-  return pub;
+  const pub: Partial<StoredUser> = { ...user };
+  delete pub.hashedPassword;
+  return pub as PublicUser;
 }
 
 // ── D1 row mappers ──────────────────────────────────────────────────────────
@@ -220,6 +229,10 @@ function rowToArtwork(row: Record<string, unknown>): any {
     price: row.price as number,
     imageUrls: JSON.parse(row.image_urls as string),
     createdAt: row.created_at as number,
+    artist: (row.artist as string) || undefined,
+    artworkYear: (row.artwork_year as string) || undefined,
+    descriptionTitle: (row.description_title as string) || undefined,
+    plusGst: !!row.plus_gst,
   };
 }
 
@@ -229,6 +242,7 @@ function rowToCollection(row: Record<string, unknown>): any {
     name: row.name as string,
     description: row.description as string,
     artworkIds: JSON.parse(row.artwork_ids as string),
+    coverImageUrl: (row.cover_image_url as string) || undefined,
     createdAt: row.created_at as number,
   };
 }
@@ -257,6 +271,9 @@ function rowToInquiry(row: Record<string, unknown>): any {
     status: row.status as string,
     catalogShared: !!row.catalog_shared,
     date: row.date as number,
+    createdBy: (row.created_by as string) || undefined,
+    createdByName: (row.created_by_name as string) || undefined,
+    imageUrls: row.image_urls ? JSON.parse(row.image_urls as string) : [],
   };
 }
 
@@ -415,9 +432,9 @@ async function handlePushPublicKey(ctx: Ctx): Promise<Response> {
 async function handlePushSubscribe(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
-  const body = await ctx.request.json() as {
+  const body = await ctx.request.json<{
     endpoint?: string; keys?: { p256dh?: string; auth?: string };
-  };
+  }>();
   if (!body.endpoint?.startsWith('https://') || !body.keys?.p256dh || !body.keys?.auth) {
     return err('A valid push subscription (endpoint, keys.p256dh, keys.auth) is required');
   }
@@ -443,7 +460,7 @@ async function handlePushSubscribe(ctx: Ctx): Promise<Response> {
 async function handlePushUnsubscribe(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
-  const body = await ctx.request.json() as { endpoint?: string };
+  const body = await ctx.request.json<{ endpoint?: string }>();
   if (!body.endpoint) return err('endpoint is required');
   const id = await endpointHash(body.endpoint);
   await ctx.env.VAYU_KV.delete(`push:sub:${session.userId}:${id}`);
@@ -477,14 +494,19 @@ function formatRupees(paise: number): string {
   return `₹${(paise / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 }
 
+function basicAuthHeader(username: string, password: string): string {
+  const credentials = btoa(`${username}:${password}`);
+  return `Basic ${credentials}`;
+}
+
 async function handlePaymentLinkCreate(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
-  const body = await ctx.request.json() as {
+  const body = await ctx.request.json<{
     amount?: number; description?: string;
     customerName?: string; customerPhone?: string; customerEmail?: string;
     notifySms?: boolean; notifyEmail?: boolean;
-  };
+  }>();
   const amountPaise = Math.round(Number(body.amount) * 100);
   if (!Number.isFinite(amountPaise) || amountPaise < 100) {
     return err('A valid amount of at least ₹1 is required');
@@ -503,7 +525,7 @@ async function handlePaymentLinkCreate(ctx: Ctx): Promise<Response> {
   const res = await fetch('https://api.razorpay.com/v1/payment_links', {
     method: 'POST',
     headers: {
-      'Authorization': `Basic ${btoa(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`)}`,
+      'Authorization': basicAuthHeader(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
@@ -562,7 +584,7 @@ async function handlePaymentLinksList(ctx: Ctx): Promise<Response> {
 function timingSafeEqualHex(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  for (let i = 0; i < a.length; i++) diff |= (a.codePointAt(i) ?? 0) ^ (b.codePointAt(i) ?? 0);
   return diff === 0;
 }
 
@@ -633,10 +655,11 @@ async function handlePaymentWebhook(ctx: Ctx): Promise<Response> {
   if (event.event === 'payment_link.paid' && !alreadyPaid) {
     const amount = updated.amount;
     const name = updated.customerName || 'customer';
+    const descriptionSuffix = record?.description ? ` — ${record.description}` : '';
     ctx.execCtx.waitUntil(Promise.all([
       sendPushToAllExcept(ctx.env, '', {
         title: 'Payment received ✓',
-        body: `${formatRupees(amount)} from ${name}${record?.description ? ` — ${record.description}` : ''}`,
+        body: `${formatRupees(amount)} from ${name}${descriptionSuffix}`,
         tag: `payment-${plink.id}`,
         data: { view: 'payments', paymentLinkId: plink.id },
       }),
@@ -720,6 +743,40 @@ async function handleAuthMe(ctx: Ctx): Promise<Response> {
   const raw = await ctx.env.VAYU_KV.get(`auth:user:${session.userId}`);
   if (!raw) return err('User not found', 404);
   return json(stripPassword(JSON.parse(raw)));
+}
+
+/** Trimmed, length-capped string field; undefined when the value isn't a string. */
+function profileText(value: unknown, maxLength: number): string | undefined {
+  return typeof value === 'string' ? value.trim().slice(0, maxLength) : undefined;
+}
+
+// Lets any signed-in user edit their own name and contact details. Email and
+// role stay admin-managed (PUT /auth/users/:id) since email is the login.
+async function handleAuthMeUpdate(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const userKey = `auth:user:${session.userId}`;
+  const raw = await ctx.env.VAYU_KV.get(userKey);
+  if (!raw) return err('User not found', 404);
+  const existing: StoredUser = JSON.parse(raw);
+  const body = await ctx.request.json<{ name?: unknown; phone?: unknown; address?: unknown }>();
+  const updated: StoredUser = {
+    ...existing,
+    name: profileText(body.name, 100) || existing.name,
+    phone: profileText(body.phone, 40) ?? existing.phone,
+    address: profileText(body.address, 500) ?? existing.address,
+  };
+  await ctx.env.VAYU_KV.put(userKey, JSON.stringify(updated));
+
+  // Keep this device's session in step so records it creates carry the new name.
+  const token = bearerToken(ctx.request);
+  if (token && updated.name !== session.name) {
+    await ctx.env.VAYU_KV.put(`auth:session:${token}`, JSON.stringify({ ...session, name: updated.name }), {
+      expiration: Math.floor(session.expiresAt / 1000),
+    });
+  }
+  logEntityChange(ctx, session, 'updated', 'user', updated.id, `Updated own profile (${updated.name})`);
+  return json(stripPassword(updated));
 }
 
 async function handleAuthLogout(ctx: Ctx): Promise<Response> {
@@ -982,7 +1039,7 @@ async function handleThumbBackfillUpload(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
   const formData = await ctx.request.formData();
-  const key = formData.get('key') as string | null;
+  const key = formData.get('key');
   const thumb = formData.get('thumb') as FormField;
   if (!key || typeof key !== 'string' || !thumb || typeof thumb === 'string') {
     return err('key and thumb are required');
@@ -1202,6 +1259,78 @@ async function handleMessageStatusBatch(ctx: Ctx): Promise<Response> {
   return json({ success: true });
 }
 
+// ── Schema migrations ───────────────────────────────────────────────────────
+// Databases created from an older schema.sql lack columns added since. Each
+// table's missing columns are added once per isolate, before its first write.
+
+const COLUMN_MIGRATIONS = {
+  artworks: {
+    artist: "TEXT DEFAULT ''",
+    artwork_year: "TEXT DEFAULT ''",
+    description_title: "TEXT DEFAULT ''",
+    plus_gst: 'INTEGER DEFAULT 0',
+  },
+  collections: {
+    cover_image_url: "TEXT DEFAULT ''",
+  },
+  inquiries: {
+    created_by: "TEXT DEFAULT ''",
+    created_by_name: "TEXT DEFAULT ''",
+    image_urls: "TEXT DEFAULT '[]'",
+  },
+} as const;
+
+type MigratedTable = keyof typeof COLUMN_MIGRATIONS;
+
+const migratedTables = new Map<MigratedTable, Promise<void>>();
+
+function ensureColumns(db: D1Database, table: MigratedTable): Promise<void> {
+  let pending = migratedTables.get(table);
+  if (!pending) {
+    pending = addMissingColumns(db, table).catch((e) => {
+      migratedTables.delete(table);
+      throw e;
+    });
+    migratedTables.set(table, pending);
+  }
+  return pending;
+}
+
+async function addMissingColumns(db: D1Database, table: MigratedTable): Promise<void> {
+  const { results } = await db.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
+  const existing = new Set(results.map(c => c.name));
+  for (const [column, definition] of Object.entries(COLUMN_MIGRATIONS[table])) {
+    if (existing.has(column)) continue;
+    try {
+      await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
+    } catch (e) {
+      // Another isolate may have added it concurrently.
+      if (!/duplicate column/i.test((e as Error).message)) throw e;
+    }
+  }
+}
+
+/** Deletes uploaded files (and their thumbnails) behind /api/files/ URLs. */
+async function deleteUploadedFiles(r2: R2Bucket, urls: string[]): Promise<void> {
+  const keys = urls
+    .filter(url => url.startsWith('/api/files/'))
+    .flatMap((url) => {
+      const key = decodeURIComponent(url.slice('/api/files/'.length));
+      return [key, `${key}__thumb`];
+    });
+  if (keys.length === 0) return;
+  try {
+    await r2.delete(keys);
+  } catch (e) {
+    console.error('R2 cleanup failed:', e);
+  }
+}
+
+/** Records a create/update/delete in the admin activity log without delaying the response. */
+function logEntityChange(ctx: Ctx, session: SessionData, action: string, entity: string, entityId: string, details: string): void {
+  ctx.execCtx.waitUntil(logActivity(ctx.env.VAYU_DB, session.userId, session.name, action, entity, entityId, details));
+}
+
 // ── Artwork route handlers ──────────────────────────────────────────────────
 
 async function handleArtworksList(ctx: Ctx): Promise<Response> {
@@ -1214,30 +1343,48 @@ async function handleArtworksList(ctx: Ctx): Promise<Response> {
   return json(artworks);
 }
 
-async function handleArtworksCreate(ctx: Ctx): Promise<Response> {
-  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
-  if (!session) return err('Unauthorized', 401);
-  const body = await ctx.request.json();
-  const art = body as any;
-  if (!art.id) return err('id is required');
-  await ctx.env.VAYU_DB.prepare(
-    `INSERT OR REPLACE INTO artworks
-     (id, custom_id, title, description, dimensions, medium, status,
-      location, price, image_urls, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
-    art.id,
+/** Column values shared by artwork INSERT and UPDATE, in column order. */
+function artworkValues(art: any): unknown[] {
+  return [
     art.customId || '',
     art.title || '',
+    art.artist || '',
+    art.artworkYear || '',
+    art.descriptionTitle || '',
     art.description || '',
     art.dimensions || '',
     art.medium || '',
     art.status || 'Available',
     art.location || '',
     art.price || 0,
+    art.plusGst ? 1 : 0,
     JSON.stringify(art.imageUrls || []),
-    art.createdAt || Date.now()
-  ).run();
+  ];
+}
+
+const artworkLabel = (art: { title?: string; customId?: string; id?: string }) =>
+  `"${art.title || art.customId || art.id}"`;
+
+async function handleArtworksCreate(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const body = await ctx.request.json();
+  const art = body as any;
+  if (!art.id) return err('id is required');
+  await ensureColumns(ctx.env.VAYU_DB, 'artworks');
+  // Re-syncs of existing artworks shouldn't show up as new in the activity log.
+  const alreadyExists = await ctx.env.VAYU_DB.prepare(
+    'SELECT 1 FROM artworks WHERE id = ?'
+  ).bind(art.id).first();
+  await ctx.env.VAYU_DB.prepare(
+    `INSERT OR REPLACE INTO artworks
+     (id, custom_id, title, artist, artwork_year, description_title, description,
+      dimensions, medium, status, location, price, plus_gst, image_urls, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(art.id, ...artworkValues(art), art.createdAt || Date.now()).run();
+  if (!alreadyExists) {
+    logEntityChange(ctx, session, 'created', 'artwork', art.id, `Added artwork ${artworkLabel(art)}`);
+  }
   return json(art, 201);
 }
 
@@ -1246,23 +1393,16 @@ async function handleArtworksUpdate(ctx: Ctx): Promise<Response> {
   if (!session) return err('Unauthorized', 401);
   const body = await ctx.request.json();
   const art = body as any;
+  const artId = ctx.path.slice('/artworks/'.length);
+  await ensureColumns(ctx.env.VAYU_DB, 'artworks');
   await ctx.env.VAYU_DB.prepare(
     `UPDATE artworks SET
-       custom_id = ?, title = ?, description = ?, dimensions = ?,
-       medium = ?, status = ?, location = ?, price = ?, image_urls = ?
+       custom_id = ?, title = ?, artist = ?, artwork_year = ?, description_title = ?,
+       description = ?, dimensions = ?, medium = ?, status = ?, location = ?,
+       price = ?, plus_gst = ?, image_urls = ?
      WHERE id = ?`
-  ).bind(
-    art.customId || '',
-    art.title || '',
-    art.description || '',
-    art.dimensions || '',
-    art.medium || '',
-    art.status || 'Available',
-    art.location || '',
-    art.price || 0,
-    JSON.stringify(art.imageUrls || []),
-    ctx.path.slice('/artworks/'.length)
-  ).run();
+  ).bind(...artworkValues(art), artId).run();
+  logEntityChange(ctx, session, 'updated', 'artwork', artId, `Updated artwork ${artworkLabel({ ...art, id: artId })}`);
   return json(art);
 }
 
@@ -1273,19 +1413,17 @@ async function handleArtworksDelete(ctx: Ctx): Promise<Response> {
 
   // Fetch the artwork to get its image URLs for R2 cleanup
   const result = await ctx.env.VAYU_DB.prepare(
-    'SELECT image_urls FROM artworks WHERE id = ?'
-  ).bind(artId).first();
+    'SELECT title, custom_id, image_urls FROM artworks WHERE id = ?'
+  ).bind(artId).first<{ title: string; custom_id: string; image_urls: string }>();
   if (result) {
-    const imageUrls: string[] = JSON.parse(result.image_urls as string);
-    for (const imgUrl of imageUrls) {
-      if (imgUrl.startsWith('/api/files/')) {
-        const key = decodeURIComponent(imgUrl.slice('/api/files/'.length));
-        try { await ctx.env.VAYU_R2.delete(key); } catch { }
-      }
-    }
+    await deleteUploadedFiles(ctx.env.VAYU_R2, JSON.parse(result.image_urls || '[]'));
   }
 
   await ctx.env.VAYU_DB.prepare('DELETE FROM artworks WHERE id = ?').bind(artId).run();
+  if (result) {
+    logEntityChange(ctx, session, 'deleted', 'artwork', artId,
+      `Deleted artwork ${artworkLabel({ title: result.title, customId: result.custom_id, id: artId })}`);
+  }
   return json({ success: true });
 }
 
@@ -1307,17 +1445,25 @@ async function handleCollectionsCreate(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json();
   const col = body as any;
   if (!col.id) return err('id is required');
+  await ensureColumns(ctx.env.VAYU_DB, 'collections');
+  const alreadyExists = await ctx.env.VAYU_DB.prepare(
+    'SELECT 1 FROM collections WHERE id = ?'
+  ).bind(col.id).first();
   await ctx.env.VAYU_DB.prepare(
     `INSERT OR REPLACE INTO collections
-     (id, name, description, artwork_ids, created_at)
-     VALUES (?, ?, ?, ?, ?)`
+     (id, name, description, artwork_ids, cover_image_url, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
   ).bind(
     col.id,
     col.name || '',
     col.description || '',
     JSON.stringify(col.artworkIds || []),
+    col.coverImageUrl || '',
     col.createdAt || Date.now()
   ).run();
+  if (!alreadyExists) {
+    logEntityChange(ctx, session, 'created', 'collection', col.id, `Created collection "${col.name || col.id}"`);
+  }
   return json(col, 201);
 }
 
@@ -1326,16 +1472,20 @@ async function handleCollectionsUpdate(ctx: Ctx): Promise<Response> {
   if (!session) return err('Unauthorized', 401);
   const body = await ctx.request.json();
   const col = body as any;
+  const colId = ctx.path.slice('/collections/'.length);
+  await ensureColumns(ctx.env.VAYU_DB, 'collections');
   await ctx.env.VAYU_DB.prepare(
     `UPDATE collections SET
-       name = ?, description = ?, artwork_ids = ?
+       name = ?, description = ?, artwork_ids = ?, cover_image_url = ?
      WHERE id = ?`
   ).bind(
     col.name || '',
     col.description || '',
     JSON.stringify(col.artworkIds || []),
-    ctx.path.slice('/collections/'.length)
+    col.coverImageUrl || '',
+    colId
   ).run();
+  logEntityChange(ctx, session, 'updated', 'collection', colId, `Updated collection "${col.name || colId}"`);
   return json(col);
 }
 
@@ -1343,7 +1493,13 @@ async function handleCollectionsDelete(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
   const colId = ctx.path.slice('/collections/'.length);
+  const result = await ctx.env.VAYU_DB.prepare(
+    'SELECT name FROM collections WHERE id = ?'
+  ).bind(colId).first<{ name: string }>();
   await ctx.env.VAYU_DB.prepare('DELETE FROM collections WHERE id = ?').bind(colId).run();
+  if (result) {
+    logEntityChange(ctx, session, 'deleted', 'collection', colId, `Deleted collection "${result.name || colId}"`);
+  }
   return json({ success: true });
 }
 
@@ -1365,6 +1521,9 @@ async function handleCatalogsCreate(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json();
   const cat = body as any;
   if (!cat.id) return err('id is required');
+  const alreadyExists = await ctx.env.VAYU_DB.prepare(
+    'SELECT 1 FROM catalogs WHERE id = ?'
+  ).bind(cat.id).first();
   await ctx.env.VAYU_DB.prepare(
     `INSERT OR REPLACE INTO catalogs
      (id, name, description, artwork_ids, cover_image_url, created_at)
@@ -1377,6 +1536,9 @@ async function handleCatalogsCreate(ctx: Ctx): Promise<Response> {
     cat.coverImageUrl || '',
     cat.createdAt || Date.now()
   ).run();
+  if (!alreadyExists) {
+    logEntityChange(ctx, session, 'created', 'catalog', cat.id, `Created catalog "${cat.name || cat.id}"`);
+  }
   return json(cat, 201);
 }
 
@@ -1385,6 +1547,7 @@ async function handleCatalogsUpdate(ctx: Ctx): Promise<Response> {
   if (!session) return err('Unauthorized', 401);
   const body = await ctx.request.json();
   const cat = body as any;
+  const catId = ctx.path.slice('/catalogs/'.length);
   await ctx.env.VAYU_DB.prepare(
     `UPDATE catalogs SET
        name = ?, description = ?, artwork_ids = ?, cover_image_url = ?
@@ -1394,8 +1557,9 @@ async function handleCatalogsUpdate(ctx: Ctx): Promise<Response> {
     cat.description || '',
     JSON.stringify(cat.artworkIds || []),
     cat.coverImageUrl || '',
-    ctx.path.slice('/catalogs/'.length)
+    catId
   ).run();
+  logEntityChange(ctx, session, 'updated', 'catalog', catId, `Updated catalog "${cat.name || catId}"`);
   return json(cat);
 }
 
@@ -1406,17 +1570,16 @@ async function handleCatalogsDelete(ctx: Ctx): Promise<Response> {
 
   // Clean up cover image from R2 if it's an uploaded file
   const result = await ctx.env.VAYU_DB.prepare(
-    'SELECT cover_image_url FROM catalogs WHERE id = ?'
-  ).bind(catId).first();
+    'SELECT name, cover_image_url FROM catalogs WHERE id = ?'
+  ).bind(catId).first<{ name: string; cover_image_url: string }>();
   if (result?.cover_image_url) {
-    const coverUrl = result.cover_image_url as string;
-    if (coverUrl.startsWith('/api/files/')) {
-      const key = decodeURIComponent(coverUrl.slice('/api/files/'.length));
-      try { await ctx.env.VAYU_R2.delete(key); } catch { }
-    }
+    await deleteUploadedFiles(ctx.env.VAYU_R2, [result.cover_image_url]);
   }
 
   await ctx.env.VAYU_DB.prepare('DELETE FROM catalogs WHERE id = ?').bind(catId).run();
+  if (result) {
+    logEntityChange(ctx, session, 'deleted', 'catalog', catId, `Deleted catalog "${result.name || catId}"`);
+  }
   return json({ success: true });
 }
 
@@ -1432,21 +1595,32 @@ async function handleInquiriesList(ctx: Ctx): Promise<Response> {
   return json(inquiries);
 }
 
+function inquiryLabel(inq: { inquiryNumber?: string; customerName?: string; id?: string }): string {
+  const number = inq.inquiryNumber || inq.id || '';
+  return inq.customerName ? `${number} (${inq.customerName})` : number;
+}
+
 async function handleInquiriesCreate(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
   const body = await ctx.request.json();
   const inq = body as any;
   if (!inq.id) return err('id is required');
-  // Detect re-syncs/migrations of existing inquiries so they don't re-notify.
-  const alreadyExists = await ctx.env.VAYU_DB.prepare(
-    'SELECT 1 FROM inquiries WHERE id = ?'
-  ).bind(inq.id).first();
+  await ensureColumns(ctx.env.VAYU_DB, 'inquiries');
+  // Detect re-syncs/migrations of existing inquiries so they don't re-notify
+  // and keep their original creator.
+  const existing = await ctx.env.VAYU_DB.prepare(
+    'SELECT created_by, created_by_name FROM inquiries WHERE id = ?'
+  ).bind(inq.id).first<{ created_by: string | null; created_by_name: string | null }>();
+  // The creator comes from the session, never from the request body.
+  const createdBy = existing ? existing.created_by || '' : session.userId;
+  const createdByName = existing ? existing.created_by_name || '' : session.name;
   await ctx.env.VAYU_DB.prepare(
     `INSERT OR REPLACE INTO inquiries
      (id, inquiry_number, customer_name, customer_phone, customer_email,
-      artwork_ids, notes, source, status, catalog_shared, date)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      artwork_ids, notes, source, status, catalog_shared, date,
+      created_by, created_by_name, image_urls)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     inq.id,
     inq.inquiryNumber || '',
@@ -1458,14 +1632,18 @@ async function handleInquiriesCreate(ctx: Ctx): Promise<Response> {
     inq.source || 'Other',
     inq.status || 'New',
     inq.catalogShared ? 1 : 0,
-    inq.date || Date.now()
+    inq.date || Date.now(),
+    createdBy,
+    createdByName,
+    JSON.stringify(inq.imageUrls || [])
   ).run();
 
-  if (!alreadyExists) {
+  if (!existing) {
     ctx.execCtx.waitUntil(notifyNewInquiry(ctx.env, inq, session));
+    logEntityChange(ctx, session, 'created', 'inquiry', inq.id, `Added inquiry ${inquiryLabel(inq)}`);
   }
 
-  return json(inq, 201);
+  return json({ ...inq, createdBy: createdBy || undefined, createdByName: createdByName || undefined }, 201);
 }
 
 async function handleInquiriesUpdate(ctx: Ctx): Promise<Response> {
@@ -1473,11 +1651,14 @@ async function handleInquiriesUpdate(ctx: Ctx): Promise<Response> {
   if (!session) return err('Unauthorized', 401);
   const body = await ctx.request.json();
   const inq = body as any;
+  const inqId = ctx.path.slice('/inquiries/'.length);
+  await ensureColumns(ctx.env.VAYU_DB, 'inquiries');
+  // created_by is deliberately not updatable.
   await ctx.env.VAYU_DB.prepare(
     `UPDATE inquiries SET
        inquiry_number = ?, customer_name = ?, customer_phone = ?,
        customer_email = ?, artwork_ids = ?, notes = ?, source = ?,
-       status = ?, catalog_shared = ?
+       status = ?, catalog_shared = ?, image_urls = ?
      WHERE id = ?`
   ).bind(
     inq.inquiryNumber || '',
@@ -1489,8 +1670,10 @@ async function handleInquiriesUpdate(ctx: Ctx): Promise<Response> {
     inq.source || 'Other',
     inq.status || 'New',
     inq.catalogShared ? 1 : 0,
-    ctx.path.slice('/inquiries/'.length)
+    JSON.stringify(inq.imageUrls || []),
+    inqId
   ).run();
+  logEntityChange(ctx, session, 'updated', 'inquiry', inqId, `Updated inquiry ${inquiryLabel({ ...inq, id: inqId })}`);
   return json(inq);
 }
 
@@ -1498,9 +1681,17 @@ async function handleInquiriesDelete(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
   const inqId = ctx.path.slice('/inquiries/'.length);
-  // Also delete associated inquiry messages
+  const result = await ctx.env.VAYU_DB.prepare(
+    'SELECT * FROM inquiries WHERE id = ?'
+  ).bind(inqId).first();
+  // Also delete associated inquiry messages and uploaded photos
   await ctx.env.VAYU_DB.prepare('DELETE FROM inquiry_messages WHERE inquiry_id = ?').bind(inqId).run();
   await ctx.env.VAYU_DB.prepare('DELETE FROM inquiries WHERE id = ?').bind(inqId).run();
+  if (result) {
+    const inq = rowToInquiry(result);
+    await deleteUploadedFiles(ctx.env.VAYU_R2, inq.imageUrls);
+    logEntityChange(ctx, session, 'deleted', 'inquiry', inqId, `Deleted inquiry ${inquiryLabel(inq)}`);
+  }
   return json({ success: true });
 }
 
@@ -1598,6 +1789,7 @@ const routes: Route[] = [
   { method: 'POST', match: isExact('/auth/setup'), handler: handleAuthSetup },
   { method: 'POST', match: isExact('/auth/login'), handler: handleAuthLogin },
   { method: 'GET', match: isExact('/auth/me'), handler: handleAuthMe },
+  { method: 'PUT', match: isExact('/auth/me'), handler: handleAuthMeUpdate },
   { method: 'POST', match: isExact('/auth/logout'), handler: handleAuthLogout },
   { method: 'GET', match: isExact('/auth/users'), handler: handleAuthUsersList },
   { method: 'GET', match: isExact('/auth/team'), handler: handleAuthTeam },

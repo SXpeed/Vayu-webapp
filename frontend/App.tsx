@@ -196,6 +196,7 @@ const App: React.FC = () => {
                         onDeleteInquiry={handlers.handleDeleteInquiry}
                         onArtworkClick={handleArtworkClick}
                         inquiryMessages={inquiryMessages}
+                        teamMembers={teamMembers}
                         currentUserId={userProfile?.id || authUser?.id || ''}
                         onSendInquiryMessage={handlers.handleSendInquiryMessage}
                     />

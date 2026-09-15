@@ -43,12 +43,16 @@ CREATE TABLE IF NOT EXISTS artworks (
   id TEXT PRIMARY KEY,
   custom_id TEXT NOT NULL DEFAULT '',
   title TEXT NOT NULL DEFAULT '',
+  artist TEXT DEFAULT '',
+  artwork_year TEXT DEFAULT '',
+  description_title TEXT DEFAULT '',
   description TEXT DEFAULT '',
   dimensions TEXT DEFAULT '',
   medium TEXT DEFAULT '',
   status TEXT DEFAULT 'Available',   -- Available | Sold | Reserved
   location TEXT DEFAULT '',
   price REAL DEFAULT 0,
+  plus_gst INTEGER DEFAULT 0,         -- 1 when price is shown as "+ GST"
   image_urls TEXT DEFAULT '[]',       -- JSON array of R2 URLs
   created_at INTEGER NOT NULL
 );
@@ -64,6 +68,7 @@ CREATE TABLE IF NOT EXISTS collections (
   name TEXT NOT NULL DEFAULT '',
   description TEXT DEFAULT '',
   artwork_ids TEXT DEFAULT '[]',        -- JSON array of artwork IDs
+  cover_image_url TEXT DEFAULT '',
   created_at INTEGER NOT NULL
 );
 
@@ -97,7 +102,10 @@ CREATE TABLE IF NOT EXISTS inquiries (
   source TEXT DEFAULT 'Other',
   status TEXT DEFAULT 'New',
   catalog_shared INTEGER DEFAULT 0,
-  date INTEGER NOT NULL
+  date INTEGER NOT NULL,
+  created_by TEXT DEFAULT '',           -- user ID of whoever added the inquiry
+  created_by_name TEXT DEFAULT '',
+  image_urls TEXT DEFAULT '[]'          -- JSON array of R2 photo URLs
 );
 
 CREATE INDEX IF NOT EXISTS idx_inquiries_date ON inquiries(date DESC);

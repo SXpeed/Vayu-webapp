@@ -19,7 +19,7 @@ export const ZoomableImage: React.FC<ZoomableImageProps> = ({ src, alt, classNam
     }, []);
 
     return (
-        <QuickPinchZoom onUpdate={onUpdate} wheelScaleFactor={0.5} doubleTapZoomOutOnMaxScale={true} minScale={1} maxScale={4} draggableUnZoomed={false}>
+        <QuickPinchZoom onUpdate={onUpdate} wheelScaleFactor={0.5} doubleTapZoomOutOnMaxScale={true} minZoom={1} maxZoom={4} draggableUnZoomed={false}>
             <div className="w-full h-full flex items-center justify-center relative">
                 <img
                     ref={imgRef}

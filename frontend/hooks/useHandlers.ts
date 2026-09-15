@@ -146,11 +146,17 @@ export function useHandlers(args: HandlerArgs) {
 
     // ── Inquiries ─────────────────────────────────────────────────────────
     const handleAddInquiry = useCallback(async (newInq: Omit<Inquiry, 'id' | 'date'>) => {
-        const inquiry: Inquiry = { ...newInq, id: `inq_${Date.now()}`, date: Date.now() };
+        // The server records the creator from the session; mirror it locally
+        // so "Added by" shows before the next sync.
+        const inquiry: Inquiry = {
+            ...newInq, id: `inq_${Date.now()}`, date: Date.now(),
+            createdBy: userProfile?.id || authUser?.id,
+            createdByName: userProfile?.name || authUser?.name,
+        };
         try { await inquiryService.saveInquiry(inquiry); } catch (e) { console.error('D1 sync failed (add inquiry):', e); }
         await db.saveInquiry(inquiry);
         setInquiries((prev: Inquiry[]) => [inquiry, ...prev]);
-    }, [setInquiries]);
+    }, [userProfile, authUser, setInquiries]);
 
     const handleUpdateInquiry = useCallback(async (updatedInq: Inquiry) => {
         try { await inquiryService.updateInquiry(updatedInq); } catch (e) { console.error('D1 sync failed (update inquiry):', e); }

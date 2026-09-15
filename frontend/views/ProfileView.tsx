@@ -69,7 +69,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ profile, onUpdateProfi
                         <Check size={14} /> Save
                     </button>
                 ) : (
-                    <button onClick={() => setIsEditing(true)} className="text-brand-900 dark:text-gray-300 font-medium text-xs uppercase tracking-wider active-scale">
+                    <button onClick={() => { setFormData(profile); setIsEditing(true); }} className="text-brand-900 dark:text-gray-300 font-medium text-xs uppercase tracking-wider active-scale">
                         Edit
                     </button>
                 )}
@@ -94,14 +94,11 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ profile, onUpdateProfi
                     </div>
 
                     <div>
-                        <label htmlFor="profile-email" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Email Address</label>
-                        {isEditing ? (
-                            <input 
-                                id="profile-email" type="email" name="email" value={formData.email} onChange={handleChange} 
-                                className="w-full bg-transparent border-b border-gray-300 dark:border-gray-700 py-1.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors" 
-                            />
-                        ) : (
-                            <p className="text-gray-900 dark:text-gray-300 text-sm py-1">{profile.email}</p>
+                        <p className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Email Address</p>
+                        {/* Email is the login, so only admins can change it (User Management). */}
+                        <p className="text-gray-900 dark:text-gray-300 text-sm py-1">{profile.email}</p>
+                        {isEditing && (
+                            <p className="text-[9px] text-gray-400 dark:text-gray-500">Ask an admin to change your email.</p>
                         )}
                     </div>
 

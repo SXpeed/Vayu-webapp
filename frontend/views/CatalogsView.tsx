@@ -45,7 +45,7 @@ const applyRoundedCorners = (ctx: CanvasRenderingContext2D, canvas: HTMLCanvasEl
 };
 
 /** For non-logos, scale down large images to max 2500px to save PDF size while keeping extreme detail. */
-const scaleDownIfNeeded = (canvas: HTMLCanvasElement, img: HTMLImageElement, isPng: boolean = false): HTMLCanvasElement => {
+const scaleDownIfNeeded = (canvas: HTMLCanvasElement, img: HTMLImageElement, isPng = false): HTMLCanvasElement => {
     let scale = 1;
     if (img.width > 2500 || img.height > 2500) {
         scale = Math.min(2500 / img.width, 2500 / img.height);
@@ -66,7 +66,7 @@ const scaleDownIfNeeded = (canvas: HTMLCanvasElement, img: HTMLImageElement, isP
     return canvas;
 };
 
-const getBase64ImageWithGradient = (url: string, radiusPx: number = 0, isLogo = false, addShadow = false): Promise<{
+const getBase64ImageWithGradient = (url: string, radiusPx = 0, isLogo = false, addShadow = false): Promise<{
     dataUrl: string,
     width: number,
     height: number,
@@ -262,6 +262,14 @@ const buildPaletteFromHex = (hex: string): ThemePalette | null => {
     };
 };
 
+const THEME_BACKGROUNDS: Record<CatalogTheme, [number, number, number]> = {
+    1: [250, 248, 244],
+    2: [224, 224, 224],
+    3: [255, 255, 255],
+    4: [42, 42, 42],
+    5: [224, 224, 224],
+};
+
 const getThemePalette = (themeId: CatalogTheme, options?: PdfOptions): ThemePalette => {
     // 1. Custom hex color takes precedence over everything else.
     if (options?.colorPalette?.startsWith('#')) {
@@ -276,11 +284,7 @@ const getThemePalette = (themeId: CatalogTheme, options?: PdfOptions): ThemePale
     }
 
     // 3. Fall back to the built-in theme defaults.
-    const bg: [number, number, number] =
-        themeId === 4 ? [42, 42, 42]
-            : (themeId === 2 || themeId === 5) ? [224, 224, 224]
-                : themeId === 3 ? [255, 255, 255]
-                    : [250, 248, 244];
+    const bg = THEME_BACKGROUNDS[themeId];
 
     const isDark = themeId === 4;
 
@@ -323,7 +327,8 @@ const loadImageInfo = async (
         }
 
         // Pass to canvas logic to add rounded corners or shadow if needed
-        return await getBase64ImageWithGradient(finalUrl, isCutout ? 0 : (themeId === 1 ? 0 : 20), false, options.imageShadow);
+        const cornerRadius = isCutout || themeId === 1 ? 0 : 20;
+        return await getBase64ImageWithGradient(finalUrl, cornerRadius, false, options.imageShadow);
     } catch (e) {
         console.error("Failed to load image for PDF", e);
         return null;
@@ -332,6 +337,8 @@ const loadImageInfo = async (
 
 // Fit the image inside the page's image box at its natural aspect ratio,
 // centered — pages are uniform A4.
+let pngAliasCounter = 0;
+
 const drawProductImage = (doc: jsPDF, imgInfo: PdfImageInfo | null, imgBoxH: number) => {
     if (!imgInfo) return;
     const imgX = 2, imgY = 2, imgBoxW = PAGE_W - 4;
@@ -348,10 +355,11 @@ const drawProductImage = (doc: jsPDF, imgInfo: PdfImageInfo | null, imgBoxH: num
     const drawX = imgX + (imgBoxW - drawW) / 2;
     const drawY = imgY + (imgBoxH - drawH) / 2;
 
-    const alias = imgInfo.format === 'PNG' ? `img_${Math.random().toString(36).substring(2)}` : undefined;
+    // PNGs need a unique alias or jsPDF reuses the first image for all of them.
+    const alias = imgInfo.format === 'PNG' ? `img_${++pngAliasCounter}` : undefined;
     const compression = imgInfo.format === 'PNG' ? undefined : 'FAST';
 
-    doc.addImage(imgInfo.dataUrl, imgInfo.format, drawX, drawY, drawW, drawH, alias, compression as any);
+    doc.addImage(imgInfo.dataUrl, imgInfo.format, drawX, drawY, drawW, drawH, alias, compression);
 };
 
 const drawFallbackLetter = (doc: jsPDF, options: PdfOptions, i: number, gold: [number, number, number]) => {
@@ -385,7 +393,7 @@ const drawLogo = async (doc: jsPDF, logoUrl: string | undefined, options: PdfOpt
         if (options.logoPlacement === 'Top Right') {
             lxOff = PAGE_W - marginX - lw;
         }
-        let lyOff = marginY;
+        const lyOff = marginY;
 
         doc.addImage(logoInfo.dataUrl, logoInfo.format, lxOff, lyOff, lw, lh, 'logoAlias', 'FAST');
     } catch (e) {
@@ -664,7 +672,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
             }
 
             setPdfProgress('Saving PDF…');
-            doc.save(`${catalogToDownload.name.replace(/\s+/g, '_')}.pdf`);
+            doc.save(`${catalogToDownload.name.replaceAll(/\s+/g, '_')}.pdf`);
         } catch (error) {
             console.error("Error generating PDF:", error);
             alert("Failed to generate PDF.");
@@ -705,13 +713,18 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
 
             <div className="flex-1 overflow-y-auto p-[6px] space-y-2 no-scrollbar pb-8">
                 {filteredCatalogs.map((catalog, index) => (
-                    <button
-                        type="button"
+                    <div
                         key={catalog.id}
-                        onClick={() => handleCatalogClick(catalog)}
-                        className="w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm overflow-hidden flex h-28 border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
+                        className="relative w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm overflow-hidden flex h-28 border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
                         style={{ animationDelay: `${index * 50}ms` }}
                     >
+                        {/* Row tap target; inner action buttons sit above it (z-[2]). */}
+                        <button
+                            type="button"
+                            onClick={() => handleCatalogClick(catalog)}
+                            aria-label={`Open catalog ${catalog.name}`}
+                            className="absolute inset-0 z-[1] w-full h-full rounded-[6px] cursor-pointer"
+                        />
                         <div className="w-28 h-full relative shrink-0 bg-gray-50 dark:bg-gray-800">
                             <img loading="lazy" decoding="async" src={getThumbUrl(catalog.coverImageUrl)} alt={catalog.name} className="w-full h-full object-cover" />
                         </div>
@@ -719,13 +732,13 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                             <div>
                                 <div className="flex justify-between items-start">
                                     <h3 className="font-serif text-gray-900 dark:text-gray-100 line-clamp-1 text-sm flex-1 mr-2">{catalog.name}</h3>
-                                    <button
+                                    <button type="button"
                                         onClick={(e) => {
                                             e.stopPropagation();
                                             handleDownloadClick(catalog);
                                         }}
                                         disabled={isGeneratingPDF}
-                                        className={`p-1.5 text-gray-400 dark:text-gray-500 hover:text-gold-600 dark:hover:text-gold-400 rounded-full transition-colors active-scale shrink-0 ${isGeneratingPDF ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                        className={`relative z-[2] p-1.5 text-gray-400 dark:text-gray-500 hover:text-gold-600 dark:hover:text-gold-400 rounded-full transition-colors active-scale shrink-0 ${isGeneratingPDF ? 'opacity-50 cursor-not-allowed' : ''}`}
                                         title="Download PDF"
                                     >
                                         <Download size={14} />
@@ -737,7 +750,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                                 <p className="text-[10px] text-gray-400 dark:text-gray-500 font-light line-clamp-2">{catalog.description}</p>
                             )}
                         </div>
-                    </button>
+                    </div>
                 ))}
                 {filteredCatalogs.length === 0 && (
                     <div className="text-center text-gray-400 dark:text-gray-500 mt-10 font-light text-sm">
@@ -1002,7 +1015,7 @@ export const CatalogFormModal: React.FC<CatalogFormModalProps> = ({ initialData,
     const [name, setName] = useState(initialData?.name || '');
     const [description, setDescription] = useState(initialData?.description || '');
     const [searchQuery, setSearchQuery] = useState('');
-    const [selectedArtworks, setSelectedArtworks] = useState<Set<string>>(new Set(initialData?.artworkIds || []));
+    const [selectedArtworks, setSelectedArtworks] = useState<Set<string>>(new Set(initialData?.artworkIds ?? []));
 
     const filteredArtworks = artworks.filter(art =>
         art.title.toLowerCase().includes(searchQuery.toLowerCase()) ||

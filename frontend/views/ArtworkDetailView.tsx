@@ -5,6 +5,10 @@ import { ArtworkFormModal } from './ArtworksView';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ZoomableImage } from '../components/ZoomableImage';
 
+/** Swaps the alpha channel of an `rgba(r, g, b, a)` color string. */
+const withAlpha = (rgba: string, alpha: number): string =>
+    `${rgba.slice(0, rgba.lastIndexOf(',') + 1)} ${alpha})`;
+
 // Helper function to extract dominant color from an image URL
 const getDominantColor = (imageUrl: string): Promise<string> => {
     return new Promise((resolve) => {
@@ -226,7 +230,7 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                     {/* Full Screen Glow Background */}
                     <div
                         className="absolute inset-0 transition-colors duration-700 ease-in-out z-0"
-                        style={{ background: `radial-gradient(circle at center, ${glowColor.replace(/[\d.]+\)$/g, '0.3)')} 0%, transparent 80%)` }}
+                        style={{ background: `radial-gradient(circle at center, ${withAlpha(glowColor, 0.3)} 0%, transparent 80%)` }}
                     />
 
                     <div className="px-[6px] pb-2 z-20 flex justify-between items-center" style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}>

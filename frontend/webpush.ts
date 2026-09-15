@@ -21,14 +21,18 @@ export interface VapidKeys {
 
 function b64urlEncode(bytes: Uint8Array): string {
   let s = '';
-  for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  for (const b of bytes) s += String.fromCodePoint(b);
+  const base64 = btoa(s).replaceAll('+', '-').replaceAll('/', '_');
+  // Strip "=" padding without a backtracking regex.
+  let end = base64.length;
+  while (end > 0 && base64[end - 1] === '=') end--;
+  return base64.slice(0, end);
 }
 
 function b64urlDecode(input: string): Uint8Array {
-  let s = input.replace(/-/g, '+').replace(/_/g, '/');
+  let s = input.replaceAll('-', '+').replaceAll('_', '/');
   while (s.length % 4) s += '=';
-  return new Uint8Array(atob(s).split('').map(c => c.charCodeAt(0)));
+  return Uint8Array.from(atob(s), c => c.codePointAt(0) ?? 0);
 }
 
 function concatBytes(...arrays: Uint8Array[]): Uint8Array {

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { UserProfile } from '../types';
 import { authService, AuthUser } from '../services/authService';
 import { db } from '../services/db';
+import toast from 'react-hot-toast';
 
 /**
  * Manages auth state: authUser, userProfile, theme, and the
@@ -32,8 +33,8 @@ export function useAuth() {
             id: user.id,
             name: user.name,
             email: user.email,
-            phone: '',
-            address: '',
+            phone: user.phone ?? '',
+            address: user.address ?? '',
             theme: savedTheme,
         };
         setUserProfile(profile);
@@ -49,6 +50,29 @@ export function useAuth() {
     const handleUpdateProfile = useCallback(async (updatedProfile: UserProfile) => {
         setUserProfile(updatedProfile);
         await db.saveUser(updatedProfile);
+
+        // Name and contact details live on the server so they survive a reload
+        // and teammates see the new name. Other profile toggles stay local.
+        const current = authUserRef.current;
+        if (!current) return;
+        const unchanged = updatedProfile.name === current.name
+            && updatedProfile.phone === (current.phone ?? '')
+            && updatedProfile.address === (current.address ?? '');
+        if (unchanged) return;
+        try {
+            const saved = await authService.updateMe({
+                name: updatedProfile.name,
+                phone: updatedProfile.phone,
+                address: updatedProfile.address,
+            });
+            const merged: AuthUser = { ...current, ...saved };
+            authUserRef.current = merged;
+            setAuthUser(merged);
+            setUserProfile(prev => (prev ? { ...prev, name: saved.name, phone: saved.phone ?? '', address: saved.address ?? '' } : prev));
+        } catch (e) {
+            console.error('Failed to save profile:', e);
+            toast.error('Could not save your profile. Please try again.');
+        }
     }, []);
 
     const handleToggleTheme = useCallback(async () => {

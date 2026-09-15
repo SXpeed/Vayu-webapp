@@ -94,6 +94,11 @@ export interface Inquiry {
     status: 'New' | 'Contacted' | 'Interested' | 'Converted' | 'Closed';
     catalogShared: boolean;
     date: number;
+    /** Set by the server from the creating user's session. */
+    createdBy?: string;
+    createdByName?: string;
+    /** Photos taken or picked for this inquiry (R2 URLs). */
+    imageUrls?: string[];
 }
 
 export interface UserProfile {
@@ -181,7 +186,8 @@ export interface PaymentLink {
     customerName: string;
     customerPhone: string;
     customerEmail: string;
-    status: 'created' | 'paid' | 'partially_paid' | 'expired' | 'cancelled' | string;
+    /** Razorpay link status; unknown future statuses pass through as plain strings. */
+    status: string;
     createdAt: number;
     createdBy: string;
     createdByName: string;

@@ -72,10 +72,10 @@ export const db = {
     setArray(STORAGE_KEYS.users, users);
   },
   async getUser(phone: string): Promise<UserProfile | null> {
-    return getArray<UserProfile>(STORAGE_KEYS.users).find(u => u.phone === phone) || null;
+    return getArray<UserProfile>(STORAGE_KEYS.users).find(u => u.phone === phone) ?? null;
   },
   async getUserByEmail(email: string): Promise<UserProfile | null> {
-    return getArray<UserProfile>(STORAGE_KEYS.users).find(u => u.email?.toLowerCase() === email.toLowerCase()) || null;
+    return getArray<UserProfile>(STORAGE_KEYS.users).find(u => u.email?.toLowerCase() === email.toLowerCase()) ?? null;
   },
 
   // Artworks

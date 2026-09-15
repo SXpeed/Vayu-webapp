@@ -1,10 +1,15 @@
-import { getThumbUrl } from '../services/storageService';
+import storageService, { getThumbUrl } from '../services/storageService';
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Plus, X, MessageSquare, MessageCircle, Send, Search, ArrowLeft, Edit2, Trash2, Phone, Mail, Image as ImageIcon, User, Clock, Tag, BookOpen, CheckCircle2, XCircle, Check, CheckCheck, Paperclip, Reply } from 'lucide-react';
-import { Inquiry, Artwork, InquiryMessage, MessageReplyTo, MessageAttachment, MessageTag } from '../types';
+import toast from 'react-hot-toast';
+import { Plus, X, MessageSquare, MessageCircle, Send, Search, ArrowLeft, Edit2, Trash2, Phone, Mail, Image as ImageIcon, User, Clock, Tag, BookOpen, CheckCircle2, XCircle, Check, CheckCheck, Paperclip, Reply, Camera, Loader2 } from 'lucide-react';
+import { Inquiry, Artwork, InquiryMessage, MessageReplyTo, MessageAttachment, MessageTag, UserProfile } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { TAG_COLORS, ALL_TAGS } from './MessagingView';
+import { useMemberNames } from '../hooks/useMemberNames';
+import { usePhotoCapture } from '../hooks/usePhotoCapture';
+import { PhotoAttachments } from '../components/PhotoAttachments';
+import { makeDocumentNumber } from '../services/documentNumber';
 
 const renderArtworkStatusColor = (status: string) => {
     if (status === 'Available') return 'bg-green-500';
@@ -20,9 +25,9 @@ const WhatsAppIcon: React.FC<{ size?: number; className?: string }> = ({ size = 
 );
 
 /** tel: link — keeps digits and a leading +. */
-const telHref = (phone: string) => `tel:${phone.replace(/[^\d+]/g, '')}`;
+const telHref = (phone: string) => `tel:${phone.replaceAll(/[^\d+]/g, '')}`;
 /** WhatsApp deep link — wa.me wants digits only (country code included). */
-const waHref = (phone: string) => `https://wa.me/${phone.replace(/\D/g, '')}`;
+const waHref = (phone: string) => `https://wa.me/${phone.replaceAll(/\D/g, '')}`;
 
 interface InquiryViewProps {
     inquiries: Inquiry[];
@@ -32,6 +37,7 @@ interface InquiryViewProps {
     onDeleteInquiry: (id: string) => void;
     onArtworkClick: (artwork: Artwork) => void;
     inquiryMessages: InquiryMessage[];
+    teamMembers: UserProfile[];
     currentUserId: string;
 
     onSendInquiryMessage: (inquiryId: string, text: string, tags: MessageTag[], replyTo?: MessageReplyTo, attachment?: MessageAttachment) => void;
@@ -54,7 +60,17 @@ const SOURCE_COLORS: Record<Inquiry['source'], string> = {
     'Other': 'bg-gray-50 dark:bg-gray-900/20 text-gray-700 dark:text-gray-400',
 };
 
-export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, onAddInquiry, onUpdateInquiry, onDeleteInquiry, onArtworkClick, inquiryMessages, currentUserId, onSendInquiryMessage }) => {
+const ARTWORK_STATUS_BADGE: Record<Artwork['status'], string> = {
+    'Available': 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400',
+    'Sold': 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400',
+    'Reserved': 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-400',
+};
+
+export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, onAddInquiry, onUpdateInquiry, onDeleteInquiry, onArtworkClick, inquiryMessages, teamMembers, currentUserId, onSendInquiryMessage }) => {
+    const resolveName = useMemberNames(teamMembers);
+    // Inquiries added before creator tracking have no creator recorded.
+    const addedBy = (inquiry: Inquiry) =>
+        inquiry.createdBy || inquiry.createdByName ? resolveName(inquiry.createdBy, inquiry.createdByName) : null;
     const [isAdding, setIsAdding] = useState(false);
     const [selectedInquiry, setSelectedInquiry] = useState<Inquiry | null>(null);
     const [chatInquiry, setChatInquiry] = useState<Inquiry | null>(null);
@@ -187,17 +203,25 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                         const coverArtwork = inquiry.artworkIds
                             .map(id => artworks.find(a => a.id === id))
                             .find((a): a is Artwork => !!a);
-                        const coverImage = coverArtwork?.imageUrls?.[0];
+                        const coverImage = coverArtwork?.imageUrls?.[0] ?? inquiry.imageUrls?.[0];
+                        const photoCount = inquiry.imageUrls?.length ?? 0;
                         return (
-                            <button
+                            <div
                                 key={inquiry.id}
-                                type="button"
-                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleInquiryClick(inquiry); }}
-                                onClick={() => handleInquiryClick(inquiry)}
-                                className={`w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm p-[6px] border animate-fade-in-up cursor-pointer active-scale ${inquiry.status === 'Closed' ? 'border-gray-200 dark:border-gray-800 opacity-70' : 'border-gray-100 dark:border-gray-800'
+                                className={`relative w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm p-[6px] border animate-fade-in-up active-scale ${inquiry.status === 'Closed' ? 'border-gray-200 dark:border-gray-800 opacity-70' : 'border-gray-100 dark:border-gray-800'
                                     }`}
                                 style={{ animationDelay: `${250 + index * 50}ms` }}
                             >
+                                {/* Whole-card tap target behind the content. The content ignores
+                                    pointer events except the chat button and contact links, so
+                                    no interactive element is nested inside another. */}
+                                <button
+                                    type="button"
+                                    onClick={() => handleInquiryClick(inquiry)}
+                                    className="absolute inset-0 w-full h-full rounded-[6px] cursor-pointer"
+                                    aria-label={`Open inquiry ${inquiry.inquiryNumber} for ${inquiry.customerName}`}
+                                />
+                                <div className="relative pointer-events-none">
                                 {/* Top Row: Avatar + Name + Status */}
                                 <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-[6px]">
@@ -213,6 +237,11 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                                             <p className="text-[9px] text-gray-500 dark:text-gray-400 uppercase tracking-wider mt-0.5">
                                                 {inquiry.inquiryNumber} • {new Date(inquiry.date).toLocaleDateString()}
                                             </p>
+                                            {addedBy(inquiry) && (
+                                                <p className="text-[9px] text-gray-500 dark:text-gray-400 mt-0.5">
+                                                    Added by <span className="font-medium text-gray-700 dark:text-gray-300">{addedBy(inquiry)}</span>
+                                                </p>
+                                            )}
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-1.5 shrink-0">
@@ -221,8 +250,9 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                                         </span>
                                         <button
                                             type="button"
-                                            onClick={(e) => { e.stopPropagation(); setChatInquiry(inquiry); }}
-                                            className="p-2 text-gray-400 dark:text-gray-500 hover:text-gold-600 dark:hover:text-gold-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale"
+                                            onClick={() => setChatInquiry(inquiry)}
+                                            aria-label={`Open chat for ${inquiry.customerName}`}
+                                            className="pointer-events-auto p-2 text-gray-400 dark:text-gray-500 hover:text-gold-600 dark:hover:text-gold-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale"
                                         >
                                             <MessageCircle size={18} />
                                         </button>
@@ -235,26 +265,22 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                                     <div className="flex items-center gap-2 flex-wrap">
                                         {inquiry.customerPhone && (
                                             <span className="text-[9px] text-gray-500 dark:text-gray-400 flex items-center gap-1">
-                                                <span
-                                                    role="link"
-                                                    tabIndex={0}
-                                                    onClick={(e) => { e.stopPropagation(); globalThis.location.href = telHref(inquiry.customerPhone); }}
-                                                    onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); globalThis.location.href = telHref(inquiry.customerPhone); } }}
-                                                    className="flex items-center gap-1 cursor-pointer hover:text-gold-600 dark:hover:text-gold-400 active-scale"
+                                                <a
+                                                    href={telHref(inquiry.customerPhone)}
+                                                    className="pointer-events-auto flex items-center gap-1 hover:text-gold-600 dark:hover:text-gold-400 active-scale"
                                                     aria-label={`Call ${inquiry.customerPhone}`}
                                                 >
                                                     <Phone size={10} /> {inquiry.customerPhone}
-                                                </span>
-                                                <span
-                                                    role="link"
-                                                    tabIndex={0}
-                                                    onClick={(e) => { e.stopPropagation(); globalThis.open(waHref(inquiry.customerPhone), '_blank', 'noopener'); }}
-                                                    onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); globalThis.open(waHref(inquiry.customerPhone), '_blank', 'noopener'); } }}
-                                                    className="text-green-600 dark:text-green-400 cursor-pointer active-scale"
+                                                </a>
+                                                <a
+                                                    href={waHref(inquiry.customerPhone)}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="pointer-events-auto text-green-600 dark:text-green-400 active-scale"
                                                     aria-label="Chat on WhatsApp"
                                                 >
                                                     <WhatsAppIcon size={11} />
-                                                </span>
+                                                </a>
                                             </span>
                                         )}
                                         <span className={`text-[8px] px-1.5 py-0.5 rounded-[3px] font-medium uppercase tracking-wider ${SOURCE_COLORS[inquiry.source]}`}>
@@ -265,6 +291,11 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                                                 <BookOpen size={9} /> Catalog Sent
                                             </span>
                                         )}
+                                        {photoCount > 0 && (
+                                            <span className="text-[8px] px-1.5 py-0.5 rounded-[3px] font-medium uppercase tracking-wider bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 flex items-center gap-1">
+                                                <Camera size={9} /> {photoCount}
+                                            </span>
+                                        )}
                                     </div>
                                     {/* Notes Preview */}
                                     {inquiry.notes && (
@@ -273,7 +304,8 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                                         </p>
                                     )}
                                 </div>
-                            </button>
+                                </div>
+                            </div>
                         );
                     })}
                     {filteredInquiries.length === 0 && (
@@ -302,6 +334,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                 <FullScreenPortal>
                     <InquiryDetailModal
                         inquiry={selectedInquiry}
+                        addedBy={addedBy(selectedInquiry)}
                         artworks={artworks}
                         onClose={handleCloseModal}
                         onUpdateInquiry={(updated) => {
@@ -322,6 +355,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                     <InquiryChatModal
                         inquiry={chatInquiry}
                         messages={inquiryMessages.filter(m => m.inquiryId === chatInquiry.id)}
+                        resolveName={resolveName}
                         currentUserId={currentUserId}
 
                         onClose={() => setChatInquiry(null)}
@@ -338,13 +372,20 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
 interface InquiryChatModalProps {
     inquiry: Inquiry;
     messages: InquiryMessage[];
+    resolveName: (id: string | undefined, storedName?: string) => string;
     currentUserId: string;
 
     onClose: () => void;
     onSendMessage: (text: string, tags: MessageTag[], replyTo?: MessageReplyTo, attachment?: MessageAttachment) => void;
 }
 
-const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, currentUserId, onClose, onSendMessage }) => {
+const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, resolveName, currentUserId, onClose, onSendMessage }) => {
+    // Quoted replies store the sender's name at reply time; resolve it through
+    // the original message so placeholders and renames show correctly.
+    const replySenderName = (replyTo: MessageReplyTo) => {
+        const original = messages.find(m => m.id === replyTo.id);
+        return original ? resolveName(original.senderId, original.senderName) : resolveName(undefined, replyTo.senderName);
+    };
     const [text, setText] = useState('');
     const [selectedTags, setSelectedTags] = useState<Set<MessageTag>>(new Set());
     const [showTagPicker, setShowTagPicker] = useState(false);
@@ -366,23 +407,35 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
         }, 50);
     }, [messages]);
 
+    const [isUploading, setIsUploading] = useState(false);
+
+    // Attachments upload to R2 like the team chat. Inline data URLs of phone
+    // photos exceed D1's row size limit, so they never reached other devices.
+    const uploadAttachment = async (file: File) => {
+        setIsUploading(true);
+        try {
+            const result = await storageService.upload(file);
+            setPendingAttachment({
+                type: file.type.startsWith('image/') ? 'image' : 'file',
+                url: result.url,
+                name: file.name,
+            });
+        } catch (error) {
+            console.error('Upload failed:', error);
+            toast.error('Failed to upload file. Please try again.');
+        } finally {
+            setIsUploading(false);
+        }
+    };
+
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
-        if (file) {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                if (typeof reader.result === 'string') {
-                    setPendingAttachment({
-                        type: file.type.startsWith('image/') ? 'image' : 'file',
-                        url: reader.result,
-                        name: file.name,
-                    });
-                }
-            };
-            reader.readAsDataURL(file);
-        }
         e.target.value = '';
+        if (file) void uploadAttachment(file);
     };
+
+    // Camera button: snap a photo and attach it straight away.
+    const camera = usePhotoCapture(([photo]) => { void uploadAttachment(photo); });
 
     const toggleTag = (tag: MessageTag) => {
         const newSet = new Set(selectedTags);
@@ -393,7 +446,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
 
     const handleSend = () => {
         if (!text.trim() && !pendingAttachment) return;
-        onSendMessage(text.trim(), Array.from(selectedTags), replyingTo || undefined, pendingAttachment || undefined);
+        onSendMessage(text.trim(), Array.from(selectedTags), replyingTo ?? undefined, pendingAttachment ?? undefined);
         setText('');
         setSelectedTags(new Set());
         setShowTagPicker(false);
@@ -482,17 +535,17 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                             : 'bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-800 rounded-bl-[4px]'
                             }`}>
                             {!isMe && (
-                                <p className="text-[9px] font-bold uppercase tracking-widest mb-1 text-gold-600 dark:text-gold-400">{msg.senderName}</p>
+                                <p className="text-[9px] font-bold uppercase tracking-widest mb-1 text-gold-600 dark:text-gold-400">{resolveName(msg.senderId, msg.senderName)}</p>
                             )}
                             {msg.replyTo && (
                                 <div className={`mb-1.5 pl-2 py-1 border-l-2 rounded-[4px] ${isMe ? 'border-gold-500/50 bg-gold-500/10 dark:border-gray-500/50 dark:bg-gray-700/50' : 'border-gold-400 bg-gray-50 dark:bg-gray-800/50'}`}>
-                                    <p className={`text-[9px] font-bold ${isMe ? 'text-gold-700 dark:text-gold-400' : 'text-gold-600 dark:text-gold-400'}`}>{msg.replyTo.senderName}</p>
+                                    <p className={`text-[9px] font-bold ${isMe ? 'text-gold-700 dark:text-gold-400' : 'text-gold-600 dark:text-gold-400'}`}>{replySenderName(msg.replyTo)}</p>
                                     <p className={`text-[10px] line-clamp-1 ${isMe ? 'text-gray-600 dark:text-gray-400' : 'text-gray-500 dark:text-gray-400'}`}>{msg.replyTo.text}</p>
                                 </div>
                             )}
                             {msg.attachment && (
                                 msg.attachment.type === 'image' ? (
-                                    <img loading="lazy" decoding="async" src={msg.attachment.url} alt={msg.attachment.name} className="rounded-[8px] max-w-full max-h-48 object-cover mb-1.5" />
+                                    <img loading="lazy" decoding="async" src={getThumbUrl(msg.attachment.url)} alt={msg.attachment.name} className="rounded-[8px] max-w-full max-h-48 object-cover mb-1.5" />
                                 ) : (
                                     <div className={`flex items-center gap-2 mb-1.5 p-2 rounded-[6px] ${isMe ? 'bg-gold-500/10 dark:bg-gray-700/50' : 'bg-gray-50 dark:bg-gray-800'}`}>
                                         <Paperclip size={14} className="text-gold-600 dark:text-gold-400" />
@@ -518,7 +571,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                     );
                     const replyButton = (
                         <button
-                            onClick={() => setReplyingTo({ id: msg.id, senderName: msg.senderName, text: msg.text || (msg.attachment ? msg.attachment.name : '') })}
+                            onClick={() => setReplyingTo({ id: msg.id, senderName: resolveName(msg.senderId, msg.senderName), text: msg.text || (msg.attachment ? msg.attachment.name : '') })}
                             className="p-1 mb-1 text-gray-300 dark:text-gray-600 hover:text-gold-500 dark:hover:text-gold-400 transition-colors shrink-0 active-scale"
                         >
                             <Reply size={14} />
@@ -581,7 +634,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                     <div className="flex items-center justify-between gap-2 mb-2 p-2 bg-gray-100 dark:bg-[#2a2a2a] rounded-[6px] animate-fade-in">
                         <div className="flex items-center gap-2 min-w-0">
                             {pendingAttachment.type === 'image' ? (
-                                <img loading="lazy" decoding="async" src={pendingAttachment.url} alt={pendingAttachment.name} className="w-10 h-10 rounded-[4px] object-cover shrink-0" />
+                                <img loading="lazy" decoding="async" src={getThumbUrl(pendingAttachment.url)} alt={pendingAttachment.name} className="w-10 h-10 rounded-[4px] object-cover shrink-0" />
                             ) : (
                                 <div className="w-10 h-10 rounded-[4px] bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-gray-500 dark:text-gray-400 shrink-0">
                                     <Paperclip size={16} />
@@ -603,12 +656,25 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                         <Tag size={18} />
                     </button>
                     <button
-                        onClick={() => fileInputRef.current?.click()}
-                        className="p-2.5 rounded-full text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors active-scale shrink-0"
+                        type="button"
+                        onClick={camera.openCamera}
+                        disabled={isUploading}
+                        aria-label="Take photo"
+                        className="p-2.5 rounded-full text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors active-scale shrink-0 disabled:opacity-60"
                     >
-                        <Paperclip size={18} />
+                        <Camera size={18} />
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isUploading}
+                        aria-label="Attach file"
+                        className="p-2.5 rounded-full text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors active-scale shrink-0 disabled:opacity-60"
+                    >
+                        {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
                     </button>
                     <input type="file" accept="image/*,.pdf,.doc,.docx,.txt" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
+                    {camera.inputs}
                     <input
                         value={text}
                         onChange={(e) => setText(e.target.value)}
@@ -647,6 +713,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
 
 interface InquiryDetailModalProps {
     inquiry: Inquiry;
+    addedBy: string | null;
     artworks: Artwork[];
     onClose: () => void;
     onUpdateInquiry: (inquiry: Inquiry) => void;
@@ -654,7 +721,7 @@ interface InquiryDetailModalProps {
     onArtworkClick: (artwork: Artwork) => void;
 }
 
-const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, artworks, onClose, onUpdateInquiry, onDeleteInquiry, onArtworkClick }) => {
+const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedBy, artworks, onClose, onUpdateInquiry, onDeleteInquiry, onArtworkClick }) => {
     const [isEditing, setIsEditing] = useState(false);
     const [selectedArtworkForPopup, setSelectedArtworkForPopup] = useState<Artwork | null>(null);
 
@@ -664,7 +731,9 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, artwor
         onUpdateInquiry({
             ...updatedData,
             id: inquiry.id,
-            date: inquiry.date
+            date: inquiry.date,
+            createdBy: inquiry.createdBy,
+            createdByName: inquiry.createdByName,
         });
         setIsEditing(false);
     };
@@ -682,6 +751,17 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, artwor
 
     const handleToggleCatalogShared = () => {
         onUpdateInquiry({ ...inquiry, catalogShared: !inquiry.catalogShared });
+    };
+
+    // Uploads can finish after other edits (or each other), so append to the
+    // latest inquiry rather than the one captured when the upload started.
+    const latestInquiryRef = useRef(inquiry);
+    latestInquiryRef.current = inquiry;
+    const handleAddPhotos = (urls: string[]) => {
+        const latest = latestInquiryRef.current;
+        const updated = { ...latest, imageUrls: [...(latest.imageUrls ?? []), ...urls] };
+        latestInquiryRef.current = updated;
+        onUpdateInquiry(updated);
     };
 
     return (
@@ -793,6 +873,12 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, artwor
                             <Clock size={14} className="text-gold-500" />
                             <span>{new Date(inquiry.date).toLocaleDateString()} at {new Date(inquiry.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                         </div>
+                        {addedBy && (
+                            <div className="flex items-center gap-[6px] text-sm text-gray-600 dark:text-gray-400">
+                                <User size={14} className="text-gold-500" />
+                                <span>Added by <span className="font-medium text-gray-900 dark:text-gray-200">{addedBy}</span></span>
+                            </div>
+                        )}
                         <div className="flex items-center gap-[6px] text-sm text-gray-600 dark:text-gray-400">
                             <BookOpen size={14} className="text-gold-500" />
                             <span className={`text-[10px] px-2 py-0.5 rounded-[3px] font-medium uppercase tracking-wider ${inquiry.catalogShared
@@ -811,6 +897,14 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, artwor
                             <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">{inquiry.notes}</p>
                         </>
                     )}
+                </div>
+
+                {/* Photos */}
+                <div className="bg-white dark:bg-[#1e1e1e] p-6 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 mb-4 animate-fade-in-up" style={{ animationDelay: '125ms' }}>
+                    <h3 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-4">
+                        Photos{inquiry.imageUrls?.length ? ` (${inquiry.imageUrls.length})` : ''}
+                    </h3>
+                    <PhotoAttachments urls={inquiry.imageUrls ?? []} onAdd={handleAddPhotos} />
                 </div>
 
                 {/* Interested Artworks */}
@@ -856,8 +950,14 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, artwor
                 )}
             </div>
             {selectedArtworkForPopup && (
-                <div className="absolute inset-0 z-[80] bg-black/50 flex items-center justify-center p-4 animate-fade-in" onClick={() => setSelectedArtworkForPopup(null)}>
-                    <div className="bg-white dark:bg-[#1e1e1e] rounded-[12px] w-full max-w-sm overflow-hidden shadow-2xl animate-scale-in" onClick={e => e.stopPropagation()}>
+                <div className="absolute inset-0 z-[80] flex items-center justify-center p-4 animate-fade-in">
+                    <button
+                        type="button"
+                        aria-label="Close artwork details"
+                        onClick={() => setSelectedArtworkForPopup(null)}
+                        className="absolute inset-0 w-full h-full bg-black/50 cursor-default"
+                    />
+                    <div className="relative bg-white dark:bg-[#1e1e1e] rounded-[12px] w-full max-w-sm overflow-hidden shadow-2xl animate-scale-in">
                         <div className="relative h-48 bg-gray-100 dark:bg-gray-800">
                             {selectedArtworkForPopup.imageUrls && selectedArtworkForPopup.imageUrls.length > 0 ? (
                                 <img loading="lazy" decoding="async" src={selectedArtworkForPopup.imageUrls[0]} alt={selectedArtworkForPopup.title} className="w-full h-full object-cover" />
@@ -882,11 +982,7 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, artwor
                             </div>
                             <div className="flex justify-between items-center pb-4 border-b border-gray-100 dark:border-gray-800">
                                 <span className="font-semibold text-gold-600 dark:text-gold-400">₹{selectedArtworkForPopup.price.toLocaleString('en-IN')}{selectedArtworkForPopup.plusGst ? ' + GST' : ''}</span>
-                                <span className={`text-[9px] px-2 py-1 rounded-[3px] font-medium uppercase tracking-wider ${
-                                    selectedArtworkForPopup.status === 'Available' ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400' :
-                                    selectedArtworkForPopup.status === 'Sold' ? 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400' :
-                                    'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-400'
-                                }`}>
+                                <span className={`text-[9px] px-2 py-1 rounded-[3px] font-medium uppercase tracking-wider ${ARTWORK_STATUS_BADGE[selectedArtworkForPopup.status]}`}>
                                     {selectedArtworkForPopup.status}
                                 </span>
                             </div>
@@ -940,8 +1036,10 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
     const [notes, setNotes] = useState(initialData?.notes || '');
     const [source, setSource] = useState<Inquiry['source']>(initialData?.source || 'Walk-in');
     const [status, setStatus] = useState<Inquiry['status']>(initialData?.status || 'New');
-    const [catalogShared] = useState(initialData?.catalogShared ?? false);
-    const [selectedArtworkIds, setSelectedArtworkIds] = useState<Set<string>>(new Set(initialData?.artworkIds || []));
+    const catalogShared = initialData?.catalogShared ?? false;
+    const [selectedArtworkIds, setSelectedArtworkIds] = useState<Set<string>>(new Set(initialData?.artworkIds ?? []));
+    const [imageUrls, setImageUrls] = useState<string[]>(initialData?.imageUrls ?? []);
+    const [isUploadingPhotos, setIsUploadingPhotos] = useState(false);
 
     const toggleArtwork = (id: string) => {
         const newSet = new Set(selectedArtworkIds);
@@ -952,9 +1050,10 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
 
     const handleSubmit = () => {
         if (!customerName.trim()) return alert('Customer name is required');
+        if (isUploadingPhotos) return toast('Photos are still uploading — save again in a moment.');
 
         onSave({
-            inquiryNumber: initialData?.inquiryNumber || `INQ-${new Date().getFullYear()}-${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`,
+            inquiryNumber: initialData?.inquiryNumber || makeDocumentNumber('INQ'),
             customerName,
             customerPhone,
             customerEmail,
@@ -962,7 +1061,8 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
             notes,
             source,
             status,
-            catalogShared
+            catalogShared,
+            imageUrls,
         });
     };
 
@@ -1061,6 +1161,17 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                     />
                 </div>
 
+                {/* Photos */}
+                <div className="bg-white dark:bg-[#1e1e1e] p-5 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 animate-fade-in-up" style={{ animationDelay: '125ms' }}>
+                    <h3 className="font-bold text-gray-900 dark:text-gray-100 text-[10px] uppercase tracking-widest mb-[6px]">Photos</h3>
+                    <PhotoAttachments
+                        urls={imageUrls}
+                        onAdd={(urls) => setImageUrls(prev => [...prev, ...urls])}
+                        onRemove={(url) => setImageUrls(prev => prev.filter(u => u !== url))}
+                        onUploadingChange={setIsUploadingPhotos}
+                    />
+                </div>
+
                 {/* Select Artworks */}
                 <div className="bg-white dark:bg-[#1e1e1e] p-5 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 animate-fade-in-up" style={{ animationDelay: '150ms' }}>
                     <div className="flex justify-between items-center mb-4">
@@ -1076,15 +1187,20 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                             const isSelected = selectedArtworkIds.has(art.id);
                             const coverImage = art.imageUrls?.[0];
                             return (
-                                <button
+                                <div
                                     key={art.id}
-                                    type="button"
-                                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleArtwork(art.id); }}
-                                    onClick={() => toggleArtwork(art.id)}
-                                    className={`w-full text-left flex items-center p-2 rounded-[6px] border transition-colors cursor-pointer active-scale animate-scale-in ${isSelected ? 'border-gold-500 bg-gold-50/50 dark:bg-gold-900/10' : 'border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50'
+                                    className={`relative w-full text-left flex items-center p-2 rounded-[6px] border transition-colors cursor-pointer active-scale animate-scale-in ${isSelected ? 'border-gold-500 bg-gold-50/50 dark:bg-gold-900/10' : 'border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50'
                                         }`}
                                     style={{ animationDelay: `${200 + index * 30}ms` }}
                                 >
+                                    {/* Row tap target; inner action buttons sit above it (z-[2]). */}
+                                    <button
+                                        type="button"
+                                        onClick={() => toggleArtwork(art.id)}
+                                        aria-label={`${isSelected ? 'Remove' : 'Add'} ${art.title}`}
+                                        aria-pressed={isSelected}
+                                        className="absolute inset-0 z-[1] w-full h-full rounded-[6px] cursor-pointer"
+                                    />
                                     {coverImage ? (
                                         <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={art.title} className="w-10 h-10 rounded-[3px] object-cover mr-3" />
                                     ) : (
@@ -1097,9 +1213,9 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                                         <p className="text-[9px] text-gray-500 dark:text-gray-400 uppercase tracking-wider mt-0.5">{art.medium} • ₹{art.price.toLocaleString('en-IN')}</p>
                                     </div>
                                     <div className="flex items-center gap-2">
-                                        <button
+                                        <button type="button" aria-label="View artwork details"
                                             onClick={(e) => { e.stopPropagation(); onArtworkClick(art); }}
-                                            className="p-1 text-gray-400 hover:text-gold-500 transition-colors"
+                                            className="relative z-[2] p-1 text-gray-400 hover:text-gold-500 transition-colors"
                                         >
                                             <MessageSquare size={14} />
                                         </button>
@@ -1108,7 +1224,7 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                                             {isSelected && <span className="text-[8px] font-bold">✓</span>}
                                         </div>
                                     </div>
-                                </button>
+                                </div>
                             );
                         })}
                     </div>

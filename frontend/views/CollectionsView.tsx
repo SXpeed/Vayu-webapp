@@ -359,7 +359,7 @@ export const CollectionFormModal: React.FC<CollectionFormModalProps> = ({ initia
     const [name, setName] = useState(initialData?.name || '');
     const [description, setDescription] = useState(initialData?.description || '');
     const [searchQuery, setSearchQuery] = useState('');
-    const [selectedArtworks, setSelectedArtworks] = useState<Set<string>>(new Set(initialData?.artworkIds || []));
+    const [selectedArtworks, setSelectedArtworks] = useState<Set<string>>(new Set(initialData?.artworkIds ?? []));
 
     const filteredArtworks = artworks.filter(art =>
         art.title.toLowerCase().includes(searchQuery.toLowerCase()) ||

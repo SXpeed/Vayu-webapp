@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 /**
@@ -11,9 +11,8 @@ import { createPortal } from 'react-dom';
  * "removeChild" DOMException that occurred when the portal wrote
  * directly into a node React was also reconciling.
  */
-export const FullScreenPortal: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const containerRef = useRef<HTMLDivElement | null>(null);
-    const [mounted, setMounted] = useState(false);
+export const FullScreenPortal: React.FC<{ readonly children: React.ReactNode }> = ({ children }) => {
+    const [container, setContainer] = useState<HTMLDivElement | null>(null);
 
     useEffect(() => {
         const shell = document.getElementById('app-shell');
@@ -24,19 +23,15 @@ export const FullScreenPortal: React.FC<{ children: React.ReactNode }> = ({ chil
         el.style.position = 'absolute';
         el.style.inset = '0';
         el.style.zIndex = '50';
-        shell.appendChild(el);
-        containerRef.current = el;
-        setMounted(true);
+        shell.append(el);
+        setContainer(el);
 
         return () => {
-            // Guard: only remove if still a child (prevents removeChild crash)
-            if (el.parentNode === shell) {
-                shell.removeChild(el);
-            }
-            containerRef.current = null;
+            // remove() is a no-op when the node is already detached, so this
+            // can't throw the old removeChild DOMException.
+            el.remove();
         };
     }, []);
 
-    if (!mounted || !containerRef.current) return null;
-    return createPortal(children, containerRef.current);
+    return container ? createPortal(children, container) : null;
 };

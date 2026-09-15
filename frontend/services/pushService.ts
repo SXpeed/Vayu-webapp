@@ -11,11 +11,11 @@ import { apiCall } from './apiClient';
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
     const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const base64 = (base64String + padding).replaceAll('-', '+').replaceAll('_', '/');
     const rawData = atob(base64);
     const output = new Uint8Array(rawData.length);
     for (let i = 0; i < rawData.length; i++) {
-        output[i] = rawData.charCodeAt(i);
+        output[i] = rawData.codePointAt(i) ?? 0;
     }
     return output;
 }
@@ -34,7 +34,7 @@ async function registerOnServer(sub: PushSubscription): Promise<void> {
 
 export const pushService = {
     isSupported(): boolean {
-        return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+        return 'serviceWorker' in navigator && 'PushManager' in globalThis && 'Notification' in globalThis;
     },
 
     /** True when this browser has an active subscription and permission is granted. */

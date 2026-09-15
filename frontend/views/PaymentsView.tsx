@@ -114,7 +114,7 @@ export const PaymentsView: React.FC = () => {
         const text = encodeURIComponent(
             `Hello ${link.customerName},\n\nPlease use this secure link to complete your payment of ${formatRupees(link.amount)} to Vayu Design:\n${link.shortUrl}\n\nThank you!`
         );
-        const phone = link.customerPhone.replace(/[^\d]/g, '');
+        const phone = link.customerPhone.replaceAll(/[^\d]/g, '');
         const url = phone ? `https://wa.me/${phone}?text=${text}` : `https://wa.me/?text=${text}`;
         globalThis.open(url, '_blank', 'noopener');
     };

@@ -36,7 +36,7 @@ export async function apiCall<T>(path: string, options?: RequestInit): Promise<T
     try {
         res = await fetch(`/api${path}`, {
             ...options,
-            headers: { ...authHeaders(), ...(options?.headers ?? {}) },
+            headers: { ...authHeaders(), ...options?.headers },
         });
     } catch {
         throw new Error('Cannot reach the server. Check your connection and try again.');

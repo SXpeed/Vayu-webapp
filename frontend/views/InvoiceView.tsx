@@ -3,6 +3,7 @@ import React, { useState, useMemo } from 'react';
 import { Plus, X, FileText, CheckCircle2, Image as ImageIcon, Info, Search, ArrowLeft, Edit2, Trash2 } from 'lucide-react';
 import { Invoice, Artwork, InvoiceItem } from '../types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { makeDocumentNumber } from '../services/documentNumber';
 
 const getInvoiceStatusColor = (status: string) => {
     switch (status) {
@@ -315,7 +316,7 @@ export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData,
     const [customerName, setCustomerName] = useState(initialData?.customerName || '');
     const [customerEmail, setCustomerEmail] = useState(initialData?.customerEmail || '');
     const [status, setStatus] = useState<Invoice['status']>(initialData?.status || 'Draft');
-    const [selectedArtworkIds, setSelectedArtworkIds] = useState<Set<string>>(new Set(initialData?.items.map(item => item.artworkId) || []));
+    const [selectedArtworkIds, setSelectedArtworkIds] = useState<Set<string>>(new Set(initialData?.items.map(item => item.artworkId) ?? []));
     const [taxRate, setTaxRate] = useState(initialData?.taxRate ?? 0.18);
 
     const availableArtworks = artworks.filter(a => a.status === 'Available' || selectedArtworkIds.has(a.id));
@@ -344,7 +345,7 @@ export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData,
         if (selectedItems.length === 0) return alert('Select at least one artwork to bill');
 
         onSave({
-            invoiceNumber: initialData?.invoiceNumber || `INV-${new Date().getFullYear()}-${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`,
+            invoiceNumber: initialData?.invoiceNumber || makeDocumentNumber('INV'),
             customerName,
             customerEmail,
             items: selectedItems,
@@ -422,15 +423,21 @@ export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData,
                             const isSelected = selectedArtworkIds.has(art.id);
                             const coverImage = art.imageUrls?.[0];
                             return (
-                                <button 
-                                    type="button"
+                                <div
                                     key={art.id}
-                                    onClick={() => toggleArtwork(art.id)}
-                                    className={`w-full text-left flex items-center p-2 rounded-[6px] border transition-colors cursor-pointer active-scale animate-scale-in ${
+                                    className={`relative w-full text-left flex items-center p-2 rounded-[6px] border transition-colors cursor-pointer active-scale animate-scale-in ${
                                         isSelected ? 'border-gold-500 bg-gold-50/50 dark:bg-gold-900/10' : 'border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50'
                                     }`}
                                     style={{ animationDelay: `${150 + index * 30}ms` }}
                                 >
+                                    {/* Row tap target; inner action buttons sit above it (z-[2]). */}
+                                    <button
+                                        type="button"
+                                        onClick={() => toggleArtwork(art.id)}
+                                        aria-label={`${isSelected ? 'Remove' : 'Add'} ${art.title}`}
+                                        aria-pressed={isSelected}
+                                        className="absolute inset-0 z-[1] w-full h-full rounded-[6px] cursor-pointer"
+                                    />
                                     {coverImage ? (
                                         <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={art.title} className="w-10 h-10 rounded-[3px] object-cover mr-3" />
                                     ) : (
@@ -444,9 +451,9 @@ export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData,
                                     </div>
                                     <div className="text-right flex items-center gap-[6px]">
                                         <p className="font-medium text-xs text-gray-900 dark:text-gray-100">₹{art.price.toLocaleString('en-IN')}{art.plusGst ? ' + GST' : ''}</p>
-                                        <button 
+                                        <button type="button" aria-label="View artwork details" 
                                             onClick={(e) => { e.stopPropagation(); onArtworkClick(art); }}
-                                            className="p-1 text-gray-400 hover:text-gold-500 transition-colors"
+                                            className="relative z-[2] p-1 text-gray-400 hover:text-gold-500 transition-colors"
                                         >
                                             <Info size={14} />
                                         </button>
@@ -456,7 +463,7 @@ export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData,
                                             <CheckCircle2 size={10} strokeWidth={3} />
                                         </div>
                                     </div>
-                                </button>
+                                </div>
                             );
                         })}
                     </div>

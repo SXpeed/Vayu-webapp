@@ -37,6 +37,29 @@ function blobToDataURL(blob: Blob): Promise<string> {
     });
 }
 
+interface Bounds {
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+}
+
+/** Bounding box of pixels more opaque than ALPHA_THRESHOLD; null when none are. */
+function findOpaqueBounds(data: Uint8ClampedArray, width: number, height: number): Bounds | null {
+    let minX = width, minY = height, maxX = -1, maxY = -1;
+    for (let y = 0; y < height; y++) {
+        const rowStart = y * width;
+        for (let x = 0; x < width; x++) {
+            if (data[(rowStart + x) * 4 + 3] <= ALPHA_THRESHOLD) continue;
+            minX = Math.min(minX, x);
+            maxX = Math.max(maxX, x);
+            minY = Math.min(minY, y);
+            maxY = Math.max(maxY, y);
+        }
+    }
+    return maxX === -1 ? null : { minX, minY, maxX, maxY };
+}
+
 /** Crop the transparent PNG down to its visible content plus a small margin,
  *  so the cutout fills the PDF image box instead of floating in dead space. */
 function cropToContent(img: HTMLImageElement): HTMLCanvasElement | null {
@@ -47,24 +70,13 @@ function cropToContent(img: HTMLImageElement): HTMLCanvasElement | null {
     if (!ctx) return null;
     ctx.drawImage(img, 0, 0);
 
-    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-    let minX = canvas.width, minY = canvas.height, maxX = -1, maxY = -1;
-    for (let y = 0; y < canvas.height; y++) {
-        for (let x = 0; x < canvas.width; x++) {
-            if (data[(y * canvas.width + x) * 4 + 3] > ALPHA_THRESHOLD) {
-                if (x < minX) minX = x;
-                if (x > maxX) maxX = x;
-                if (y < minY) minY = y;
-                if (y > maxY) maxY = y;
-            }
-        }
-    }
-    if (maxX === -1) return null; // fully transparent — keep original
+    const bounds = findOpaqueBounds(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
+    if (!bounds) return null; // fully transparent — keep original
 
-    minX = Math.max(0, minX - CROP_PADDING_PX);
-    minY = Math.max(0, minY - CROP_PADDING_PX);
-    maxX = Math.min(canvas.width - 1, maxX + CROP_PADDING_PX);
-    maxY = Math.min(canvas.height - 1, maxY + CROP_PADDING_PX);
+    const minX = Math.max(0, bounds.minX - CROP_PADDING_PX);
+    const minY = Math.max(0, bounds.minY - CROP_PADDING_PX);
+    const maxX = Math.min(canvas.width - 1, bounds.maxX + CROP_PADDING_PX);
+    const maxY = Math.min(canvas.height - 1, bounds.maxY + CROP_PADDING_PX);
 
     const w = maxX - minX + 1;
     const h = maxY - minY + 1;

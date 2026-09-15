@@ -2,6 +2,8 @@ export interface AuthUser {
   id: string;
   name: string;
   email: string;
+  phone?: string;
+  address?: string;
   role: 'admin' | 'user';
   createdAt: number;
   isOnline?: boolean;
@@ -141,6 +143,11 @@ export const authService = {
 
   async getPresence(): Promise<PresenceMap> {
     return call<PresenceMap>('/auth/presence');
+  },
+
+  /** Saves the signed-in user's own name and contact details. */
+  async updateMe(fields: { name: string; phone: string; address: string }): Promise<AuthUser> {
+    return call<AuthUser>('/auth/me', { method: 'PUT', body: JSON.stringify(fields) });
   },
 
   async heartbeat(): Promise<void> {

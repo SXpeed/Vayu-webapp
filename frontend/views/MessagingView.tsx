@@ -1,9 +1,12 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit2, Check, CheckCheck, Pin, Archive, MoreVertical, Paperclip, Reply, Loader2, Eye, Trash2 } from 'lucide-react';
+import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit2, Check, CheckCheck, Pin, Archive, MoreVertical, Paperclip, Reply, Loader2, Eye, Trash2, Camera } from 'lucide-react';
 import { Conversation, ConversationDetails, Message, MessageTag, MessageReplyTo, MessageAttachment, UserProfile } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import storageService, { getThumbUrl } from '../services/storageService';
+import { useMemberNames } from '../hooks/useMemberNames';
+import { usePhotoCapture } from '../hooks/usePhotoCapture';
+import toast from 'react-hot-toast';
 
 interface MessagingViewProps {
     conversations: Conversation[];
@@ -77,10 +80,14 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
 
     const groupConversations = useMemo(() => conversations.filter(c => c.isGroup), [conversations]);
 
+    const resolveName = useMemberNames(teamMembers);
+    const participantName = (conv: Conversation, idx: number) =>
+        resolveName(conv.participantIds[idx], conv.participantNames[idx]);
+
     const matchesSearch = (c: Conversation) => {
         if (!searchQuery.trim()) return true;
         const q = searchQuery.toLowerCase();
-        return c.participantNames.some(n => n.toLowerCase().includes(q)) || c.lastMessage.toLowerCase().includes(q);
+        return c.participantIds.some((_, i) => participantName(c, i).toLowerCase().includes(q)) || c.lastMessage.toLowerCase().includes(q);
     };
 
     const pinnedConversations = useMemo(
@@ -105,13 +112,14 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
         // Show the first participant that isn't the current user, or just the first.
         if (idx === -1) {
             return {
-                name: conv.participantNames[0] || 'Unknown',
+                name: participantName(conv, 0),
                 id: conv.participantIds[0] || conv.id,
             };
         }
         const otherIdx = idx === 0 ? 1 : 0;
+        const hasOther = otherIdx < conv.participantIds.length;
         return {
-            name: conv.participantNames[otherIdx] || conv.participantNames[0],
+            name: participantName(conv, hasOther ? otherIdx : 0),
             id: conv.participantIds[otherIdx] || conv.participantIds[0],
         };
     };
@@ -121,7 +129,7 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
     const getConvDisplayName = (conv: Conversation) => {
         if (conv.isGroup) return conv.groupName || 'Group';
         if (adminAdvanceView && !conv.participantIds.includes(currentUserId)) {
-            return conv.participantNames.join(' ↔ ');
+            return conv.participantIds.map((_, i) => participantName(conv, i)).join(' ↔ ');
         }
         return getOtherParticipant(conv).name;
     };
@@ -147,12 +155,17 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
         const isForeign = adminAdvanceView && !conv.participantIds.includes(currentUserId);
         return (
             <div key={conv.id} className="relative">
-                <button
-                    type="button"
-                    onClick={() => { setOpenMenuId(null); handleConvClick(conv); }}
-                    className="w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm p-[6px] flex items-center gap-2 border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
+                <div
+                    className="relative w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm p-[6px] flex items-center gap-2 border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
                     style={{ animationDelay: `${150 + index * 50}ms` }}
                 >
+                    {/* Row tap target; inner action buttons sit above it (z-[2]). */}
+                    <button
+                        type="button"
+                        onClick={() => { setOpenMenuId(null); handleConvClick(conv); }}
+                        aria-label={`Open conversation with ${displayName}`}
+                        className="absolute inset-0 z-[1] w-full h-full rounded-[6px] cursor-pointer"
+                    />
                     <div className="relative shrink-0">
                         <div className="w-11 h-11 rounded-full bg-gray-50 dark:bg-gray-800 flex items-center justify-center text-brand-900 dark:text-gold-400">
                             <User size={20} strokeWidth={1.5} />
@@ -181,13 +194,13 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                             {conv.unreadCount}
                         </div>
                     )}
-                    <button
+                    <button type="button" aria-label="Conversation options"
                         onClick={(e) => { e.stopPropagation(); setOpenMenuId(isMenuOpen ? null : conv.id); }}
-                        className="p-1.5 text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale shrink-0"
+                        className="relative z-[2] p-1.5 text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale shrink-0"
                     >
                         <MoreVertical size={16} />
                     </button>
-                </button>
+                </div>
                 {isMenuOpen && (
                     <div className="absolute right-10 top-1/2 -translate-y-1/2 z-20 bg-white dark:bg-[#262626] rounded-[6px] shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden animate-scale-in flex flex-col min-w-[110px]">
                         {conv.isGroup && onUpdateGroup && (
@@ -276,11 +289,16 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                     <div className="space-y-2 animate-fade-in-up">
                         {groupConversations.map((group) => (
                             <div key={group.id} className="relative">
-                                <button
-                                    type="button"
-                                    onClick={() => { setOpenMenuId(null); handleConvClick(group); }}
-                                    className="w-full bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm p-[6px] flex items-center gap-[6px] border border-gold-300 dark:border-gold-700 text-left cursor-pointer"
+                                <div
+                                    className="relative w-full bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm p-[6px] flex items-center gap-[6px] border border-gold-300 dark:border-gold-700 text-left cursor-pointer"
                                 >
+                                    {/* Row tap target; inner action buttons sit above it (z-[2]). */}
+                                    <button
+                                        type="button"
+                                        onClick={() => { setOpenMenuId(null); handleConvClick(group); }}
+                                        aria-label={`Open group ${group.groupName || 'Group'}`}
+                                        className="absolute inset-0 z-[1] w-full h-full rounded-[6px] cursor-pointer"
+                                    />
                                     <div className="w-11 h-11 rounded-full bg-gold-500/10 dark:bg-gold-900/20 flex items-center justify-center text-gold-600 dark:text-gold-400 shrink-0">
                                         <Users size={20} strokeWidth={1.5} />
                                     </div>
@@ -290,13 +308,13 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                                             {group.participantIds.length} members • {group.lastMessage || 'No messages yet'}
                                         </p>
                                     </div>
-                                    <button
+                                    <button type="button" aria-label="Group options"
                                         onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === group.id ? null : group.id); }}
-                                        className="p-1.5 text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale shrink-0"
+                                        className="relative z-[2] p-1.5 text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale shrink-0"
                                     >
                                         <MoreVertical size={16} />
                                     </button>
-                                </button>
+                                </div>
                                 {openMenuId === group.id && (
                                     <div className="absolute right-10 top-1/2 -translate-y-1/2 z-20 bg-white dark:bg-[#262626] rounded-[6px] shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden animate-scale-in flex flex-col min-w-[110px]">
                                         {onUpdateGroup && (
@@ -402,12 +420,13 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
 
             {/* Chat Detail Modal */}
             {selectedConv && (() => {
-                const liveConv = conversations.find(c => c.id === selectedConv.id) || selectedConv;
+                const liveConv = conversations.find(c => c.id === selectedConv.id) ?? selectedConv;
                 return (
                     <FullScreenPortal>
                         <ChatDetailModal
                             conversation={liveConv}
                             messages={messages.filter(m => m.conversationId === liveConv.id)}
+                            resolveName={resolveName}
                             currentUserId={currentUserId}
                             currentUserName={currentUserName}
                             otherParticipant={getOtherParticipant(liveConv)}
@@ -479,6 +498,7 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
 interface ChatDetailModalProps {
     conversation: Conversation;
     messages: Message[];
+    resolveName: (id: string | undefined, storedName?: string) => string;
     currentUserId: string;
     currentUserName: string;
     otherParticipant: { name: string; id: string };
@@ -488,7 +508,13 @@ interface ChatDetailModalProps {
     onUpdateConversationDetails: (conversationId: string, details: ConversationDetails) => void;
 }
 
-const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, messages, currentUserId, currentUserName, otherParticipant, isOnline, onClose, onSendMessage, onUpdateConversationDetails }) => {
+const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, messages, resolveName, currentUserId, currentUserName, otherParticipant, isOnline, onClose, onSendMessage, onUpdateConversationDetails }) => {
+    // Quoted replies store the sender's name at reply time; resolve it through
+    // the original message so placeholders and renames show correctly.
+    const replySenderName = (replyTo: MessageReplyTo) => {
+        const original = messages.find(m => m.id === replyTo.id);
+        return original ? resolveName(original.senderId, original.senderName) : resolveName(undefined, replyTo.senderName);
+    };
     const [newMessage, setNewMessage] = useState('');
     const [selectedTags, setSelectedTags] = useState<Set<MessageTag>>(new Set());
     const [showTagPicker, setShowTagPicker] = useState(false);
@@ -559,30 +585,35 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
         setSelectedTags(newSet);
     };
 
-    const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (file) {
-            setIsUploading(true);
-            try {
-                const result = await storageService.upload(file);
-                setPendingAttachment({
-                    type: file.type.startsWith('image/') ? 'image' : 'file',
-                    url: result.url,
-                    name: file.name,
-                });
-            } catch (error) {
-                console.error('Upload failed:', error);
-                alert('Failed to upload file. Please try again.');
-            } finally {
-                setIsUploading(false);
-            }
+    const uploadAttachment = async (file: File) => {
+        setIsUploading(true);
+        try {
+            const result = await storageService.upload(file);
+            setPendingAttachment({
+                type: file.type.startsWith('image/') ? 'image' : 'file',
+                url: result.url,
+                name: file.name,
+            });
+        } catch (error) {
+            console.error('Upload failed:', error);
+            toast.error('Failed to upload file. Please try again.');
+        } finally {
+            setIsUploading(false);
         }
-        e.target.value = '';
     };
+
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        e.target.value = '';
+        if (file) void uploadAttachment(file);
+    };
+
+    // Camera button: snap a photo and attach it straight away.
+    const camera = usePhotoCapture(([photo]) => { void uploadAttachment(photo); });
 
     const handleSend = () => {
         if (!newMessage.trim() && !pendingAttachment) return;
-        onSendMessage(conversation.id, newMessage.trim(), Array.from(selectedTags), replyingTo || undefined, pendingAttachment || undefined);
+        onSendMessage(conversation.id, newMessage.trim(), Array.from(selectedTags), replyingTo ?? undefined, pendingAttachment ?? undefined);
         setNewMessage('');
         setSelectedTags(new Set());
         setShowTagPicker(false);
@@ -786,11 +817,11 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                             : 'bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-800 rounded-bl-[4px]'
                             }`}>
                             {!isMe && (
-                                <p className="text-[9px] font-bold uppercase tracking-widest mb-1 text-gold-600 dark:text-gold-400">{msg.senderName}</p>
+                                <p className="text-[9px] font-bold uppercase tracking-widest mb-1 text-gold-600 dark:text-gold-400">{resolveName(msg.senderId, msg.senderName)}</p>
                             )}
                             {msg.replyTo && (
                                 <div className={`mb-1.5 pl-2 py-1 border-l-2 rounded-[4px] ${isMe ? 'border-gold-500/50 bg-gold-500/10 dark:border-gray-500/50 dark:bg-gray-700/50' : 'border-gold-400 bg-gray-50 dark:bg-gray-800/50'}`}>
-                                    <p className={`text-[9px] font-bold ${isMe ? 'text-gold-700 dark:text-gold-400' : 'text-gold-600 dark:text-gold-400'}`}>{msg.replyTo.senderName}</p>
+                                    <p className={`text-[9px] font-bold ${isMe ? 'text-gold-700 dark:text-gold-400' : 'text-gold-600 dark:text-gold-400'}`}>{replySenderName(msg.replyTo)}</p>
                                     <p className={`text-[10px] line-clamp-1 ${isMe ? 'text-gray-600 dark:text-gray-400' : 'text-gray-500 dark:text-gray-400'}`}>{msg.replyTo.text}</p>
                                 </div>
                             )}
@@ -822,7 +853,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                     );
                     const replyButton = (
                         <button
-                            onClick={() => setReplyingTo({ id: msg.id, senderName: msg.senderName, text: msg.text || (msg.attachment ? msg.attachment.name : '') })}
+                            onClick={() => setReplyingTo({ id: msg.id, senderName: resolveName(msg.senderId, msg.senderName), text: msg.text || (msg.attachment ? msg.attachment.name : '') })}
                             className="p-1 mb-1 text-gray-300 dark:text-gray-600 hover:text-gold-500 dark:hover:text-gold-400 transition-colors shrink-0 active-scale"
                         >
                             <Reply size={14} />
@@ -917,13 +948,25 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                         <Tag size={18} />
                     </button>
                     <button
+                        type="button"
+                        onClick={camera.openCamera}
+                        disabled={isUploading}
+                        aria-label="Take photo"
+                        className="p-2.5 rounded-full text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors active-scale shrink-0 disabled:opacity-60"
+                    >
+                        <Camera size={18} />
+                    </button>
+                    <button
+                        type="button"
                         onClick={() => fileInputRef.current?.click()}
                         disabled={isUploading}
+                        aria-label="Attach file"
                         className="p-2.5 rounded-full text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors active-scale shrink-0 disabled:opacity-60"
                     >
                         {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
                     </button>
                     <input type="file" accept="image/*,.pdf,.doc,.docx,.txt" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
+                    {camera.inputs}
                     <input
                         value={newMessage}
                         onChange={(e) => setNewMessage(e.target.value)}
