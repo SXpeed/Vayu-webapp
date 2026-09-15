@@ -94,7 +94,7 @@ export const InvoiceView: React.FC<InvoiceViewProps> = ({ invoices, artworks, on
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-[6px] space-y-4 no-scrollbar pb-8">
+            <div className="flex-1 overflow-y-auto p-[6px] space-y-4 no-scrollbar pb-20">
                 {/* Summary Cards */}
                 <div className="grid grid-cols-2 gap-[6px] mb-6">
                     <div className="bg-white dark:bg-[#1e1e1e] p-[6px] rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 animate-fade-in-up" style={{ animationDelay: '50ms' }}>
@@ -288,7 +288,7 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({ invoice,
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-[6px] no-scrollbar pb-8">
+            <div className="flex-1 overflow-y-auto p-[6px] no-scrollbar pb-20">
                 <div className="mb-4 animate-fade-in-up" style={{ animationDelay: '50ms' }}>
                     <ProformaPdfActions invoice={invoice} artworks={artworks} />
                 </div>

@@ -82,7 +82,7 @@ export const CollectionsView: React.FC<CollectionsViewProps> = ({ collections, a
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-[6px] space-y-2 no-scrollbar pb-8">
+            <div className="flex-1 overflow-y-auto p-[6px] space-y-2 no-scrollbar pb-20">
                 {filteredCollections.map((collection, index) => {
                     const coverImage = getCoverImage(collection);
                     return (

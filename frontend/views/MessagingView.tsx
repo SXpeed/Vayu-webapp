@@ -283,7 +283,7 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-[6px] space-y-4 no-scrollbar pb-8">
+            <div className="flex-1 overflow-y-auto p-[6px] space-y-4 no-scrollbar pb-20">
                 {/* Group Chats */}
                 {groupConversations.length > 0 && (
                     <div className="space-y-2 animate-fade-in-up">
@@ -1145,24 +1145,22 @@ interface NewChatModalProps {
     teamMembers: UserProfile[];
     existingConvIds: string[];
     onClose: () => void;
-    onSelectMember: (memberId: string, details: ConversationDetails) => void;
+    onSelectMember: (memberId: string, details?: ConversationDetails) => void;
     onCreateGroup: (participantIds: string[], groupName: string, details: ConversationDetails) => void;
 }
 
 const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvIds, onClose, onSelectMember, onCreateGroup }) => {
     const [mode, setMode] = useState<'direct' | 'group'>('direct');
-    const [selectedMember, setSelectedMember] = useState<UserProfile | null>(null);
+    const [startingId, setStartingId] = useState<string | null>(null);
     const [formData, setFormData] = useState<ConversationDetails>({ title: '', reason: '', note: '' });
     const [groupName, setGroupName] = useState('');
     const [selectedGroupMemberIds, setSelectedGroupMemberIds] = useState<Set<string>>(new Set());
 
-    const handleStart = () => {
-        if (!selectedMember) return;
-        onSelectMember(selectedMember.id, {
-            title: formData.title?.trim() || undefined,
-            reason: formData.reason?.trim() || undefined,
-            note: formData.note?.trim() || undefined,
-        });
+    // 1-on-1 chats start immediately on member tap — no title/reason form beforehand.
+    const handleSelectMember = (member: UserProfile) => {
+        if (startingId) return; // guard against double-tap while the conversation is created
+        setStartingId(member.id);
+        onSelectMember(member.id);
     };
 
     const toggleGroupMember = (memberId: string) => {
@@ -1183,18 +1181,16 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
         });
     };
 
-    let headerTitle = 'New Message';
-    if (selectedMember) headerTitle = 'Start Conversation';
-    else if (mode === 'group') headerTitle = 'New Group';
+    const headerTitle = mode === 'group' ? 'New Group' : 'New Message';
 
     return (
         <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-[60] flex flex-col animate-fade-in-up">
             <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm z-10">
                 <button
-                    onClick={() => selectedMember ? setSelectedMember(null) : onClose()}
+                    onClick={onClose}
                     className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale"
                 >
-                    {selectedMember ? <ArrowLeft size={20} /> : <X size={20} />}
+                    <X size={20} />
                 </button>
                 <h2 className="text-base font-serif text-gray-900 dark:text-white">
                     {headerTitle}
@@ -1202,8 +1198,7 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                 <div className="w-9"></div>
             </div>
 
-            {!selectedMember && (
-                <div className="bg-white dark:bg-[#1a1a1a] border-b border-gray-100 dark:border-gray-800 px-[6px] pb-[6px] flex gap-2">
+            <div className="bg-white dark:bg-[#1a1a1a] border-b border-gray-100 dark:border-gray-800 px-[6px] pb-[6px] flex gap-2">
                     <button
                         onClick={() => setMode('direct')}
                         className={`flex-1 py-2 rounded-[6px] text-[10px] font-bold uppercase tracking-widest transition-all active-scale ${mode === 'direct'
@@ -1223,9 +1218,8 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                         New Group
                     </button>
                 </div>
-            )}
 
-            {!selectedMember && mode === 'direct' && (
+            {mode === 'direct' && (
                 <div className="flex-1 overflow-y-auto p-[6px] space-y-2 no-scrollbar">
                     <h3 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-[6px] px-1">Team Members</h3>
                     {teamMembers.length === 0 ? (
@@ -1242,7 +1236,7 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                         <button
                             type="button"
                             key={member.id}
-                            onClick={() => setSelectedMember(member)}
+                            onClick={() => handleSelectMember(member)}
                             className="w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm p-[6px] flex items-center gap-[6px] border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
                             style={{ animationDelay: `${index * 50}ms` }}
                         >
@@ -1260,13 +1254,15 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                                     {member.isOnline ? 'Online' : 'Offline'}
                                 </p>
                             </div>
-                            <MessageCircle size={18} className="text-gray-400 dark:text-gray-500" />
+                            {startingId === member.id
+                                ? <Loader2 size={18} className="text-gray-400 dark:text-gray-500 animate-spin" />
+                                : <MessageCircle size={18} className="text-gray-400 dark:text-gray-500" />}
                         </button>
                     ))}
                 </div>
             )}
 
-            {!selectedMember && mode === 'group' && (
+            {mode === 'group' && (
                 <div className="flex-1 overflow-y-auto p-[6px] space-y-5 no-scrollbar">
                     <div>
                         <label htmlFor="create-group-name" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Group Name</label>
@@ -1368,63 +1364,6 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                             }`}
                     >
                         Create Group
-                    </button>
-                </div>
-            )}
-
-            {selectedMember && (
-                <div className="flex-1 overflow-y-auto p-[6px] space-y-5 no-scrollbar">
-                    <div className="flex items-center gap-[6px] bg-white dark:bg-[#1e1e1e] rounded-[6px] p-[6px] border border-gray-100 dark:border-gray-800">
-                        <div className="w-11 h-11 rounded-full bg-gray-50 dark:bg-gray-800 flex items-center justify-center text-brand-900 dark:text-gold-400 shrink-0">
-                            <User size={20} strokeWidth={1.5} />
-                        </div>
-                        <div>
-                            <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm">{selectedMember.name}</h3>
-                            <p className={`text-[9px] uppercase tracking-widest font-medium ${selectedMember.isOnline ? 'text-green-500' : 'text-gray-400 dark:text-gray-500'}`}>
-                                {selectedMember.isOnline ? 'Online' : 'Offline'}
-                            </p>
-                        </div>
-                    </div>
-
-                    <div>
-                        <label htmlFor="create-dm-title" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Title</label>
-                        <input
-                            id="create-dm-title"
-                            value={formData.title}
-                            onChange={(e) => setFormData(prev => ({ ...prev, title: e.target.value }))}
-                            placeholder="What's this conversation about?"
-                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
-                        />
-                    </div>
-
-                    <div>
-                        <label htmlFor="create-dm-reason" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Why are we starting this?</label>
-                        <input
-                            id="create-dm-reason"
-                            value={formData.reason}
-                            onChange={(e) => setFormData(prev => ({ ...prev, reason: e.target.value }))}
-                            placeholder="Reason for reaching out"
-                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
-                        />
-                    </div>
-
-                    <div>
-                        <label htmlFor="create-dm-note" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Note</label>
-                        <textarea
-                            id="create-dm-note"
-                            value={formData.note}
-                            onChange={(e) => setFormData(prev => ({ ...prev, note: e.target.value }))}
-                            placeholder="Any extra context (optional)"
-                            rows={3}
-                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors resize-none"
-                        />
-                    </div>
-
-                    <button
-                        onClick={handleStart}
-                        className="w-full bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 rounded-[6px] py-3 text-sm font-medium tracking-wide hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors shadow-md active-scale"
-                    >
-                        Start Conversation
                     </button>
                 </div>
             )}

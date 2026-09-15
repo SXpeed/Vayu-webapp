@@ -711,7 +711,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-[6px] space-y-2 no-scrollbar pb-8">
+            <div className="flex-1 overflow-y-auto p-[6px] space-y-2 no-scrollbar pb-20">
                 {filteredCatalogs.map((catalog, index) => (
                     <div
                         key={catalog.id}

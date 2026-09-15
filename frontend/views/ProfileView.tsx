@@ -75,7 +75,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ profile, onUpdateProfi
                 )}
             </div>
 
-            <div className="flex-1 overflow-y-auto p-[6px] space-y-6 no-scrollbar pb-8">
+            <div className="flex-1 overflow-y-auto p-[6px] space-y-6 no-scrollbar pb-20">
                 
                 {/* Personal Info */}
                 <section className="bg-white dark:bg-[#1e1e1e] p-5 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 space-y-4 animate-fade-in-up" style={{ animationDelay: '50ms' }}>
