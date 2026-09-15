@@ -36,7 +36,22 @@ jobs:
         run: npm run build --prefix frontend
 
       - name: Deploy to Cloudflare Workers
-        run: npx wrangler deploy
+        id: deploy
+        run: npx wrangler deploy > deploy_output.txt 2>&1
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Report deploy result
+        if: always()
+        run: |
+          if [ "${{ steps.deploy.outcome }}" = "failure" ]; then
+            echo "=== DEPLOY FAILED, full error: ==="
+            cat deploy_output.txt
+            MSG=$(tail -c 700 deploy_output.txt | tr -d '\r' | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error::$MSG"
+            exit 1
+          else
+            echo "=== DEPLOY SUCCEEDED ==="
+            tail -n 20 deploy_output.txt
+          fi
