@@ -48,8 +48,8 @@ jobs:
           if [ "${{ steps.deploy.outcome }}" = "failure" ]; then
             echo "=== DEPLOY FAILED, full error: ==="
             cat deploy_output.txt
-            MSG=$(tail -c 700 deploy_output.txt | tr -d '\r' | sed ':a;N;$!ba;s/\n/%0A/g')
-            echo "::error::$MSG"
+            ERRS=$(grep -i -m 6 -E "ERROR|failed|unauthorized|forbidden|not authorized|✘" deploy_output.txt | tr -d '\r' | head -c 900 | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error::$ERRS"
             exit 1
           else
             echo "=== DEPLOY SUCCEEDED ==="
