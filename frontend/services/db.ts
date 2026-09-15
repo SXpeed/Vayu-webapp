@@ -1,4 +1,4 @@
-import { Artwork, Catalog, Collection, Invoice, Inquiry, Conversation, Message, InquiryMessage, UserProfile } from '../types';
+import { Artwork, CalendarEvent, Catalog, Collection, Contact, Invoice, Inquiry, Conversation, Message, InquiryMessage, UserProfile } from '../types';
 
 const STORAGE_KEYS = {
   users: 'vayu_users',
@@ -10,6 +10,8 @@ const STORAGE_KEYS = {
   conversations: 'vayu_conversations',
   messages: 'vayu_messages',
   inquiryMessages: 'vayu_inquiry_messages',
+  events: 'vayu_events',
+  contacts: 'vayu_contacts',
   seedVersion: 'vayu_seed_version',
 };
 
@@ -163,6 +165,28 @@ export const db = {
   },
   async saveInquiryMessage(msg: InquiryMessage): Promise<void> {
     setArray(STORAGE_KEYS.inquiryMessages, upsertById(getArray<InquiryMessage>(STORAGE_KEYS.inquiryMessages), msg));
+  },
+
+  // Calendar Events
+  async getEvents(): Promise<CalendarEvent[]> {
+    return getArray<CalendarEvent>(STORAGE_KEYS.events).sort((a, b) => a.date - b.date);
+  },
+  async saveEvent(event: CalendarEvent): Promise<void> {
+    setArray(STORAGE_KEYS.events, upsertById(getArray<CalendarEvent>(STORAGE_KEYS.events), event));
+  },
+  async deleteEvent(id: string): Promise<void> {
+    setArray(STORAGE_KEYS.events, getArray<CalendarEvent>(STORAGE_KEYS.events).filter(e => e.id !== id));
+  },
+
+  // Contacts
+  async getContacts(): Promise<Contact[]> {
+    return getArray<Contact>(STORAGE_KEYS.contacts).sort((a, b) => b.createdAt - a.createdAt);
+  },
+  async saveContact(contact: Contact): Promise<void> {
+    setArray(STORAGE_KEYS.contacts, upsertById(getArray<Contact>(STORAGE_KEYS.contacts), contact));
+  },
+  async deleteContact(id: string): Promise<void> {
+    setArray(STORAGE_KEYS.contacts, getArray<Contact>(STORAGE_KEYS.contacts).filter(c => c.id !== id));
   },
 
 };

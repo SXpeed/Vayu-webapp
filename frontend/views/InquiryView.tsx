@@ -523,7 +523,9 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                             value={chatSearchQuery}
                             onChange={(e) => setChatSearchQuery(e.target.value)}
                             placeholder="Search in this chat..."
-                            autoFocus
+                            autoComplete="off"
+                            autoCorrect="off"
+                            spellCheck={false}
                             className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 pl-8 pr-8 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
                         />
                         {chatSearchQuery && (

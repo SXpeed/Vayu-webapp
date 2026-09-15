@@ -1,11 +1,13 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { Artwork, Catalog, Invoice, Collection, Inquiry, Conversation, Message, InquiryMessage, UserProfile } from '../types';
+import { Artwork, CalendarEvent, Catalog, Collection, Contact, Invoice, Inquiry, Conversation, Message, InquiryMessage, UserProfile } from '../types';
 import { db } from '../services/db';
 import { messagingService } from '../services/messagingService';
 import { artworkService } from '../services/artworkService';
 import { collectionService } from '../services/collectionService';
 import { catalogService } from '../services/catalogService';
 import { inquiryService } from '../services/inquiryService';
+import { eventService } from '../services/eventService';
+import { contactService } from '../services/contactService';
 import { authService, AuthUser } from '../services/authService';
 
 /**
@@ -23,6 +25,8 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
     const [allMessages, setAllMessages] = useState<Message[]>([]);
     const [inquiryMessages, setInquiryMessages] = useState<InquiryMessage[]>([]);
     const [teamMembers, setTeamMembers] = useState<UserProfile[]>([]);
+    const [events, setEvents] = useState<CalendarEvent[]>([]);
+    const [contacts, setContacts] = useState<Contact[]>([]);
 
     // Serialized snapshot of the last payload applied per entity key. Polling
     // compares against this and skips setState when nothing changed, so the
@@ -45,7 +49,8 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
             try {
                 const [
                     loadedArtworks, loadedConversations, loadedMessages,
-                    loadedCollections, loadedCatalogs, loadedInquiries, loadedInquiryMessages
+                    loadedCollections, loadedCatalogs, loadedInquiries, loadedInquiryMessages,
+                    loadedEvents, loadedContacts
                 ] = await Promise.all([
                     artworkService.getArtworks(),
                     messagingService.getConversations(),
@@ -54,12 +59,16 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
                     catalogService.getCatalogs(),
                     inquiryService.getInquiries(),
                     inquiryService.getInquiryMessages(),
+                    eventService.getEvents(),
+                    contactService.getContacts(),
                 ]);
                 applyIfChanged('artworks', loadedArtworks, setArtworks);
                 applyIfChanged('conversations', loadedConversations, setConversations);
                 applyIfChanged('messages', loadedMessages, setAllMessages);
                 applyIfChanged('collections', loadedCollections, setCollections);
                 applyIfChanged('catalogs', loadedCatalogs, setCatalogs);
+                applyIfChanged('events', loadedEvents, setEvents);
+                applyIfChanged('contacts', loadedContacts, setContacts);
                 applyIfChanged('inquiries', loadedInquiries, setInquiries);
                 applyIfChanged('inquiryMessages', loadedInquiryMessages, setInquiryMessages);
                 for (const art of loadedArtworks) await db.saveArtwork(art);
@@ -258,17 +267,21 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
         const pollEntities = async () => {
             if (cancelled || document.visibilityState === 'hidden') return;
             try {
-                const [remoteArtworks, remoteCollections, remoteCatalogs, remoteInquiries] = await Promise.all([
+                const [remoteArtworks, remoteCollections, remoteCatalogs, remoteInquiries, remoteEvents, remoteContacts] = await Promise.all([
                     artworkService.getArtworks(),
                     collectionService.getCollections(),
                     catalogService.getCatalogs(),
                     inquiryService.getInquiries(),
+                    eventService.getEvents(),
+                    contactService.getContacts(),
                 ]);
                 if (!cancelled) {
                     applyIfChanged('artworks', remoteArtworks, setArtworks);
                     applyIfChanged('collections', remoteCollections, setCollections);
                     applyIfChanged('catalogs', remoteCatalogs, setCatalogs);
                     applyIfChanged('inquiries', remoteInquiries, setInquiries);
+                    applyIfChanged('events', remoteEvents, setEvents);
+                    applyIfChanged('contacts', remoteContacts, setContacts);
                 }
             } catch (err) {
                 console.warn('Failed to poll entities:', err);
@@ -298,6 +311,8 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
         allMessages, setAllMessages,
         inquiryMessages, setInquiryMessages,
         teamMembers, setTeamMembers,
+        events, setEvents,
+        contacts, setContacts,
         loadData,
         loadTeamMembers,
         migrateLocalToD1,

@@ -695,12 +695,12 @@ interface Route {
 
 async function handleAuthStatus(ctx: Ctx): Promise<Response> {
   const count = await ctx.env.VAYU_KV.get('auth:count');
-  return json({ needsSetup: !count || Number.parseInt(count) === 0 });
+  return json({ needsSetup: !count || Number.parseInt(count, 10) === 0 });
 }
 
 async function handleAuthSetup(ctx: Ctx): Promise<Response> {
   const count = await ctx.env.VAYU_KV.get('auth:count');
-  if (count && Number.parseInt(count) > 0) return err('Setup already complete', 403);
+  if (count && Number.parseInt(count, 10) > 0) return err('Setup already complete', 403);
   const body = await ctx.request.json();
   const { name, email, password } = body as { name?: string; email?: string; password?: string };
   if (!name || !email || !password) return err('name, email and password are required');
@@ -856,7 +856,7 @@ async function handleAuthUsersCreate(ctx: Ctx): Promise<Response> {
   await ctx.env.VAYU_KV.put(`auth:user:${id}`, JSON.stringify(user));
   await ctx.env.VAYU_KV.put(emailKey, id);
   const countRaw = await ctx.env.VAYU_KV.get('auth:count');
-  await ctx.env.VAYU_KV.put('auth:count', String((countRaw ? Number.parseInt(countRaw) : 0) + 1));
+  await ctx.env.VAYU_KV.put('auth:count', String((countRaw ? Number.parseInt(countRaw, 10) : 0) + 1));
   await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'created', 'user', id, `Created user "${name}" (${email}) with role "${role === 'admin' ? 'admin' : 'user'}"`);
   return json(stripPassword(user), 201);
 }
@@ -873,7 +873,7 @@ async function handleAuthUsersDelete(ctx: Ctx): Promise<Response> {
   await ctx.env.VAYU_KV.delete(`auth:user:${userId}`);
   await ctx.env.VAYU_KV.delete(`auth:email:${user.email}`);
   const countRaw = await ctx.env.VAYU_KV.get('auth:count');
-  if (countRaw) await ctx.env.VAYU_KV.put('auth:count', String(Math.max(0, Number.parseInt(countRaw) - 1)));
+  if (countRaw) await ctx.env.VAYU_KV.put('auth:count', String(Math.max(0, Number.parseInt(countRaw, 10) - 1)));
   await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'deleted', 'user', userId, `Deleted user "${user.name}" (${user.email})`);
   return json({ success: true });
 }
@@ -943,7 +943,7 @@ async function handleActivityLogsList(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
   if (session.role !== 'admin') return err('Forbidden', 403);
-  const limit = Math.min(Number.parseInt(ctx.url.searchParams.get('limit') || '100'), 500);
+  const limit = Math.min(Number.parseInt(ctx.url.searchParams.get('limit') || '100', 10), 500);
   const results = await ctx.env.VAYU_DB.prepare(
     'SELECT * FROM activity_logs ORDER BY timestamp DESC LIMIT ?'
   ).bind(limit).all();
@@ -1782,6 +1782,259 @@ async function handleInquiryMessageStatusBatch(ctx: Ctx): Promise<Response> {
   return json({ success: true });
 }
 
+// ── Calendar event route handlers ───────────────────────────────────────────
+
+function rowToEvent(row: Record<string, unknown>): any {
+  let todos: any[] = [];
+  try { todos = row.todos ? JSON.parse(row.todos as string) : []; } catch { todos = []; }
+  return {
+    id: row.id as string,
+    title: (row.title as string) || '',
+    date: row.event_date as number,
+    endDate: (row.end_date as number) || undefined,
+    notes: row.notes || undefined,
+    todos,
+    createdAt: row.created_at as number,
+    createdBy: row.created_by || undefined,
+    createdByName: row.created_by_name || undefined,
+  };
+}
+
+// The events table is created lazily (once per isolate) so no manual D1
+// migration is required before first use. Column ALTERs handle tables created
+// before end_date/todos existed.
+let eventsTablePromise: Promise<void> | null = null;
+function ensureEventsTable(db: D1Database): Promise<void> {
+  eventsTablePromise ??= db.prepare(`
+      CREATE TABLE IF NOT EXISTS events (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL DEFAULT '',
+        event_date INTEGER NOT NULL DEFAULT 0,
+        end_date INTEGER,
+        todos TEXT NOT NULL DEFAULT '[]',
+        notes TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT,
+        created_by_name TEXT
+      )
+    `).run().then(async () => {
+      // Migration for tables created before end_date/todos were added —
+      // ALTER fails harmlessly when the column already exists.
+      try { await db.prepare('ALTER TABLE events ADD COLUMN end_date INTEGER').run(); } catch { /* already exists */ }
+      try { await db.prepare(`ALTER TABLE events ADD COLUMN todos TEXT NOT NULL DEFAULT '[]'`).run(); } catch { /* already exists */ }
+    });
+  return eventsTablePromise;
+}
+
+async function handleEventsList(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  await ensureEventsTable(ctx.env.VAYU_DB);
+  const results = await ctx.env.VAYU_DB.prepare(
+    'SELECT * FROM events ORDER BY event_date ASC'
+  ).all();
+  const events = (results.results || []).map(rowToEvent);
+  return json(events);
+}
+
+async function handleEventsCreate(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const body = await ctx.request.json();
+  const ev = body as any;
+  if (!ev.id) return err('id is required');
+  if (!ev.title || !String(ev.title).trim()) return err('title is required');
+  if (!ev.date) return err('date is required');
+  await ensureEventsTable(ctx.env.VAYU_DB);
+  // Preserve the original creator on re-syncs/migrations, mirroring inquiries.
+  const existing = await ctx.env.VAYU_DB.prepare(
+    'SELECT created_by, created_by_name FROM events WHERE id = ?'
+  ).bind(ev.id).first<{ created_by: string | null; created_by_name: string | null }>();
+  const createdBy = existing ? existing.created_by || '' : session.userId;
+  const createdByName = existing ? existing.created_by_name || '' : session.name;
+  await ctx.env.VAYU_DB.prepare(
+    `INSERT OR REPLACE INTO events
+     (id, title, event_date, end_date, todos, notes, created_at, created_by, created_by_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    ev.id,
+    String(ev.title).trim(),
+    ev.date,
+    ev.endDate ?? null,
+    JSON.stringify(ev.todos || []),
+    ev.notes || '',
+    ev.createdAt || Date.now(),
+    createdBy,
+    createdByName
+  ).run();
+  if (!existing) {
+    logEntityChange(ctx, session, 'created', 'event', ev.id, `Added event "${String(ev.title).trim()}"`);
+  }
+  return json({ ...ev, createdBy: createdBy || undefined, createdByName: createdByName || undefined }, 201);
+}
+
+async function handleEventsUpdate(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const evId = ctx.path.slice('/events/'.length);
+  if (!evId) return err('Event not found', 404);
+  const body = await ctx.request.json() as any;
+  if (!body.date) return err('date is required');
+  await ensureEventsTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.prepare(
+    `UPDATE events SET
+       title = ?, event_date = ?, end_date = ?, notes = ?, todos = ?
+     WHERE id = ?`
+  ).bind(
+    String(body.title || '').trim(),
+    body.date,
+    body.endDate ?? null,
+    body.notes || '',
+    JSON.stringify(body.todos || []),
+    evId
+  ).run();
+  logEntityChange(ctx, session, 'updated', 'event', evId, `Updated event "${String(body.title || '').trim()}"`);
+  return json(body);
+}
+
+async function handleEventsDelete(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const evId = ctx.path.slice('/events/'.length);
+  if (!evId) return err('Event not found', 404);
+  await ensureEventsTable(ctx.env.VAYU_DB);
+  const result = await ctx.env.VAYU_DB.prepare(
+    'SELECT * FROM events WHERE id = ?'
+  ).bind(evId).first();
+  await ctx.env.VAYU_DB.prepare('DELETE FROM events WHERE id = ?').bind(evId).run();
+  if (result) {
+    const ev = rowToEvent(result);
+    logEntityChange(ctx, session, 'deleted', 'event', evId, `Deleted event "${ev.title}"`);
+  }
+  return json({ success: true });
+}
+
+// ── Contact route handlers ──────────────────────────────────────────────────
+// Manual + imported contacts. Contacts derived from inquiries are computed
+// client-side and never stored here.
+
+function rowToContact(row: Record<string, unknown>): any {
+  return {
+    id: row.id as string,
+    name: (row.name as string) || '',
+    phone: (row.phone as string) || '',
+    email: row.email || undefined,
+    notes: row.notes || undefined,
+    source: (row.source as string) || 'manual',
+    createdAt: row.created_at as number,
+    createdBy: row.created_by || undefined,
+    createdByName: row.created_by_name || undefined,
+  };
+}
+
+// The contacts table is created lazily (once per isolate) so no manual D1
+// migration is required before first use.
+let contactsTablePromise: Promise<void> | null = null;
+function ensureContactsTable(db: D1Database): Promise<void> {
+  contactsTablePromise ??= db.prepare(`
+      CREATE TABLE IF NOT EXISTS contacts (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL DEFAULT '',
+        phone TEXT NOT NULL DEFAULT '',
+        email TEXT NOT NULL DEFAULT '',
+        notes TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL DEFAULT 'manual',
+        created_at INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT,
+        created_by_name TEXT
+      )
+    `).run().then(() => undefined);
+  return contactsTablePromise;
+}
+
+async function handleContactsList(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  await ensureContactsTable(ctx.env.VAYU_DB);
+  const results = await ctx.env.VAYU_DB.prepare(
+    'SELECT * FROM contacts ORDER BY created_at DESC'
+  ).all();
+  const contacts = (results.results || []).map(rowToContact);
+  return json(contacts);
+}
+
+async function handleContactsCreate(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const body = await ctx.request.json();
+  const c = body as any;
+  if (!c.id) return err('id is required');
+  if (!c.name || !String(c.name).trim()) return err('name is required');
+  await ensureContactsTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.prepare(
+    `INSERT OR REPLACE INTO contacts
+     (id, name, phone, email, notes, source, created_at, created_by, created_by_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    c.id,
+    String(c.name).trim(),
+    c.phone || '',
+    c.email || '',
+    c.notes || '',
+    c.source || 'manual',
+    c.createdAt || Date.now(),
+    session.userId,
+    session.name
+  ).run();
+  logEntityChange(ctx, session, 'created', 'contact', c.id, `Added contact "${String(c.name).trim()}"`);
+  return json({ ...c, createdBy: session.userId, createdByName: session.name }, 201);
+}
+
+async function handleContactsImport(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const body = await ctx.request.json() as any;
+  const list = Array.isArray(body?.contacts) ? body.contacts : [];
+  if (list.length === 0) return err('contacts array is required');
+  if (list.length > 500) return err('Too many contacts (max 500 per import)');
+  await ensureContactsTable(ctx.env.VAYU_DB);
+  const stmts = list.map((c: any) => ctx.env.VAYU_DB.prepare(
+    `INSERT OR REPLACE INTO contacts
+     (id, name, phone, email, notes, source, created_at, created_by, created_by_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    c.id,
+    String(c.name || '').trim(),
+    c.phone || '',
+    c.email || '',
+    c.notes || '',
+    c.source || 'import',
+    c.createdAt || Date.now(),
+    session.userId,
+    session.name
+  ));
+  await ctx.env.VAYU_DB.batch(stmts);
+  logEntityChange(ctx, session, 'created', 'contact', 'import', `Imported ${stmts.length} contact(s)`);
+  return json({ imported: stmts.length }, 201);
+}
+
+async function handleContactsDelete(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const contactId = ctx.path.slice('/contacts/'.length);
+  if (!contactId) return err('Contact not found', 404);
+  await ensureContactsTable(ctx.env.VAYU_DB);
+  const result = await ctx.env.VAYU_DB.prepare(
+    'SELECT * FROM contacts WHERE id = ?'
+  ).bind(contactId).first();
+  await ctx.env.VAYU_DB.prepare('DELETE FROM contacts WHERE id = ?').bind(contactId).run();
+  if (result) {
+    const c = rowToContact(result);
+    logEntityChange(ctx, session, 'deleted', 'contact', contactId, `Deleted contact "${c.name}"`);
+  }
+  return json({ success: true });
+}
+
 // ── Route table ─────────────────────────────────────────────────────────────
 
 const isExact = (p: string) => (path: string) => path === p;
@@ -1854,6 +2107,18 @@ const routes: Route[] = [
   { method: 'POST', match: isExact('/inquiry-messages'), handler: handleInquiryMessagesCreate },
   { method: 'PUT', match: (p) => p.startsWith('/inquiry-messages/') && p.endsWith('/status'), handler: handleInquiryMessageStatusUpdate },
   { method: 'PUT', match: isExact('/inquiry-messages/status-batch'), handler: handleInquiryMessageStatusBatch },
+
+  // Calendar events
+  { method: 'GET', match: isExact('/events'), handler: handleEventsList },
+  { method: 'POST', match: isExact('/events'), handler: handleEventsCreate },
+  { method: 'PUT', match: isPrefix('/events/'), handler: handleEventsUpdate },
+  { method: 'DELETE', match: isPrefix('/events/'), handler: handleEventsDelete },
+
+  // Contacts
+  { method: 'GET', match: isExact('/contacts'), handler: handleContactsList },
+  { method: 'POST', match: isExact('/contacts'), handler: handleContactsCreate },
+  { method: 'POST', match: isExact('/contacts/import'), handler: handleContactsImport },
+  { method: 'DELETE', match: isPrefix('/contacts/'), handler: handleContactsDelete },
 
   // Settings
   { method: 'GET', match: isExact('/settings'), handler: handleSettingsGet },

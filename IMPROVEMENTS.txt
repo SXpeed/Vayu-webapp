@@ -1,0 +1,67 @@
+=====================================================
+VAYU WEBAPP — IMPROVEMENTS CHECKLIST (short form)
+Updated: 2026-09-15
+=====================================================
+
+[X] DONE — UI / UX
+- Bottom nav overlapping tiles (Collections/Catalogs/Messaging/Invoice/Profile) -> pb-20
+- 1-on-1 chat opened a shared group -> fixed (!isGroup check in useHandlers)
+- 1-on-1 chat: title/reason form removed -> chat starts instantly on tap
+- Group chat scroll shift on open -> instant pre-paint scroll (useLayoutEffect)
+- New messages only auto-follow when near bottom
+- Touch: taps eaten while rows animate -> animations 0.6s->0.3s, staggers halved,
+  touch-action: manipulation, active-scale smooth release
+- PWA auto-update: checks SW update on resume + auto-reload on new version
+
+[ ] TODO — BACKGROUND REMOVAL (frontend/services/imageCutoutService.ts)
+- Downscale input to ~1536-2048px before AI inference (3-10x faster, no visible loss)
+- Add device:'gpu' (WebGPU, auto CPU fallback) — build already ships the bundle
+- Persist cutouts in IndexedDB (today in-memory only -> recompute after restart)
+- Self-host AI model files via publicPath + prefetch/warm-up (kills 30-60s first-use CDN download)
+- Try model:'small' for speed (A/B edge quality)
+- Optional later: server-side removal via Cloudflare Workers AI (see next section)
+
+[ ] TODO — SERVER-SIDE CUTOUT (Cloudflare Workers AI) — ~half a day, biggest catalog win
+Result: phone catalog cutouts minutes -> ~10-30s total; repeat catalogs instant for the whole team
+Why fast: images already live in R2 -> worker reads them directly (no upload), GPU inference ~0.5-2s,
+  no model download on device ever, cheap phones get desktop speed
+- wrangler.jsonc: add "ai": { "binding": "AI" }
+- worker.ts: POST /api/cutout (session auth), input = R2 key from /api/files/... URL:
+    1. cache check: R2 get key__cutout -> exists? return URL instantly
+    2. read original from R2 -> run Workers AI background-removal model
+    3. store transparent PNG as key__cutout (immutable cache headers) -> return url
+- worker.ts: add key__cutout to deleteUploadedFiles() so cutouts are cleaned up on artwork delete
+- No file-serving change needed (handleFileGet already serves any R2 key generically)
+- imageCutoutService.ts: try POST /api/cutout first -> on ANY failure fall back to existing
+  on-device pipeline (kept untouched = zero regression risk)
+- Keep existing client cropToContent() (server returns uncropped PNG; no canvas in workers)
+- Verify at impl time: exact model ID + response format + neuron cost + input size limit
+  (if a photo exceeds the limit -> that image falls back to on-device)
+- Testing: catalog on real device (~1-3s/image), R2 shows __cutout objects, repeat catalog
+  = instant (cache hit), force server error -> fallback works, artwork delete cleans cutout
+- Cost: fraction of a cent per image (neurons) + daily free neuron allowance on paid plan
+
+
+[ ] TODO — CLOUDFLARE INVOCATIONS (paid plan, ~8.5k/day/user today)
+- L0 QUICK WINS (2-4h): merge 4 pollers into 1 /api/sync; adaptive intervals
+  (chat open 15s, idle 60s); presence heartbeat 30s->60s; Cache Rule on /api/files/*
+  -> ~85% cut. Do NOT cache authed API routes (edge cache skips auth — leak risk).
+- L1 PUSH-DRIVEN SYNC (~1 day): reuse existing Web Push — changes notify team,
+  SW broadcasts SYNC_REQUIRED, poll = 10min safety net -> ~99% cut, chat ~1-2s
+- L2 DURABLE OBJECTS + WEBSOCKET (2-4 days): hibernation, presence = connection
+  (deletes heartbeat + KV writes), realtime typing/delivery -> ~99.8% cut
+- L3 ANALYTICS ENGINE (2-4h): per-route invocation counters — DO THIS FIRST (measure)
+- Note: KV writes are the real quota risk (1M/mo included; heartbeat burns ~21k/user)
+
+[ ] TODO — NATIVE APP FEEL (APK / iOS)
+- Custom domain on Cloudflare (required, free, dashboard-only)
+- Serve /.well-known/assetlinks.json from worker (removes URL bar in TWA APK)
+- Rebuild APK via PWABuilder/Bubblewrap after 1+2
+- iOS: keep home-screen PWA (real push on iOS 16.4+); App Store route = Capacitor later
+
+[ ] MINOR / BACKLOG
+- Actions checkout/setup-node deprecation warning (Node 20 -> Node 24) in CI
+- Consider bumping wrangler 4.110 -> 4.131
+
+SUGGESTED ORDER: L3 (measure) -> L0 -> observe -> L1 -> native TWA -> L2
+RULES: commit/push only when user says so. Deploys happen via git push (GitHub Actions).

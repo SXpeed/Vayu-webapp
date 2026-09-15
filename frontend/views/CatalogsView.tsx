@@ -562,39 +562,26 @@ const drawSinglePage = async (
     return pagesAddedNow;
 };
 
-const drawArtworkPages = async (
-    doc: jsPDF,
-    art: Artwork,
-    artIndex: number,
-    options: PdfOptions,
-    themeId: CatalogTheme,
-    theme2BgDataUrl: string,
-    catalog: Catalog,
-    onProgress?: (message: string) => void
-) => {
-    const ctx: PageDrawContext = {
-        doc, art, artIndex, options, themeId, theme2BgDataUrl,
-        catalogName: catalog.name, catalogCoverUrl: catalog.coverImageUrl,
-        onProgress
-    };
+const drawArtworkPages = async (pageCtx: PageDrawContext): Promise<void> => {
+    const { doc, art, artIndex, options, themeId, theme2BgDataUrl } = pageCtx;
     let pagesAdded = 0;
     const pageOpts = options.pageOptions || [];
 
     if (pageOpts.includes('Main Image') || pageOpts.length === 0) {
-        pagesAdded = await drawSinglePage(ctx, art.imageUrls?.[0], 0, pagesAdded);
+        pagesAdded = await drawSinglePage(pageCtx, art.imageUrls?.[0], 0, pagesAdded);
     }
     if (pageOpts.includes('2nd Image')) {
         // Only add the 2nd page when the artwork actually has a 2nd image —
         // never emit an image-less page just to carry the description.
         const imgUrl = art.imageUrls && art.imageUrls.length > 1 ? art.imageUrls[1] : undefined;
         if (imgUrl) {
-            pagesAdded = await drawSinglePage(ctx, imgUrl, 1, pagesAdded);
+            pagesAdded = await drawSinglePage(pageCtx, imgUrl, 1, pagesAdded);
         }
     }
     if (pageOpts.includes('All Image')) {
         if (art.imageUrls && art.imageUrls.length > 2) {
             for (let j = 2; j < art.imageUrls.length; j++) {
-                pagesAdded = await drawSinglePage(ctx, art.imageUrls[j], j, pagesAdded);
+                pagesAdded = await drawSinglePage(pageCtx, art.imageUrls[j], j, pagesAdded);
             }
         }
     }
@@ -665,10 +652,11 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
             for (let i = 0; i < catalogArtworks.length; i++) {
                 const prefix = `Image ${i + 1} of ${catalogArtworks.length}`;
                 setPdfProgress(prefix);
-                await drawArtworkPages(
-                    doc, catalogArtworks[i], i, options, themeId, theme2BgDataUrl, catalogToDownload,
-                    (message) => setPdfProgress(`${prefix} — ${message}`)
-                );
+                await drawArtworkPages({
+                    doc, art: catalogArtworks[i], artIndex: i, options, themeId, theme2BgDataUrl,
+                    catalogName: catalogToDownload.name, catalogCoverUrl: catalogToDownload.coverImageUrl,
+                    onProgress: (message) => setPdfProgress(`${prefix} — ${message}`),
+                });
             }
 
             setPdfProgress('Saving PDF…');

@@ -1,8 +1,8 @@
 import { useCallback } from 'react';
 import {
-    Artwork, Catalog, Invoice, Collection, Inquiry, Conversation,
+    Artwork, CalendarEvent, Catalog, Invoice, Collection, Contact, Inquiry, Conversation,
     ConversationDetails, Message, MessageTag, MessageReplyTo, MessageAttachment,
-    InquiryMessage, UserProfile, MessageStatus
+    InquiryMessage, NewContact, UserProfile, MessageStatus
 } from '../types';
 import { AuthUser } from '../services/authService';
 import { db } from '../services/db';
@@ -11,6 +11,8 @@ import { artworkService } from '../services/artworkService';
 import { collectionService } from '../services/collectionService';
 import { catalogService } from '../services/catalogService';
 import { inquiryService } from '../services/inquiryService';
+import { eventService } from '../services/eventService';
+import { contactService } from '../services/contactService';
 
 interface HandlerArgs {
     authUser: AuthUser | null;
@@ -26,6 +28,8 @@ interface HandlerArgs {
     setConversations: React.Dispatch<React.SetStateAction<Conversation[]>>;
     setAllMessages: React.Dispatch<React.SetStateAction<Message[]>>;
     setInquiryMessages: React.Dispatch<React.SetStateAction<InquiryMessage[]>>;
+    setEvents: React.Dispatch<React.SetStateAction<CalendarEvent[]>>;
+    setContacts: React.Dispatch<React.SetStateAction<Contact[]>>;
     setSelectedArtwork: React.Dispatch<React.SetStateAction<Artwork | null>>;
 }
 
@@ -49,7 +53,7 @@ export function useHandlers(args: HandlerArgs) {
     const {
         authUser, userProfile, artworks, conversations, teamMembers,
         setArtworks, setCatalogs, setCollections, setInvoices, setInquiries,
-        setConversations, setAllMessages, setInquiryMessages, setSelectedArtwork,
+        setConversations, setAllMessages, setInquiryMessages, setEvents, setContacts, setSelectedArtwork,
     } = args;
 
     // ── Artworks ──────────────────────────────────────────────────────────
@@ -175,6 +179,75 @@ export function useHandlers(args: HandlerArgs) {
         await db.deleteInquiry(id);
         setInquiries((prev: Inquiry[]) => prev.filter((i: Inquiry) => i.id !== id));
     }, [setInquiries]);
+
+    // ── Calendar Events ───────────────────────────────────────────────────
+    const handleAddEvent = useCallback(async (newEvent: Omit<CalendarEvent, 'id' | 'createdAt' | 'createdBy' | 'createdByName'>) => {
+        // The server records the creator from the session; mirror it locally
+        // so "Added by" shows before the next sync.
+        const event: CalendarEvent = {
+            ...newEvent,
+            id: `evt_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
+            createdAt: Date.now(),
+            createdBy: userProfile?.id || authUser?.id,
+            createdByName: userProfile?.name || authUser?.name,
+        };
+        try { await eventService.saveEvent(event); } catch (e) { console.error('D1 sync failed (add event):', e); }
+        await db.saveEvent(event);
+        setEvents((prev: CalendarEvent[]) => [...prev, event].sort((a, b) => a.date - b.date));
+    }, [userProfile, authUser, setEvents]);
+
+    const handleDeleteEvent = useCallback(async (id: string) => {
+        try { await eventService.deleteEvent(id); } catch (e) { console.error('D1 sync failed (delete event):', e); }
+        await db.deleteEvent(id);
+        setEvents((prev: CalendarEvent[]) => prev.filter((ev: CalendarEvent) => ev.id !== id));
+    }, [setEvents]);
+
+    const handleUpdateEvent = useCallback(async (updated: CalendarEvent) => {
+        try { await eventService.updateEvent(updated); } catch (e) { console.error('D1 sync failed (update event):', e); }
+        await db.saveEvent(updated);
+        setEvents((prev: CalendarEvent[]) => prev
+            .map((ev: CalendarEvent) => ev.id === updated.id ? updated : ev)
+            .sort((a, b) => a.date - b.date));
+    }, [setEvents]);
+
+    // ── Contacts ──────────────────────────────────────────────────────────
+    const handleAddContact = useCallback(async (newContact: NewContact) => {
+        const contact: Contact = {
+            ...newContact,
+            id: `cont_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
+            createdAt: Date.now(),
+            createdBy: userProfile?.id || authUser?.id,
+            createdByName: userProfile?.name || authUser?.name,
+        };
+        try { await contactService.saveContact(contact); } catch (e) { console.error('D1 sync failed (add contact):', e); }
+        await db.saveContact(contact);
+        setContacts((prev: Contact[]) => [contact, ...prev]);
+    }, [userProfile, authUser, setContacts]);
+
+    const handleImportContacts = useCallback(async (list: NewContact[]) => {
+        const stamped: Contact[] = list.map(c => ({
+            ...c,
+            id: `cont_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
+            createdAt: Date.now(),
+            createdBy: userProfile?.id || authUser?.id,
+            createdByName: userProfile?.name || authUser?.name,
+        }));
+        let imported = stamped.length;
+        try { imported = await contactService.importContacts(stamped); } catch (e) { console.error('D1 sync failed (import contacts):', e); }
+        await Promise.all(stamped.map(c => db.saveContact(c)));
+        setContacts((prev: Contact[]) => {
+            const seen = new Set(prev.map(c => c.id));
+            const fresh = stamped.filter(c => !seen.has(c.id));
+            return [...fresh, ...prev].sort((a, b) => b.createdAt - a.createdAt);
+        });
+        return imported;
+    }, [userProfile, authUser, setContacts]);
+
+    const handleDeleteContact = useCallback(async (id: string) => {
+        try { await contactService.deleteContact(id); } catch (e) { console.error('D1 sync failed (delete contact):', e); }
+        await db.deleteContact(id);
+        setContacts((prev: Contact[]) => prev.filter((c: Contact) => c.id !== id));
+    }, [setContacts]);
 
     // ── Inquiry Messages ──────────────────────────────────────────────────
     const handleSendInquiryMessage = useCallback(async (
@@ -336,6 +409,10 @@ export function useHandlers(args: HandlerArgs) {
         handleAddInvoice, handleUpdateInvoice, handleDeleteInvoice,
         // Inquiries
         handleAddInquiry, handleUpdateInquiry, handleDeleteInquiry,
+        // Calendar events
+        handleAddEvent, handleUpdateEvent, handleDeleteEvent,
+        // Contacts
+        handleAddContact, handleImportContacts, handleDeleteContact,
         // Inquiry messages
         handleSendInquiryMessage,
         // Messaging

@@ -796,7 +796,6 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                             value={chatSearchQuery}
                             onChange={(e) => setChatSearchQuery(e.target.value)}
                             placeholder="Search in this chat..."
-                            autoFocus
                             autoComplete="off"
                             autoCorrect="off"
                             spellCheck={false}

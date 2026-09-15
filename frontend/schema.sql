@@ -147,3 +147,38 @@ CREATE TABLE IF NOT EXISTS activity_logs (
 
 CREATE INDEX IF NOT EXISTS idx_activity_logs_timestamp ON activity_logs(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_logs_user ON activity_logs(user_id);
+
+-- ── Calendar Events table ───────────────────────────────────────────────────
+-- Team-shared upcoming events shown on the home screen.
+
+CREATE TABLE IF NOT EXISTS events (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL DEFAULT '',
+  event_date INTEGER NOT NULL DEFAULT 0,
+  end_date INTEGER,
+  todos TEXT NOT NULL DEFAULT '[]',
+  notes TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT,
+  created_by_name TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_date ON events(event_date ASC);
+
+-- ── Contacts table ──────────────────────────────────────────────────────────
+-- Manually added + CSV-imported contacts. Inquiry-derived contacts are
+-- computed client-side and never stored here.
+
+CREATE TABLE IF NOT EXISTS contacts (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'manual',
+  created_at INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT,
+  created_by_name TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_created ON contacts(created_at DESC);

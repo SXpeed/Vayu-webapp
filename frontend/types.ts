@@ -107,6 +107,31 @@ export interface Inquiry {
     imageUrls?: string[];
 }
 
+export interface EventTodo {
+    id: string;
+    text: string;
+    /** Assigned team member; optional. */
+    assigneeId?: string;
+    assigneeName?: string;
+    done: boolean;
+    createdAt: number;
+}
+
+export interface CalendarEvent {
+    id: string;
+    title: string;
+    /** Epoch ms when the event starts. */
+    date: number;
+    /** Optional end — for multi-day events (e.g. an exhibition running all month). */
+    endDate?: number;
+    notes?: string;
+    /** Event-planner task list with assignees. */
+    todos: EventTodo[];
+    createdAt: number;
+    createdBy?: string;
+    createdByName?: string;
+}
+
 export interface UserProfile {
     id: string;
     name: string;
@@ -182,7 +207,23 @@ export interface InquiryMessage {
     attachment?: MessageAttachment;
 }
 
-export type ViewState = 'login' | 'home' | 'artworks' | 'collections' | 'catalogs' | 'invoice' | 'inquiry' | 'messaging' | 'profile' | 'activity' | 'payments';
+export interface Contact {
+    id: string;
+    name: string;
+    phone: string;
+    email?: string;
+    notes?: string;
+    /** 'inquiry' entries are derived client-side from inquiries and not stored in D1. */
+    source: 'manual' | 'import' | 'inquiry';
+    createdAt: number;
+    createdBy?: string;
+    createdByName?: string;
+}
+
+/** A contact as passed by the UI before id/creator metadata is stamped. */
+export type NewContact = Omit<Contact, 'id' | 'createdAt' | 'createdBy' | 'createdByName'>;
+
+export type ViewState = 'login' | 'home' | 'artworks' | 'collections' | 'catalogs' | 'contacts' | 'calendar' | 'invoice' | 'inquiry' | 'messaging' | 'profile' | 'activity' | 'payments';
 
 export interface PaymentLink {
     id: string;

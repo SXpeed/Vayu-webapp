@@ -45,6 +45,8 @@ const InquiryView = lazy(() => import('./views/InquiryView').then(m => ({ defaul
 const MessagingView = lazy(() => import('./views/MessagingView').then(m => ({ default: m.MessagingView })));
 const ActivityLogView = lazy(() => import('./views/ActivityLogView').then(m => ({ default: m.ActivityLogView })));
 const PaymentsView = lazy(() => import('./views/PaymentsView').then(m => ({ default: m.PaymentsView })));
+const ContactsView = lazy(() => import('./views/ContactsView').then(m => ({ default: m.ContactsView })));
+const CalendarView = lazy(() => import('./views/CalendarView').then(m => ({ default: m.CalendarView })));
 
 const ViewFallback = () => (
     <div className="h-full flex items-center justify-center">
@@ -78,6 +80,8 @@ const App: React.FC = () => {
         allMessages, setAllMessages,
         inquiryMessages, setInquiryMessages,
         teamMembers,
+        events, setEvents,
+        contacts, setContacts,
         loadData, loadTeamMembers, migrateLocalToD1,
     } = useEntityData(authUser, authUserRef);
 
@@ -86,6 +90,7 @@ const App: React.FC = () => {
         authUser, userProfile, artworks, conversations, teamMembers,
         setArtworks, setCatalogs, setCollections, setInvoices, setInquiries,
         setConversations, setAllMessages, setInquiryMessages, setSelectedArtwork,
+        setEvents, setContacts,
     });
 
     // ── Initialize DB and load data — runs ONCE on mount ──────────────────
@@ -177,13 +182,25 @@ const App: React.FC = () => {
             case 'login':
                 return <LoginView onLogin={handleLogin} />;
             case 'home':
-                return userProfile ? <HomeView artworks={artworks} catalogs={catalogs} invoices={invoices} onNavigate={navigateTo} userProfile={userProfile} onArtworkClick={handleArtworkClick} onCatalogClick={() => navigateTo('catalogs')} /> : null;
+                return userProfile ? <HomeView artworks={artworks} catalogs={catalogs} invoices={invoices} events={events} teamMembers={teamMembers} onNavigate={navigateTo} userProfile={userProfile} onCatalogClick={() => navigateTo('catalogs')} onAddEvent={handlers.handleAddEvent} onUpdateEvent={handlers.handleUpdateEvent} onDeleteEvent={handlers.handleDeleteEvent} /> : null;
             case 'artworks':
                 return <ArtworksView artworks={artworks} onAddArtwork={handlers.handleAddArtwork} onArtworkClick={handleArtworkClick} />;
             case 'collections':
                 return <CollectionsView collections={collections} artworks={artworks} onAddCollection={handlers.handleAddCollection} onUpdateCollection={handlers.handleUpdateCollection} onDeleteCollection={handlers.handleDeleteCollection} onArtworkClick={handleArtworkClick} onAddArtwork={handlers.handleAddArtwork} />;
             case 'catalogs':
                 return <CatalogsView catalogs={catalogs} artworks={artworks} onAddCatalog={handlers.handleAddCatalog} onUpdateCatalog={handlers.handleUpdateCatalog} onDeleteCatalog={handlers.handleDeleteCatalog} onArtworkClick={handleArtworkClick} onAddArtwork={handlers.handleAddArtwork} />;
+            case 'contacts':
+                return (
+                    <ContactsView
+                        contacts={contacts}
+                        inquiries={inquiries}
+                        onAddContact={handlers.handleAddContact}
+                        onImportContacts={handlers.handleImportContacts}
+                        onDeleteContact={handlers.handleDeleteContact}
+                    />
+                );
+            case 'calendar':
+                return <CalendarView events={events} onBack={() => navigateTo('home')} />;
             case 'invoice':
                 return <InvoiceView invoices={invoices} artworks={artworks} onAddInvoice={handlers.handleAddInvoice} onUpdateInvoice={handlers.handleUpdateInvoice} onDeleteInvoice={handlers.handleDeleteInvoice} onArtworkClick={handleArtworkClick} />;
             case 'inquiry':
