@@ -263,7 +263,9 @@ export function useHandlers(args: HandlerArgs) {
     // ── Messaging: Create Conversation / Group ────────────────────────────
     const handleCreateConversation = useCallback(async (participantId: string, details?: ConversationDetails): Promise<Conversation> => {
         const selfId = userProfile?.id || authUser?.id || '';
-        const existing = conversations.find(c => c.participantIds.includes(participantId) && c.participantIds.includes(selfId));
+        // Only match direct (1-on-1) conversations — a group that happens to
+        // contain both users must NOT be treated as an existing 1-on-1 chat.
+        const existing = conversations.find(c => !c.isGroup && c.participantIds.includes(participantId) && c.participantIds.includes(selfId));
         if (existing) return existing;
 
         const otherMember = teamMembers.find(m => m.id === participantId);

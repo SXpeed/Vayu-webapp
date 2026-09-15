@@ -201,6 +201,20 @@
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
+                // When an UPDATED service worker takes control (a new app
+                // version), reload once so the running page picks up the new
+                // bundle instead of staying on the old one until the next cold
+                // start. The hadController guard keeps the very first install
+                // (no controller yet) from causing an unnecessary reload.
+                let refreshing = false;
+                let hadController = !!navigator.serviceWorker.controller;
+                navigator.serviceWorker.addEventListener('controllerchange', () => {
+                    if (!hadController) { hadController = true; return; }
+                    if (refreshing) return;
+                    refreshing = true;
+                    window.location.reload();
+                });
+
                 navigator.serviceWorker.getRegistrations().then((registrations) => {
                     // Only unregister service workers that are NOT our current sw.js
                     // (e.g. old ones from different scopes) to avoid killing the
@@ -212,6 +226,18 @@
                         navigator.serviceWorker.register('./sw.js')
                             .then((registration) => {
                                 console.log('ServiceWorker registration successful with scope: ', registration.scope);
+
+                                // Home-screen launches usually RESUME the old
+                                // session without a navigation, so the browser
+                                // never checks for updates on its own. Force an
+                                // update check whenever the app becomes visible
+                                // again (new worker -> installs -> activates ->
+                                // controllerchange above reloads the page).
+                                document.addEventListener('visibilitychange', () => {
+                                    if (document.visibilityState === 'visible') {
+                                        registration.update().catch(() => { /* offline — ignore */ });
+                                    }
+                                });
                             })
                             .catch((err) => {
                                 console.log('ServiceWorker registration failed: ', err);
