@@ -69,11 +69,16 @@ export interface InvoiceItem {
     price: number;
 }
 
+/** A proforma invoice (quotation) — stored per device in localStorage. */
 export interface Invoice {
     id: string;
     invoiceNumber: string;
     customerName: string;
     customerEmail: string;
+    customerPhone?: string;
+    customerAddress?: string;
+    /** Set when the proforma was generated from an inquiry. */
+    inquiryId?: string;
     items: InvoiceItem[];
     subtotal: number;
     taxRate: number;
@@ -88,6 +93,7 @@ export interface Inquiry {
     customerName: string;
     customerPhone: string;
     customerEmail: string;
+    customerAddress?: string;
     artworkIds: string[];
     notes: string;
     source: 'Walk-in' | 'Phone' | 'Email' | 'Social Media' | 'Referral' | 'Other';

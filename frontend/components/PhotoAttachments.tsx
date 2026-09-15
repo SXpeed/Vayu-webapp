@@ -94,6 +94,9 @@ export const PhotoAttachments: React.FC<PhotoAttachmentsProps> = ({ urls, onAdd,
                     <ImageIcon size={15} /> Gallery
                 </button>
             </div>
+            <p className="text-[9px] text-gray-400 dark:text-gray-500 mt-2">
+                Add as many photos as you need — tap Take Photo again for each shot, or select several at once in Gallery.
+            </p>
             {inputs}
 
             {previewUrl && (

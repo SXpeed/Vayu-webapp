@@ -115,29 +115,35 @@ export function useHandlers(args: HandlerArgs) {
         setCollections((prev: Collection[]) => prev.filter((c: Collection) => c.id !== id));
     }, [setCollections]);
 
-    // ── Invoices ──────────────────────────────────────────────────────────
-    const handleAddInvoice = useCallback(async (newInv: Omit<Invoice, 'id' | 'date'>) => {
+    // ── Proforma invoices ─────────────────────────────────────────────────
+    // A proforma is a quotation: its artworks only become Sold once it's Paid.
+    const markPaidInvoiceArtworksSold = useCallback((invoice: Invoice) => {
+        if (invoice.status !== 'Paid') return;
+        const invoicedArtIds = new Set(invoice.items.map(item => item.artworkId));
+        const toMark = artworks.filter(art => invoicedArtIds.has(art.id) && art.status !== 'Sold');
+        if (toMark.length === 0) return;
+        const soldIds = new Set(toMark.map(art => art.id));
+        for (const art of toMark) {
+            const updatedArt = { ...art, status: 'Sold' as const };
+            artworkService.updateArtwork(updatedArt).catch(e => console.error('D1 sync failed (proforma artwork status):', e));
+            db.saveArtwork(updatedArt);
+        }
+        setArtworks(prev => prev.map(art => (soldIds.has(art.id) ? { ...art, status: 'Sold' as const } : art)));
+    }, [artworks, setArtworks]);
+
+    const handleAddInvoice = useCallback(async (newInv: Omit<Invoice, 'id' | 'date'>): Promise<Invoice> => {
         const invoice: Invoice = { ...newInv, id: `inv_${Date.now()}`, date: Date.now() };
         await db.saveInvoice(invoice);
         setInvoices((prev: Invoice[]) => [invoice, ...prev]);
-
-        const invoicedArtIds = new Set(invoice.items.map(item => item.artworkId));
-        const updatedArtworks = artworks.map(art => {
-            if (invoicedArtIds.has(art.id)) {
-                const updatedArt = { ...art, status: 'Sold' as const };
-                artworkService.updateArtwork(updatedArt).catch(e => console.error('D1 sync failed (invoice artwork status):', e));
-                db.saveArtwork(updatedArt);
-                return updatedArt;
-            }
-            return art;
-        });
-        setArtworks(updatedArtworks);
-    }, [artworks, setInvoices, setArtworks]);
+        markPaidInvoiceArtworksSold(invoice);
+        return invoice;
+    }, [setInvoices, markPaidInvoiceArtworksSold]);
 
     const handleUpdateInvoice = useCallback(async (updatedInv: Invoice) => {
         await db.saveInvoice(updatedInv);
         setInvoices((prev: Invoice[]) => prev.map((i: Invoice) => i.id === updatedInv.id ? updatedInv : i));
-    }, [setInvoices]);
+        markPaidInvoiceArtworksSold(updatedInv);
+    }, [setInvoices, markPaidInvoiceArtworksSold]);
 
     const handleDeleteInvoice = useCallback(async (id: string) => {
         await db.deleteInvoice(id);
@@ -176,7 +182,7 @@ export function useHandlers(args: HandlerArgs) {
         replyTo?: MessageReplyTo, attachment?: MessageAttachment
     ) => {
         const msg: InquiryMessage = {
-            id: `inqmsg_${Date.now()}`,
+            id: `inqmsg_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
             inquiryId,
             senderId: userProfile?.id || authUser?.id || '',
             senderName: userProfile?.name || authUser?.name || 'You',
@@ -201,7 +207,7 @@ export function useHandlers(args: HandlerArgs) {
         replyTo?: MessageReplyTo, attachment?: MessageAttachment
     ) => {
         const msg: Message = {
-            id: `msg_${Date.now()}`,
+            id: `msg_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
             conversationId,
             senderId: userProfile?.id || authUser?.id || '',
             senderName: userProfile?.name || authUser?.name || 'You',

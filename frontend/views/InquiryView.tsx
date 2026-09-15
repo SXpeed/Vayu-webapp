@@ -1,8 +1,8 @@
 import storageService, { getThumbUrl } from '../services/storageService';
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import toast from 'react-hot-toast';
-import { Plus, X, MessageSquare, MessageCircle, Send, Search, ArrowLeft, Edit2, Trash2, Phone, Mail, Image as ImageIcon, User, Clock, Tag, BookOpen, CheckCircle2, XCircle, Check, CheckCheck, Paperclip, Reply, Camera, Loader2 } from 'lucide-react';
-import { Inquiry, Artwork, InquiryMessage, MessageReplyTo, MessageAttachment, MessageTag, UserProfile } from '../types';
+import { Plus, X, MessageSquare, MessageCircle, Send, Search, ArrowLeft, Edit2, Trash2, Phone, Mail, Image as ImageIcon, User, Clock, Tag, BookOpen, CheckCircle2, XCircle, Check, CheckCheck, Paperclip, Reply, Camera, Loader2, MapPin, FileText } from 'lucide-react';
+import { Inquiry, Artwork, InquiryMessage, MessageReplyTo, MessageAttachment, MessageTag, UserProfile, Invoice } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { TAG_COLORS, ALL_TAGS } from './MessagingView';
@@ -10,6 +10,8 @@ import { useMemberNames } from '../hooks/useMemberNames';
 import { usePhotoCapture } from '../hooks/usePhotoCapture';
 import { PhotoAttachments } from '../components/PhotoAttachments';
 import { makeDocumentNumber } from '../services/documentNumber';
+import { exportProformaPdf } from '../services/proformaPdf';
+import { InvoiceFormModal, ProformaPdfActions, type NewInvoice } from './InvoiceView';
 
 const renderArtworkStatusColor = (status: string) => {
     if (status === 'Available') return 'bg-green-500';
@@ -37,6 +39,8 @@ interface InquiryViewProps {
     onDeleteInquiry: (id: string) => void;
     onArtworkClick: (artwork: Artwork) => void;
     inquiryMessages: InquiryMessage[];
+    invoices: Invoice[];
+    onAddInvoice: (invoice: NewInvoice) => Promise<Invoice>;
     teamMembers: UserProfile[];
     currentUserId: string;
 
@@ -66,7 +70,7 @@ const ARTWORK_STATUS_BADGE: Record<Artwork['status'], string> = {
     'Reserved': 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-400',
 };
 
-export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, onAddInquiry, onUpdateInquiry, onDeleteInquiry, onArtworkClick, inquiryMessages, teamMembers, currentUserId, onSendInquiryMessage }) => {
+export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, onAddInquiry, onUpdateInquiry, onDeleteInquiry, onArtworkClick, inquiryMessages, invoices, onAddInvoice, teamMembers, currentUserId, onSendInquiryMessage }) => {
     const resolveName = useMemberNames(teamMembers);
     // Inquiries added before creator tracking have no creator recorded.
     const addedBy = (inquiry: Inquiry) =>
@@ -336,6 +340,8 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                         inquiry={selectedInquiry}
                         addedBy={addedBy(selectedInquiry)}
                         artworks={artworks}
+                        proformas={invoices.filter(inv => inv.inquiryId === selectedInquiry.id)}
+                        onAddInvoice={onAddInvoice}
                         onClose={handleCloseModal}
                         onUpdateInquiry={(updated) => {
                             onUpdateInquiry(updated);
@@ -376,7 +382,7 @@ interface InquiryChatModalProps {
     currentUserId: string;
 
     onClose: () => void;
-    onSendMessage: (text: string, tags: MessageTag[], replyTo?: MessageReplyTo, attachment?: MessageAttachment) => void;
+    onSendMessage: (text: string, tags: MessageTag[], replyTo?: MessageReplyTo, attachment?: MessageAttachment) => void | Promise<void>;
 }
 
 const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, resolveName, currentUserId, onClose, onSendMessage }) => {
@@ -390,7 +396,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
     const [selectedTags, setSelectedTags] = useState<Set<MessageTag>>(new Set());
     const [showTagPicker, setShowTagPicker] = useState(false);
     const [replyingTo, setReplyingTo] = useState<MessageReplyTo | null>(null);
-    const [pendingAttachment, setPendingAttachment] = useState<MessageAttachment | null>(null);
+    const [pendingAttachments, setPendingAttachments] = useState<MessageAttachment[]>([]);
     const [showSearch, setShowSearch] = useState(false);
     const [chatSearchQuery, setChatSearchQuery] = useState('');
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -407,35 +413,39 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
         }, 50);
     }, [messages]);
 
-    const [isUploading, setIsUploading] = useState(false);
+    const [uploadingCount, setUploadingCount] = useState(0);
+    const isUploading = uploadingCount > 0;
 
     // Attachments upload to R2 like the team chat. Inline data URLs of phone
     // photos exceed D1's row size limit, so they never reached other devices.
-    const uploadAttachment = async (file: File) => {
-        setIsUploading(true);
-        try {
-            const result = await storageService.upload(file);
-            setPendingAttachment({
-                type: file.type.startsWith('image/') ? 'image' : 'file',
-                url: result.url,
-                name: file.name,
-            });
-        } catch (error) {
-            console.error('Upload failed:', error);
-            toast.error('Failed to upload file. Please try again.');
-        } finally {
-            setIsUploading(false);
-        }
+    const uploadAttachments = async (files: File[]) => {
+        setUploadingCount(count => count + files.length);
+        const results = await Promise.allSettled(files.map(file => storageService.upload(file)));
+        const uploaded: MessageAttachment[] = [];
+        results.forEach((result, i) => {
+            if (result.status === 'fulfilled') {
+                uploaded.push({ type: files[i].type.startsWith('image/') ? 'image' : 'file', url: result.value.url, name: files[i].name });
+            } else {
+                console.error('Upload failed:', result.reason);
+            }
+        });
+        if (uploaded.length < files.length) toast.error('Some files failed to upload. Please try again.');
+        setPendingAttachments(prev => [...prev, ...uploaded]);
+        setUploadingCount(count => count - files.length);
     };
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
+        const files = Array.from(e.target.files ?? []);
         e.target.value = '';
-        if (file) void uploadAttachment(file);
+        if (files.length > 0) void uploadAttachments(files);
     };
 
-    // Camera button: snap a photo and attach it straight away.
-    const camera = usePhotoCapture(([photo]) => { void uploadAttachment(photo); });
+    const removePendingAttachment = (url: string) => {
+        setPendingAttachments(prev => prev.filter(a => a.url !== url));
+    };
+
+    // Camera button: snap a photo and attach it straight away (repeat for more).
+    const camera = usePhotoCapture((photos) => { void uploadAttachments(photos); });
 
     const toggleTag = (tag: MessageTag) => {
         const newSet = new Set(selectedTags);
@@ -445,13 +455,22 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
     };
 
     const handleSend = () => {
-        if (!text.trim() && !pendingAttachment) return;
-        onSendMessage(text.trim(), Array.from(selectedTags), replyingTo ?? undefined, pendingAttachment ?? undefined);
+        if (!text.trim() && pendingAttachments.length === 0) return;
+        const [first, ...rest] = pendingAttachments;
+        const outgoing = { text: text.trim(), tags: Array.from(selectedTags), replyTo: replyingTo ?? undefined };
         setText('');
         setSelectedTags(new Set());
         setShowTagPicker(false);
         setReplyingTo(null);
-        setPendingAttachment(null);
+        setPendingAttachments([]);
+        // The text (and first attachment) goes as one message; each extra photo
+        // follows as its own message, sent in order.
+        void (async () => {
+            await onSendMessage(outgoing.text, outgoing.tags, outgoing.replyTo, first);
+            for (const attachment of rest) {
+                await onSendMessage('', outgoing.tags, undefined, attachment);
+            }
+        })();
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -630,21 +649,33 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                         </button>
                     </div>
                 )}
-                {pendingAttachment && (
-                    <div className="flex items-center justify-between gap-2 mb-2 p-2 bg-gray-100 dark:bg-[#2a2a2a] rounded-[6px] animate-fade-in">
-                        <div className="flex items-center gap-2 min-w-0">
-                            {pendingAttachment.type === 'image' ? (
-                                <img loading="lazy" decoding="async" src={getThumbUrl(pendingAttachment.url)} alt={pendingAttachment.name} className="w-10 h-10 rounded-[4px] object-cover shrink-0" />
-                            ) : (
-                                <div className="w-10 h-10 rounded-[4px] bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-gray-500 dark:text-gray-400 shrink-0">
-                                    <Paperclip size={16} />
-                                </div>
-                            )}
-                            <p className="text-[11px] text-gray-600 dark:text-gray-300 truncate">{pendingAttachment.name}</p>
-                        </div>
-                        <button onClick={() => setPendingAttachment(null)} className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 shrink-0 active-scale">
-                            <X size={14} />
-                        </button>
+                {(pendingAttachments.length > 0 || isUploading) && (
+                    <div className="flex items-center gap-2 mb-2 p-2 bg-gray-100 dark:bg-[#2a2a2a] rounded-[6px] animate-fade-in overflow-x-auto no-scrollbar">
+                        {pendingAttachments.map((attachment) => (
+                            <div key={attachment.url} className="relative shrink-0">
+                                {attachment.type === 'image' ? (
+                                    <img loading="lazy" decoding="async" src={getThumbUrl(attachment.url)} alt={attachment.name} className="w-12 h-12 rounded-[4px] object-cover" />
+                                ) : (
+                                    <div className="w-12 h-12 rounded-[4px] bg-gray-200 dark:bg-gray-700 flex flex-col items-center justify-center text-gray-500 dark:text-gray-400 px-1">
+                                        <Paperclip size={14} />
+                                        <span className="text-[7px] truncate w-full text-center mt-0.5">{attachment.name}</span>
+                                    </div>
+                                )}
+                                <button
+                                    type="button"
+                                    onClick={() => removePendingAttachment(attachment.url)}
+                                    aria-label={`Remove ${attachment.name}`}
+                                    className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-black/70 text-white flex items-center justify-center active-scale"
+                                >
+                                    <X size={9} />
+                                </button>
+                            </div>
+                        ))}
+                        {Array.from({ length: uploadingCount }, (_, i) => (
+                            <div key={`uploading-${i}`} className="w-12 h-12 rounded-[4px] bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-gray-400 shrink-0">
+                                <Loader2 size={14} className="animate-spin" />
+                            </div>
+                        ))}
                     </div>
                 )}
                 <div className="flex items-center gap-2">
@@ -673,7 +704,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                     >
                         {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
                     </button>
-                    <input type="file" accept="image/*,.pdf,.doc,.docx,.txt" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
+                    <input type="file" multiple accept="image/*,.pdf,.doc,.docx,.txt" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
                     {camera.inputs}
                     <input
                         value={text}
@@ -695,8 +726,8 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                     />
                     <button
                         onClick={handleSend}
-                        disabled={!text.trim() && !pendingAttachment}
-                        className={`p-2.5 rounded-full transition-all active-scale shrink-0 ${text.trim() || pendingAttachment
+                        disabled={!text.trim() && pendingAttachments.length === 0}
+                        className={`p-2.5 rounded-full transition-all active-scale shrink-0 ${text.trim() || pendingAttachments.length > 0
                             ? 'bg-gold-500 dark:bg-gold-500 text-white dark:text-brand-950 shadow-md'
                             : 'bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-600'
                             }`}
@@ -715,14 +746,18 @@ interface InquiryDetailModalProps {
     inquiry: Inquiry;
     addedBy: string | null;
     artworks: Artwork[];
+    /** Proforma invoices generated from this inquiry. */
+    proformas: Invoice[];
+    onAddInvoice: (invoice: NewInvoice) => Promise<Invoice>;
     onClose: () => void;
     onUpdateInquiry: (inquiry: Inquiry) => void;
     onDeleteInquiry: () => void;
     onArtworkClick: (artwork: Artwork) => void;
 }
 
-const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedBy, artworks, onClose, onUpdateInquiry, onDeleteInquiry, onArtworkClick }) => {
+const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedBy, artworks, proformas, onAddInvoice, onClose, onUpdateInquiry, onDeleteInquiry, onArtworkClick }) => {
     const [isEditing, setIsEditing] = useState(false);
+    const [isCreatingProforma, setIsCreatingProforma] = useState(false);
     const [selectedArtworkForPopup, setSelectedArtworkForPopup] = useState<Artwork | null>(null);
 
     const linkedArtworks = inquiry.artworkIds.map(id => artworks.find(a => a.id === id)).filter((a): a is Artwork => !!a);
@@ -751,6 +786,19 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
 
     const handleToggleCatalogShared = () => {
         onUpdateInquiry({ ...inquiry, catalogShared: !inquiry.catalogShared });
+    };
+
+    // Save the proforma, then hand over the PDF (with artwork images) right away.
+    const handleCreateProforma = async (data: NewInvoice) => {
+        const created = await onAddInvoice(data);
+        setIsCreatingProforma(false);
+        toast.success(`Proforma ${created.invoiceNumber} created`);
+        try {
+            await exportProformaPdf(created, artworks);
+        } catch (e) {
+            console.error('Proforma PDF failed:', e);
+            toast.error('Saved, but the PDF could not be created. Use the PDF button to retry.');
+        }
     };
 
     // Uploads can finish after other edits (or each other), so append to the
@@ -816,6 +864,16 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
                     </button>
                 </div>
 
+                <button
+                    type="button"
+                    onClick={() => setIsCreatingProforma(true)}
+                    className="w-full flex items-center justify-center gap-2 py-3 mb-4 rounded-[6px] text-[10px] font-bold uppercase tracking-widest active-scale shadow-sm bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 animate-fade-in-up"
+                    style={{ animationDelay: '75ms' }}
+                >
+                    <FileText size={16} strokeWidth={2.5} />
+                    Create Proforma Invoice
+                </button>
+
                 {/* Customer Info Card */}
                 <div className="bg-white dark:bg-[#1e1e1e] p-6 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 mb-4 animate-fade-in-up" style={{ animationDelay: '100ms' }}>
                     <div className="flex justify-between items-start mb-6">
@@ -865,6 +923,12 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
                                 </a>
                             </div>
                         )}
+                        {inquiry.customerAddress && (
+                            <div className="flex items-start gap-[6px] text-sm text-gray-600 dark:text-gray-400">
+                                <MapPin size={14} className="text-gold-500 shrink-0 mt-0.5" />
+                                <span className="whitespace-pre-line">{inquiry.customerAddress}</span>
+                            </div>
+                        )}
                         <div className="flex items-center gap-[6px] text-sm text-gray-600 dark:text-gray-400">
                             <Tag size={14} className="text-gold-500" />
                             <span className={`text-[10px] px-2 py-0.5 rounded-[3px] font-medium uppercase tracking-wider ${SOURCE_COLORS[inquiry.source]}`}>{inquiry.source}</span>
@@ -898,6 +962,26 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
                         </>
                     )}
                 </div>
+
+                {/* Proforma invoices from this inquiry */}
+                {proformas.length > 0 && (
+                    <div className="bg-white dark:bg-[#1e1e1e] p-6 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 mb-4 animate-fade-in-up" style={{ animationDelay: '115ms' }}>
+                        <h3 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-4">Proforma Invoices ({proformas.length})</h3>
+                        <div className="space-y-3">
+                            {proformas.map(proforma => (
+                                <div key={proforma.id} className="flex items-center justify-between gap-2">
+                                    <div className="min-w-0">
+                                        <p className="text-sm font-serif text-gray-900 dark:text-white truncate">{proforma.invoiceNumber}</p>
+                                        <p className="text-[9px] text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                            ₹{proforma.total.toLocaleString('en-IN')} • {proforma.items.length} {proforma.items.length === 1 ? 'artwork' : 'artworks'} • {proforma.status}
+                                        </p>
+                                    </div>
+                                    <ProformaPdfActions invoice={proforma} artworks={artworks} compact />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                 {/* Photos */}
                 <div className="bg-white dark:bg-[#1e1e1e] p-6 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 mb-4 animate-fade-in-up" style={{ animationDelay: '125ms' }}>
@@ -939,6 +1023,23 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
                     </div>
                 )}
 
+                {isCreatingProforma && (
+                    <InvoiceFormModal
+                        prefill={{
+                            customerName: inquiry.customerName,
+                            customerPhone: inquiry.customerPhone,
+                            customerEmail: inquiry.customerEmail,
+                            customerAddress: inquiry.customerAddress,
+                            inquiryId: inquiry.id,
+                            items: linkedArtworks.map(art => ({ artworkId: art.id, title: art.title, price: art.price })),
+                        }}
+                        artworks={artworks}
+                        saveLabel="Save & PDF"
+                        onClose={() => setIsCreatingProforma(false)}
+                        onSave={handleCreateProforma}
+                        onArtworkClick={onArtworkClick}
+                    />
+                )}
                 {isEditing && (
                     <InquiryFormModal
                         initialData={inquiry}
@@ -1033,6 +1134,7 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
     const [customerName, setCustomerName] = useState(initialData?.customerName || '');
     const [customerPhone, setCustomerPhone] = useState(initialData?.customerPhone || '');
     const [customerEmail, setCustomerEmail] = useState(initialData?.customerEmail || '');
+    const [customerAddress, setCustomerAddress] = useState(initialData?.customerAddress ?? '');
     const [notes, setNotes] = useState(initialData?.notes || '');
     const [source, setSource] = useState<Inquiry['source']>(initialData?.source || 'Walk-in');
     const [status, setStatus] = useState<Inquiry['status']>(initialData?.status || 'New');
@@ -1057,6 +1159,7 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
             customerName,
             customerPhone,
             customerEmail,
+            customerAddress: customerAddress.trim(),
             artworkIds: Array.from(selectedArtworkIds),
             notes,
             source,
@@ -1112,6 +1215,17 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                             onChange={e => setCustomerEmail(e.target.value)}
                             className="w-full bg-transparent border-b border-gray-300 dark:border-gray-700 py-1.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
                             placeholder="customer@example.com"
+                        />
+                    </div>
+                    <div>
+                        <label htmlFor="customerAddress" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Address</label>
+                        <textarea
+                            id="customerAddress"
+                            value={customerAddress}
+                            onChange={e => setCustomerAddress(e.target.value)}
+                            rows={2}
+                            className="w-full bg-transparent border-b border-gray-300 dark:border-gray-700 py-1.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors resize-none"
+                            placeholder="House / street, area, city, PIN"
                         />
                     </div>
                     <div className="grid grid-cols-2 gap-[6px]">

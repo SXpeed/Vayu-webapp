@@ -265,6 +265,7 @@ function rowToInquiry(row: Record<string, unknown>): any {
     customerName: row.customer_name as string,
     customerPhone: row.customer_phone as string,
     customerEmail: row.customer_email as string,
+    customerAddress: (row.customer_address as string) || undefined,
     artworkIds: JSON.parse(row.artwork_ids as string),
     notes: row.notes as string,
     source: row.source as string,
@@ -1274,6 +1275,7 @@ const COLUMN_MIGRATIONS = {
     cover_image_url: "TEXT DEFAULT ''",
   },
   inquiries: {
+    customer_address: "TEXT DEFAULT ''",
     created_by: "TEXT DEFAULT ''",
     created_by_name: "TEXT DEFAULT ''",
     image_urls: "TEXT DEFAULT '[]'",
@@ -1617,16 +1619,17 @@ async function handleInquiriesCreate(ctx: Ctx): Promise<Response> {
   const createdByName = existing ? existing.created_by_name || '' : session.name;
   await ctx.env.VAYU_DB.prepare(
     `INSERT OR REPLACE INTO inquiries
-     (id, inquiry_number, customer_name, customer_phone, customer_email,
+     (id, inquiry_number, customer_name, customer_phone, customer_email, customer_address,
       artwork_ids, notes, source, status, catalog_shared, date,
       created_by, created_by_name, image_urls)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     inq.id,
     inq.inquiryNumber || '',
     inq.customerName || '',
     inq.customerPhone || '',
     inq.customerEmail || '',
+    inq.customerAddress || '',
     JSON.stringify(inq.artworkIds || []),
     inq.notes || '',
     inq.source || 'Other',
@@ -1657,7 +1660,7 @@ async function handleInquiriesUpdate(ctx: Ctx): Promise<Response> {
   await ctx.env.VAYU_DB.prepare(
     `UPDATE inquiries SET
        inquiry_number = ?, customer_name = ?, customer_phone = ?,
-       customer_email = ?, artwork_ids = ?, notes = ?, source = ?,
+       customer_email = ?, customer_address = ?, artwork_ids = ?, notes = ?, source = ?,
        status = ?, catalog_shared = ?, image_urls = ?
      WHERE id = ?`
   ).bind(
@@ -1665,6 +1668,7 @@ async function handleInquiriesUpdate(ctx: Ctx): Promise<Response> {
     inq.customerName || '',
     inq.customerPhone || '',
     inq.customerEmail || '',
+    inq.customerAddress || '',
     JSON.stringify(inq.artworkIds || []),
     inq.notes || '',
     inq.source || 'Other',

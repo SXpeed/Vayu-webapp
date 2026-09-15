@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS inquiries (
   customer_name TEXT NOT NULL DEFAULT '',
   customer_phone TEXT DEFAULT '',
   customer_email TEXT DEFAULT '',
+  customer_address TEXT DEFAULT '',
   artwork_ids TEXT DEFAULT '[]',        -- JSON array of artwork IDs
   notes TEXT DEFAULT '',
   source TEXT DEFAULT 'Other',

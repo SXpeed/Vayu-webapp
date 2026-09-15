@@ -15,7 +15,8 @@ interface HomeViewProps {
 
 export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices, userProfile, onNavigate, onArtworkClick, onCatalogClick }) => {
     const availableArtworks = useMemo(() => artworks.filter(a => a.status === 'Available').length, [artworks]);
-    const totalRevenue = useMemo(() => invoices.reduce((sum, inv) => sum + inv.total, 0), [invoices]);
+    // Proforma invoices are quotations; only paid ones count as revenue.
+    const totalRevenue = useMemo(() => invoices.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + inv.total, 0), [invoices]);
     const recentArtworks = useMemo(() => [...artworks].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5), [artworks]);
     const recentCatalogs = useMemo(() => [...catalogs].sort((a, b) => b.createdAt - a.createdAt).slice(0, 2), [catalogs]);
 
@@ -71,7 +72,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                             <div className="text-brand-900 dark:text-gold-400">
                                 <Receipt size={22} strokeWidth={1.5} />
                             </div>
-                            <span className="text-[9px] font-medium text-gray-600 dark:text-gray-300 uppercase tracking-wider">Invoice</span>
+                            <span className="text-[9px] font-medium text-gray-600 dark:text-gray-300 uppercase tracking-wider text-center leading-tight">Proforma<br />Invoice</span>
                         </button>
                         <button 
                             onClick={() => onNavigate('messaging')}
