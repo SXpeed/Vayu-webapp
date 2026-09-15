@@ -132,7 +132,7 @@ export function ActivityLogView({ onBack }: ActivityLogViewProps) {
                         <div
                             key={log.id}
                             className="bg-white dark:bg-[#1e1e1e] border border-gray-100 dark:border-gray-800 rounded-[6px] p-3.5 shadow-sm animate-fade-in-up"
-                            style={{ animationDelay: `${Math.min(index * 30, 300)}ms` }}
+                            style={{ animationDelay: `${Math.min(index * 15, 150)}ms` }}
                         >
                             <div className="flex items-start gap-[6px]">
                                 {/* Action icon */}

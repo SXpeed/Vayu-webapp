@@ -716,7 +716,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                     <div
                         key={catalog.id}
                         className="relative w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm overflow-hidden flex h-28 border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
-                        style={{ animationDelay: `${index * 50}ms` }}
+                        style={{ animationDelay: `${index * 25}ms` }}
                     >
                         {/* Row tap target; inner action buttons sit above it (z-[2]). */}
                         <button
@@ -932,7 +932,7 @@ export const CatalogDetailModal: React.FC<CatalogDetailModalProps> = ({ catalog,
                             key={artwork.id}
                             onClick={() => onArtworkClick(artwork)}
                             className="w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm overflow-hidden flex h-28 border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
-                            style={{ animationDelay: `${index * 50}ms` }}
+                            style={{ animationDelay: `${index * 25}ms` }}
                         >
                             <div className="w-28 h-full relative shrink-0 bg-gray-50 dark:bg-gray-800">
                                 {artwork.imageUrls.length > 0 ? (

@@ -116,7 +116,7 @@ export const InvoiceView: React.FC<InvoiceViewProps> = ({ invoices, artworks, on
                             key={invoice.id}
                             onClick={() => handleInvoiceClick(invoice)}
                             className="w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm p-[6px] flex items-center justify-between border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
-                            style={{ animationDelay: `${200 + index * 50}ms` }}
+                            style={{ animationDelay: `${index * 25}ms` }}
                         >
                             <div className="flex items-center gap-[6px]">
                                 <div className="bg-gray-50 dark:bg-gray-800 p-2.5 rounded-full text-brand-900 dark:text-gold-400">
@@ -559,7 +559,7 @@ export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData,
                                     className={`relative w-full text-left flex items-center p-2 rounded-[6px] border transition-colors cursor-pointer active-scale animate-scale-in ${
                                         isSelected ? 'border-gold-500 bg-gold-50/50 dark:bg-gold-900/10' : 'border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50'
                                     }`}
-                                    style={{ animationDelay: `${150 + index * 30}ms` }}
+                                    style={{ animationDelay: `${index * 25}ms` }}
                                 >
                                     {/* Row tap target; inner action buttons sit above it (z-[2]). */}
                                     <button

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
 import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit2, Check, CheckCheck, Pin, Archive, MoreVertical, Paperclip, Reply, Loader2, Eye, Trash2, Camera } from 'lucide-react';
 import { Conversation, ConversationDetails, Message, MessageTag, MessageReplyTo, MessageAttachment, UserProfile } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
@@ -157,7 +157,7 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
             <div key={conv.id} className="relative">
                 <div
                     className="relative w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm p-[6px] flex items-center gap-2 border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
-                    style={{ animationDelay: `${150 + index * 50}ms` }}
+                    style={{ animationDelay: `${index * 25}ms` }}
                 >
                     {/* Row tap target; inner action buttons sit above it (z-[2]). */}
                     <button
@@ -534,22 +534,36 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    useEffect(() => {
-        const scrollToBottom = () => {
-            setTimeout(() => {
-                if (messagesEndRef.current) {
-                    const container = messagesEndRef.current.parentElement;
-                    if (container) {
-                        container.scrollTop = container.scrollHeight;
-                    }
-                }
-            }, 100);
-        };
-        scrollToBottom();
+    const scrollToBottom = () => {
+        const container = messagesEndRef.current?.parentElement;
+        if (container) container.scrollTop = container.scrollHeight;
+    };
 
-        window.visualViewport?.addEventListener('resize', scrollToBottom);
-        return () => window.visualViewport?.removeEventListener('resize', scrollToBottom);
-    }, [messages, isOtherTyping]);
+    // Jump straight to the latest message BEFORE the first paint, so opening
+    // a chat (especially large group chats) never shows the top of the list
+    // and then visibly snaps down.
+    useLayoutEffect(() => {
+        scrollToBottom();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [conversation.id]);
+
+    // While the chat is open, follow incoming messages only when the user is
+    // already at (or near) the bottom — reading history must not be yanked.
+    useEffect(() => {
+        const container = messagesEndRef.current?.parentElement;
+        if (!container) return;
+        const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
+        if (isNearBottom) container.scrollTop = container.scrollHeight;
+    }, [messages.length, isOtherTyping]);
+
+    // Keyboard open/close: re-anchor to the bottom on the next frame after
+    // the visual viewport resizes.
+    useEffect(() => {
+        const onViewportResize = () => requestAnimationFrame(scrollToBottom);
+        window.visualViewport?.addEventListener('resize', onViewportResize);
+        return () => window.visualViewport?.removeEventListener('resize', onViewportResize);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     useEffect(() => {
         return () => {
@@ -1071,7 +1085,7 @@ const EditGroupModal: React.FC<EditGroupModalProps> = ({ conversation, teamMembe
                                     key={member.id}
                                     onClick={() => toggleMember(member.id)}
                                     className={`w-full text-left rounded-[6px] shadow-sm p-[6px] flex items-center gap-[6px] border animate-fade-in-up cursor-pointer active-scale ${isSelected ? "border-gold-500 bg-gold-50/50 dark:bg-gold-900/10" : "bg-white dark:bg-[#1e1e1e] border-gray-100 dark:border-gray-800"}`}
-                                    style={{ animationDelay: `${index * 50}ms` }}
+                                    style={{ animationDelay: `${index * 25}ms` }}
                                 >
                                     <div className="relative">
                                         <div className="w-11 h-11 rounded-full bg-gray-50 dark:bg-gray-800 flex items-center justify-center text-brand-900 dark:text-gold-400">
@@ -1238,7 +1252,7 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                             key={member.id}
                             onClick={() => handleSelectMember(member)}
                             className="w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm p-[6px] flex items-center gap-[6px] border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
-                            style={{ animationDelay: `${index * 50}ms` }}
+                            style={{ animationDelay: `${index * 25}ms` }}
                         >
                             <div className="relative">
                                 <div className="w-11 h-11 rounded-full bg-gray-50 dark:bg-gray-800 flex items-center justify-center text-brand-900 dark:text-gold-400">
@@ -1297,7 +1311,7 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                                         onClick={() => toggleGroupMember(member.id)}
                                         className={`w-full text-left rounded-[6px] shadow-sm p-[6px] flex items-center gap-[6px] border animate-fade-in-up cursor-pointer active-scale ${isSelected ? 'border-gold-500 bg-gold-50/50 dark:bg-gold-900/10' : 'bg-white dark:bg-[#1e1e1e] border-gray-100 dark:border-gray-800'
                                             }`}
-                                        style={{ animationDelay: `${index * 50}ms` }}
+                                        style={{ animationDelay: `${index * 25}ms` }}
                                     >
                                         <div className="relative">
                                             <div className="w-11 h-11 rounded-full bg-gray-50 dark:bg-gray-800 flex items-center justify-center text-brand-900 dark:text-gold-400">

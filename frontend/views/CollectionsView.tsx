@@ -91,7 +91,7 @@ export const CollectionsView: React.FC<CollectionsViewProps> = ({ collections, a
                             key={collection.id}
                             onClick={() => handleCollectionClick(collection)}
                             className="w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm overflow-hidden flex h-28 border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
-                            style={{ animationDelay: `${index * 50}ms` }}
+                            style={{ animationDelay: `${index * 25}ms` }}
                         >
                             <div className="w-28 h-full relative shrink-0 bg-gray-50 dark:bg-gray-800">
                                 {coverImage ? (
