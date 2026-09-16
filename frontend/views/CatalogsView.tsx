@@ -1,7 +1,8 @@
 import React, { useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
-import { Plus, X, Edit2, Trash2, Download, Image as ImageIcon, Check, Search, Loader2, Camera, Upload, FileText, FileDown } from 'lucide-react';
+import { Plus, X, Edit2, Trash2, Download, Image as ImageIcon, Check, Loader2, Camera, Upload, FileText, FileDown } from 'lucide-react';
+import { SearchBar } from '../components/SearchBar';
 import { toast } from 'react-hot-toast';
 import { Catalog, Artwork, PdfOptions, CatalogTheme } from '../types';
 import type { jsPDF } from 'jspdf';
@@ -802,19 +803,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                 </div>
 
                 {/* Search — above the tabs, shared by both sections */}
-                <div className="relative mb-[6px]">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-gray-500" size={16} />
-                    <input
-                        type="text"
-                        placeholder={tab === 'create' ? 'Search catalogs to edit...' : 'Search catalogs...'}
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        autoComplete="off"
-                        autoCorrect="off"
-                        spellCheck={false}
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 pl-9 pr-4 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
-                    />
-                </div>
+                <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder={tab === 'create' ? 'Search catalogs to edit...' : 'Search catalogs...'} className="mb-[6px]" />
 
                 {/* Sections: saved catalogs vs. the create flow */}
                 <div className="flex gap-1.5">
@@ -1155,16 +1144,7 @@ export const CatalogDetailModal: React.FC<CatalogDetailModalProps> = ({ catalog,
                         </button>
                     </div>
                 </div>
-                <div className="relative">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-gray-500" size={16} />
-                    <input
-                        type="text"
-                        placeholder="Search artworks..."
-                        value={detailSearchQuery}
-                        onChange={(e) => setDetailSearchQuery(e.target.value)}
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 pl-9 pr-4 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
-                    />
-                </div>
+                <SearchBar value={detailSearchQuery} onChange={setDetailSearchQuery} placeholder="Search artworks..." />
             </div>
 
             <div className="flex-1 overflow-y-auto no-scrollbar pb-20">
@@ -1350,20 +1330,33 @@ export const CatalogFormModal: React.FC<CatalogFormModalProps> = ({ initialData,
                 <button onClick={onClose} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
                     <X size={20} />
                 </button>
-                <h2 className="text-base font-serif text-gray-900 dark:text-white">{initialData ? 'Edit Catalog' : 'Create Catalog'}</h2>
-                {onGenerate && (
-                    <button
-                        type="button"
-                        onClick={() => { void handleGenerate(); }}
-                        title="Save and open the PDF generator"
-                        className="text-gray-600 dark:text-gray-300 font-medium px-2 py-2 uppercase tracking-wider text-xs active-scale flex items-center gap-1"
-                    >
-                        <Download size={13} /> PDF
+                <h2 className="flex-1 text-center text-base font-serif text-gray-900 dark:text-white">{initialData ? 'Edit Catalog' : 'Create Catalog'}</h2>
+                <div className="flex items-center gap-0.5">
+                    {initialData && onDelete && (
+                        <button
+                            type="button"
+                            onClick={() => setConfirmDelete(true)}
+                            aria-label="Delete catalog"
+                            title="Delete catalog"
+                            className="p-2 text-gray-400 dark:text-gray-500 hover:text-red-500 rounded-full transition-colors active-scale"
+                        >
+                            <Trash2 size={18} />
+                        </button>
+                    )}
+                    {onGenerate && (
+                        <button
+                            type="button"
+                            onClick={() => { void handleGenerate(); }}
+                            title="Save and open the PDF generator"
+                            className="text-gray-600 dark:text-gray-300 font-medium px-2 py-2 uppercase tracking-wider text-xs active-scale flex items-center gap-1"
+                        >
+                            <Download size={13} /> PDF
+                        </button>
+                    )}
+                    <button onClick={handleSubmit} className="text-gold-600 dark:text-gold-400 font-medium px-2 py-2 uppercase tracking-wider text-xs active-scale">
+                        Save
                     </button>
-                )}
-                <button onClick={handleSubmit} className="text-gold-600 dark:text-gold-400 font-medium px-2 py-2 uppercase tracking-wider text-xs active-scale">
-                    Save
-                </button>
+                </div>
             </div>
 
             <div className="flex-1 overflow-y-auto p-[6px] no-scrollbar flex flex-col gap-6">
@@ -1398,16 +1391,7 @@ export const CatalogFormModal: React.FC<CatalogFormModalProps> = ({ initialData,
                     </div>
 
                     {/* Search Bar for Artworks */}
-                    <div className="relative mb-4">
-                        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-gray-500" size={16} />
-                        <input
-                            type="text"
-                            placeholder="Search artworks to add..."
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full bg-white dark:bg-[#1e1e1e] border border-gray-200 dark:border-gray-800 rounded-[6px] py-2 pl-9 pr-4 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors shadow-sm"
-                        />
-                    </div>
+                    <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search artworks to add..." className="mb-4" />
 
                     {/* Selected product tile tray */}
                     {selectedList.length > 0 && (

@@ -235,7 +235,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                 {/* Upcoming Events (calendar) */}
                 <section className="animate-fade-in-up" style={{ animationDelay: '250ms' }}>
                     <div className="flex justify-between items-end mb-[6px] px-[6px]">
-                        <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest">Upcoming Events</h2>
+                        <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest">Events</h2>
                         <div className="flex items-center gap-2">
                             <button
                                 onClick={() => onNavigate('calendar')}

@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
-import { Plus, Search, Image as ImageIcon, X, Trash2, Loader2, Camera, Folder } from 'lucide-react';
+import { Plus, Image as ImageIcon, X, Trash2, Loader2, Camera, Folder } from 'lucide-react';
+import { SearchBar } from '../components/SearchBar';
 import { Artwork } from '../types';
 import storageService, { getThumbUrl } from '../services/storageService';
 
@@ -32,19 +33,7 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
                         <Plus size={20} />
                     </button>
                 </div>
-                <div className="relative">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-gray-500" size={16} />
-                    <input
-                        type="text"
-                        placeholder="Search artworks..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        autoComplete="off"
-                        autoCorrect="off"
-                        spellCheck={false}
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 pl-9 pr-4 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
-                    />
-                </div>
+                <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search artworks..." />
             </div>
 
             {/* List */}

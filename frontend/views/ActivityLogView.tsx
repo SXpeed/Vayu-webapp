@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { authService, ActivityLog } from '../services/authService';
+import { SearchBar } from '../components/SearchBar';
 
 interface ActivityLogViewProps {
     readonly onBack: () => void;
@@ -209,22 +210,7 @@ export function ActivityLogView({ onBack }: ActivityLogViewProps) {
 
                     {/* Search + Filter */}
                     <div className="flex gap-2">
-                        <div className="relative flex-1">
-                            <svg className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-gray-500" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <circle cx="11" cy="11" r="8" />
-                                <path d="m21 21-4.3-4.3" />
-                            </svg>
-                            <input
-                                type="text"
-                                placeholder="Search activity…"
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                autoComplete="off"
-                                autoCorrect="off"
-                                spellCheck={false}
-                                className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 pl-9 pr-4 text-xs text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
-                            />
-                        </div>
+                        <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search activity…" className="flex-1" />
                         <select
                             value={actionFilter}
                             onChange={(e) => setActionFilter(e.target.value)}

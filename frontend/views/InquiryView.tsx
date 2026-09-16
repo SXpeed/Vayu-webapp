@@ -2,6 +2,7 @@ import storageService, { getThumbUrl } from '../services/storageService';
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { Plus, X, MessageSquare, MessageCircle, Send, Search, ArrowLeft, Edit2, Trash2, Phone, Mail, Image as ImageIcon, User, Clock, Tag, BookOpen, CheckCircle2, XCircle, Check, CheckCheck, Paperclip, Reply, Camera, Loader2, MapPin, FileText } from 'lucide-react';
+import { SearchBar } from '../components/SearchBar';
 import { Inquiry, Artwork, InquiryMessage, MessageReplyTo, MessageAttachment, MessageTag, UserProfile, Invoice } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
@@ -151,19 +152,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                         <Plus size={20} />
                     </button>
                 </div>
-                <div className="relative">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-gray-500" size={16} />
-                    <input
-                        type="text"
-                        placeholder="Search inquiries..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        autoComplete="off"
-                        autoCorrect="off"
-                        spellCheck={false}
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 pl-9 pr-4 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
-                    />
-                </div>
+                <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search inquiries..." />
             </div>
 
             <div className="flex-1 overflow-y-auto p-[6px] space-y-4 no-scrollbar pb-20">
@@ -171,27 +160,27 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                 <div className="flex gap-2 animate-fade-in-up" style={{ animationDelay: '50ms' }}>
                     <button
                         onClick={() => setFilterTab('active')}
-                        className={`flex-1 py-2.5 rounded-[6px] text-[10px] font-bold uppercase tracking-widest transition-all duration-300 active-scale ${filterTab === 'active'
+                        className={`flex-1 py-2 rounded-full text-[9px] font-bold uppercase tracking-widest transition-colors active-scale ${filterTab === 'active'
                             ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
-                            : 'bg-white dark:bg-[#1e1e1e] text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
+                            : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
                             }`}
                     >
                         Active ({activeCount})
                     </button>
                     <button
                         onClick={() => setFilterTab('closed')}
-                        className={`flex-1 py-2.5 rounded-[6px] text-[10px] font-bold uppercase tracking-widest transition-all duration-300 active-scale ${filterTab === 'closed'
+                        className={`flex-1 py-2 rounded-full text-[9px] font-bold uppercase tracking-widest transition-colors active-scale ${filterTab === 'closed'
                             ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
-                            : 'bg-white dark:bg-[#1e1e1e] text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
+                            : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
                             }`}
                     >
                         Closed ({closedCount})
                     </button>
                     <button
                         onClick={() => setFilterTab('shared')}
-                        className={`flex-1 py-2.5 rounded-[6px] text-[10px] font-bold uppercase tracking-widest transition-all duration-300 active-scale ${filterTab === 'shared'
+                        className={`flex-1 py-2 rounded-full text-[9px] font-bold uppercase tracking-widest transition-colors active-scale ${filterTab === 'shared'
                             ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
-                            : 'bg-white dark:bg-[#1e1e1e] text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
+                            : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
                             }`}
                     >
                         Shared ({sharedCount})
@@ -517,23 +506,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
 
             {showSearch && (
                 <div className="bg-white dark:bg-[#1a1a1a] border-b border-gray-100 dark:border-gray-800 px-[6px] py-2 animate-fade-in">
-                    <div className="relative">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500" size={14} />
-                        <input
-                            value={chatSearchQuery}
-                            onChange={(e) => setChatSearchQuery(e.target.value)}
-                            placeholder="Search in this chat..."
-                            autoComplete="off"
-                            autoCorrect="off"
-                            spellCheck={false}
-                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 pl-8 pr-8 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
-                        />
-                        {chatSearchQuery && (
-                            <button onClick={() => setChatSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
-                                <X size={14} />
-                            </button>
-                        )}
-                    </div>
+                    <SearchBar value={chatSearchQuery} onChange={setChatSearchQuery} placeholder="Search in this chat..." />
                 </div>
             )}
 
@@ -827,49 +800,48 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
             </div>
 
             <div className="flex-1 overflow-y-auto p-[6px] no-scrollbar pb-20">
-                {/* Action Buttons - Active/Close & Catalog Shared */}
-                <div className="flex gap-[6px] mb-4 animate-fade-in-up" style={{ animationDelay: '50ms' }}>
+                {/* Action row — Close / Share / Proforma (catalog pill style, single line) */}
+                <div className="flex gap-1.5 mb-4 animate-fade-in-up" style={{ animationDelay: '50ms' }}>
                     <button
                         onClick={handleToggleStatus}
-                        className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-[6px] text-[10px] font-bold uppercase tracking-widest transition-all duration-300 active-scale shadow-sm ${inquiry.status === 'Closed'
-                            ? 'bg-green-500 dark:bg-green-600 text-white hover:bg-green-600 dark:hover:bg-green-500'
-                            : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 hover:border-red-300 dark:hover:border-red-700'
+                        className={`flex-1 min-w-0 flex items-center justify-center gap-1 py-2 rounded-full text-[9px] font-bold uppercase tracking-widest transition-colors active-scale whitespace-nowrap ${inquiry.status === 'Closed'
+                            ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
+                            : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400'
                             }`}
                     >
                         {inquiry.status === 'Closed' ? (
                             <>
-                                <CheckCircle2 size={16} strokeWidth={2.5} />
-                                Reopen Inquiry
+                                <CheckCircle2 size={12} strokeWidth={2.5} />
+                                Reopen
                             </>
                         ) : (
                             <>
-                                <XCircle size={16} strokeWidth={2.5} />
-                                Close Inquiry
+                                <XCircle size={12} strokeWidth={2.5} />
+                                Close
                             </>
                         )}
                     </button>
 
                     <button
                         onClick={handleToggleCatalogShared}
-                        className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-[6px] text-[10px] font-bold uppercase tracking-widest transition-all duration-300 active-scale shadow-sm ${inquiry.catalogShared
-                            ? 'bg-gold-500 text-white hover:bg-gold-600'
-                            : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:bg-gold-50 dark:hover:bg-gold-900/15 hover:text-gold-600 dark:hover:text-gold-400 hover:border-gold-300 dark:hover:border-gold-700'
+                        className={`flex-1 min-w-0 flex items-center justify-center gap-1 py-2 rounded-full text-[9px] font-bold uppercase tracking-widest transition-colors active-scale whitespace-nowrap ${inquiry.catalogShared
+                            ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
+                            : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400 hover:text-gold-600 dark:hover:text-gold-400'
                             }`}
                     >
-                        <BookOpen size={16} strokeWidth={2.5} />
-                        {inquiry.catalogShared ? 'Catalog Sent ✓' : 'Share Catalog'}
+                        <BookOpen size={12} strokeWidth={2.5} />
+                        {inquiry.catalogShared ? 'Sent' : 'Share'}
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={() => setIsCreatingProforma(true)}
+                        className="flex-1 min-w-0 flex items-center justify-center gap-1 py-2 rounded-full text-[9px] font-bold uppercase tracking-widest active-scale shadow-sm whitespace-nowrap bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950"
+                    >
+                        <FileText size={12} strokeWidth={2.5} />
+                        Proforma
                     </button>
                 </div>
-
-                <button
-                    type="button"
-                    onClick={() => setIsCreatingProforma(true)}
-                    className="w-full flex items-center justify-center gap-2 py-3 mb-4 rounded-[6px] text-[10px] font-bold uppercase tracking-widest active-scale shadow-sm bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 animate-fade-in-up"
-                    style={{ animationDelay: '75ms' }}
-                >
-                    <FileText size={16} strokeWidth={2.5} />
-                    Create Proforma Invoice
-                </button>
 
                 {/* Customer Info Card */}
                 <div className="bg-white dark:bg-[#1e1e1e] p-6 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 mb-4 animate-fade-in-up" style={{ animationDelay: '100ms' }}>

@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
 import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit2, Check, CheckCheck, Pin, Archive, MoreVertical, Paperclip, Reply, Loader2, Eye, Trash2, Camera } from 'lucide-react';
+import { SearchBar } from '../components/SearchBar';
 import { Conversation, ConversationDetails, Message, MessageTag, MessageReplyTo, MessageAttachment, UserProfile } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
@@ -268,19 +269,7 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                         </button>
                     </div>
                 </div>
-                <div className="relative">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-gray-500" size={16} />
-                    <input
-                        type="text"
-                        placeholder="Search conversations..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        autoComplete="off"
-                        autoCorrect="off"
-                        spellCheck={false}
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 pl-9 pr-4 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
-                    />
-                </div>
+                <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search messages..." />
             </div>
 
             <div className="flex-1 overflow-y-auto p-[6px] space-y-4 no-scrollbar pb-20">
@@ -787,23 +776,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
             {/* In-chat Search */}
             {showSearch && (
                 <div className="bg-white dark:bg-[#1a1a1a] border-b border-gray-100 dark:border-gray-800 px-[6px] py-2 animate-fade-in">
-                    <div className="relative">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500" size={14} />
-                        <input
-                            value={chatSearchQuery}
-                            onChange={(e) => setChatSearchQuery(e.target.value)}
-                            placeholder="Search in this chat..."
-                            autoComplete="off"
-                            autoCorrect="off"
-                            spellCheck={false}
-                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 pl-8 pr-8 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
-                        />
-                        {chatSearchQuery && (
-                            <button onClick={() => setChatSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
-                                <X size={14} />
-                            </button>
-                        )}
-                    </div>
+                    <SearchBar value={chatSearchQuery} onChange={setChatSearchQuery} placeholder="Search in this chat..." />
                 </div>
             )}
 

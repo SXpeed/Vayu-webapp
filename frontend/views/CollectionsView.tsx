@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
-import { Plus, X, Check, Image as ImageIcon, Search, Edit2, Trash2, Camera, Loader2 } from 'lucide-react';
+import { Plus, X, Check, Image as ImageIcon, Edit2, Trash2, Camera, Loader2 } from 'lucide-react';
+import { SearchBar } from '../components/SearchBar';
 import { Collection, Artwork } from '../types';
 import storageService, { getThumbUrl } from '../services/storageService';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
@@ -67,19 +68,7 @@ export const CollectionsView: React.FC<CollectionsViewProps> = ({ collections, a
                         <Plus size={20} />
                     </button>
                 </div>
-                <div className="relative">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-gray-500" size={16} />
-                    <input
-                        type="text"
-                        placeholder="Search collections..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        autoComplete="off"
-                        autoCorrect="off"
-                        spellCheck={false}
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 pl-9 pr-4 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
-                    />
-                </div>
+                <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search collections..." />
             </div>
 
             <div className="flex-1 overflow-y-auto p-[6px] space-y-2 no-scrollbar pb-20">
@@ -220,16 +209,7 @@ export const CollectionDetailModal: React.FC<CollectionDetailModalProps> = ({ co
                         </button>
                     </div>
                 </div>
-                <div className="relative">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-gray-500" size={16} />
-                    <input
-                        type="text"
-                        placeholder="Search artworks..."
-                        value={detailSearchQuery}
-                        onChange={(e) => setDetailSearchQuery(e.target.value)}
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 pl-9 pr-4 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
-                    />
-                </div>
+                <SearchBar value={detailSearchQuery} onChange={setDetailSearchQuery} placeholder="Search artworks..." />
             </div>
 
             <div className="flex-1 overflow-y-auto no-scrollbar pb-20">
@@ -433,16 +413,7 @@ export const CollectionFormModal: React.FC<CollectionFormModalProps> = ({ initia
                     </div>
 
                     {/* Search Bar for Artworks */}
-                    <div className="relative mb-4">
-                        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-gray-500" size={16} />
-                        <input
-                            type="text"
-                            placeholder="Search artworks to add..."
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full bg-white dark:bg-[#1e1e1e] border border-gray-200 dark:border-gray-800 rounded-[6px] py-2 pl-9 pr-4 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors shadow-sm"
-                        />
-                    </div>
+                    <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search artworks to add..." className="mb-4" />
 
                     <div className="grid grid-cols-2 gap-2">
                         {filteredArtworks.map((art, index) => {

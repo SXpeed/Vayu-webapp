@@ -3,7 +3,8 @@ import { Contact, Inquiry, NewContact } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import toast from 'react-hot-toast';
-import { Search, Users, UserPlus, Trash2, X, Phone, Mail, Upload, Download, Loader2, Briefcase, Edit2 } from 'lucide-react';
+import { Users, UserPlus, Trash2, X, Phone, Mail, Upload, Download, Loader2, Briefcase, Edit2 } from 'lucide-react';
+import { SearchBar } from '../components/SearchBar';
 
 interface ContactsViewProps {
     contacts: Contact[];
@@ -310,19 +311,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
                         <input ref={fileInputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={handleImportFile} />
                     </div>
                 </div>
-                <div className="relative mb-[6px]">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-gray-500" size={16} />
-                    <input
-                        type="text"
-                        placeholder="Search name, phone or email..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        autoComplete="off"
-                        autoCorrect="off"
-                        spellCheck={false}
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 pl-9 pr-4 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
-                    />
-                </div>
+                <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search contacts..." />
                 <div className="flex gap-[6px] overflow-x-auto no-scrollbar pb-1">
                     {FILTERS.map(f => (
                         <button
