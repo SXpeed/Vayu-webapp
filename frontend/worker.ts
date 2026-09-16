@@ -256,8 +256,21 @@ function rowToCatalog(row: Record<string, unknown>): any {
     description: row.description as string,
     artworkIds: JSON.parse(row.artwork_ids as string),
     coverImageUrl: row.cover_image_url as string,
+    pdfUrl: (row.pdf_url as string) || undefined,
+    source: (row.source as string) || undefined,
     createdAt: row.created_at as number,
   };
+}
+
+// The catalogs table predates pdf_url/source — add them lazily (once per
+// isolate) so no manual D1 migration is required.
+let catalogsColumnsPromise: Promise<void> | null = null;
+function ensureCatalogsColumns(db: D1Database): Promise<void> {
+  catalogsColumnsPromise ??= (async () => {
+    try { await db.prepare('ALTER TABLE catalogs ADD COLUMN pdf_url TEXT').run(); } catch { /* already exists */ }
+    try { await db.prepare(`ALTER TABLE catalogs ADD COLUMN source TEXT NOT NULL DEFAULT 'generated'`).run(); } catch { /* already exists */ }
+  })();
+  return catalogsColumnsPromise;
 }
 
 function rowToInquiry(row: Record<string, unknown>): any {
@@ -1699,6 +1712,7 @@ async function handleCollectionsDelete(ctx: Ctx): Promise<Response> {
 async function handleCatalogsList(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
+  await ensureCatalogsColumns(ctx.env.VAYU_DB);
   const results = await ctx.env.VAYU_DB.prepare(
     'SELECT * FROM catalogs ORDER BY created_at DESC'
   ).all();
@@ -1712,19 +1726,22 @@ async function handleCatalogsCreate(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json();
   const cat = body as any;
   if (!cat.id) return err('id is required');
+  await ensureCatalogsColumns(ctx.env.VAYU_DB);
   const alreadyExists = await ctx.env.VAYU_DB.prepare(
     'SELECT 1 FROM catalogs WHERE id = ?'
   ).bind(cat.id).first();
   await ctx.env.VAYU_DB.prepare(
     `INSERT OR REPLACE INTO catalogs
-     (id, name, description, artwork_ids, cover_image_url, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
+     (id, name, description, artwork_ids, cover_image_url, pdf_url, source, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     cat.id,
     cat.name || '',
     cat.description || '',
     JSON.stringify(cat.artworkIds || []),
     cat.coverImageUrl || '',
+    cat.pdfUrl || null,
+    cat.source || 'generated',
     cat.createdAt || Date.now()
   ).run();
   if (!alreadyExists) {
@@ -1739,15 +1756,18 @@ async function handleCatalogsUpdate(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json();
   const cat = body as any;
   const catId = ctx.path.slice('/catalogs/'.length);
+  await ensureCatalogsColumns(ctx.env.VAYU_DB);
   await ctx.env.VAYU_DB.prepare(
     `UPDATE catalogs SET
-       name = ?, description = ?, artwork_ids = ?, cover_image_url = ?
+       name = ?, description = ?, artwork_ids = ?, cover_image_url = ?, pdf_url = ?, source = ?
      WHERE id = ?`
   ).bind(
     cat.name || '',
     cat.description || '',
     JSON.stringify(cat.artworkIds || []),
     cat.coverImageUrl || '',
+    cat.pdfUrl || null,
+    cat.source || 'generated',
     catId
   ).run();
   logEntityChange(ctx, session, 'updated', 'catalog', catId, `Updated catalog "${cat.name || catId}"`);

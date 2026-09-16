@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
-import { Plus, X, Edit2, Trash2, Download, Image as ImageIcon, Check, Search, Loader2, Camera } from 'lucide-react';
+import { Plus, X, Edit2, Trash2, Download, Image as ImageIcon, Check, Search, Loader2, Camera, Upload, FileText } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Catalog, Artwork, PdfOptions, CatalogTheme } from '../types';
 import type { jsPDF } from 'jspdf';
@@ -10,7 +10,7 @@ import { ArtworkFormModal } from './ArtworksView';
 interface CatalogsViewProps {
     catalogs: Catalog[];
     artworks: Artwork[];
-    onAddCatalog: (catalog: Omit<Catalog, 'id' | 'createdAt'>) => void;
+    onAddCatalog: (catalog: Omit<Catalog, 'id' | 'createdAt'> & { id?: string }) => Promise<Catalog | void> | void;
     onUpdateCatalog: (catalog: Catalog) => void;
     onDeleteCatalog: (id: string) => void;
     onArtworkClick: (artwork: Artwork) => void;
@@ -588,46 +588,71 @@ const drawArtworkPages = async (pageCtx: PageDrawContext): Promise<void> => {
 };
 
 export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, onAddCatalog, onUpdateCatalog, onDeleteCatalog, onArtworkClick, onAddArtwork }) => {
-    const [isAdding, setIsAdding] = useState(false);
-    const [selectedCatalog, setSelectedCatalog] = useState<Catalog | null>(null);
     const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
     const [pdfProgress, setPdfProgress] = useState<string | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
-
-    React.useEffect(() => {
-        const handlePopState = (e: PopStateEvent) => {
-            if (e.state?.modal !== 'catalog') {
-                setSelectedCatalog(null);
-            }
-        };
-        globalThis.addEventListener('popstate', handlePopState);
-        return () => globalThis.removeEventListener('popstate', handlePopState);
-    }, []);
-
-    const handleCatalogClick = (catalog: Catalog) => {
-        setSelectedCatalog(catalog);
-        globalThis.history.pushState({ view: 'catalogs', modal: 'catalog' }, '');
-    };
-
-    const handleCloseModal = () => {
-        if (globalThis.history.state?.modal === 'catalog') {
-            globalThis.history.back();
-        } else {
-            setSelectedCatalog(null);
-        }
-    };
+    const [tab, setTab] = useState<'catalogs' | 'create'>('catalogs');
+    const [isUploadingPdf, setIsUploadingPdf] = useState(false);
+    const [deletePdfTarget, setDeletePdfTarget] = useState<Catalog | null>(null);
+    const [editingCatalogId, setEditingCatalogId] = useState<string | null>(null);
+    const pdfInputRef = useRef<HTMLInputElement>(null);
 
     const [showCatalogStudio, setShowCatalogStudio] = useState(false);
     const [catalogToDownload, setCatalogToDownload] = useState<Catalog | null>(null);
 
-    const filteredCatalogs = catalogs.filter(catalog =>
-        catalog.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        catalog.description.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    // The Catalogs tab lists only entries that actually hold a PDF
+    // (uploaded files + generated PDFs saved from the studio).
+    const pdfCatalogs = catalogs
+        .filter(catalog => !!catalog.pdfUrl)
+        .filter(catalog =>
+            catalog.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            catalog.description.toLowerCase().includes(searchQuery.toLowerCase())
+        );
+
+    // Catalog available in the Create tab picker (new + every existing one).
+    const editingCatalog = catalogs.find(c => c.id === editingCatalogId) || null;
 
     const handleDownloadClick = (catalog: Catalog) => {
         setCatalogToDownload(catalog);
         setShowCatalogStudio(true);
+    };
+
+    /** Opens a stored catalog PDF (uploaded or generated) in a new tab. */
+    const handleOpenPdf = (catalog: Catalog) => {
+        if (!catalog.pdfUrl) return;
+        globalThis.open(getThumbUrl(catalog.pdfUrl), '_blank');
+    };
+
+    /** Uploads a PDF file and stores it as its own catalog entry. */
+    const handleUploadPdf = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        e.target.value = '';
+        if (!file) return;
+        if (file.type && file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+            toast.error('Please choose a PDF file');
+            return;
+        }
+        setIsUploadingPdf(true);
+        const toastId = toast.loading('Uploading catalog…');
+        try {
+            const result = await storageService.upload(file);
+            const name = file.name.replace(/\.pdf$/i, '').trim() || 'Uploaded catalog';
+            onAddCatalog({
+                id: `cat_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
+                name,
+                description: '',
+                artworkIds: [],
+                coverImageUrl: '',
+                pdfUrl: result.url,
+                source: 'uploaded',
+            });
+            toast.success('Catalog uploaded', { id: toastId });
+        } catch (error) {
+            console.error('Catalog PDF upload failed:', error);
+            toast.error('Upload failed — try again', { id: toastId });
+        } finally {
+            setIsUploadingPdf(false);
+        }
     };
 
     const handleGeneratePDF = async (options: PdfOptions, themeId: CatalogTheme) => {
@@ -659,6 +684,21 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                 });
             }
 
+            setPdfProgress('Saving to Catalogs…');
+            // Store the generated PDF so it lives in the Catalogs list.
+            try {
+                const blob = doc.output('blob');
+                const pdfFile = new File([blob], `${catalogToDownload.name.trim().replaceAll(/\s+/g, '_')}.pdf`, { type: 'application/pdf' });
+                const uploaded = await storageService.upload(pdfFile);
+                const updated: Catalog = { ...catalogToDownload, pdfUrl: uploaded.url, source: 'generated' };
+                onUpdateCatalog(updated);
+                setCatalogToDownload(updated);
+                toast.success('Catalog PDF saved to Catalogs');
+            } catch (uploadError) {
+                console.error('Saving generated catalog PDF failed:', uploadError);
+                toast.error('Generated PDF downloaded, but saving to Catalogs failed');
+            }
+
             setPdfProgress('Saving PDF…');
             doc.save(`${catalogToDownload.name.replaceAll(/\s+/g, '_')}.pdf`);
         } catch (error) {
@@ -677,30 +717,114 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
             <div className="bg-white dark:bg-[#1a1a1a] px-[6px] pt-[calc(1.75rem+env(safe-area-inset-top,0px))] pb-[6px] shadow-sm z-10 border-b border-gray-100 dark:border-gray-800">
                 <div className="flex justify-between items-center mb-[6px]">
                     <h1 className="text-xl font-serif text-gray-900 dark:text-white">Catalogs</h1>
+                    {tab === 'catalogs' && (
+                        <button
+                            onClick={() => pdfInputRef.current?.click()}
+                            disabled={isUploadingPdf}
+                            aria-label="Upload catalog PDF"
+                            title="Upload catalog PDF"
+                            className="bg-gray-100 dark:bg-[#2a2a2a] text-gray-600 dark:text-gray-300 p-1.5 rounded-full shadow-sm hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale disabled:opacity-40"
+                        >
+                            {isUploadingPdf ? <Loader2 size={20} className="animate-spin" /> : <Upload size={20} />}
+                        </button>
+                    )}
+                    <input ref={pdfInputRef} type="file" accept="application/pdf,.pdf" className="hidden" onChange={handleUploadPdf} />
+                </div>
+
+                {/* Sections: saved catalogs vs. the create flow */}
+                <div className="flex gap-1.5 mb-[6px]">
                     <button
-                        onClick={() => setIsAdding(true)}
-                        className="bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 p-1.5 rounded-full shadow-md hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors active-scale"
+                        type="button"
+                        onClick={() => setTab('catalogs')}
+                        className={`flex-1 py-1.5 rounded-full text-[9px] font-bold uppercase tracking-widest transition-colors active-scale ${tab === 'catalogs'
+                            ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
+                            : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
+                            }`}
                     >
-                        <Plus size={20} />
+                        Catalogs
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setTab('create')}
+                        className={`flex-1 py-1.5 rounded-full text-[9px] font-bold uppercase tracking-widest transition-colors active-scale ${tab === 'create'
+                            ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
+                            : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
+                            }`}
+                    >
+                        Create Catalog
                     </button>
                 </div>
-                <div className="relative">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-gray-500" size={16} />
-                    <input
-                        type="text"
-                        placeholder="Search catalogs..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        autoComplete="off"
-                        autoCorrect="off"
-                        spellCheck={false}
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 pl-9 pr-4 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
-                    />
-                </div>
+
+                {tab === 'catalogs' && (
+                    <div className="relative">
+                        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-gray-500" size={16} />
+                        <input
+                            type="text"
+                            placeholder="Search catalogs..."
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            autoComplete="off"
+                            autoCorrect="off"
+                            spellCheck={false}
+                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 pl-9 pr-4 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                        />
+                    </div>
+                )}
             </div>
 
+            {tab === 'create' ? (
+                <div className="flex-1 overflow-hidden flex flex-col">
+                    {/* Pick an existing catalog to edit its items, or start a new one */}
+                    <div className="bg-white dark:bg-[#1a1a1a] px-[6px] py-2 border-b border-gray-100 dark:border-gray-800">
+                        <label htmlFor="catalog-picker" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider px-1">Editing</label>
+                        <select
+                            id="catalog-picker"
+                            value={editingCatalogId ?? ''}
+                            onChange={(e) => setEditingCatalogId(e.target.value || null)}
+                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 px-3 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                        >
+                            <option value="">— New catalog —</option>
+                            {catalogs.map(c => (
+                                <option key={c.id} value={c.id}>{c.name}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div className="flex-1 overflow-hidden">
+                        <CatalogFormModal
+                            key={editingCatalogId ?? 'new'}
+                            inline
+                            initialData={editingCatalog ?? undefined}
+                            artworks={artworks}
+                            onClose={() => setTab('catalogs')}
+                            onSave={async (data) => {
+                                if (editingCatalog) {
+                                    onUpdateCatalog({ ...editingCatalog, ...data, id: editingCatalog.id, createdAt: editingCatalog.createdAt });
+                                    toast.success('Catalog updated');
+                                } else {
+                                    const full: Catalog = { ...data, id: `cat_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`, createdAt: Date.now() };
+                                    await onAddCatalog(full);
+                                    toast.success('Catalog created');
+                                }
+                            }}
+                            onGenerate={async (data) => {
+                                let cat: Catalog;
+                                if (editingCatalog) {
+                                    cat = { ...editingCatalog, ...data, id: editingCatalog.id, createdAt: editingCatalog.createdAt };
+                                    onUpdateCatalog(cat);
+                                } else {
+                                    cat = { ...data, id: `cat_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`, createdAt: Date.now() };
+                                    await onAddCatalog(cat);
+                                }
+                                // The PDF generator page — generated PDFs land in the Catalogs tab.
+                                setTab('catalogs');
+                                handleDownloadClick(cat);
+                            }}
+                        />
+                    </div>
+                </div>
+            ) : (
             <div className="flex-1 overflow-y-auto p-[6px] space-y-2 no-scrollbar pb-20">
-                {filteredCatalogs.map((catalog, index) => (
+                {pdfCatalogs.map((catalog, index) => (
                     <div
                         key={catalog.id}
                         className="relative w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm overflow-hidden flex h-28 border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
@@ -709,12 +833,19 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                         {/* Row tap target; inner action buttons sit above it (z-[2]). */}
                         <button
                             type="button"
-                            onClick={() => handleCatalogClick(catalog)}
-                            aria-label={`Open catalog ${catalog.name}`}
+                            onClick={() => handleOpenPdf(catalog)}
+                            aria-label={`Open catalog PDF ${catalog.name}`}
                             className="absolute inset-0 z-[1] w-full h-full rounded-[6px] cursor-pointer"
                         />
                         <div className="w-28 h-full relative shrink-0 bg-gray-50 dark:bg-gray-800">
-                            <img loading="lazy" decoding="async" src={getThumbUrl(catalog.coverImageUrl)} alt={catalog.name} className="w-full h-full object-cover" />
+                            {catalog.source === 'uploaded' ? (
+                                <div className="w-full h-full flex flex-col items-center justify-center gap-1 text-gold-600 dark:text-gold-400">
+                                    <FileText size={26} strokeWidth={1.25} />
+                                    <span className="text-[7px] font-bold uppercase tracking-widest">PDF</span>
+                                </div>
+                            ) : (
+                                <img loading="lazy" decoding="async" src={getThumbUrl(catalog.coverImageUrl)} alt={catalog.name} className="w-full h-full object-cover" />
+                            )}
                         </div>
                         <div className="p-[6px] flex flex-col justify-between flex-1">
                             <div>
@@ -723,16 +854,17 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                                     <button type="button"
                                         onClick={(e) => {
                                             e.stopPropagation();
-                                            handleDownloadClick(catalog);
+                                            setDeletePdfTarget(catalog);
                                         }}
-                                        disabled={isGeneratingPDF}
-                                        className={`relative z-[2] p-1.5 text-gray-400 dark:text-gray-500 hover:text-gold-600 dark:hover:text-gold-400 rounded-full transition-colors active-scale shrink-0 ${isGeneratingPDF ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                        title="Download PDF"
+                                        className="relative z-[2] p-1.5 text-gray-300 dark:text-gray-600 hover:text-red-500 rounded-full transition-colors active-scale shrink-0"
+                                        title="Delete PDF"
                                     >
-                                        <Download size={14} />
+                                        <Trash2 size={14} />
                                     </button>
                                 </div>
-                                <p className="text-[9px] text-gray-500 dark:text-gray-400 mt-1 uppercase tracking-wider">{catalog.artworkIds.length} Artworks</p>
+                                <p className="text-[9px] text-gray-500 dark:text-gray-400 mt-1 uppercase tracking-wider">
+                                    {catalog.source === 'uploaded' ? 'PDF · Uploaded' : `PDF · ${catalog.artworkIds.length} Artworks`}
+                                </p>
                             </div>
                             {catalog.description && (
                                 <p className="text-[10px] text-gray-400 dark:text-gray-500 font-light line-clamp-2">{catalog.description}</p>
@@ -740,42 +872,12 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                         </div>
                     </div>
                 ))}
-                {filteredCatalogs.length === 0 && (
-                    <div className="text-center text-gray-400 dark:text-gray-500 mt-10 font-light text-sm">
-                        No catalogs found.
+                {pdfCatalogs.length === 0 && (
+                    <div className="text-center text-gray-400 dark:text-gray-500 mt-10 font-light text-sm px-6">
+                        No catalog PDFs yet. Upload a PDF, or build one from the "Create Catalog" tab — generated PDFs are saved here automatically.
                     </div>
                 )}
             </div>
-
-            {isAdding && (
-                <CatalogFormModal
-                    artworks={artworks}
-                    onClose={() => setIsAdding(false)}
-                    onSave={(newCat) => {
-                        onAddCatalog(newCat);
-                        setIsAdding(false);
-                    }}
-                />
-            )}
-
-            {selectedCatalog && (
-                <CatalogDetailModal
-                    catalog={selectedCatalog}
-                    artworks={artworks}
-                    onClose={handleCloseModal}
-                    onDownloadClick={() => handleDownloadClick(selectedCatalog)}
-                    onArtworkClick={onArtworkClick}
-                    onUpdateCatalog={(updated) => {
-                        onUpdateCatalog(updated);
-                        setSelectedCatalog(updated);
-                    }}
-                    onDeleteCatalog={() => {
-                        onDeleteCatalog(selectedCatalog.id);
-                        setSelectedCatalog(null);
-                    }}
-                    isGeneratingPDF={isGeneratingPDF}
-                    onAddArtwork={onAddArtwork}
-                />
             )}
 
             {/* Catalog Studio View */}
@@ -789,6 +891,20 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                     generationProgress={pdfProgress}
                 />
             )}
+
+            {/* Delete confirmation for a catalog PDF — must type "Delete" */}
+            <TypeDeleteDialog
+                isOpen={!!deletePdfTarget}
+                title="Delete catalog PDF"
+                itemName={deletePdfTarget?.name || ''}
+                message="the stored PDF is archived for admin review"
+                onClose={() => setDeletePdfTarget(null)}
+                onConfirm={() => {
+                    if (deletePdfTarget) onDeleteCatalog(deletePdfTarget.id);
+                    setDeletePdfTarget(null);
+                    toast.success('Catalog PDF deleted');
+                }}
+            />
         </div>
     );
 };
@@ -986,11 +1102,15 @@ export const CatalogDetailModal: React.FC<CatalogDetailModalProps> = ({ catalog,
 export interface CatalogFormModalProps {
     initialData?: Catalog;
     artworks: Artwork[];
+    /** Rendered inline inside a tab body instead of as a full-screen overlay. */
+    inline?: boolean;
     onClose: () => void;
-    onSave: (catalog: Omit<Catalog, 'id' | 'createdAt'>) => void;
+    onSave: (catalog: Omit<Catalog, 'id' | 'createdAt'> & { id?: string }) => void | Promise<void>;
+    /** Provided by the Create tab — saves, then opens the PDF generator. */
+    onGenerate?: (catalog: Omit<Catalog, 'id' | 'createdAt'> & { id?: string }) => void | Promise<void>;
 }
 
-export const CatalogFormModal: React.FC<CatalogFormModalProps> = ({ initialData, artworks, onClose, onSave }) => {
+export const CatalogFormModal: React.FC<CatalogFormModalProps> = ({ initialData, artworks, onClose, onSave, inline, onGenerate }) => {
     const [name, setName] = useState(initialData?.name || '');
     const [description, setDescription] = useState(initialData?.description || '');
     const [searchQuery, setSearchQuery] = useState('');
@@ -1011,25 +1131,56 @@ export const CatalogFormModal: React.FC<CatalogFormModalProps> = ({ initialData,
         setSelectedArtworks(newSet);
     };
 
-    const handleSubmit = () => {
-        if (!name.trim()) return alert("Name is required");
-        if (selectedArtworks.size === 0) return alert("Select at least one artwork");
-
-        onSave({
+    const buildPayload = (): (Omit<Catalog, 'id' | 'createdAt'> & { id?: string }) | null => {
+        if (!name.trim()) {
+            alert("Name is required");
+            return null;
+        }
+        if (selectedArtworks.size === 0) {
+            alert("Select at least one artwork");
+            return null;
+        }
+        return {
             name,
             description,
             artworkIds: Array.from(selectedArtworks),
             coverImageUrl: initialData?.coverImageUrl || `https://picsum.photos/seed/${name}/800/600`
-        });
+        };
+    };
+
+    const handleSubmit = () => {
+        const payload = buildPayload();
+        if (!payload) return;
+        void onSave(payload);
+    };
+
+    /** Saves, then hands the catalog to the PDF generator page. */
+    const handleGenerate = async () => {
+        const payload = buildPayload();
+        if (!payload) return;
+        await onSave(payload);
+        await onGenerate?.(payload);
     };
 
     return (
-        <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-[70] flex flex-col animate-fade-in-up">
-            <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm">
+        <div className={inline
+            ? 'h-full flex flex-col'
+            : 'absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-[70] flex flex-col animate-fade-in-up'}>
+            <div className={`bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-[6px] border-b border-gray-100 dark:border-gray-800 shadow-sm ${inline ? '' : 'pt-[calc(1.75rem+env(safe-area-inset-top,0px))]'}`}>
                 <button onClick={onClose} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
                     <X size={20} />
                 </button>
                 <h2 className="text-base font-serif text-gray-900 dark:text-white">{initialData ? 'Edit Catalog' : 'Create Catalog'}</h2>
+                {onGenerate && (
+                    <button
+                        type="button"
+                        onClick={() => { void handleGenerate(); }}
+                        title="Save and open the PDF generator"
+                        className="text-gray-600 dark:text-gray-300 font-medium px-2 py-2 uppercase tracking-wider text-xs active-scale flex items-center gap-1"
+                    >
+                        <Download size={13} /> PDF
+                    </button>
+                )}
                 <button onClick={handleSubmit} className="text-gold-600 dark:text-gold-400 font-medium px-2 py-2 uppercase tracking-wider text-xs active-scale">
                     Save
                 </button>

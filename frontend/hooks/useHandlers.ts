@@ -80,11 +80,12 @@ export function useHandlers(args: HandlerArgs) {
     }, [setArtworks, setSelectedArtwork]);
 
     // ── Catalogs ──────────────────────────────────────────────────────────
-    const handleAddCatalog = useCallback(async (newCat: Omit<Catalog, 'id' | 'createdAt'>) => {
-        const catalog: Catalog = { ...newCat, id: `cat_${Date.now()}`, createdAt: Date.now() };
+    const handleAddCatalog = useCallback(async (newCat: Omit<Catalog, 'id' | 'createdAt'> & { id?: string }) => {
+        const catalog: Catalog = { ...newCat, id: newCat.id || `cat_${Date.now()}`, createdAt: Date.now() };
         try { await catalogService.saveCatalog(catalog); } catch (e) { console.error('D1 sync failed (add catalog):', e); }
         await db.saveCatalog(catalog);
         setCatalogs((prev: Catalog[]) => [catalog, ...prev]);
+        return catalog;
     }, [setCatalogs]);
 
     const handleUpdateCatalog = useCallback(async (updatedCat: Catalog) => {

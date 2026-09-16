@@ -83,6 +83,8 @@ CREATE TABLE IF NOT EXISTS catalogs (
   description TEXT DEFAULT '',
   artwork_ids TEXT DEFAULT '[]',        -- JSON array of artwork IDs
   cover_image_url TEXT DEFAULT '',
+  pdf_url TEXT,                         -- stored PDF (generated or uploaded)
+  source TEXT NOT NULL DEFAULT 'generated',
   created_at INTEGER NOT NULL
 );
 

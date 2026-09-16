@@ -629,7 +629,11 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                 </div>
             )}
 
-            <div className="bg-white dark:bg-[#1a1a1a] px-[6px] py-[9px] border-t border-gray-100 dark:border-gray-800 transition-colors">
+            {/* Message Input — bottom padding follows the iPhone home indicator */}
+            <div
+                className="bg-white dark:bg-[#1a1a1a] px-[6px] pt-[9px] border-t border-gray-100 dark:border-gray-800 transition-colors"
+                style={{ paddingBottom: 'calc(9px + env(safe-area-inset-bottom, 0px))' }}
+            >
                 {selectedTags.size > 0 && (
                     <div className="flex gap-1 mb-2 flex-wrap">
                         {Array.from(selectedTags).map(tag => (
@@ -724,7 +728,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                         spellCheck={false}
                         data-form-type="other"
                         data-1p-ignore
-                        className="flex-1 bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                        className="flex-1 min-w-0 bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
                     />
                     <button
                         onClick={handleSend}

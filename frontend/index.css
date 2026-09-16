@@ -130,6 +130,23 @@ body,
     padding-bottom: calc(2rem + env(safe-area-inset-bottom, 0px));
 }
 
+/*
+ * iOS input zoom prevention.
+ * Safari (including home-screen PWAs, where `maximum-scale=1` is ignored)
+ * auto-zooms the page whenever an input/textarea/select with a computed
+ * font-size below 16px receives focus. Force 16px on touch devices so
+ * tapping "Type a message" and every other field never zooms the UI.
+ * Desktop (fine pointer) keeps the original compact sizes.
+ */
+@media only screen and (pointer: coarse) {
+    input,
+    textarea,
+    select {
+        font-size: 16px !important;
+    }
+}
+
+
 @theme {
     --font-sans: 'Inter', sans-serif;
     --font-serif: 'Playfair Display', serif;
