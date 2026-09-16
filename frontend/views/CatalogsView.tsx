@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
-import { Plus, X, Edit2, Trash2, Download, Image as ImageIcon, Check, Search, Loader2, Camera, Upload, FileText } from 'lucide-react';
+import { Plus, X, Edit2, Trash2, Download, Image as ImageIcon, Check, Search, Loader2, Camera, Upload, FileText, FileDown } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Catalog, Artwork, PdfOptions, CatalogTheme } from '../types';
 import type { jsPDF } from 'jspdf';
@@ -615,10 +615,54 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
         setShowCatalogStudio(true);
     };
 
-    /** Opens a stored catalog PDF (uploaded or generated) in a new tab. */
-    const handleOpenPdf = (catalog: Catalog) => {
+    /** Fetches a stored catalog PDF as a blob — bypasses SW/PWA navigation quirks. */
+    const fetchPdfBlob = async (catalog: Catalog): Promise<Blob> => {
+        const res = await fetch(catalog.pdfUrl!);
+        if (!res.ok) throw new Error('Could not load the PDF');
+        return res.blob();
+    };
+
+    const saveBlobAsPdf = (blob: Blob, name: string) => {
+        const url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${name.trim().replaceAll(/\s+/g, '_') || 'catalog'}.pdf`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    };
+
+    /** Opens the stored PDF in a new tab; falls back to a download when popups are blocked (installed PWAs). */
+    const handleOpenPdf = async (catalog: Catalog) => {
         if (!catalog.pdfUrl) return;
-        globalThis.open(getThumbUrl(catalog.pdfUrl), '_blank');
+        const toastId = toast.loading('Opening PDF…');
+        try {
+            const blob = await fetchPdfBlob(catalog);
+            const url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
+            const win = globalThis.open(url, '_blank');
+            if (!win) {
+                saveBlobAsPdf(blob, catalog.name);
+                toast.success('PDF ready — check your downloads');
+            }
+            toast.dismiss(toastId);
+            setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        } catch (e) {
+            toast.dismiss(toastId);
+            toast.error((e as Error).message || 'Could not open the PDF');
+        }
+    };
+
+    const handleDownloadPdf = async (catalog: Catalog) => {
+        if (!catalog.pdfUrl) return;
+        const toastId = toast.loading('Preparing download…');
+        try {
+            const blob = await fetchPdfBlob(catalog);
+            saveBlobAsPdf(blob, catalog.name);
+            toast.dismiss(toastId);
+            toast.success('PDF downloaded');
+        } catch (e) {
+            toast.dismiss(toastId);
+            toast.error((e as Error).message || 'Download failed');
+        }
     };
 
     /** Uploads a PDF file and stores it as its own catalog entry. */
@@ -860,6 +904,16 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                             <div>
                                 <div className="flex justify-between items-start">
                                     <h3 className="font-serif text-gray-900 dark:text-gray-100 line-clamp-1 text-sm flex-1 mr-2">{catalog.name}</h3>
+                                    <button type="button"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            void handleDownloadPdf(catalog);
+                                        }}
+                                        className="relative z-[2] p-1.5 text-gray-400 dark:text-gray-500 hover:text-gold-600 dark:hover:text-gold-400 rounded-full transition-colors active-scale shrink-0"
+                                        title="Download PDF"
+                                    >
+                                        <FileDown size={14} />
+                                    </button>
                                     <button type="button"
                                         onClick={(e) => {
                                             e.stopPropagation();

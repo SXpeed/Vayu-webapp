@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { TriangleAlert } from 'lucide-react';
 
 interface TypeDeleteDialogProps {
@@ -45,8 +46,11 @@ export const TypeDeleteDialog: React.FC<TypeDeleteDialogProps> = ({
 
     if (!isOpen) return null;
 
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+    // Portaled to <body> so the dialog always sits above every panel/portal
+    // and can never be misplaced onto a previous page by nested stacking
+    // contexts on iOS.
+    return createPortal(
+        <div className="fixed inset-0 z-[90] flex items-center justify-center">
             {/* Backdrop */}
             <button
                 type="button"
@@ -106,6 +110,7 @@ export const TypeDeleteDialog: React.FC<TypeDeleteDialogProps> = ({
                     </button>
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body
     );
 };
