@@ -482,7 +482,7 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                 message="all of its messages are archived for admin review"
                 onClose={() => setDeleteConvId(null)}
                 onConfirm={() => {
-                    if (onDeleteConversation) onDeleteConversation(deleteConvId);
+                    if (deleteConvId && onDeleteConversation) onDeleteConversation(deleteConvId);
                     setDeleteConvId(null);
                 }}
             />
@@ -909,8 +909,12 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                 </div>
             )}
 
-            {/* Message Input */}
-            <div className="bg-white dark:bg-[#1a1a1a] px-[6px] py-[9px] border-t border-gray-100 dark:border-gray-800 transition-colors">
+            {/* Message Input — bottom padding follows the iPhone home indicator
+                so the bar is never cropped, even with reply/tag previews stacked */}
+            <div
+                className="bg-white dark:bg-[#1a1a1a] px-[6px] pt-[9px] border-t border-gray-100 dark:border-gray-800 transition-colors"
+                style={{ paddingBottom: 'calc(9px + env(safe-area-inset-bottom, 0px))' }}
+            >
                 {replyingTo && (
                     <div className="flex items-center justify-between gap-2 mb-2 pl-3 pr-2 py-1.5 bg-gray-100 dark:bg-[#2a2a2a] rounded-[6px] border-l-2 border-gold-500 animate-fade-in">
                         <div className="min-w-0">
@@ -993,7 +997,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                         spellCheck={false}
                         data-form-type="other"
                         data-1p-ignore
-                        className="flex-1 bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                        className="flex-1 min-w-0 bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
                     />
                     <button
                         onClick={handleSend}

@@ -272,10 +272,10 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                                     >
                                         <div className="w-11 shrink-0 rounded-[6px] bg-gold-500/10 dark:bg-gold-900/20 border border-gold-500/30 text-center py-1">
                                             <p className="text-[8px] font-bold text-gold-600 dark:text-gold-400 uppercase tracking-widest leading-none">
-                                                {isRange ? `${MONTHS_SHORT[new Date(ev.date).getMonth()]}-${MONTHS_SHORT[new Date(ev.endDate).getMonth()]}` : MONTHS_SHORT[new Date(ev.date).getMonth()]}
+                                                {isRange ? `${MONTHS_SHORT[new Date(ev.date).getMonth()]}-${MONTHS_SHORT[new Date(ev.endDate!).getMonth()]}` : MONTHS_SHORT[new Date(ev.date).getMonth()]}
                                             </p>
                                             <p className="text-base font-serif text-gray-900 dark:text-white leading-tight">
-                                                {isRange ? `${new Date(ev.date).getDate()}-${new Date(ev.endDate).getDate()}` : new Date(ev.date).getDate()}
+                                                {isRange ? `${new Date(ev.date).getDate()}-${new Date(ev.endDate!).getDate()}` : new Date(ev.date).getDate()}
                                             </p>
                                         </div>
                                         <div className="flex-1 min-w-0">
@@ -285,7 +285,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                                             </h3>
                                             <p className="text-[9px] text-gray-500 dark:text-gray-400 uppercase tracking-wider mt-0.5">
                                                 {isRange
-                                                    ? `${fmtShortDate(ev.date)} – ${fmtShortDate(ev.endDate)}`
+                                                    ? `${fmtShortDate(ev.date)} – ${fmtShortDate(ev.endDate!)}`
                                                     : (new Date(ev.date).getHours() === 0 && new Date(ev.date).getMinutes() === 0
                                                         ? 'All day'
                                                         : new Date(ev.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}

@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "useDefineForClassFields": true,
+    "isolatedModules": true
+  },
+  "include": [
+    "*.tsx",
+    "*.ts",
+    "components",
+    "hooks",
+    "services",
+    "views",
+    "assets"
+  ],
+  "exclude": ["worker.ts", "webpush.ts", "dist", "node_modules", ".wrangler"]
+}
