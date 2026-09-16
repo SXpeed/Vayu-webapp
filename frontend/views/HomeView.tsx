@@ -37,7 +37,7 @@ const toInputValue = (ms?: number): string => {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
-const EMPTY_EVENT_FORM = { title: '', dateTime: '', endDateTime: '', notes: '', color: '' };
+const EMPTY_EVENT_FORM = { title: '', dateTime: '', endDateTime: '', notes: '', color: '', todos: [] as EventTodo[] };
 
 export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices, events, teamMembers, userProfile, onNavigate, onCatalogClick, onAddEvent, onUpdateEvent, onDeleteEvent }) => {
     const availableArtworks = useMemo(() => artworks.filter(a => a.status === 'Available').length, [artworks]);
@@ -84,11 +84,12 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                 endDate: eventForm.endDateTime ? new Date(eventForm.endDateTime).getTime() : undefined,
                 notes: eventForm.notes.trim() || undefined,
                 color: eventForm.color || undefined,
+                todos: eventForm.todos,
             };
             if (editingEvent) {
                 await onUpdateEvent({ ...editingEvent, ...fields });
             } else {
-                await onAddEvent({ ...fields, todos: [] });
+                await onAddEvent({ ...fields });
             }
             setEventForm({ ...EMPTY_EVENT_FORM });
             setEditingEvent(null);
@@ -113,6 +114,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
             endDateTime: toInputValue(ev.endDate),
             notes: ev.notes || '',
             color: ev.color || EVENT_COLORS[0],
+            todos: [...(ev.todos || [])],
         });
         setShowEventModal(true);
     };
@@ -138,16 +140,16 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
         updateEventTodos(eventId, (ev.todos || []).map(t => (t.id === todoId ? { ...t, done: !t.done } : t)));
     };
 
-    const removeTodo = (eventId: string, todoId: string) => {
-        const ev = events.find(e => e.id === eventId);
-        if (!ev) return;
-        updateEventTodos(eventId, (ev.todos || []).filter(t => t.id !== todoId));
+    const toggleFormTodo = (todoId: string) => {
+        setEventForm(prev => ({ ...prev, todos: prev.todos.map(t => (t.id === todoId ? { ...t, done: !t.done } : t)) }));
     };
 
-    const addTodo = (eventId: string) => {
+    const removeFormTodo = (todoId: string) => {
+        setEventForm(prev => ({ ...prev, todos: prev.todos.filter(t => t.id !== todoId) }));
+    };
+
+    const addTodoToForm = () => {
         if (!todoDraft.trim()) return;
-        const ev = events.find(e => e.id === eventId);
-        if (!ev) return;
         const assignee = teamMembers.find(m => m.id === todoAssignee);
         const todo: EventTodo = {
             id: `todo_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
@@ -157,7 +159,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
             done: false,
             createdAt: Date.now(),
         };
-        updateEventTodos(eventId, [...(ev.todos || []), todo]);
+        setEventForm(prev => ({ ...prev, todos: [...prev.todos, todo] }));
         setTodoDraft('');
         setTodoAssignee('');
     };
@@ -323,52 +325,11 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                                                             {todo.assigneeName}
                                                         </span>
                                                     )}
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => removeTodo(ev.id, todo.id)}
-                                                        aria-label={`Delete task "${todo.text}"`}
-                                                        className="p-1 text-gray-300 dark:text-gray-600 hover:text-red-500 transition-colors shrink-0"
-                                                    >
-                                                        <X size={11} />
-                                                    </button>
                                                 </div>
                                             ))}
                                             {todos.length === 0 && (
-                                                <p className="text-[10px] text-gray-400 dark:text-gray-500 font-light">No tasks yet — add one below.</p>
+                                                <p className="text-[10px] text-gray-400 dark:text-gray-500 font-light">No tasks yet — edit the event to add some.</p>
                                             )}
-                                            <div className="flex items-center gap-1.5 pt-1">
-                                                <input
-                                                    value={todoDraft}
-                                                    onChange={(e) => setTodoDraft(e.target.value)}
-                                                    onKeyDown={(e) => { if (e.key === 'Enter') addTodo(ev.id); }}
-                                                    placeholder="Add a task..."
-                                                    autoComplete="off"
-                                                    aria-label="New task"
-                                                    className="flex-1 min-w-0 bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-1.5 px-2.5 text-[11px] text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
-                                                />
-                                                <select
-                                                    value={todoAssignee}
-                                                    onChange={(e) => setTodoAssignee(e.target.value)}
-                                                    aria-label="Assign task to"
-                                                    className="bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-1.5 px-1.5 text-[10px] text-gray-700 dark:text-gray-200 focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 max-w-[110px] shrink-0"
-                                                >
-                                                    <option value="">Assign</option>
-                                                    {teamMembers.map(m => (
-                                                        <option key={m.id} value={m.id}>{m.name}</option>
-                                                    ))}
-                                                </select>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => addTodo(ev.id)}
-                                                    disabled={!todoDraft.trim()}
-                                                    aria-label="Add task"
-                                                    className={`p-1.5 rounded-[6px] shrink-0 transition-colors active-scale ${todoDraft.trim()
-                                                        ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950'
-                                                        : 'bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-600'}`}
-                                                >
-                                                    <Plus size={13} />
-                                                </button>
-                                            </div>
                                         </div>
                                     )}
                                 </div>
@@ -475,6 +436,75 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                                     placeholder="Any details (optional)"
                                     className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors resize-none"
                                 />
+                            </div>
+                            <div>
+                                <label htmlFor="event-task" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Tasks &amp; Assignment</label>
+                                <div className="space-y-1.5">
+                                    {eventForm.todos.map(todo => (
+                                        <div key={todo.id} className="flex items-center gap-2 bg-white dark:bg-[#1e1e1e] rounded-[6px] border border-gray-100 dark:border-gray-800 px-2 py-1.5">
+                                            <button
+                                                type="button"
+                                                onClick={() => toggleFormTodo(todo.id)}
+                                                aria-label={todo.done ? `Mark "${todo.text}" as not done` : `Mark "${todo.text}" as done`}
+                                                className={`w-[18px] h-[18px] rounded-[4px] border flex items-center justify-center shrink-0 transition-colors active-scale ${todo.done ? 'bg-gold-500 border-gold-500 text-white' : 'border-gray-300 dark:border-gray-600'}`}
+                                            >
+                                                {todo.done && <Check size={11} strokeWidth={3} />}
+                                            </button>
+                                            <span className={`flex-1 min-w-0 text-xs truncate ${todo.done ? 'text-gray-400 line-through' : 'text-gray-700 dark:text-gray-200'}`}>
+                                                {todo.text}
+                                            </span>
+                                            {todo.assigneeName && (
+                                                <span className="text-[8px] font-bold text-gold-600 dark:text-gold-400 uppercase tracking-wider shrink-0">
+                                                    {todo.assigneeName}
+                                                </span>
+                                            )}
+                                            <button
+                                                type="button"
+                                                onClick={() => removeFormTodo(todo.id)}
+                                                aria-label={`Remove task "${todo.text}"`}
+                                                className="p-1 text-gray-300 dark:text-gray-600 hover:text-red-500 transition-colors shrink-0"
+                                            >
+                                                <X size={11} />
+                                            </button>
+                                        </div>
+                                    ))}
+                                    {eventForm.todos.length === 0 && (
+                                        <p className="text-[10px] text-gray-400 dark:text-gray-500 font-light">No tasks yet — add one below.</p>
+                                    )}
+                                    <div className="flex items-center gap-1.5">
+                                        <input
+                                            id="event-task"
+                                            value={todoDraft}
+                                            onChange={(e) => setTodoDraft(e.target.value)}
+                                            onKeyDown={(e) => { if (e.key === 'Enter') addTodoToForm(); }}
+                                            placeholder="Add a task..."
+                                            autoComplete="off"
+                                            className="flex-1 min-w-0 bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-1.5 px-2.5 text-[11px] text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                                        />
+                                        <select
+                                            value={todoAssignee}
+                                            onChange={(e) => setTodoAssignee(e.target.value)}
+                                            aria-label="Assign task to"
+                                            className="bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-1.5 px-1.5 text-[10px] text-gray-700 dark:text-gray-200 focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 max-w-[110px] shrink-0"
+                                        >
+                                            <option value="">Assign</option>
+                                            {teamMembers.map(m => (
+                                                <option key={m.id} value={m.id}>{m.name}</option>
+                                            ))}
+                                        </select>
+                                        <button
+                                            type="button"
+                                            onClick={addTodoToForm}
+                                            disabled={!todoDraft.trim()}
+                                            aria-label="Add task"
+                                            className={`p-1.5 rounded-[6px] shrink-0 transition-colors active-scale ${todoDraft.trim()
+                                                ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950'
+                                                : 'bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-600'}`}
+                                        >
+                                            <Plus size={13} />
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                             <button
                                 type="button"

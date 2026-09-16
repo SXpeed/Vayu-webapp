@@ -877,7 +877,8 @@ async function handleAuthUsersDelete(ctx: Ctx): Promise<Response> {
   const countRaw = await ctx.env.VAYU_KV.get('auth:count');
   if (countRaw) await ctx.env.VAYU_KV.put('auth:count', String(Math.max(0, Number.parseInt(countRaw, 10) - 1)));
   await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'deleted', 'user', userId, `Deleted user "${user.name}" (${user.email})`);
-  archiveDeletedAsync(ctx, session, 'user', userId, `User "${user.name}" (${user.email})`, stripPassword(user));
+  // Full user (incl. password hash) so an admin undo fully restores the login.
+  archiveDeletedAsync(ctx, session, 'user', userId, `User "${user.name}" (${user.email})`, user);
   return json({ success: true });
 }
 
@@ -1417,6 +1418,78 @@ async function handleDeletedItemsList(ctx: Ctx): Promise<Response> {
   return json(items);
 }
 
+/** Removes R2 files belonging to an archived record — only called on permanent purge. */
+async function cleanupArchivedFiles(r2: R2Bucket, entity: string, payload: Record<string, unknown> | null): Promise<void> {
+  try {
+    if (!payload) return;
+    if (entity === 'artwork' && typeof payload.image_urls === 'string') {
+      await deleteUploadedFiles(r2, JSON.parse(payload.image_urls || '[]'));
+    } else if (entity === 'catalog' && typeof payload.cover_image_url === 'string' && payload.cover_image_url) {
+      await deleteUploadedFiles(r2, [payload.cover_image_url]);
+    } else if (entity === 'inquiry' && typeof payload.image_urls === 'string') {
+      await deleteUploadedFiles(r2, JSON.parse(payload.image_urls || '[]'));
+    }
+  } catch (e) {
+    console.error('Failed to clean up archived files:', e);
+  }
+}
+
+const RESTORABLE_TABLES: Record<string, string> = {
+  artwork: 'artworks',
+  collection: 'collections',
+  catalog: 'catalogs',
+  inquiry: 'inquiries',
+  event: 'events',
+  contact: 'contacts',
+  conversation: 'conversations',
+};
+
+/** POST /deleted-items/:id/restore — puts an archived record back into its table. Admin only. */
+async function handleDeletedItemsRestore(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  if (session.role !== 'admin') return err('Forbidden', 403);
+  await ensureDeletedItemsTable(ctx.env.VAYU_DB);
+  const id = ctx.path.slice('/deleted-items/'.length).replace(/\/restore$/, '');
+  if (!id) return err('Archived item not found', 404);
+
+  const row = await ctx.env.VAYU_DB.prepare('SELECT * FROM deleted_items WHERE id = ?').bind(id).first();
+  if (!row) return err('Archived item not found', 404);
+  const entity = row.entity as string;
+  let payload: Record<string, unknown> | null = null;
+  try { payload = row.payload ? JSON.parse(row.payload as string) : null; } catch { payload = null; }
+  if (!payload) return err('Archived item has no restorable snapshot');
+
+  if (entity === 'user') {
+    // KV-backed users: restore the login and email lookup.
+    const userId = String(payload.id || '');
+    if (!userId || !payload.email) return err('Archived user snapshot is incomplete');
+    const emailKey = `auth:email:${payload.email}`;
+    const existingForEmail = await ctx.env.VAYU_KV.get(emailKey);
+    if (existingForEmail) return err('A user with this email already exists', 409);
+    const existingUser = await ctx.env.VAYU_KV.get(`auth:user:${userId}`);
+    if (existingUser) return err('This user already exists', 409);
+    await ctx.env.VAYU_KV.put(`auth:user:${userId}`, JSON.stringify(payload));
+    await ctx.env.VAYU_KV.put(emailKey, userId);
+    const countRaw = await ctx.env.VAYU_KV.get('auth:count');
+    await ctx.env.VAYU_KV.put('auth:count', String((countRaw ? Number.parseInt(countRaw, 10) : 0) + 1));
+  } else {
+    const table = RESTORABLE_TABLES[entity];
+    if (!table) return err(`Cannot restore entity type "${entity}"`);
+    const cols = Object.keys(payload).filter(k => typeof payload![k] !== 'object' || payload![k] === null);
+    if (cols.length === 0 || !payload.id) return err('Archived snapshot is incomplete');
+    const existing = await ctx.env.VAYU_DB.prepare(`SELECT id FROM ${table} WHERE id = ?`).bind(String(payload.id)).first();
+    if (existing) return err('An item with this id already exists — restore aborted', 409);
+    await ctx.env.VAYU_DB.prepare(
+      `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`
+    ).bind(...cols.map(c => (payload![c] === undefined ? null : payload![c]) as string | number | null)).run();
+  }
+
+  await ctx.env.VAYU_DB.prepare('DELETE FROM deleted_items WHERE id = ?').bind(id).run();
+  logEntityChange(ctx, session, 'updated', entity, String(payload.id || id), `Restored deleted ${entity} from archive`);
+  return json({ success: true });
+}
+
 /** Purges archived items: DELETE /deleted-items (all) or DELETE /deleted-items/:id (one). Admin only. */
 async function handleDeletedItemsPurge(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
@@ -1425,9 +1498,22 @@ async function handleDeletedItemsPurge(ctx: Ctx): Promise<Response> {
   await ensureDeletedItemsTable(ctx.env.VAYU_DB);
   const id = ctx.path.slice('/deleted-items'.length).replace(/^\//, '');
   if (id) {
+    const row = await ctx.env.VAYU_DB.prepare('SELECT * FROM deleted_items WHERE id = ?').bind(id).first();
+    if (row) {
+      let payload: Record<string, unknown> | null = null;
+      try { payload = row.payload ? JSON.parse(row.payload as string) : null; } catch { payload = null; }
+      // Permanent removal — now the uploaded files go too.
+      await cleanupArchivedFiles(ctx.env.VAYU_R2, row.entity as string, payload);
+    }
     await ctx.env.VAYU_DB.prepare('DELETE FROM deleted_items WHERE id = ?').bind(id).run();
     logEntityChange(ctx, session, 'deleted', 'deleted item', id, 'Permanently purged an archived item');
   } else {
+    const rows = await ctx.env.VAYU_DB.prepare('SELECT * FROM deleted_items').all();
+    for (const row of (rows.results || []) as Record<string, unknown>[]) {
+      let payload: Record<string, unknown> | null = null;
+      try { payload = row.payload ? JSON.parse(row.payload as string) : null; } catch { payload = null; }
+      await cleanupArchivedFiles(ctx.env.VAYU_R2, row.entity as string, payload);
+    }
     await ctx.env.VAYU_DB.prepare('DELETE FROM deleted_items').run();
     logEntityChange(ctx, session, 'deleted', 'deleted items', '', 'Purged the entire deleted-items archive');
   }
@@ -1514,21 +1600,19 @@ async function handleArtworksDelete(ctx: Ctx): Promise<Response> {
   if (!session) return err('Unauthorized', 401);
   const artId = ctx.path.slice('/artworks/'.length);
 
-  // Fetch the artwork to get its image URLs for R2 cleanup
+  // Snapshot the full row so the admin can restore it later. R2 files are NOT
+  // deleted here — they are only removed on permanent purge, so an undo keeps images.
   const result = await ctx.env.VAYU_DB.prepare(
-    'SELECT title, custom_id, image_urls FROM artworks WHERE id = ?'
-  ).bind(artId).first<{ title: string; custom_id: string; image_urls: string }>();
-  if (result) {
-    await deleteUploadedFiles(ctx.env.VAYU_R2, JSON.parse(result.image_urls || '[]'));
-  }
+    'SELECT * FROM artworks WHERE id = ?'
+  ).bind(artId).first();
 
   await ctx.env.VAYU_DB.prepare('DELETE FROM artworks WHERE id = ?').bind(artId).run();
   if (result) {
     archiveDeletedAsync(ctx, session, 'artwork', artId,
-      `Artwork ${artworkLabel({ title: result.title, customId: result.custom_id, id: artId })}`,
-      { title: result.title, customId: result.custom_id, image_urls: result.image_urls });
+      `Artwork ${artworkLabel({ title: (result as any).title, customId: (result as any).custom_id, id: artId })}`,
+      result);
     logEntityChange(ctx, session, 'deleted', 'artwork', artId,
-      `Deleted artwork ${artworkLabel({ title: result.title, customId: result.custom_id, id: artId })}`);
+      `Deleted artwork ${artworkLabel({ title: (result as any).title, customId: (result as any).custom_id, id: artId })}`);
   }
   return json({ success: true });
 }
@@ -1600,12 +1684,12 @@ async function handleCollectionsDelete(ctx: Ctx): Promise<Response> {
   if (!session) return err('Unauthorized', 401);
   const colId = ctx.path.slice('/collections/'.length);
   const result = await ctx.env.VAYU_DB.prepare(
-    'SELECT name FROM collections WHERE id = ?'
-  ).bind(colId).first<{ name: string }>();
+    'SELECT * FROM collections WHERE id = ?'
+  ).bind(colId).first();
   await ctx.env.VAYU_DB.prepare('DELETE FROM collections WHERE id = ?').bind(colId).run();
   if (result) {
-    archiveDeletedAsync(ctx, session, 'collection', colId, `Collection "${result.name || colId}"`, { name: result.name });
-    logEntityChange(ctx, session, 'deleted', 'collection', colId, `Deleted collection "${result.name || colId}"`);
+    archiveDeletedAsync(ctx, session, 'collection', colId, `Collection "${(result as any).name || colId}"`, result);
+    logEntityChange(ctx, session, 'deleted', 'collection', colId, `Deleted collection "${(result as any).name || colId}"`);
   }
   return json({ success: true });
 }
@@ -1675,18 +1759,15 @@ async function handleCatalogsDelete(ctx: Ctx): Promise<Response> {
   if (!session) return err('Unauthorized', 401);
   const catId = ctx.path.slice('/catalogs/'.length);
 
-  // Clean up cover image from R2 if it's an uploaded file
+  // Full-row snapshot for undo; R2 cleanup is deferred to permanent purge.
   const result = await ctx.env.VAYU_DB.prepare(
-    'SELECT name, cover_image_url FROM catalogs WHERE id = ?'
-  ).bind(catId).first<{ name: string; cover_image_url: string }>();
-  if (result?.cover_image_url) {
-    await deleteUploadedFiles(ctx.env.VAYU_R2, [result.cover_image_url]);
-  }
+    'SELECT * FROM catalogs WHERE id = ?'
+  ).bind(catId).first();
 
   await ctx.env.VAYU_DB.prepare('DELETE FROM catalogs WHERE id = ?').bind(catId).run();
   if (result) {
-    archiveDeletedAsync(ctx, session, 'catalog', catId, `Catalog "${result.name || catId}"`, { name: result.name, cover_image_url: result.cover_image_url });
-    logEntityChange(ctx, session, 'deleted', 'catalog', catId, `Deleted catalog "${result.name || catId}"`);
+    archiveDeletedAsync(ctx, session, 'catalog', catId, `Catalog "${(result as any).name || catId}"`, result);
+    logEntityChange(ctx, session, 'deleted', 'catalog', catId, `Deleted catalog "${(result as any).name || catId}"`);
   }
   return json({ success: true });
 }
@@ -1799,8 +1880,7 @@ async function handleInquiriesDelete(ctx: Ctx): Promise<Response> {
   await ctx.env.VAYU_DB.prepare('DELETE FROM inquiries WHERE id = ?').bind(inqId).run();
   if (result) {
     const inq = rowToInquiry(result);
-    await deleteUploadedFiles(ctx.env.VAYU_R2, inq.imageUrls);
-    archiveDeletedAsync(ctx, session, 'inquiry', inqId, `Inquiry ${inquiryLabel(inq)}`, inq);
+    archiveDeletedAsync(ctx, session, 'inquiry', inqId, `Inquiry ${inquiryLabel(inq)}`, result);
     logEntityChange(ctx, session, 'deleted', 'inquiry', inqId, `Deleted inquiry ${inquiryLabel(inq)}`);
   }
   return json({ success: true });
@@ -2055,7 +2135,7 @@ async function handleEventsDelete(ctx: Ctx): Promise<Response> {
   await ctx.env.VAYU_DB.prepare('DELETE FROM events WHERE id = ?').bind(evId).run();
   if (result) {
     const ev = rowToEvent(result);
-    archiveDeletedAsync(ctx, session, 'event', evId, `Event "${ev.title}"`, ev);
+    archiveDeletedAsync(ctx, session, 'event', evId, `Event "${ev.title}"`, result);
     logEntityChange(ctx, session, 'deleted', 'event', evId, `Deleted event "${ev.title}"`);
   }
   return json({ success: true });
@@ -2177,7 +2257,7 @@ async function handleContactsDelete(ctx: Ctx): Promise<Response> {
   await ctx.env.VAYU_DB.prepare('DELETE FROM contacts WHERE id = ?').bind(contactId).run();
   if (result) {
     const c = rowToContact(result);
-    archiveDeletedAsync(ctx, session, 'contact', contactId, `Contact "${c.name}"`, c);
+    archiveDeletedAsync(ctx, session, 'contact', contactId, `Contact "${c.name}"`, result);
     logEntityChange(ctx, session, 'deleted', 'contact', contactId, `Deleted contact "${c.name}"`);
   }
   return json({ success: true });
@@ -2293,6 +2373,7 @@ const routes: Route[] = [
 
   // Deleted items archive (admin)
   { method: 'GET', match: isExact('/deleted-items'), handler: handleDeletedItemsList },
+  { method: 'POST', match: isPrefix('/deleted-items/'), handler: handleDeletedItemsRestore },
   { method: 'DELETE', match: isPrefix('/deleted-items'), handler: handleDeletedItemsPurge },
 
   // Settings

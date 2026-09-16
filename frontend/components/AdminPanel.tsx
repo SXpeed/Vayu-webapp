@@ -4,7 +4,8 @@ import { TypeDeleteDialog } from './TypeDeleteDialog';
 import UserManagementPanel from './UserManagementPanel';
 import { apiCall } from '../services/apiClient';
 import { DeletedItem } from '../types';
-import { ArrowLeft, Archive, History, Users as UsersIcon, Trash2, Loader2, ChevronRight, ShieldCheck, FileText, CalendarDays, Phone, MessageCircle, User as UserIcon, FolderOpen, BookOpen } from 'lucide-react';
+import { ArrowLeft, Archive, History, Users as UsersIcon, Trash2, Loader2, ChevronRight, ShieldCheck, FileText, CalendarDays, Phone, MessageCircle, User as UserIcon, FolderOpen, BookOpen, Undo2 } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 const ActivityLogView = React.lazy(() => import('../views/ActivityLogView').then(m => ({ default: m.ActivityLogView })));
 
@@ -51,6 +52,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUserId, onClose }
     const [purgeTarget, setPurgeTarget] = useState<DeletedItem | null>(null);
     const [purgeAll, setPurgeAll] = useState(false);
     const [isPurging, setIsPurging] = useState(false);
+    const [restoringId, setRestoringId] = useState<string | null>(null);
 
     const loadItems = useCallback(async () => {
         setIsLoading(true);
@@ -81,6 +83,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUserId, onClose }
             setError((e as Error).message);
         } finally {
             setIsPurging(false);
+        }
+    };
+
+    const handleRestore = async (item: DeletedItem) => {
+        setRestoringId(item.id);
+        try {
+            await apiCall(`/deleted-items/${item.id}/restore`, { method: 'POST' });
+            setItems(prev => prev.filter(i => i.id !== item.id));
+            toast.success('Restored');
+        } catch (e) {
+            toast.error((e as Error).message || 'Restore failed');
+        } finally {
+            setRestoringId(null);
         }
     };
 
@@ -165,9 +180,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUserId, onClose }
                                         </div>
                                         <button
                                             type="button"
+                                            onClick={() => { void handleRestore(item); }}
+                                            disabled={isPurging || restoringId === item.id}
+                                            aria-label={`Restore archived ${label}`}
+                                            title="Undo — put this item back"
+                                            className="p-1.5 text-gray-400 dark:text-gray-500 hover:text-gold-600 dark:hover:text-gold-400 rounded-full transition-colors active-scale disabled:opacity-40 shrink-0"
+                                        >
+                                            {restoringId === item.id ? <Loader2 size={14} className="animate-spin" /> : <Undo2 size={14} />}
+                                        </button>
+                                        <button
+                                            type="button"
                                             onClick={() => setPurgeTarget(item)}
                                             disabled={isPurging}
-                                            aria-label={`Purge archived ${label}`}
+                                            aria-label={`Permanently delete archived ${label}`}
+                                            title="Delete permanently"
                                             className="p-1.5 text-gray-300 dark:text-gray-600 hover:text-red-500 rounded-full transition-colors active-scale shrink-0"
                                         >
                                             <Trash2 size={14} />
