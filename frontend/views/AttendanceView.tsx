@@ -7,7 +7,7 @@ import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import toast from 'react-hot-toast';
 import {
     ArrowLeft, Clock, Loader2, MapPin, RefreshCw, Settings,
-    CheckCircle2, Wifi, Store as StoreIcon, Plus, Pencil, Trash2, LogIn, LogOut, History, XCircle,
+    CheckCircle2, Wifi, Store as StoreIcon, Plus, Pencil, Trash2, LogIn, LogOut, History, XCircle, Users as UsersIcon,
 } from 'lucide-react';
 
 interface AttendanceViewProps {
@@ -69,6 +69,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ authUser, isAdmi
     const [stores, setStores] = useState<StoreConfig[]>([]);
     const [openRecord, setOpenRecord] = useState<AttendanceRecord | null>(null);
     const [recent, setRecent] = useState<AttendanceRecord[]>([]);
+    const [allRecords, setAllRecords] = useState<AttendanceRecord[]>([]);
     const [assignedStoreId, setAssignedStoreId] = useState<string | null>(null);
     const [selectedStoreId, setSelectedStoreId] = useState('');
     const [gps, setGps] = useState<GpsFix | null>(null);
@@ -93,6 +94,9 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ authUser, isAdmi
             setRecent(me.recent);
             setAssignedStoreId(me.assignedStoreId);
             setSelectedStoreId(prev => prev || me.assignedStoreId || me.open?.storeId || storeList[0]?.id || '');
+            if (isAdmin) {
+                try { setAllRecords(await attendanceService.getRecords()); } catch { /* non-fatal */ }
+            }
         } catch (e) {
             toast.error((e as Error).message || 'Failed to load attendance');
         } finally {
@@ -189,7 +193,6 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ authUser, isAdmi
                         <Loader2 size={22} className="animate-spin text-gold-500" />
                     </div>
                 )}
-            </div>
 
                 {!isLoading && (
                     <>
@@ -330,8 +333,41 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ authUser, isAdmi
                                 })}
                             </div>
                         </div>
+
+                        {/* Admin: everyone's check-ins — employees only ever see their own (server-enforced) */}
+                        {isAdmin && (
+                            <div className="bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 p-4 animate-fade-in-up" style={{ animationDelay: '120ms' }}>
+                                <h2 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 flex items-center gap-2">
+                                    <UsersIcon size={13} className="text-gold-500" /> All employees
+                                </h2>
+                                {allRecords.length === 0 && (
+                                    <p className="text-[10px] text-gray-400 dark:text-gray-500 font-light">No attendance records yet.</p>
+                                )}
+                                <div className="space-y-2">
+                                    {allRecords.map(rec => (
+                                        <div key={rec.id} className="flex items-center gap-2.5 text-xs">
+                                            <div className="w-7 h-7 rounded-full bg-gray-100 dark:bg-[#2a2a2a] flex items-center justify-center shrink-0 text-[9px] font-bold text-gray-500 dark:text-gray-400">
+                                                {(rec.employeeName || '?').trim().charAt(0).toUpperCase()}
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-gray-900 dark:text-gray-100 truncate">{rec.employeeName || rec.employeeId}</p>
+                                                <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-wider">
+                                                    {fmtDate(rec.checkInAt)} · in {fmtTime(rec.checkInAt)} · out {fmtTime(rec.checkOutAt)}
+                                                </p>
+                                            </div>
+                                            <span className={`text-[8px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded-full shrink-0 ${rec.status === 'checked-in'
+                                                ? 'bg-gold-100 dark:bg-gold-900/30 text-gold-700 dark:text-gold-400'
+                                                : 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400'}`}>
+                                                {rec.status}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </>
                 )}
+            </div>
 
             {/* Admin store manager */}
             {showManage && (
