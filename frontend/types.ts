@@ -125,11 +125,25 @@ export interface CalendarEvent {
     /** Optional end — for multi-day events (e.g. an exhibition running all month). */
     endDate?: number;
     notes?: string;
+    /** Hex color identifying this event on the calendar (distinct from holidays). */
+    color?: string;
     /** Event-planner task list with assignees. */
     todos: EventTodo[];
     createdAt: number;
     createdBy?: string;
     createdByName?: string;
+}
+
+/** An archived record in the admin "Deleted" section. */
+export interface DeletedItem {
+    id: string;
+    entity: string;
+    entityId: string;
+    summary: string;
+    payload?: unknown;
+    deletedAt: number;
+    deletedBy?: string;
+    deletedByName?: string;
 }
 
 export interface UserProfile {

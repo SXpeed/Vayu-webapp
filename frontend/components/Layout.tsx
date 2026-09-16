@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Lenis from 'lenis';
 import { BottomNav } from '../components/BottomNav';
-import { User, Users, Activity } from 'lucide-react';
+import { AdminPanel } from '../components/AdminPanel';
+import { User, ShieldCheck } from 'lucide-react';
 import { AuthUser } from '../services/authService';
 import { ViewState } from '../types';
-import UserManagementPanel from './UserManagementPanel';
 
 /** Smooth (Lenis) scrolling on the main content scroller. Wheel/desktop only —
  * touch stays native so iOS momentum scrolling is untouched. Nested scrollable
@@ -35,10 +35,9 @@ const Layout: React.FC<{
   currentView: ViewState;
   onNavigate: (view: ViewState) => void;
   userProfile?: AuthUser | null;
-  onShowActivity?: () => void;
   children?: React.ReactNode;
-}> = ({ currentView, onNavigate, userProfile, onShowActivity, children }) => {
-  const [showUserMgmt, setShowUserMgmt] = useState(false);
+}> = ({ currentView, onNavigate, userProfile, children }) => {
+  const [showAdmin, setShowAdmin] = useState(false);
   const isAdmin = userProfile?.role === 'admin';
   const mainRef = useRef<HTMLElement>(null);
   useSmoothScroll(mainRef);
@@ -59,13 +58,8 @@ const Layout: React.FC<{
               </div>
               <div className="flex items-center gap-2 mt-1">
                 {isAdmin && (
-                  <button onClick={() => setShowUserMgmt(true)} className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale shrink-0" title="Manage users">
-                    <Users size={16} className="text-brand-900 dark:text-gold-400" />
-                  </button>
-                )}
-                {isAdmin && onShowActivity && (
-                  <button onClick={onShowActivity} className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale shrink-0" title="Activity logs">
-                    <Activity size={16} className="text-brand-900 dark:text-gold-400" />
+                  <button onClick={() => setShowAdmin(true)} className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale shrink-0" title="Admin — deleted items, users & activity">
+                    <ShieldCheck size={16} className="text-brand-900 dark:text-gold-400" />
                   </button>
                 )}
                 <button onClick={() => onNavigate('profile')} className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale shrink-0">
@@ -84,11 +78,11 @@ const Layout: React.FC<{
         {/* Bottom Navigation */}
         {currentView !== 'login' && <BottomNav currentView={currentView} onChangeView={onNavigate} />}
 
-        {/* User Management Panel (full-screen overlay) */}
-        {showUserMgmt && userProfile && (
-          <UserManagementPanel
+        {/* Admin Panel (full-screen overlay — admins only) */}
+        {showAdmin && userProfile && (
+          <AdminPanel
             currentUserId={userProfile.id}
-            onClose={() => setShowUserMgmt(false)}
+            onClose={() => setShowAdmin(false)}
           />
         )}
       </div>

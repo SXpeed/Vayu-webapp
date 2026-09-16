@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { X, UserPlus, Trash2, Shield, User, Eye, EyeOff, Edit2, Check, Bell, BellOff } from 'lucide-react';
 import { authService, AuthUser } from '../services/authService';
-import { ConfirmDialog } from './ConfirmDialog';
+import { TypeDeleteDialog } from './TypeDeleteDialog';
 
 interface Props {
   currentUserId: string;
@@ -224,6 +224,16 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
                       <option value="user">User</option>
                       <option value="admin">Admin</option>
                     </select>
+                    {u.id !== currentUserId && (
+                      <button
+                        type="button"
+                        onClick={() => setDeleteTarget(u)}
+                        disabled={removingId === u.id}
+                        className="w-full py-2 text-xs font-medium tracking-wide text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-[6px] transition-colors active-scale flex items-center justify-center gap-1.5 disabled:opacity-40"
+                      >
+                        <Trash2 size={12} /> Delete User
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <div className="flex items-center gap-[6px]">
@@ -254,16 +264,6 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
                     >
                       <Edit2 size={14} />
                     </button>
-                    {u.id !== currentUserId && (
-                      <button
-                        onClick={() => setDeleteTarget(u)}
-                        disabled={removingId === u.id}
-                        className="p-1.5 text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors active-scale disabled:opacity-40 shrink-0"
-                        title="Remove user"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
                   </div>
                 )}
               </div>
@@ -361,10 +361,11 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
         </section>
       </div>
 
-      <ConfirmDialog
+      <TypeDeleteDialog
         isOpen={!!deleteTarget}
-        title="Remove User"
-        message={`Are you sure you want to remove "${deleteTarget?.name}"? This action cannot be undone.`}
+        title="Remove user"
+        itemName={deleteTarget?.name || ''}
+        message="their account and login access are archived for admin review"
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => {
           if (deleteTarget) handleRemove(deleteTarget.id);

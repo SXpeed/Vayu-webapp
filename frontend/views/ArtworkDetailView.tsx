@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { ArrowLeft, Edit2, X, Image as ImageIcon } from 'lucide-react';
 import { Artwork } from '../types';
 import { ArtworkFormModal } from './ArtworksView';
-import { ConfirmDialog } from '../components/ConfirmDialog';
+import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { ZoomableImage } from '../components/ZoomableImage';
 
 /** Swaps the alpha channel of an `rgba(r, g, b, a)` color string. */
@@ -281,10 +281,11 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                 />
             )}
 
-            <ConfirmDialog
+            <TypeDeleteDialog
                 isOpen={confirmOpen}
-                title="Delete Artwork"
-                message={`Are you sure you want to delete "${artwork.title}"?`}
+                title="Delete artwork"
+                itemName={artwork.title}
+                message="it will be archived for admin review"
                 onClose={() => setConfirmOpen(false)}
                 onConfirm={() => {
                     onDeleteArtwork(artwork.id);

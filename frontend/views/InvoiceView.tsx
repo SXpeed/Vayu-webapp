@@ -3,7 +3,7 @@ import React, { useState, useMemo } from 'react';
 import toast from 'react-hot-toast';
 import { Plus, X, FileText, CheckCircle2, Image as ImageIcon, Info, Search, ArrowLeft, Edit2, Trash2, Download, Share2, Loader2, Phone, Mail, MapPin } from 'lucide-react';
 import { Invoice, Artwork, InvoiceItem } from '../types';
-import { ConfirmDialog } from '../components/ConfirmDialog';
+import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { makeDocumentNumber } from '../services/documentNumber';
 import { exportProformaPdf } from '../services/proformaPdf';
 
@@ -260,17 +260,6 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({ invoice,
         setIsEditing(false);
     };
 
-    const [isConfirmOpen, setIsConfirmOpen] = useState(false);
-    const [confirmMessage, setConfirmMessage] = useState('');
-    const handleDelete = () => {
-        setConfirmMessage(`Are you sure you want to delete proforma invoice "${invoice.invoiceNumber}"?`);
-        setIsConfirmOpen(true);
-    };
-    const confirmDelete = () => {
-        onDeleteInvoice();
-        setIsConfirmOpen(false);
-    };
-
     return (
         <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-50 flex flex-col animate-fade-in-up">
             <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm z-10">
@@ -281,9 +270,6 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({ invoice,
                 <div className="flex items-center gap-2">
                     <button onClick={() => setIsEditing(true)} aria-label="Edit proforma invoice" className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
                         <Edit2 size={18} />
-                    </button>
-                    <button onClick={handleDelete} aria-label="Delete proforma invoice" className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors active-scale">
-                        <Trash2 size={18} />
                     </button>
                 </div>
             </div>
@@ -373,17 +359,10 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({ invoice,
                         onClose={() => setIsEditing(false)}
                         onSave={handleSaveEdit}
                         onArtworkClick={onArtworkClick}
+                        onDelete={onDeleteInvoice}
                     />
                 )}
             </div>
-
-            <ConfirmDialog
-                isOpen={isConfirmOpen}
-                title="Delete Proforma Invoice"
-                message={confirmMessage}
-                onClose={() => setIsConfirmOpen(false)}
-                onConfirm={confirmDelete}
-            />
         </div>
     );
 };
@@ -400,9 +379,12 @@ interface InvoiceFormModalProps {
     onClose: () => void;
     onSave: (invoice: NewInvoice) => void | Promise<void>;
     onArtworkClick: (artwork: Artwork) => void;
+    /** Shown only when editing an existing proforma — delete lives inside the edit form. */
+    onDelete?: () => void;
 }
 
-export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData, prefill, artworks, saveLabel = 'Save', onClose, onSave, onArtworkClick }) => {
+export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData, prefill, artworks, saveLabel = 'Save', onClose, onSave, onArtworkClick, onDelete }) => {
+    const [confirmDelete, setConfirmDelete] = useState(false);
     const start = initialData ?? prefill;
     const [customerName, setCustomerName] = useState(start?.customerName ?? '');
     const [customerPhone, setCustomerPhone] = useState(start?.customerPhone ?? '');
@@ -628,7 +610,29 @@ export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData,
                 </div>
 
                 <div className="h-10"></div>
+
+                {initialData && onDelete && (
+                    <button
+                        type="button"
+                        onClick={() => setConfirmDelete(true)}
+                        className="w-full rounded-[6px] py-2.5 text-sm font-medium tracking-wide transition-colors active-scale flex items-center justify-center gap-2 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 hover:bg-red-50 dark:hover:bg-red-900/20 mb-4"
+                    >
+                        <Trash2 size={14} /> Delete Proforma Invoice
+                    </button>
+                )}
             </div>
+
+            <TypeDeleteDialog
+                isOpen={confirmDelete}
+                title="Delete proforma invoice"
+                itemName={initialData ? `${initialData.invoiceNumber} — ${initialData.customerName}` : ''}
+                message="it will be archived for admin review"
+                onClose={() => setConfirmDelete(false)}
+                onConfirm={() => {
+                    setConfirmDelete(false);
+                    onDelete?.();
+                }}
+            />
         </div>
     );
 };

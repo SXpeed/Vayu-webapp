@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { Plus, X, Check, Image as ImageIcon, Search, Edit2, Trash2, Camera, Loader2 } from 'lucide-react';
 import { Collection, Artwork } from '../types';
 import storageService, { getThumbUrl } from '../services/storageService';
-import { ConfirmDialog } from '../components/ConfirmDialog';
+import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { ArtworkFormModal } from './ArtworksView';
 
 interface CollectionsViewProps {
@@ -320,10 +320,11 @@ export const CollectionDetailModal: React.FC<CollectionDetailModalProps> = ({ co
                 />
             )}
 
-            <ConfirmDialog
+            <TypeDeleteDialog
                 isOpen={confirmOpen}
-                title="Delete Collection"
-                message={`Are you sure you want to delete collection "${collection.name}"?`}
+                title="Delete collection"
+                itemName={collection.name}
+                message="it will be archived for admin review"
                 onClose={() => setConfirmOpen(false)}
                 onConfirm={() => {
                     onDeleteCollection(collection.id);

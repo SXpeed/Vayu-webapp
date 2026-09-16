@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { CalendarEvent } from '../types';
+import { apiCall } from '../services/apiClient';
+import { eventColor } from '../services/eventService';
 import { ArrowLeft, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 
 interface CalendarViewProps {
@@ -46,9 +48,10 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) =>
     const [selectedDate, setSelectedDate] = useState<number>(() => startOfTodayMs());
     const [holidayMap, setHolidayMap] = useState<Record<string, string>>({});
 
-    // ── Public holidays (India) via the free date.nager.at API, cached in
-    // sessionStorage per year so switching months never refetches. Failures
-    // (offline / API down) simply leave the calendar without holiday labels.
+    // ── Public holidays (India: national + festivals) via the Worker's
+    // /api/holidays route (Calendarific, cached in KV per year). Session cache
+    // avoids refetching while flipping months. Failures (offline / not
+    // configured) simply leave the calendar without holiday labels.
     useEffect(() => {
         const cacheKey = `vayu_holidays_${viewYear}`;
         const cached = sessionStorage.getItem(cacheKey);
@@ -57,18 +60,17 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) =>
             return;
         }
         let cancelled = false;
-        fetch(`https://date.nager.at/api/v3/PublicHolidays/${viewYear}/IN`)
-            .then(res => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
-            .then((list: Array<{ date: string; localName: string }>) => {
+        apiCall<Array<{ date: string; name: string }>>(`/holidays?year=${viewYear}`)
+            .then(list => {
                 if (cancelled || !Array.isArray(list)) return;
                 const map: Record<string, string> = {};
                 for (const h of list) {
-                    if (h?.date && h?.localName) map[h.date] = h.localName;
+                    if (h?.date && h?.name) map[h.date] = h.name;
                 }
                 try { sessionStorage.setItem(cacheKey, JSON.stringify(map)); } catch { /* quota — ignore */ }
                 setHolidayMap(prev => ({ ...prev, ...map }));
             })
-            .catch(() => { /* holiday labels unavailable — not critical */ });
+            .catch(() => { /* offline or not configured — not critical */ });
         return () => { cancelled = true; };
     }, [viewYear]);
 
@@ -152,6 +154,18 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) =>
                 </button>
             </div>
 
+            {/* Legend — events use their own colour; holidays/festivals are always red */}
+            <div className="flex items-center gap-3 px-[10px] pb-1.5 text-[8px] text-gray-400 dark:text-gray-500 uppercase tracking-wider">
+                <span className="flex items-center gap-1">
+                    <span className="w-[6px] h-[6px] rounded-full bg-brand-900 dark:bg-gold-400 inline-block" />
+                    Event (own colour)
+                </span>
+                <span className="flex items-center gap-1">
+                    <span className="w-[6px] h-[6px] rounded-full bg-red-500 inline-block" />
+                    Holiday / Festival
+                </span>
+            </div>
+
             {/* Weekday header */}
             <div className="grid grid-cols-7 gap-[2px] px-[6px] pb-1">
                 {WEEKDAYS.map(day => (
@@ -192,8 +206,19 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) =>
                                 </span>
                             )}
                             {dayEvents.length > 0 && (
-                                <span className={`mt-auto mb-[2px] text-[6px] font-bold leading-none px-[3px] py-[1px] rounded-full ${dayEvents.length > 1 ? 'bg-gold-500 text-white' : 'bg-gold-500/80 text-white'}`}>
-                                    {dayEvents.length > 1 ? dayEvents.length : '•'}
+                                <span className="mt-auto mb-[2px] flex items-center gap-[2px]">
+                                    {dayEvents.slice(0, 3).map(ev => (
+                                        <span
+                                            key={ev.id}
+                                            className="w-[5px] h-[5px] rounded-full shrink-0"
+                                            style={{ backgroundColor: eventColor(ev) }}
+                                        />
+                                    ))}
+                                    {dayEvents.length > 3 && (
+                                        <span className="text-[6px] font-bold leading-none text-gray-500 dark:text-gray-400">
+                                            +{dayEvents.length - 3}
+                                        </span>
+                                    )}
                                 </span>
                             )}
                         </button>
@@ -231,7 +256,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) =>
                             className="bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 p-[6px] mb-2 animate-fade-in-up"
                         >
                             <div className="flex items-center gap-[6px]">
-                                <div className="w-1 self-stretch rounded-full bg-gold-500 shrink-0"></div>
+                                <div className="w-1 self-stretch rounded-full shrink-0" style={{ backgroundColor: eventColor(ev) }}></div>
                                 <div className="flex-1 min-w-0">
                                     <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm line-clamp-1">{ev.title}</h3>
                                     <p className="text-[9px] text-gray-500 dark:text-gray-400 uppercase tracking-wider mt-0.5">

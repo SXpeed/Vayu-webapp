@@ -224,6 +224,12 @@ export function useHandlers(args: HandlerArgs) {
         setContacts((prev: Contact[]) => [contact, ...prev]);
     }, [userProfile, authUser, setContacts]);
 
+    const handleUpdateContact = useCallback(async (updated: Contact) => {
+        try { await contactService.updateContact(updated); } catch (e) { console.error('D1 sync failed (update contact):', e); }
+        await db.saveContact(updated);
+        setContacts((prev: Contact[]) => prev.map((c: Contact) => (c.id === updated.id ? updated : c)));
+    }, [setContacts]);
+
     const handleImportContacts = useCallback(async (list: NewContact[]) => {
         const stamped: Contact[] = list.map(c => ({
             ...c,
@@ -412,7 +418,7 @@ export function useHandlers(args: HandlerArgs) {
         // Calendar events
         handleAddEvent, handleUpdateEvent, handleDeleteEvent,
         // Contacts
-        handleAddContact, handleImportContacts, handleDeleteContact,
+        handleAddContact, handleUpdateContact, handleImportContacts, handleDeleteContact,
         // Inquiry messages
         handleSendInquiryMessage,
         // Messaging

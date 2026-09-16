@@ -8,6 +8,8 @@ interface Env {
   RAZORPAY_KEY_ID?: string;
   RAZORPAY_KEY_SECRET?: string;
   RAZORPAY_WEBHOOK_SECRET?: string;
+  // Calendarific (Indian public holidays & festivals) — set via `wrangler secret put`.
+  CALENDARIFIC_API_KEY?: string;
 }
 
 type FormField = File | string | null;
@@ -875,6 +877,7 @@ async function handleAuthUsersDelete(ctx: Ctx): Promise<Response> {
   const countRaw = await ctx.env.VAYU_KV.get('auth:count');
   if (countRaw) await ctx.env.VAYU_KV.put('auth:count', String(Math.max(0, Number.parseInt(countRaw, 10) - 1)));
   await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'deleted', 'user', userId, `Deleted user "${user.name}" (${user.email})`);
+  archiveDeletedAsync(ctx, session, 'user', userId, `User "${user.name}" (${user.email})`, stripPassword(user));
   return json({ success: true });
 }
 
@@ -1146,8 +1149,18 @@ async function handleConversationsDelete(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
   const convId = ctx.path.slice('/conversations/'.length);
+  const conv = await ctx.env.VAYU_DB.prepare('SELECT * FROM conversations WHERE id = ?').bind(convId).first();
+  const msgCount = await ctx.env.VAYU_DB.prepare('SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ?').bind(convId).first<{ n: number }>();
   await ctx.env.VAYU_DB.prepare('DELETE FROM messages WHERE conversation_id = ?').bind(convId).run();
   await ctx.env.VAYU_DB.prepare('DELETE FROM conversations WHERE id = ?').bind(convId).run();
+  if (conv) {
+    const raw = conv as Record<string, unknown>;
+    const label = String(raw.group_name || raw.title || 'conversation');
+    archiveDeletedAsync(ctx, session, 'conversation', convId,
+      `Conversation "${label}" (${msgCount?.n || 0} messages)`,
+      { conversation: conv, messageCount: msgCount?.n || 0 });
+    logEntityChange(ctx, session, 'deleted', 'conversation', convId, `Deleted conversation "${label}" (${msgCount?.n || 0} messages)`);
+  }
   return json({ success: true });
 }
 
@@ -1333,6 +1346,94 @@ function logEntityChange(ctx: Ctx, session: SessionData, action: string, entity:
   ctx.execCtx.waitUntil(logActivity(ctx.env.VAYU_DB, session.userId, session.name, action, entity, entityId, details));
 }
 
+// ── Deleted Items archive ───────────────────────────────────────────────────
+// Every destructive delete snapshots the record into `deleted_items` so admins
+// can audit what was removed, by whom and when (Admin → Deleted).
+
+let deletedItemsTablePromise: Promise<void> | null = null;
+function ensureDeletedItemsTable(db: D1Database): Promise<void> {
+  deletedItemsTablePromise ??= db.prepare(`
+      CREATE TABLE IF NOT EXISTS deleted_items (
+        id TEXT PRIMARY KEY,
+        entity TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        payload TEXT,
+        deleted_at INTEGER NOT NULL DEFAULT 0,
+        deleted_by TEXT,
+        deleted_by_name TEXT
+      )
+    `).run().then(() => undefined);
+  return deletedItemsTablePromise;
+}
+
+/** Archives a snapshot of a just-deleted record. Fire-and-forget — never blocks the response. */
+function archiveDeletedAsync(ctx: Ctx, session: SessionData, entity: string, entityId: string, summary: string, payload: unknown): void {
+  ctx.execCtx.waitUntil(archiveDeleted(ctx.env.VAYU_DB, session, entity, entityId, summary, payload));
+}
+
+async function archiveDeleted(db: D1Database, session: SessionData, entity: string, entityId: string, summary: string, payload: unknown): Promise<void> {
+  try {
+    await ensureDeletedItemsTable(db);
+    await db.prepare(
+      'INSERT INTO deleted_items (id, entity, entity_id, summary, payload, deleted_at, deleted_by, deleted_by_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).bind(
+      crypto.randomUUID(),
+      entity,
+      entityId,
+      summary,
+      payload ? JSON.stringify(payload) : null,
+      Date.now(),
+      session.userId,
+      session.name
+    ).run();
+  } catch (e) {
+    console.error('Failed to archive deleted item:', e);
+  }
+}
+
+async function handleDeletedItemsList(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  if (session.role !== 'admin') return err('Forbidden', 403);
+  await ensureDeletedItemsTable(ctx.env.VAYU_DB);
+  const results = await ctx.env.VAYU_DB.prepare(
+    'SELECT * FROM deleted_items ORDER BY deleted_at DESC LIMIT 200'
+  ).all();
+  const items = (results.results || []).map((row: Record<string, unknown>) => {
+    let payload: unknown = null;
+    try { payload = row.payload ? JSON.parse(row.payload as string) : null; } catch { payload = null; }
+    return {
+      id: row.id as string,
+      entity: row.entity as string,
+      entityId: row.entity_id as string,
+      summary: (row.summary as string) || '',
+      payload,
+      deletedAt: row.deleted_at as number,
+      deletedBy: row.deleted_by as string | undefined,
+      deletedByName: (row.deleted_by_name as string) || undefined,
+    };
+  });
+  return json(items);
+}
+
+/** Purges archived items: DELETE /deleted-items (all) or DELETE /deleted-items/:id (one). Admin only. */
+async function handleDeletedItemsPurge(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  if (session.role !== 'admin') return err('Forbidden', 403);
+  await ensureDeletedItemsTable(ctx.env.VAYU_DB);
+  const id = ctx.path.slice('/deleted-items'.length).replace(/^\//, '');
+  if (id) {
+    await ctx.env.VAYU_DB.prepare('DELETE FROM deleted_items WHERE id = ?').bind(id).run();
+    logEntityChange(ctx, session, 'deleted', 'deleted item', id, 'Permanently purged an archived item');
+  } else {
+    await ctx.env.VAYU_DB.prepare('DELETE FROM deleted_items').run();
+    logEntityChange(ctx, session, 'deleted', 'deleted items', '', 'Purged the entire deleted-items archive');
+  }
+  return json({ success: true });
+}
+
 // ── Artwork route handlers ──────────────────────────────────────────────────
 
 async function handleArtworksList(ctx: Ctx): Promise<Response> {
@@ -1423,6 +1524,9 @@ async function handleArtworksDelete(ctx: Ctx): Promise<Response> {
 
   await ctx.env.VAYU_DB.prepare('DELETE FROM artworks WHERE id = ?').bind(artId).run();
   if (result) {
+    archiveDeletedAsync(ctx, session, 'artwork', artId,
+      `Artwork ${artworkLabel({ title: result.title, customId: result.custom_id, id: artId })}`,
+      { title: result.title, customId: result.custom_id, image_urls: result.image_urls });
     logEntityChange(ctx, session, 'deleted', 'artwork', artId,
       `Deleted artwork ${artworkLabel({ title: result.title, customId: result.custom_id, id: artId })}`);
   }
@@ -1500,6 +1604,7 @@ async function handleCollectionsDelete(ctx: Ctx): Promise<Response> {
   ).bind(colId).first<{ name: string }>();
   await ctx.env.VAYU_DB.prepare('DELETE FROM collections WHERE id = ?').bind(colId).run();
   if (result) {
+    archiveDeletedAsync(ctx, session, 'collection', colId, `Collection "${result.name || colId}"`, { name: result.name });
     logEntityChange(ctx, session, 'deleted', 'collection', colId, `Deleted collection "${result.name || colId}"`);
   }
   return json({ success: true });
@@ -1580,6 +1685,7 @@ async function handleCatalogsDelete(ctx: Ctx): Promise<Response> {
 
   await ctx.env.VAYU_DB.prepare('DELETE FROM catalogs WHERE id = ?').bind(catId).run();
   if (result) {
+    archiveDeletedAsync(ctx, session, 'catalog', catId, `Catalog "${result.name || catId}"`, { name: result.name, cover_image_url: result.cover_image_url });
     logEntityChange(ctx, session, 'deleted', 'catalog', catId, `Deleted catalog "${result.name || catId}"`);
   }
   return json({ success: true });
@@ -1694,6 +1800,7 @@ async function handleInquiriesDelete(ctx: Ctx): Promise<Response> {
   if (result) {
     const inq = rowToInquiry(result);
     await deleteUploadedFiles(ctx.env.VAYU_R2, inq.imageUrls);
+    archiveDeletedAsync(ctx, session, 'inquiry', inqId, `Inquiry ${inquiryLabel(inq)}`, inq);
     logEntityChange(ctx, session, 'deleted', 'inquiry', inqId, `Deleted inquiry ${inquiryLabel(inq)}`);
   }
   return json({ success: true });
@@ -1782,6 +1889,40 @@ async function handleInquiryMessageStatusBatch(ctx: Ctx): Promise<Response> {
   return json({ success: true });
 }
 
+// ── Public holidays route handler ───────────────────────────────────────────
+// Indian public holidays & festivals via Calendarific, cached per year in KV
+// (they don't change) so the provider is called at most a few times a year.
+
+async function handleHolidaysGet(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const year = Number.parseInt(ctx.url.searchParams.get('year') || String(new Date().getFullYear()), 10);
+  if (!Number.isInteger(year) || year < 1970 || year > 2100) return err('Invalid year');
+
+  const cacheKey = `holidays:in:${year}`;
+  const cached = await ctx.env.VAYU_KV.get(cacheKey);
+  if (cached) return json(JSON.parse(cached));
+
+  const apiKey = ctx.env.CALENDARIFIC_API_KEY;
+  if (!apiKey) return json([]); // not configured yet — calendar works without holidays
+
+  const res = await fetch(
+    `https://calendarific.com/api/v2/holidays?api_key=${encodeURIComponent(apiKey)}&country=IN&year=${year}`
+  );
+  const data = await res.json() as {
+    response?: { holidays?: Array<{ date?: { iso?: string }; name?: string; local_name?: string }> };
+  };
+  const list = data?.response?.holidays;
+  if (!Array.isArray(list)) return err('Holiday provider error', 502);
+
+  const holidays = list
+    .filter(h => h?.date?.iso && (h.name || h.local_name))
+    .map(h => ({ date: h.date!.iso as string, name: (h.name || h.local_name) as string }));
+
+  await ctx.env.VAYU_KV.put(cacheKey, JSON.stringify(holidays), { expirationTtl: 60 * 60 * 24 * 30 });
+  return json(holidays);
+}
+
 // ── Calendar event route handlers ───────────────────────────────────────────
 
 function rowToEvent(row: Record<string, unknown>): any {
@@ -1793,6 +1934,7 @@ function rowToEvent(row: Record<string, unknown>): any {
     date: row.event_date as number,
     endDate: (row.end_date as number) || undefined,
     notes: row.notes || undefined,
+    color: (row.color as string) || undefined,
     todos,
     createdAt: row.created_at as number,
     createdBy: row.created_by || undefined,
@@ -1813,15 +1955,17 @@ function ensureEventsTable(db: D1Database): Promise<void> {
         end_date INTEGER,
         todos TEXT NOT NULL DEFAULT '[]',
         notes TEXT NOT NULL DEFAULT '',
+        color TEXT,
         created_at INTEGER NOT NULL DEFAULT 0,
         created_by TEXT,
         created_by_name TEXT
       )
     `).run().then(async () => {
-      // Migration for tables created before end_date/todos were added —
+      // Migration for tables created before end_date/todos/color were added —
       // ALTER fails harmlessly when the column already exists.
       try { await db.prepare('ALTER TABLE events ADD COLUMN end_date INTEGER').run(); } catch { /* already exists */ }
       try { await db.prepare(`ALTER TABLE events ADD COLUMN todos TEXT NOT NULL DEFAULT '[]'`).run(); } catch { /* already exists */ }
+      try { await db.prepare('ALTER TABLE events ADD COLUMN color TEXT').run(); } catch { /* already exists */ }
     });
   return eventsTablePromise;
 }
@@ -1854,8 +1998,8 @@ async function handleEventsCreate(ctx: Ctx): Promise<Response> {
   const createdByName = existing ? existing.created_by_name || '' : session.name;
   await ctx.env.VAYU_DB.prepare(
     `INSERT OR REPLACE INTO events
-     (id, title, event_date, end_date, todos, notes, created_at, created_by, created_by_name)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     (id, title, event_date, end_date, todos, notes, color, created_at, created_by, created_by_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     ev.id,
     String(ev.title).trim(),
@@ -1863,6 +2007,7 @@ async function handleEventsCreate(ctx: Ctx): Promise<Response> {
     ev.endDate ?? null,
     JSON.stringify(ev.todos || []),
     ev.notes || '',
+    ev.color || null,
     ev.createdAt || Date.now(),
     createdBy,
     createdByName
@@ -1883,7 +2028,7 @@ async function handleEventsUpdate(ctx: Ctx): Promise<Response> {
   await ensureEventsTable(ctx.env.VAYU_DB);
   await ctx.env.VAYU_DB.prepare(
     `UPDATE events SET
-       title = ?, event_date = ?, end_date = ?, notes = ?, todos = ?
+       title = ?, event_date = ?, end_date = ?, notes = ?, todos = ?, color = ?
      WHERE id = ?`
   ).bind(
     String(body.title || '').trim(),
@@ -1891,6 +2036,7 @@ async function handleEventsUpdate(ctx: Ctx): Promise<Response> {
     body.endDate ?? null,
     body.notes || '',
     JSON.stringify(body.todos || []),
+    body.color || null,
     evId
   ).run();
   logEntityChange(ctx, session, 'updated', 'event', evId, `Updated event "${String(body.title || '').trim()}"`);
@@ -1909,6 +2055,7 @@ async function handleEventsDelete(ctx: Ctx): Promise<Response> {
   await ctx.env.VAYU_DB.prepare('DELETE FROM events WHERE id = ?').bind(evId).run();
   if (result) {
     const ev = rowToEvent(result);
+    archiveDeletedAsync(ctx, session, 'event', evId, `Event "${ev.title}"`, ev);
     logEntityChange(ctx, session, 'deleted', 'event', evId, `Deleted event "${ev.title}"`);
   }
   return json({ success: true });
@@ -2030,9 +2177,32 @@ async function handleContactsDelete(ctx: Ctx): Promise<Response> {
   await ctx.env.VAYU_DB.prepare('DELETE FROM contacts WHERE id = ?').bind(contactId).run();
   if (result) {
     const c = rowToContact(result);
+    archiveDeletedAsync(ctx, session, 'contact', contactId, `Contact "${c.name}"`, c);
     logEntityChange(ctx, session, 'deleted', 'contact', contactId, `Deleted contact "${c.name}"`);
   }
   return json({ success: true });
+}
+
+async function handleContactsUpdate(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const contactId = ctx.path.slice('/contacts/'.length);
+  if (!contactId) return err('Contact not found', 404);
+  const body = await ctx.request.json() as any;
+  if (!body.name || !String(body.name).trim()) return err('name is required');
+  await ensureContactsTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.prepare(
+    'UPDATE contacts SET name = ?, phone = ?, email = ?, notes = ? WHERE id = ?'
+  ).bind(
+    String(body.name).trim(),
+    body.phone || '',
+    body.email || '',
+    body.notes || '',
+    contactId
+  ).run();
+  const updated = await ctx.env.VAYU_DB.prepare('SELECT * FROM contacts WHERE id = ?').bind(contactId).first();
+  logEntityChange(ctx, session, 'updated', 'contact', contactId, `Updated contact "${String(body.name).trim()}"`);
+  return json(updated ? rowToContact(updated) : { id: contactId });
 }
 
 // ── Route table ─────────────────────────────────────────────────────────────
@@ -2118,7 +2288,12 @@ const routes: Route[] = [
   { method: 'GET', match: isExact('/contacts'), handler: handleContactsList },
   { method: 'POST', match: isExact('/contacts'), handler: handleContactsCreate },
   { method: 'POST', match: isExact('/contacts/import'), handler: handleContactsImport },
+  { method: 'PUT', match: isPrefix('/contacts/'), handler: handleContactsUpdate },
   { method: 'DELETE', match: isPrefix('/contacts/'), handler: handleContactsDelete },
+
+  // Deleted items archive (admin)
+  { method: 'GET', match: isExact('/deleted-items'), handler: handleDeletedItemsList },
+  { method: 'DELETE', match: isPrefix('/deleted-items'), handler: handleDeletedItemsPurge },
 
   // Settings
   { method: 'GET', match: isExact('/settings'), handler: handleSettingsGet },
@@ -2128,6 +2303,9 @@ const routes: Route[] = [
   { method: 'GET', match: isExact('/push/public-key'), handler: handlePushPublicKey },
   { method: 'POST', match: isExact('/push/subscribe'), handler: handlePushSubscribe },
   { method: 'POST', match: isExact('/push/unsubscribe'), handler: handlePushUnsubscribe },
+
+  // Public holidays (India)
+  { method: 'GET', match: isExact('/holidays'), handler: handleHolidaysGet },
 
   // Razorpay payment links
   { method: 'POST', match: isExact('/payments/link'), handler: handlePaymentLinkCreate },

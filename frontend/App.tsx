@@ -195,6 +195,7 @@ const App: React.FC = () => {
                         contacts={contacts}
                         inquiries={inquiries}
                         onAddContact={handlers.handleAddContact}
+                        onUpdateContact={handlers.handleUpdateContact}
                         onImportContacts={handlers.handleImportContacts}
                         onDeleteContact={handlers.handleDeleteContact}
                     />
@@ -259,7 +260,7 @@ const App: React.FC = () => {
     };
 
     return (
-        <Layout currentView={currentView} onNavigate={navigateTo} userProfile={authUser} onShowActivity={() => navigateTo('activity')}>
+        <Layout currentView={currentView} onNavigate={navigateTo} userProfile={authUser}>
             <Toaster position="top-center" />
             <Suspense fallback={<ViewFallback />}>
                 {renderView()}

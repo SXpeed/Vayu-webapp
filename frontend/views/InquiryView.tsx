@@ -4,7 +4,7 @@ import toast from 'react-hot-toast';
 import { Plus, X, MessageSquare, MessageCircle, Send, Search, ArrowLeft, Edit2, Trash2, Phone, Mail, Image as ImageIcon, User, Clock, Tag, BookOpen, CheckCircle2, XCircle, Check, CheckCheck, Paperclip, Reply, Camera, Loader2, MapPin, FileText } from 'lucide-react';
 import { Inquiry, Artwork, InquiryMessage, MessageReplyTo, MessageAttachment, MessageTag, UserProfile, Invoice } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
-import { ConfirmDialog } from '../components/ConfirmDialog';
+import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { TAG_COLORS, ALL_TAGS } from './MessagingView';
 import { useMemberNames } from '../hooks/useMemberNames';
 import { usePhotoCapture } from '../hooks/usePhotoCapture';
@@ -775,12 +775,6 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
         setIsEditing(false);
     };
 
-    const [confirmOpen, setConfirmOpen] = useState(false);
-
-    const handleDelete = () => {
-        setConfirmOpen(true);
-    };
-
     const handleToggleStatus = () => {
         const newStatus = inquiry.status === 'Closed' ? 'New' : 'Closed';
         onUpdateInquiry({ ...inquiry, status: newStatus });
@@ -824,9 +818,6 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
                 <div className="flex items-center gap-2">
                     <button onClick={() => setIsEditing(true)} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
                         <Edit2 size={18} />
-                    </button>
-                    <button onClick={handleDelete} className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors active-scale">
-                        <Trash2 size={18} />
                     </button>
                 </div>
             </div>
@@ -1049,6 +1040,7 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
                         onClose={() => setIsEditing(false)}
                         onSave={handleSaveEdit}
                         onArtworkClick={onArtworkClick}
+                        onDelete={onDeleteInquiry}
                     />
                 )}
             </div>
@@ -1107,17 +1099,6 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
                     </div>
                 </div>
             )}
-
-            <ConfirmDialog
-                isOpen={confirmOpen}
-                title="Delete Inquiry"
-                message={`Are you sure you want to delete inquiry "${inquiry.inquiryNumber}"?`}
-                onClose={() => setConfirmOpen(false)}
-                onConfirm={() => {
-                    onDeleteInquiry();
-                    setConfirmOpen(false);
-                }}
-            />
         </div>
     );
 };
@@ -1130,9 +1111,12 @@ interface InquiryFormModalProps {
     onClose: () => void;
     onSave: (inquiry: any) => void;
     onArtworkClick: (artwork: Artwork) => void;
+    /** Shown only when editing — delete lives inside the edit form. */
+    onDelete?: () => void;
 }
 
-const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artworks, onClose, onSave, onArtworkClick }) => {
+const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artworks, onClose, onSave, onArtworkClick, onDelete }) => {
+    const [confirmDelete, setConfirmDelete] = useState(false);
     const [customerName, setCustomerName] = useState(initialData?.customerName || '');
     const [customerPhone, setCustomerPhone] = useState(initialData?.customerPhone || '');
     const [customerEmail, setCustomerEmail] = useState(initialData?.customerEmail || '');
@@ -1347,7 +1331,29 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                 </div>
 
                 <div className="h-10"></div>
+
+                {initialData && onDelete && (
+                    <button
+                        type="button"
+                        onClick={() => setConfirmDelete(true)}
+                        className="w-full rounded-[6px] py-2.5 text-sm font-medium tracking-wide transition-colors active-scale flex items-center justify-center gap-2 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 hover:bg-red-50 dark:hover:bg-red-900/20 mb-4"
+                    >
+                        <Trash2 size={14} /> Delete Inquiry
+                    </button>
+                )}
             </div>
+
+            <TypeDeleteDialog
+                isOpen={confirmDelete}
+                title="Delete inquiry"
+                itemName={initialData ? `${initialData.inquiryNumber} — ${initialData.customerName}` : ''}
+                message="its messages and photos are archived for admin review"
+                onClose={() => setConfirmDelete(false)}
+                onConfirm={() => {
+                    setConfirmDelete(false);
+                    onDelete?.();
+                }}
+            />
         </div>
     );
 };

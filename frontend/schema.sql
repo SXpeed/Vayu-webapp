@@ -158,6 +158,7 @@ CREATE TABLE IF NOT EXISTS events (
   end_date INTEGER,
   todos TEXT NOT NULL DEFAULT '[]',
   notes TEXT NOT NULL DEFAULT '',
+  color TEXT,
   created_at INTEGER NOT NULL DEFAULT 0,
   created_by TEXT,
   created_by_name TEXT
@@ -182,3 +183,20 @@ CREATE TABLE IF NOT EXISTS contacts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_contacts_created ON contacts(created_at DESC);
+
+-- ── Deleted Items archive ───────────────────────────────────────────────────
+-- Every destructive delete first archives a snapshot here so admins can audit
+-- what was removed, by whom and when.
+
+CREATE TABLE IF NOT EXISTS deleted_items (
+  id TEXT PRIMARY KEY,
+  entity TEXT NOT NULL,          -- artwork | collection | catalog | inquiry | event | contact | conversation | user
+  entity_id TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  payload TEXT,                  -- JSON snapshot of the deleted record
+  deleted_at INTEGER NOT NULL DEFAULT 0,
+  deleted_by TEXT,
+  deleted_by_name TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_deleted_items_at ON deleted_items(deleted_at DESC);

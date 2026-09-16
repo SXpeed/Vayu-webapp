@@ -1,7 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import { Artwork, CalendarEvent, Catalog, EventTodo, Invoice, ViewState, UserProfile } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
+import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { getThumbUrl } from '../services/storageService';
+import { EVENT_COLORS, eventColor } from '../services/eventService';
 import { MessageCircle, Receipt, TrendingUp, Palette, ArrowRight, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronDown, Edit2 } from 'lucide-react';
 
 interface HomeViewProps {
@@ -35,7 +37,7 @@ const toInputValue = (ms?: number): string => {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
-const EMPTY_EVENT_FORM = { title: '', dateTime: '', endDateTime: '', notes: '' };
+const EMPTY_EVENT_FORM = { title: '', dateTime: '', endDateTime: '', notes: '', color: '' };
 
 export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices, events, teamMembers, userProfile, onNavigate, onCatalogClick, onAddEvent, onUpdateEvent, onDeleteEvent }) => {
     const availableArtworks = useMemo(() => artworks.filter(a => a.status === 'Available').length, [artworks]);
@@ -48,6 +50,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
     const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
     const [eventForm, setEventForm] = useState({ ...EMPTY_EVENT_FORM });
     const [isSavingEvent, setIsSavingEvent] = useState(false);
+    const [confirmDeleteEvent, setConfirmDeleteEvent] = useState(false);
     const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
     const [todoDraft, setTodoDraft] = useState('');
     const [todoAssignee, setTodoAssignee] = useState('');
@@ -80,6 +83,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                 date: new Date(eventForm.dateTime).getTime(),
                 endDate: eventForm.endDateTime ? new Date(eventForm.endDateTime).getTime() : undefined,
                 notes: eventForm.notes.trim() || undefined,
+                color: eventForm.color || undefined,
             };
             if (editingEvent) {
                 await onUpdateEvent({ ...editingEvent, ...fields });
@@ -96,7 +100,8 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
 
     const openAddEvent = () => {
         setEditingEvent(null);
-        setEventForm({ ...EMPTY_EVENT_FORM });
+        // Rotate through the palette so consecutive events get distinct colors.
+        setEventForm({ ...EMPTY_EVENT_FORM, color: EVENT_COLORS[events.length % EVENT_COLORS.length] });
         setShowEventModal(true);
     };
 
@@ -107,6 +112,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
             dateTime: toInputValue(ev.date),
             endDateTime: toInputValue(ev.endDate),
             notes: ev.notes || '',
+            color: ev.color || EVENT_COLORS[0],
         });
         setShowEventModal(true);
     };
@@ -114,6 +120,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
     const handleDeleteEventFromModal = () => {
         if (!editingEvent) return;
         onDeleteEvent(editingEvent.id);
+        setConfirmDeleteEvent(false);
         setEditingEvent(null);
         setEventForm({ ...EMPTY_EVENT_FORM });
         setShowEventModal(false);
@@ -270,7 +277,10 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                                             </p>
                                         </div>
                                         <div className="flex-1 min-w-0">
-                                            <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm line-clamp-1">{ev.title}</h3>
+                                            <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm line-clamp-1 flex items-center gap-1.5">
+                                                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: eventColor(ev) }} />
+                                                {ev.title}
+                                            </h3>
                                             <p className="text-[9px] text-gray-500 dark:text-gray-400 uppercase tracking-wider mt-0.5">
                                                 {isRange
                                                     ? `${fmtShortDate(ev.date)} – ${fmtShortDate(ev.endDate)}`
@@ -481,16 +491,42 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                             {editingEvent && (
                                 <button
                                     type="button"
-                                    onClick={handleDeleteEventFromModal}
+                                    onClick={() => setConfirmDeleteEvent(true)}
                                     className="w-full rounded-[6px] py-2.5 text-sm font-medium tracking-wide transition-colors active-scale flex items-center justify-center gap-2 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 hover:bg-red-50 dark:hover:bg-red-900/20"
                                 >
                                     <Trash2 size={14} /> Delete Event
                                 </button>
                             )}
+                            <div>
+                                <label className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Colour</label>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    {EVENT_COLORS.map(c => (
+                                        <button
+                                            key={c}
+                                            type="button"
+                                            onClick={() => setEventForm(prev => ({ ...prev, color: c }))}
+                                            aria-label={`Use colour ${c}`}
+                                            aria-pressed={eventForm.color === c}
+                                            className={`w-7 h-7 rounded-full transition-transform active-scale ${eventForm.color === c ? 'ring-2 ring-offset-2 ring-gold-500 dark:ring-offset-[#121212] scale-110' : ''}`}
+                                            style={{ backgroundColor: c }}
+                                        />
+                                    ))}
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </FullScreenPortal>
             )}
+
+            {/* Delete confirmation — must type "Delete" */}
+            <TypeDeleteDialog
+                isOpen={confirmDeleteEvent}
+                title="Delete event"
+                itemName={editingEvent?.title || ''}
+                message="it will be archived for admin review"
+                onClose={() => setConfirmDeleteEvent(false)}
+                onConfirm={handleDeleteEventFromModal}
+            />
         </div>
     );
 };

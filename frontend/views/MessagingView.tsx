@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef, useEffect, useLayoutEffect } from 're
 import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit2, Check, CheckCheck, Pin, Archive, MoreVertical, Paperclip, Reply, Loader2, Eye, Trash2, Camera } from 'lucide-react';
 import { Conversation, ConversationDetails, Message, MessageTag, MessageReplyTo, MessageAttachment, UserProfile } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
-import { ConfirmDialog } from '../components/ConfirmDialog';
+import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import storageService, { getThumbUrl } from '../services/storageService';
 import { useMemberNames } from '../hooks/useMemberNames';
 import { usePhotoCapture } from '../hooks/usePhotoCapture';
@@ -475,20 +475,17 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                 </FullScreenPortal>
             )}
 
-            {deleteConvId && (
-                <FullScreenPortal>
-                    <ConfirmDialog
-                        isOpen={!!deleteConvId}
-                        title="Delete Conversation"
-                        message="Are you sure you want to delete this conversation? This action cannot be undone."
-                        onClose={() => setDeleteConvId(null)}
-                        onConfirm={() => {
-                            if (onDeleteConversation) onDeleteConversation(deleteConvId);
-                            setDeleteConvId(null);
-                        }}
-                    />
-                </FullScreenPortal>
-            )}
+            <TypeDeleteDialog
+                isOpen={!!deleteConvId}
+                title="Delete conversation"
+                itemName="this conversation"
+                message="all of its messages are archived for admin review"
+                onClose={() => setDeleteConvId(null)}
+                onConfirm={() => {
+                    if (onDeleteConversation) onDeleteConversation(deleteConvId);
+                    setDeleteConvId(null);
+                }}
+            />
         </div>
     );
 };

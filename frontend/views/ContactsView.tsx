@@ -1,13 +1,15 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Contact, Inquiry, NewContact } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
+import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import toast from 'react-hot-toast';
-import { Search, Users, UserPlus, Trash2, X, Phone, Mail, Upload, Download, Loader2, Briefcase } from 'lucide-react';
+import { Search, Users, UserPlus, Trash2, X, Phone, Mail, Upload, Download, Loader2, Briefcase, Edit2 } from 'lucide-react';
 
 interface ContactsViewProps {
     contacts: Contact[];
     inquiries: Inquiry[];
     onAddContact: (contact: NewContact) => Promise<void>;
+    onUpdateContact: (contact: Contact) => Promise<void>;
     onImportContacts: (list: NewContact[]) => Promise<number>;
     onDeleteContact: (id: string) => void;
 }
@@ -109,7 +111,7 @@ function readCsvContacts(rows: string[][]): NewContact[] {
     return out;
 }
 
-export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries, onAddContact, onImportContacts, onDeleteContact }) => {
+export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries, onAddContact, onUpdateContact, onImportContacts, onDeleteContact }) => {
     const [searchQuery, setSearchQuery] = useState('');
     const [filter, setFilter] = useState<ContactFilter>('all');
     const [showAdd, setShowAdd] = useState(false);
@@ -181,19 +183,47 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
         if (!canSave || isSaving) return;
         setIsSaving(true);
         try {
-            await onAddContact({
-                name: form.name.trim(),
-                phone: form.phone.trim(),
-                email: form.email.trim() || undefined,
-                notes: form.notes.trim() || undefined,
-                source: 'manual',
-            });
+            if (editingContact) {
+                await onUpdateContact({
+                    ...editingContact,
+                    name: form.name.trim(),
+                    phone: form.phone.trim(),
+                    email: form.email.trim() || undefined,
+                    notes: form.notes.trim() || undefined,
+                });
+                toast.success('Contact updated');
+            } else {
+                await onAddContact({
+                    name: form.name.trim(),
+                    phone: form.phone.trim(),
+                    email: form.email.trim() || undefined,
+                    notes: form.notes.trim() || undefined,
+                    source: 'manual',
+                });
+                toast.success('Contact added');
+            }
             setForm({ name: '', phone: '', email: '', notes: '' });
+            setEditingContact(null);
             setShowAdd(false);
-            toast.success('Contact added');
         } finally {
             setIsSaving(false);
         }
+    };
+
+    const openEditContact = (contact: Contact) => {
+        setEditingContact(contact);
+        setForm({ name: contact.name, phone: contact.phone, email: contact.email || '', notes: contact.notes || '' });
+        setShowAdd(true);
+    };
+
+    const confirmDeleteContact = () => {
+        if (!editingContact) return;
+        onDeleteContact(editingContact.id);
+        setConfirmDelete(false);
+        setEditingContact(null);
+        setForm({ name: '', phone: '', email: '', notes: '' });
+        setShowAdd(false);
+        toast.success('Contact deleted');
     };
 
     const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -343,11 +373,11 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
                             {contact.source !== 'inquiry' && (
                                 <button
                                     type="button"
-                                    onClick={() => onDeleteContact(contact.id)}
-                                    aria-label={`Delete contact ${contact.name}`}
+                                    onClick={() => openEditContact(contact)}
+                                    aria-label={`Edit contact ${contact.name}`}
                                     className="p-1.5 text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale shrink-0"
                                 >
-                                    <Trash2 size={14} />
+                                    <Edit2 size={14} />
                                 </button>
                             )}
                         </div>
@@ -378,13 +408,13 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
                     <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-50 flex flex-col animate-fade-in-up">
                         <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm z-10">
                             <button
-                                onClick={() => setShowAdd(false)}
+                                onClick={() => { setShowAdd(false); setEditingContact(null); }}
                                 className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale"
                                 aria-label="Close"
                             >
                                 <X size={20} />
                             </button>
-                            <h2 className="text-base font-serif text-gray-900 dark:text-white">Add Contact</h2>
+                            <h2 className="text-base font-serif text-gray-900 dark:text-white">{editingContact ? 'Edit Contact' : 'Add Contact'}</h2>
                             <div className="w-9"></div>
                         </div>
                         <div className="flex-1 overflow-y-auto p-[6px] space-y-5 no-scrollbar">
@@ -442,6 +472,15 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
                             <p className="text-[9px] text-gray-400 dark:text-gray-500 font-light flex items-center gap-1.5">
                                 <Briefcase size={10} /> Name is required, plus a phone or email.
                             </p>
+                            {editingContact && (
+                                <button
+                                    type="button"
+                                    onClick={() => setConfirmDelete(true)}
+                                    className="w-full rounded-[6px] py-2.5 text-sm font-medium tracking-wide transition-colors active-scale flex items-center justify-center gap-2 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 hover:bg-red-50 dark:hover:bg-red-900/20"
+                                >
+                                    <Trash2 size={14} /> Delete Contact
+                                </button>
+                            )}
                             <button
                                 type="button"
                                 onClick={handleSave}
@@ -452,12 +491,22 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
                                     }`}
                             >
                                 {isSaving && <Loader2 size={14} className="animate-spin" />}
-                                Add Contact
+                                {editingContact ? 'Save Changes' : 'Add Contact'}
                             </button>
                         </div>
                     </div>
                 </FullScreenPortal>
             )}
+
+            {/* Delete confirmation — must type "Delete" */}
+            <TypeDeleteDialog
+                isOpen={confirmDelete}
+                title="Delete contact"
+                itemName={editingContact?.name || ''}
+                message="it will be archived for admin review"
+                onClose={() => setConfirmDelete(false)}
+                onConfirm={confirmDeleteContact}
+            />
         </div>
     );
 };

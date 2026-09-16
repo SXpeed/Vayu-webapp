@@ -22,6 +22,13 @@ export const contactService = {
         return res.imported;
     },
 
+    async updateContact(contact: Contact): Promise<void> {
+        await call<{ success: boolean }>(`/contacts/${contact.id}`, {
+            method: 'PUT',
+            body: JSON.stringify(contact),
+        });
+    },
+
     async deleteContact(id: string): Promise<void> {
         await call<{ success: boolean }>(`/contacts/${id}`, {
             method: 'DELETE',

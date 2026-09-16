@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { ConfirmDialog } from '../components/ConfirmDialog';
+import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { Plus, X, Edit2, Trash2, Download, Image as ImageIcon, Check, Search, Loader2, Camera } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Catalog, Artwork, PdfOptions, CatalogTheme } from '../types';
@@ -843,19 +843,9 @@ export const CatalogDetailModal: React.FC<CatalogDetailModalProps> = ({ catalog,
     };
 
     const [confirmOpen, setConfirmOpen] = useState(false);
-    const [confirmMsg, setConfirmMsg] = useState('');
-    const [confirmCallback, setConfirmCallback] = useState<() => void>(() => { });
-
-    const showConfirm = (msg: string, cb: () => void) => {
-        setConfirmMsg(msg);
-        setConfirmCallback(() => cb);
-        setConfirmOpen(true);
-    };
 
     const handleDelete = () => {
-        showConfirm(`Are you sure you want to delete catalog "${catalog.name}"?`, () => {
-            onDeleteCatalog();
-        });
+        setConfirmOpen(true);
     };
 
     return (
@@ -978,13 +968,14 @@ export const CatalogDetailModal: React.FC<CatalogDetailModalProps> = ({ catalog,
                 />
             )}
 
-            <ConfirmDialog
+            <TypeDeleteDialog
                 isOpen={confirmOpen}
-                title="Delete Catalog"
-                message={confirmMsg}
+                title="Delete catalog"
+                itemName={catalog.name}
+                message="it will be archived for admin review"
                 onClose={() => setConfirmOpen(false)}
                 onConfirm={() => {
-                    confirmCallback();
+                    onDeleteCatalog();
                     setConfirmOpen(false);
                 }}
             />
