@@ -47,6 +47,7 @@ const ActivityLogView = lazy(() => import('./views/ActivityLogView').then(m => (
 const PaymentsView = lazy(() => import('./views/PaymentsView').then(m => ({ default: m.PaymentsView })));
 const ContactsView = lazy(() => import('./views/ContactsView').then(m => ({ default: m.ContactsView })));
 const CalendarView = lazy(() => import('./views/CalendarView').then(m => ({ default: m.CalendarView })));
+const AttendanceView = lazy(() => import('./views/AttendanceView').then(m => ({ default: m.AttendanceView })));
 
 const ViewFallback = () => (
     <div className="h-full flex items-center justify-center">
@@ -202,6 +203,8 @@ const App: React.FC = () => {
                 );
             case 'calendar':
                 return <CalendarView events={events} onBack={() => navigateTo('home')} />;
+            case 'attendance':
+                return authUser ? <AttendanceView authUser={authUser} isAdmin={authUser.role === 'admin'} onBack={() => navigateTo('home')} /> : null;
             case 'invoice':
                 return <InvoiceView invoices={invoices} artworks={artworks} onAddInvoice={handlers.handleAddInvoice} onUpdateInvoice={handlers.handleUpdateInvoice} onDeleteInvoice={handlers.handleDeleteInvoice} onArtworkClick={handleArtworkClick} />;
             case 'inquiry':

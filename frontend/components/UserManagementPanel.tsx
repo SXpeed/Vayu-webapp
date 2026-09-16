@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { X, UserPlus, Trash2, Shield, User, Eye, EyeOff, Edit2, Check, Bell, BellOff } from 'lucide-react';
 import { authService, AuthUser } from '../services/authService';
 import { TypeDeleteDialog } from './TypeDeleteDialog';
+import { StoreConfig } from '../types';
+import { apiCall } from '../services/apiClient';
 
 interface Props {
   currentUserId: string;
@@ -22,6 +24,8 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
   const [addError, setAddError] = useState('');
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AuthUser | null>(null);
+  const [stores, setStores] = useState<StoreConfig[]>([]);
+  const [editStoreId, setEditStoreId] = useState('');
 
   // Edit state
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -45,6 +49,13 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
   }, []);
 
   useEffect(() => { loadUsers(); }, [loadUsers]);
+
+  // Stores for the attendance assignment dropdown (best effort — absent if none exist).
+  useEffect(() => {
+    apiCall<StoreConfig[]>('/attendance/stores')
+      .then(setStores)
+      .catch(() => setStores([]));
+  }, []);
 
   const handleAdd = async (e: { preventDefault(): void }) => {
     e.preventDefault();
@@ -89,6 +100,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
     setEditName(u.name);
     setEditEmail(u.email);
     setEditRole(u.role);
+    setEditStoreId(u.storeId || '');
     setEditPassword('');
     setEditError('');
   };
@@ -98,6 +110,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
     setEditName('');
     setEditEmail('');
     setEditRole('user');
+    setEditStoreId('');
     setEditPassword('');
     setEditError('');
   };
@@ -114,10 +127,11 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
     }
     setEditSaving(true);
     try {
-      const data: { name?: string; email?: string; role?: 'admin' | 'user'; password?: string } = {
+      const data: { name?: string; email?: string; role?: 'admin' | 'user'; password?: string; storeId?: string } = {
         name: editName.trim(),
         email: editEmail.trim(),
         role: editRole,
+        storeId: editStoreId,
       };
       if (editPassword) data.password = editPassword;
       const updated = await authService.updateUser(id, data);
@@ -224,6 +238,19 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
                       <option value="user">User</option>
                       <option value="admin">Admin</option>
                     </select>
+                    {stores.length > 0 && (
+                      <select
+                        value={editStoreId}
+                        onChange={e => setEditStoreId(e.target.value)}
+                        aria-label="Assigned attendance store"
+                        className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-1.5 px-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
+                      >
+                        <option value="">No assigned store</option>
+                        {stores.map(s => (
+                          <option key={s.id} value={s.id}>{s.name}</option>
+                        ))}
+                      </select>
+                    )}
                     {u.id !== currentUserId && (
                       <button
                         type="button"

@@ -594,7 +594,8 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
     const [tab, setTab] = useState<'catalogs' | 'create'>('catalogs');
     const [isUploadingPdf, setIsUploadingPdf] = useState(false);
     const [deletePdfTarget, setDeletePdfTarget] = useState<Catalog | null>(null);
-    const [editingCatalogId, setEditingCatalogId] = useState<string | null>(null);
+    const [formCatalog, setFormCatalog] = useState<Catalog | null>(null);
+    const [showForm, setShowForm] = useState(false);
     const pdfInputRef = useRef<HTMLInputElement>(null);
 
     const [showCatalogStudio, setShowCatalogStudio] = useState(false);
@@ -608,9 +609,6 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
             catalog.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
             catalog.description.toLowerCase().includes(searchQuery.toLowerCase())
         );
-
-    // Catalog available in the Create tab picker (new + every existing one).
-    const editingCatalog = catalogs.find(c => c.id === editingCatalogId) || null;
 
     const handleDownloadClick = (catalog: Catalog) => {
         setCatalogToDownload(catalog);
@@ -728,6 +726,16 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                             {isUploadingPdf ? <Loader2 size={20} className="animate-spin" /> : <Upload size={20} />}
                         </button>
                     )}
+                    {tab === 'create' && (
+                        <button
+                            onClick={() => { setFormCatalog(null); setShowForm(true); }}
+                            aria-label="Add catalog"
+                            title="Add catalog"
+                            className="bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 p-1.5 rounded-full shadow-md hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors active-scale"
+                        >
+                            <Plus size={20} />
+                        </button>
+                    )}
                     <input ref={pdfInputRef} type="file" accept="application/pdf,.pdf" className="hidden" onChange={handleUploadPdf} />
                 </div>
 
@@ -773,54 +781,55 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
             </div>
 
             {tab === 'create' ? (
-                <div className="flex-1 overflow-hidden flex flex-col">
-                    {/* Pick an existing catalog to edit its items, or start a new one */}
-                    <div className="bg-white dark:bg-[#1a1a1a] px-[6px] py-2 border-b border-gray-100 dark:border-gray-800">
-                        <label htmlFor="catalog-picker" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider px-1">Editing</label>
-                        <select
-                            id="catalog-picker"
-                            value={editingCatalogId ?? ''}
-                            onChange={(e) => setEditingCatalogId(e.target.value || null)}
-                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 px-3 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                <div className="flex-1 overflow-y-auto p-[6px] space-y-2 no-scrollbar pb-20">
+                    {/* All catalogs with their selected products — list like Collections */}
+                    {catalogs.map((catalog, index) => (
+                        <div
+                            key={catalog.id}
+                            className="relative w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm overflow-hidden flex h-28 border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
+                            style={{ animationDelay: `${index * 25}ms` }}
                         >
-                            <option value="">— New catalog —</option>
-                            {catalogs.map(c => (
-                                <option key={c.id} value={c.id}>{c.name}</option>
-                            ))}
-                        </select>
-                    </div>
-                    <div className="flex-1 overflow-hidden">
-                        <CatalogFormModal
-                            key={editingCatalogId ?? 'new'}
-                            inline
-                            initialData={editingCatalog ?? undefined}
-                            artworks={artworks}
-                            onClose={() => setTab('catalogs')}
-                            onSave={async (data) => {
-                                if (editingCatalog) {
-                                    onUpdateCatalog({ ...editingCatalog, ...data, id: editingCatalog.id, createdAt: editingCatalog.createdAt });
-                                    toast.success('Catalog updated');
-                                } else {
-                                    const full: Catalog = { ...data, id: `cat_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`, createdAt: Date.now() };
-                                    await onAddCatalog(full);
-                                    toast.success('Catalog created');
-                                }
-                            }}
-                            onGenerate={async (data) => {
-                                let cat: Catalog;
-                                if (editingCatalog) {
-                                    cat = { ...editingCatalog, ...data, id: editingCatalog.id, createdAt: editingCatalog.createdAt };
-                                    onUpdateCatalog(cat);
-                                } else {
-                                    cat = { ...data, id: `cat_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`, createdAt: Date.now() };
-                                    await onAddCatalog(cat);
-                                }
-                                // The PDF generator page — generated PDFs land in the Catalogs tab.
-                                setTab('catalogs');
-                                handleDownloadClick(cat);
-                            }}
-                        />
-                    </div>
+                            {/* Row tap target; inner action buttons sit above it (z-[2]). */}
+                            <button
+                                type="button"
+                                onClick={() => { setFormCatalog(catalog); setShowForm(true); }}
+                                aria-label={`Edit catalog ${catalog.name}`}
+                                className="absolute inset-0 z-[1] w-full h-full rounded-[6px] cursor-pointer"
+                            />
+                            <div className="w-28 h-full relative shrink-0 bg-gray-50 dark:bg-gray-800">
+                                <img loading="lazy" decoding="async" src={getThumbUrl(catalog.coverImageUrl)} alt={catalog.name} className="w-full h-full object-cover" />
+                            </div>
+                            <div className="p-[6px] flex flex-col justify-between flex-1">
+                                <div>
+                                    <div className="flex justify-between items-start">
+                                        <h3 className="font-serif text-gray-900 dark:text-gray-100 line-clamp-1 text-sm flex-1 mr-2">{catalog.name}</h3>
+                                        <button type="button"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleDownloadClick(catalog);
+                                            }}
+                                            disabled={isGeneratingPDF}
+                                            className={`relative z-[2] p-1.5 text-gray-400 dark:text-gray-500 hover:text-gold-600 dark:hover:text-gold-400 rounded-full transition-colors active-scale shrink-0 ${isGeneratingPDF ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                            title="Open PDF generator"
+                                        >
+                                            <Download size={14} />
+                                        </button>
+                                    </div>
+                                    <p className="text-[9px] text-gray-500 dark:text-gray-400 mt-1 uppercase tracking-wider">
+                                        {catalog.artworkIds.length} Artworks{catalog.pdfUrl ? ' · PDF saved' : ''}
+                                    </p>
+                                </div>
+                                {catalog.description && (
+                                    <p className="text-[10px] text-gray-400 dark:text-gray-500 font-light line-clamp-2">{catalog.description}</p>
+                                )}
+                            </div>
+                        </div>
+                    ))}
+                    {catalogs.length === 0 && (
+                        <div className="text-center text-gray-400 dark:text-gray-500 mt-10 font-light text-sm px-6">
+                            No catalogs yet — tap the + button above to create your first one.
+                        </div>
+                    )}
                 </div>
             ) : (
             <div className="flex-1 overflow-y-auto p-[6px] space-y-2 no-scrollbar pb-20">
@@ -889,6 +898,39 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                     onGeneratePDF={(options, themeId) => handleGeneratePDF(options, themeId)}
                     isGeneratingPDF={isGeneratingPDF}
                     generationProgress={pdfProgress}
+                />
+            )}
+
+            {/* Add / Edit catalog page (old modal format) — opened from the Create tab */}
+            {showForm && (
+                <CatalogFormModal
+                    initialData={formCatalog ?? undefined}
+                    artworks={artworks}
+                    onClose={() => setShowForm(false)}
+                    onSave={async (data) => {
+                        if (formCatalog) {
+                            onUpdateCatalog({ ...formCatalog, ...data, id: formCatalog.id, createdAt: formCatalog.createdAt });
+                            toast.success('Catalog updated');
+                        } else {
+                            const full: Catalog = { ...data, id: `cat_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`, createdAt: Date.now() };
+                            await onAddCatalog(full);
+                            toast.success('Catalog created');
+                        }
+                        setShowForm(false);
+                    }}
+                    onGenerate={async (data) => {
+                        let cat: Catalog;
+                        if (formCatalog) {
+                            cat = { ...formCatalog, ...data, id: formCatalog.id, createdAt: formCatalog.createdAt };
+                            onUpdateCatalog(cat);
+                        } else {
+                            cat = { ...data, id: `cat_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`, createdAt: Date.now() };
+                            await onAddCatalog(cat);
+                        }
+                        // Open the PDF generator page — generated PDFs land in the Catalogs tab.
+                        setShowForm(false);
+                        handleDownloadClick(cat);
+                    }}
                 />
             )}
 
@@ -1164,9 +1206,9 @@ export const CatalogFormModal: React.FC<CatalogFormModalProps> = ({ initialData,
 
     return (
         <div className={inline
-            ? 'h-full flex flex-col'
+            ? 'h-full flex flex-col bg-[#faf9f6] dark:bg-[#121212]'
             : 'absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-[70] flex flex-col animate-fade-in-up'}>
-            <div className={`bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-[6px] border-b border-gray-100 dark:border-gray-800 shadow-sm ${inline ? '' : 'pt-[calc(1.75rem+env(safe-area-inset-top,0px))]'}`}>
+            <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm">
                 <button onClick={onClose} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
                     <X size={20} />
                 </button>

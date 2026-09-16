@@ -202,3 +202,40 @@ CREATE TABLE IF NOT EXISTS deleted_items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_deleted_items_at ON deleted_items(deleted_at DESC);
+
+-- ── Attendance: stores & check-ins ──────────────────────────────────────────
+-- Stores define the geofence (lat/lng + radius in meters) and whether the
+-- employee must be on the approved store Wi-Fi. Attendance rows keep ONLY
+-- server-generated timestamps; GPS + connection info are recorded for audit.
+
+CREATE TABLE IF NOT EXISTS stores (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL DEFAULT '',
+  latitude REAL NOT NULL DEFAULT 0,
+  longitude REAL NOT NULL DEFAULT 0,
+  gps_radius INTEGER NOT NULL DEFAULT 150,   -- geofence radius in meters
+  wifi_required INTEGER NOT NULL DEFAULT 0,  -- Require Store Wi-Fi ON/OFF
+  wifi_ssid TEXT NOT NULL DEFAULT '',        -- approved Wi-Fi network name
+  created_at INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS attendance (
+  id TEXT PRIMARY KEY,
+  employee_id TEXT NOT NULL,
+  employee_name TEXT DEFAULT '',
+  store_id TEXT NOT NULL,
+  check_in_at INTEGER,                  -- server timestamp
+  check_in_lat REAL,
+  check_in_lng REAL,
+  check_in_accuracy REAL,               -- GPS accuracy in meters
+  check_out_at INTEGER,                 -- server timestamp
+  check_out_lat REAL,
+  check_out_lng REAL,
+  check_out_accuracy REAL,
+  connection_type TEXT DEFAULT 'unknown', -- wifi | mobile | unknown
+  status TEXT NOT NULL DEFAULT 'checked-in', -- checked-in | checked-out
+  created_at INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_attendance_employee ON attendance(employee_id);
+CREATE INDEX IF NOT EXISTS idx_attendance_in ON attendance(check_in_at DESC);

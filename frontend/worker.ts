@@ -17,6 +17,7 @@ type FormField = File | string | null;
 interface StoredUser {
   id: string;
   name: string;
+  storeId?: string;
   email: string;
   phone?: string;
   address?: string;
@@ -904,8 +905,8 @@ async function handleAuthUsersUpdate(ctx: Ctx): Promise<Response> {
   if (!raw) return err('User not found', 404);
   const existing: StoredUser = JSON.parse(raw);
   const editBody = await ctx.request.json();
-  const { name, email, role, password } = editBody as {
-    name?: string; email?: string; role?: string; password?: string;
+  const { name, email, role, password, storeId } = editBody as {
+    name?: string; email?: string; role?: string; password?: string; storeId?: string;
   };
   // If email is changing, check for conflicts and update the email index
   const newEmail = email ? email.toLowerCase().trim() : existing.email;
@@ -926,6 +927,7 @@ async function handleAuthUsersUpdate(ctx: Ctx): Promise<Response> {
     name: name || existing.name,
     email: newEmail,
     role: resolvedRole,
+    storeId: typeof storeId === 'string' ? storeId : existing.storeId,
     hashedPassword: password ? await hashPassword(password) : existing.hashedPassword,
   };
   await ctx.env.VAYU_KV.put(`auth:user:${userId}`, JSON.stringify(updated));
@@ -2305,6 +2307,331 @@ async function handleContactsUpdate(ctx: Ctx): Promise<Response> {
   return json(updated ? rowToContact(updated) : { id: contactId });
 }
 
+// ── Attendance: stores & check-in/out ───────────────────────────────────────
+// Geofenced employee attendance. ALL validation happens here on the server:
+// GPS radius check (haversine), GPS accuracy gate, per-store Wi-Fi strategy
+// (toggleable via the store's wifi_required flag without touching this flow),
+// and every timestamp is the SERVER clock — the phone's clock is never trusted.
+
+const MAX_GPS_ACCURACY = 100; // meters — reject fixes worse than this
+
+function rowToStore(row: Record<string, unknown>): any {
+  return {
+    id: row.id as string,
+    name: (row.name as string) || '',
+    latitude: row.latitude as number,
+    longitude: row.longitude as number,
+    gpsRadius: row.gps_radius as number,
+    wifiRequired: !!(row.wifi_required),
+    wifiSsid: (row.wifi_ssid as string) || '',
+    createdAt: row.created_at as number,
+  };
+}
+
+function rowToAttendance(row: Record<string, unknown>): any {
+  return {
+    id: row.id as string,
+    employeeId: row.employee_id as string,
+    employeeName: (row.employee_name as string) || '',
+    storeId: row.store_id as string,
+    checkInAt: row.check_in_at as number | null,
+    checkInLat: row.check_in_lat as number | null,
+    checkInLng: row.check_in_lng as number | null,
+    checkInAccuracy: row.check_in_accuracy as number | null,
+    checkOutAt: row.check_out_at as number | null,
+    checkOutLat: row.check_out_lat as number | null,
+    checkOutLng: row.check_out_lng as number | null,
+    checkOutAccuracy: row.check_out_accuracy as number | null,
+    connectionType: (row.connection_type as string) || 'unknown',
+    status: row.status as string,
+    createdAt: row.created_at as number,
+  };
+}
+
+/** Great-circle distance between two points, in meters. */
+function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6_371_000;
+  const toRad = (d: number): number => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+let storesTablePromise: Promise<void> | null = null;
+function ensureStoresTable(db: D1Database): Promise<void> {
+  storesTablePromise ??= db.prepare(`
+      CREATE TABLE IF NOT EXISTS stores (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL DEFAULT '',
+        latitude REAL NOT NULL DEFAULT 0,
+        longitude REAL NOT NULL DEFAULT 0,
+        gps_radius INTEGER NOT NULL DEFAULT 150,
+        wifi_required INTEGER NOT NULL DEFAULT 0,
+        wifi_ssid TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL DEFAULT 0
+      )
+    `).run().then(() => undefined);
+  return storesTablePromise;
+}
+
+let attendanceTablePromise: Promise<void> | null = null;
+function ensureAttendanceTable(db: D1Database): Promise<void> {
+  attendanceTablePromise ??= db.prepare(`
+      CREATE TABLE IF NOT EXISTS attendance (
+        id TEXT PRIMARY KEY,
+        employee_id TEXT NOT NULL,
+        employee_name TEXT DEFAULT '',
+        store_id TEXT NOT NULL,
+        check_in_at INTEGER,
+        check_in_lat REAL,
+        check_in_lng REAL,
+        check_in_accuracy REAL,
+        check_out_at INTEGER,
+        check_out_lat REAL,
+        check_out_lng REAL,
+        check_out_accuracy REAL,
+        connection_type TEXT DEFAULT 'unknown',
+        status TEXT NOT NULL DEFAULT 'checked-in',
+        created_at INTEGER NOT NULL DEFAULT 0
+      )
+    `).run().then(() => undefined);
+  return attendanceTablePromise;
+}
+
+/** Shared pre-flight validation for check-in AND check-out. */
+async function validateAttendanceContext(
+  ctx: Ctx,
+  session: SessionData,
+  body: { storeId?: unknown; lat?: unknown; lng?: unknown; accuracy?: unknown; connectionType?: unknown; wifiSsid?: unknown }
+): Promise<{ ok: true; store: any } | { ok: false; response: Response }> {
+  const storeId = typeof body.storeId === 'string' ? body.storeId : '';
+  if (!storeId) return { ok: false, response: err('Store is required', 400) };
+  const lat = typeof body.lat === 'number' ? body.lat : Number.NaN;
+  const lng = typeof body.lng === 'number' ? body.lng : Number.NaN;
+  const accuracy = typeof body.accuracy === 'number' ? body.accuracy : Number.NaN;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    return { ok: false, response: err('GPS coordinates are required — enable location and retry', 422) };
+  }
+  if (!Number.isFinite(accuracy) || accuracy <= 0 || accuracy > MAX_GPS_ACCURACY) {
+    return { ok: false, response: err('GPS accuracy too low — move to an open area and retry', 422) };
+  }
+
+  await ensureStoresTable(ctx.env.VAYU_DB);
+  await ensureAttendanceTable(ctx.env.VAYU_DB);
+  const storeRow = await ctx.env.VAYU_DB.prepare('SELECT * FROM stores WHERE id = ?').bind(storeId).first();
+  if (!storeRow) return { ok: false, response: err('Store not found', 404) };
+  const store = rowToStore(storeRow);
+
+  // Assigned-store enforcement: employee identity comes from the session, and
+  // their assigned store (if any) is read from the server-side user record.
+  const userRaw = await ctx.env.VAYU_KV.get(`auth:user:${session.userId}`);
+  const assignedStoreId = userRaw ? ((JSON.parse(userRaw) as StoredUser).storeId || '') : '';
+  if (assignedStoreId && assignedStoreId !== storeId) {
+    return { ok: false, response: err('You can only check in at your assigned store', 403) };
+  }
+
+  // GPS geofence — computed server-side from the submitted coordinates.
+  const distance = haversineMeters(lat, lng, store.latitude, store.longitude);
+  if (distance > store.gpsRadius) {
+    return { ok: false, response: err('You are outside the store', 422) };
+  }
+
+  // Wi-Fi strategy — per-store toggle. OFF: GPS + internet is enough (mobile
+  // data allowed). ON: the employee must be on the approved store Wi-Fi.
+  if (store.wifiRequired) {
+    if (body.connectionType !== 'wifi') {
+      return { ok: false, response: err('Please connect to the store Wi-Fi before checking in', 422) };
+    }
+    const approved = store.wifiSsid.trim().toLowerCase();
+    const reported = String(body.wifiSsid || '').trim().toLowerCase();
+    if (!approved || reported !== approved) {
+      return { ok: false, response: err('You are not on the approved store Wi-Fi network', 422) };
+    }
+  }
+
+  return { ok: true, store };
+}
+
+async function handleStoresList(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  await ensureStoresTable(ctx.env.VAYU_DB);
+  const results = await ctx.env.VAYU_DB.prepare('SELECT * FROM stores ORDER BY name ASC').all();
+  return json((results.results || []).map(rowToStore));
+}
+
+function readStoreBody(body: Record<string, unknown>): { error: Response } | { data: { name: string; latitude: number; longitude: number; gpsRadius: number; wifiRequired: number; wifiSsid: string } } {
+  const name = String(body.name || '').trim();
+  const latitude = typeof body.latitude === 'number' ? body.latitude : Number.parseFloat(String(body.latitude));
+  const longitude = typeof body.longitude === 'number' ? body.longitude : Number.parseFloat(String(body.longitude));
+  const gpsRadius = Number.parseInt(String(body.gpsRadius ?? 150), 10);
+  if (!name) return { error: err('Store name is required', 400) };
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return { error: err('Valid store latitude and longitude are required', 400) };
+  if (!Number.isFinite(gpsRadius) || gpsRadius < 20 || gpsRadius > 5000) return { error: err('GPS radius must be between 20 and 5000 meters', 400) };
+  return {
+    data: {
+      name,
+      latitude,
+      longitude,
+      gpsRadius,
+      wifiRequired: body.wifiRequired ? 1 : 0,
+      wifiSsid: String(body.wifiSsid || '').trim(),
+    },
+  };
+}
+
+async function handleStoresCreate(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  if (session.role !== 'admin') return err('Forbidden', 403);
+  await ensureStoresTable(ctx.env.VAYU_DB);
+  const parsed = readStoreBody(await ctx.request.json() as Record<string, unknown>);
+  if ('error' in parsed) return parsed.error;
+  const { data } = parsed;
+  const id = `store_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+  await ctx.env.VAYU_DB.prepare(
+    'INSERT INTO stores (id, name, latitude, longitude, gps_radius, wifi_required, wifi_ssid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).bind(id, data.name, data.latitude, data.longitude, data.gpsRadius, data.wifiRequired, data.wifiSsid, Date.now()).run();
+  logEntityChange(ctx, session, 'created', 'store', id, `Created store "${data.name}"`);
+  return json(rowToStore({ id, ...data, created_at: Date.now() }), 201);
+}
+
+async function handleStoresUpdate(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  if (session.role !== 'admin') return err('Forbidden', 403);
+  const storeId = ctx.path.slice('/attendance/stores/'.length);
+  await ensureStoresTable(ctx.env.VAYU_DB);
+  const parsed = readStoreBody(await ctx.request.json() as Record<string, unknown>);
+  if ('error' in parsed) return parsed.error;
+  const { data } = parsed;
+  const result = await ctx.env.VAYU_DB.prepare(
+    'UPDATE stores SET name = ?, latitude = ?, longitude = ?, gps_radius = ?, wifi_required = ?, wifi_ssid = ? WHERE id = ?'
+  ).bind(data.name, data.latitude, data.longitude, data.gpsRadius, data.wifiRequired, data.wifiSsid, storeId).run();
+  if (!result.meta.changes) return err('Store not found', 404);
+  logEntityChange(ctx, session, 'updated', 'store', storeId, `Updated store "${data.name}"`);
+  return json(rowToStore({ id: storeId, ...data, created_at: Date.now() }));
+}
+
+async function handleStoresDelete(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  if (session.role !== 'admin') return err('Forbidden', 403);
+  const storeId = ctx.path.slice('/attendance/stores/'.length);
+  await ensureStoresTable(ctx.env.VAYU_DB);
+  const result = await ctx.env.VAYU_DB.prepare('DELETE FROM stores WHERE id = ?').bind(storeId).run();
+  if (!result.meta.changes) return err('Store not found', 404);
+  logEntityChange(ctx, session, 'deleted', 'store', storeId, 'Deleted a store');
+  return json({ success: true });
+}
+
+/** GET /attendance/me — the caller's open record + recent history. */
+async function handleAttendanceMe(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  await ensureStoresTable(ctx.env.VAYU_DB);
+  await ensureAttendanceTable(ctx.env.VAYU_DB);
+  const openRow = await ctx.env.VAYU_DB.prepare(
+    "SELECT * FROM attendance WHERE employee_id = ? AND status = 'checked-in' ORDER BY check_in_at DESC LIMIT 1"
+  ).bind(session.userId).first();
+  const recent = await ctx.env.VAYU_DB.prepare(
+    'SELECT * FROM attendance WHERE employee_id = ? ORDER BY check_in_at DESC LIMIT 10'
+  ).bind(session.userId).all();
+  const userRaw = await ctx.env.VAYU_KV.get(`auth:user:${session.userId}`);
+  const assignedStoreId = userRaw ? ((JSON.parse(userRaw) as StoredUser).storeId || '') : '';
+  return json({
+    open: openRow ? rowToAttendance(openRow) : null,
+    recent: (recent.results || []).map(rowToAttendance),
+    assignedStoreId: assignedStoreId || null,
+  });
+}
+
+async function handleAttendanceCheckIn(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const body = await ctx.request.json() as Record<string, unknown>;
+  const validated = await validateAttendanceContext(ctx, session, body);
+  if (!validated.ok) return validated.response;
+  const { store } = validated;
+  await ensureAttendanceTable(ctx.env.VAYU_DB);
+  const open = await ctx.env.VAYU_DB.prepare(
+    "SELECT id FROM attendance WHERE employee_id = ? AND status = 'checked-in'"
+  ).bind(session.userId).first();
+  if (open) return err('You are already checked in', 409);
+
+  const id = `att_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+  const serverNow = Date.now(); // SERVER timestamp — the phone clock is never trusted
+  const record: Record<string, unknown> = {
+    id, employee_id: session.userId, employee_name: session.name, store_id: store.id,
+    check_in_at: serverNow, check_in_lat: body.lat as number, check_in_lng: body.lng as number, check_in_accuracy: body.accuracy as number,
+    check_out_at: null, check_out_lat: null, check_out_lng: null, check_out_accuracy: null,
+    connection_type: String(body.connectionType || 'unknown'), status: 'checked-in', created_at: serverNow,
+  };
+  await ctx.env.VAYU_DB.prepare(
+    `INSERT INTO attendance
+     (id, employee_id, employee_name, store_id, check_in_at, check_in_lat, check_in_lng, check_in_accuracy, check_out_at, check_out_lat, check_out_lng, check_out_accuracy, connection_type, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, 'checked-in', ?)`
+  ).bind(
+    id, session.userId, session.name, store.id,
+    serverNow, body.lat, body.lng, body.accuracy,
+    String(body.connectionType || 'unknown'), serverNow
+  ).run();
+  logEntityChange(ctx, session, 'created', 'attendance', id, `Checked in at "${store.name}"`);
+  return json({ record: rowToAttendance(record), message: 'Check-in successful' }, 201);
+}
+
+async function handleAttendanceCheckOut(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const body = await ctx.request.json() as Record<string, unknown>;
+  const validated = await validateAttendanceContext(ctx, session, body);
+  if (!validated.ok) return validated.response;
+  const { store } = validated;
+  await ensureAttendanceTable(ctx.env.VAYU_DB);
+  const openRow = await ctx.env.VAYU_DB.prepare(
+    "SELECT * FROM attendance WHERE employee_id = ? AND status = 'checked-in' ORDER BY check_in_at DESC LIMIT 1"
+  ).bind(session.userId).first();
+  if (!openRow) return err('You are not checked in', 409);
+  const open = openRow as Record<string, unknown>;
+  if ((open.store_id as string) !== store.id) {
+    return err('You must check out from the same store you checked in at', 422);
+  }
+
+  const serverNow = Date.now(); // SERVER timestamp
+  const record: Record<string, unknown> = {
+    ...open,
+    check_out_at: serverNow, check_out_lat: body.lat as number, check_out_lng: body.lng as number, check_out_accuracy: body.accuracy as number,
+    connection_type: String(body.connectionType || 'unknown'), status: 'checked-out',
+  };
+  await ctx.env.VAYU_DB.prepare(
+    `UPDATE attendance SET
+       check_out_at = ?, check_out_lat = ?, check_out_lng = ?, check_out_accuracy = ?, connection_type = ?, status = 'checked-out'
+     WHERE id = ?`
+  ).bind(serverNow, body.lat, body.lng, body.accuracy, String(body.connectionType || 'unknown'), open.id as string).run();
+  logEntityChange(ctx, session, 'updated', 'attendance', open.id as string, `Checked out from "${store.name}"`);
+  return json({ record: rowToAttendance(record), message: 'Check-out successful' });
+}
+
+/** GET /attendance/records — admins see everyone; employees see their own. */
+async function handleAttendanceRecords(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  await ensureAttendanceTable(ctx.env.VAYU_DB);
+  const storeId = ctx.url.searchParams.get('storeId');
+  let stmt;
+  if (session.role === 'admin') {
+    stmt = storeId
+      ? ctx.env.VAYU_DB.prepare('SELECT * FROM attendance WHERE store_id = ? ORDER BY check_in_at DESC LIMIT 300').bind(storeId)
+      : ctx.env.VAYU_DB.prepare('SELECT * FROM attendance ORDER BY check_in_at DESC LIMIT 300');
+  } else {
+    stmt = ctx.env.VAYU_DB.prepare('SELECT * FROM attendance WHERE employee_id = ? ORDER BY check_in_at DESC LIMIT 100').bind(session.userId);
+  }
+  const results = await stmt.all();
+  return json((results.results || []).map(rowToAttendance));
+}
+
 // ── Route table ─────────────────────────────────────────────────────────────
 
 const isExact = (p: string) => (path: string) => path === p;
@@ -2407,6 +2734,16 @@ const routes: Route[] = [
 
   // Public holidays (India)
   { method: 'GET', match: isExact('/holidays'), handler: handleHolidaysGet },
+
+  // Attendance (geofenced check-in/out)
+  { method: 'GET', match: isExact('/attendance/stores'), handler: handleStoresList },
+  { method: 'POST', match: isExact('/attendance/stores'), handler: handleStoresCreate },
+  { method: 'PUT', match: isPrefix('/attendance/stores/'), handler: handleStoresUpdate },
+  { method: 'DELETE', match: isPrefix('/attendance/stores/'), handler: handleStoresDelete },
+  { method: 'GET', match: isExact('/attendance/me'), handler: handleAttendanceMe },
+  { method: 'POST', match: isExact('/attendance/check-in'), handler: handleAttendanceCheckIn },
+  { method: 'POST', match: isExact('/attendance/check-out'), handler: handleAttendanceCheckOut },
+  { method: 'GET', match: isExact('/attendance/records'), handler: handleAttendanceRecords },
 
   // Razorpay payment links
   { method: 'POST', match: isExact('/payments/link'), handler: handlePaymentLinkCreate },

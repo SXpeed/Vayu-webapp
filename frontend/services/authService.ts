@@ -5,6 +5,8 @@ export interface AuthUser {
   phone?: string;
   address?: string;
   role: 'admin' | 'user';
+  /** Assigned attendance store (geofence target), set by an admin. */
+  storeId?: string;
   createdAt: number;
   isOnline?: boolean;
   lastSeen?: number;
@@ -127,7 +129,7 @@ export const authService = {
     return user;
   },
 
-  async updateUser(id: string, data: { name?: string; email?: string; role?: 'admin' | 'user'; password?: string }): Promise<AuthUser> {
+  async updateUser(id: string, data: { name?: string; email?: string; role?: 'admin' | 'user'; password?: string; storeId?: string }): Promise<AuthUser> {
     const user = await call<AuthUser>(`/auth/users/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data),

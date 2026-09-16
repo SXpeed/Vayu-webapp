@@ -238,10 +238,46 @@ export interface Contact {
     createdByName?: string;
 }
 
+/** A store geofence configuration for employee attendance. */
+export interface StoreConfig {
+    id: string;
+    name: string;
+    latitude: number;
+    longitude: number;
+    /** Geofence radius in meters. */
+    gpsRadius: number;
+    /** Require Store Wi-Fi ON/OFF — server-side toggle, core flow unchanged. */
+    wifiRequired: boolean;
+    /** Approved Wi-Fi network name (SSID). */
+    wifiSsid: string;
+    createdAt: number;
+}
+
+/** One attendance record. ALL timestamps are server-generated. */
+export interface AttendanceRecord {
+    id: string;
+    employeeId: string;
+    employeeName: string;
+    storeId: string;
+    checkInAt: number | null;
+    checkInLat: number | null;
+    checkInLng: number | null;
+    checkInAccuracy: number | null;
+    checkOutAt: number | null;
+    checkOutLat: number | null;
+    checkOutLng: number | null;
+    checkOutAccuracy: number | null;
+    /** 'wifi' | 'mobile' | 'unknown' — as reported by the device. */
+    connectionType: string;
+    /** 'checked-in' | 'checked-out'. */
+    status: string;
+    createdAt: number;
+}
+
 /** A contact as passed by the UI before id/creator metadata is stamped. */
 export type NewContact = Omit<Contact, 'id' | 'createdAt' | 'createdBy' | 'createdByName'>;
 
-export type ViewState = 'login' | 'home' | 'artworks' | 'collections' | 'catalogs' | 'contacts' | 'calendar' | 'invoice' | 'inquiry' | 'messaging' | 'profile' | 'activity' | 'payments';
+export type ViewState = 'login' | 'home' | 'artworks' | 'collections' | 'catalogs' | 'contacts' | 'calendar' | 'attendance' | 'invoice' | 'inquiry' | 'messaging' | 'profile' | 'activity' | 'payments';
 
 export interface PaymentLink {
     id: string;

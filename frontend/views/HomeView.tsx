@@ -4,7 +4,7 @@ import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { getThumbUrl } from '../services/storageService';
 import { EVENT_COLORS, eventColor } from '../services/eventService';
-import { MessageCircle, Receipt, TrendingUp, Palette, ArrowRight, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronDown, Edit2 } from 'lucide-react';
+import { Clock, Receipt, TrendingUp, Palette, ArrowRight, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronDown, Edit2 } from 'lucide-react';
 
 interface HomeViewProps {
     artworks: Artwork[];
@@ -221,13 +221,13 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                             <span className="text-[9px] font-medium text-gray-600 dark:text-gray-300 uppercase tracking-wider text-center leading-tight">Proforma<br />Invoice</span>
                         </button>
                         <button 
-                            onClick={() => onNavigate('messaging')}
+                            onClick={() => onNavigate('attendance')}
                             className="bg-white dark:bg-[#1e1e1e] p-[6px] rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 flex flex-col items-center justify-center gap-2 hover:border-gold-500 dark:hover:border-gold-500 transition-colors active-scale"
                         >
                             <div className="text-brand-900 dark:text-gold-400">
-                                <MessageCircle size={22} strokeWidth={1.5} />
+                                <Clock size={22} strokeWidth={1.5} />
                             </div>
-                            <span className="text-[9px] font-medium text-gray-600 dark:text-gray-300 uppercase tracking-wider">Messages</span>
+                            <span className="text-[9px] font-medium text-gray-600 dark:text-gray-300 uppercase tracking-wider">Attendance</span>
                         </button>
                     </div>
                 </section>
