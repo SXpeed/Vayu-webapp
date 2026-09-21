@@ -53,7 +53,7 @@ export const PhotoAttachments: React.FC<PhotoAttachmentsProps> = ({ urls, onAdd,
                             <button
                                 type="button"
                                 onClick={() => setPreviewUrl(url)}
-                                className="w-full h-full rounded-[6px] overflow-hidden border border-gray-200 dark:border-gray-700 active-scale"
+                                className="w-full h-full rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 active-scale"
                                 aria-label={`View photo ${index + 1}`}
                             >
                                 <img loading="lazy" decoding="async" src={getThumbUrl(url)} alt="" className="w-full h-full object-cover" />
@@ -71,7 +71,7 @@ export const PhotoAttachments: React.FC<PhotoAttachmentsProps> = ({ urls, onAdd,
                         </div>
                     ))}
                     {Array.from({ length: uploadingCount }, (_, i) => (
-                        <div key={`uploading-${i}`} className="w-16 h-16 rounded-[6px] bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-gray-400">
+                        <div key={`uploading-${i}`} className="w-16 h-16 rounded-lg neu-inset flex items-center justify-center text-gray-400">
                             <Loader2 size={18} className="animate-spin" />
                         </div>
                     ))}
@@ -82,19 +82,19 @@ export const PhotoAttachments: React.FC<PhotoAttachmentsProps> = ({ urls, onAdd,
                 <button
                     type="button"
                     onClick={openCamera}
-                    className="flex items-center justify-center gap-2 py-2.5 rounded-[6px] bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 text-[10px] font-bold uppercase tracking-widest active-scale"
+                    className="flex items-center justify-center gap-2 py-2.5 rounded-lg neu-raised-sm neu-btn text-gold-700 dark:text-gold-300 text-[11px] font-bold uppercase tracking-widest active-scale"
                 >
                     <Camera size={15} /> Take Photo
                 </button>
                 <button
                     type="button"
                     onClick={openGallery}
-                    className="flex items-center justify-center gap-2 py-2.5 rounded-[6px] bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 text-[10px] font-bold uppercase tracking-widest active-scale border border-gray-200 dark:border-gray-700"
+                    className="flex items-center justify-center gap-2 py-2.5 rounded-lg neu-inset text-gray-700 dark:text-gray-200 text-[11px] font-bold uppercase tracking-widest active-scale border border-gray-200 dark:border-gray-700"
                 >
                     <ImageIcon size={15} /> Gallery
                 </button>
             </div>
-            <p className="text-[9px] text-gray-400 dark:text-gray-500 mt-2">
+            <p className="text-[11px] text-gray-600 dark:text-gray-300 mt-2">
                 Add as many photos as you need — tap Take Photo again for each shot, or select several at once in Gallery.
             </p>
             {inputs}

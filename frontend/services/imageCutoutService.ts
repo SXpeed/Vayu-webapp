@@ -1,11 +1,13 @@
 import { removeBackground } from '@imgly/background-removal';
 
-export interface PdfImageInfo {
-    dataUrl: string;
-    width: number;
-    height: number;
-    format: string;
-}
+/**
+ * Background removal for catalog PDFs.
+ *
+ * Runs inside the catalog-PDF Web Worker, never on the page: the model runs
+ * on the CPU as single-threaded WASM, and on the main thread each image froze
+ * the UI for seconds. So nothing here may touch the DOM — decoding goes
+ * through createImageBitmap and cropping through OffscreenCanvas.
+ */
 
 /** Progress messages ("Downloading AI model 45%", "Removing background…"). */
 export type CutoutProgress = (message: string) => void;
@@ -16,26 +18,27 @@ export type CutoutProgress = (message: string) => void;
 const CROP_PADDING_PX = 30;
 const ALPHA_THRESHOLD = 10;
 
-const cutoutCache = new Map<string, PdfImageInfo>();
+/**
+ * The library memoises its setup keyed on JSON.stringify(config) — which drops
+ * functions — so it keeps calling the progress callback from the *first*
+ * image for every later one (image 3 reported itself as "Image 1"). All
+ * progress therefore goes through one stable function that forwards to the
+ * image currently being processed. Images are processed one at a time.
+ */
+let currentProgress: CutoutProgress | undefined;
+const forwardProgress = (key: string, current: number, total: number) => {
+    if (!currentProgress) return;
+    if (key.startsWith('fetch:') && total > 0) {
+        const pct = Math.round((current / total) * 100);
+        currentProgress(`Downloading AI model ${pct}%`);
+    } else {
+        currentProgress('Removing background…');
+    }
+};
+
+/** Cropped cutouts, kept for the worker's lifetime so regenerating is quick. */
+const cutoutCache = new Map<string, Blob>();
 const MAX_CACHE = 20;
-
-function loadImage(src: string): Promise<HTMLImageElement> {
-    return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.onload = () => resolve(img);
-        img.onerror = () => reject(new Error('Failed to load processed image'));
-        img.src = src;
-    });
-}
-
-function blobToDataURL(blob: Blob): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.onerror = () => reject(new Error('Could not read processed image'));
-        reader.readAsDataURL(blob);
-    });
-}
 
 interface Bounds {
     minX: number;
@@ -60,15 +63,13 @@ function findOpaqueBounds(data: Uint8ClampedArray, width: number, height: number
     return maxX === -1 ? null : { minX, minY, maxX, maxY };
 }
 
-/** Crop the transparent PNG down to its visible content plus a small margin,
+/** Crop the transparent image down to its visible content plus a small margin,
  *  so the cutout fills the PDF image box instead of floating in dead space. */
-function cropToContent(img: HTMLImageElement): HTMLCanvasElement | null {
-    const canvas = document.createElement('canvas');
-    canvas.width = img.width;
-    canvas.height = img.height;
+async function cropToContent(image: ImageBitmap): Promise<Blob | null> {
+    const canvas = new OffscreenCanvas(image.width, image.height);
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return null;
-    ctx.drawImage(img, 0, 0);
+    ctx.drawImage(image, 0, 0);
 
     const bounds = findOpaqueBounds(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
     if (!bounds) return null; // fully transparent — keep original
@@ -80,51 +81,35 @@ function cropToContent(img: HTMLImageElement): HTMLCanvasElement | null {
 
     const w = maxX - minX + 1;
     const h = maxY - minY + 1;
-    const cropped = document.createElement('canvas');
-    cropped.width = w;
-    cropped.height = h;
+    const cropped = new OffscreenCanvas(w, h);
     const cctx = cropped.getContext('2d');
     if (!cctx) return null;
     cctx.drawImage(canvas, minX, minY, w, h, 0, 0, w, h);
-    return cropped;
+    return cropped.convertToBlob({ type: 'image/png' });
 }
 
-export async function removeBackgroundImageLocal(imgUrl: string, onProgress?: CutoutProgress): Promise<PdfImageInfo> {
+/** Remove the background from an image; returns the cropped transparent PNG. */
+export async function removeBackgroundToBlob(imgUrl: string, onProgress?: CutoutProgress): Promise<Blob> {
     const cached = cutoutCache.get(imgUrl);
     if (cached) return cached;
 
+    // In a worker, location is the worker script's URL — same origin, so a
+    // root-relative /api/files/… path still resolves to the right place.
     const absoluteUrl = new URL(imgUrl, globalThis.location.href).href;
 
-    const transparentBlob = await removeBackground(absoluteUrl, {
-        progress: (key: string, current: number, total: number) => {
-            if (!onProgress) return;
-            if (key.startsWith('fetch:') && total > 0) {
-                const pct = Math.round((current / total) * 100);
-                onProgress(`Downloading AI model ${pct}%`);
-            } else {
-                onProgress('Removing background…');
-            }
-        },
-    });
+    currentProgress = onProgress;
+    const transparentBlob = await removeBackground(absoluteUrl, { progress: forwardProgress });
     onProgress?.('Removing background…');
 
-    const rawDataUrl = await blobToDataURL(transparentBlob);
-    const img = await loadImage(rawDataUrl);
-
-    const croppedCanvas = cropToContent(img);
-    const info: PdfImageInfo = croppedCanvas
-        ? {
-            dataUrl: croppedCanvas.toDataURL('image/png'),
-            width: croppedCanvas.width,
-            height: croppedCanvas.height,
-            format: 'PNG',
-        }
-        : { dataUrl: rawDataUrl, width: img.width, height: img.height, format: 'PNG' };
+    const image = await createImageBitmap(transparentBlob);
+    const cropped = await cropToContent(image);
+    image.close();
+    const result = cropped ?? transparentBlob;
 
     if (cutoutCache.size >= MAX_CACHE) {
         const firstKey = cutoutCache.keys().next().value;
         if (firstKey) cutoutCache.delete(firstKey);
     }
-    cutoutCache.set(imgUrl, info);
-    return info;
+    cutoutCache.set(imgUrl, result);
+    return result;
 }

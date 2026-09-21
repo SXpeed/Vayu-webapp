@@ -31,31 +31,23 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
       {/* Backdrop */}
       <button
         type="button"
-        className="fixed inset-0 bg-black/30 transition-opacity border-none p-0 cursor-default"
+        className="fixed inset-0 neu-scrim transition-opacity border-none p-0 cursor-default"
         onClick={onClose}
         aria-label="Close dialog"
       />
       {/* Panel */}
-      <div className="relative z-10 w-full max-w-md transform rounded-2xl bg-white dark:bg-[#1e1e1e] p-6 text-left align-middle shadow-xl transition-all">
-        <h3 className="text-lg font-medium leading-6 text-gray-900 dark:text-white">
+      <div className="relative z-10 w-[min(28rem,92vw)] neu-modal p-6 text-left align-middle">
+        <h3 className="text-lg font-serif leading-6 text-gray-900 dark:text-white">
           {title}
         </h3>
         <div className="mt-2">
-          <p className="text-sm text-gray-500 dark:text-gray-300">{message}</p>
+          <p className="text-sm text-gray-700 dark:text-gray-200">{message}</p>
         </div>
-        <div className="mt-4 flex justify-end space-x-2">
-          <button
-            type="button"
-            className="inline-flex justify-center rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#2a2a2a] px-[6px] py-2 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none"
-            onClick={onClose}
-          >
+        <div className="mt-5 flex justify-end gap-2.5">
+          <button type="button" className="neu-button" onClick={onClose}>
             Cancel
           </button>
-          <button
-            type="button"
-            className="inline-flex justify-center rounded-md border border-transparent bg-red-600 hover:bg-red-700 px-[6px] py-2 text-sm font-medium text-white focus:outline-none"
-            onClick={onConfirm}
-          >
+          <button type="button" className="neu-button neu-button-danger" onClick={onConfirm}>
             Confirm
           </button>
         </div>

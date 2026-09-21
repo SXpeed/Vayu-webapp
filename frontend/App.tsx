@@ -1,4 +1,5 @@
-import React, { useState, useEffect, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useMemo, lazy, Suspense } from 'react';
+import { Lock } from 'lucide-react';
 
 import { Toaster } from 'react-hot-toast';
 import Layout from './components/Layout';
@@ -21,6 +22,8 @@ import { useEntityData } from './hooks/useEntityData';
 import { useHandlers } from './hooks/useHandlers';
 import { pushService } from './services/pushService';
 import { syncService } from './services/syncService';
+import { canOpenView, makeCan, permissionsOf } from './access';
+import { PageRoot, PageHeader, PageBody, EmptyState, Button } from './components/ui';
 
 /** Views a push-notification click may deep-link into. */
 const PUSH_VIEWS = ['messaging', 'inquiry', 'payments'] as const;
@@ -33,21 +36,69 @@ const getPushLaunchView = (): PushView | null => {
 };
 
 // Code-split: only Login and Home are needed for first paint; every other
-// view (including heavy deps like jsPDF and background removal inside
-// CatalogsView) loads on demand.
-const ArtworksView = lazy(() => import('./views/ArtworksView').then(m => ({ default: m.ArtworksView })));
-const CatalogsView = lazy(() => import('./views/CatalogsView').then(m => ({ default: m.CatalogsView })));
-const InvoiceView = lazy(() => import('./views/InvoiceView').then(m => ({ default: m.InvoiceView })));
-const CollectionsView = lazy(() => import('./views/CollectionsView').then(m => ({ default: m.CollectionsView })));
-const ProfileView = lazy(() => import('./views/ProfileView').then(m => ({ default: m.ProfileView })));
-const ArtworkDetailView = lazy(() => import('./views/ArtworkDetailView').then(m => ({ default: m.ArtworkDetailView })));
-const InquiryView = lazy(() => import('./views/InquiryView').then(m => ({ default: m.InquiryView })));
-const MessagingView = lazy(() => import('./views/MessagingView').then(m => ({ default: m.MessagingView })));
-const ActivityLogView = lazy(() => import('./views/ActivityLogView').then(m => ({ default: m.ActivityLogView })));
-const PaymentsView = lazy(() => import('./views/PaymentsView').then(m => ({ default: m.PaymentsView })));
-const ContactsView = lazy(() => import('./views/ContactsView').then(m => ({ default: m.ContactsView })));
-const CalendarView = lazy(() => import('./views/CalendarView').then(m => ({ default: m.CalendarView })));
-const AttendanceView = lazy(() => import('./views/AttendanceView').then(m => ({ default: m.AttendanceView })));
+// view loads on demand. Heavy deps (jsPDF, background removal) are dynamic
+// imports *inside* the views, so warming a view never pulls them in.
+const viewLoaders = {
+    ArtworksView: () => import('./views/ArtworksView'),
+    CatalogsView: () => import('./views/CatalogsView'),
+    InvoiceView: () => import('./views/InvoiceView'),
+    CollectionsView: () => import('./views/CollectionsView'),
+    ProfileView: () => import('./views/ProfileView'),
+    ArtworkDetailView: () => import('./views/ArtworkDetailView'),
+    InquiryView: () => import('./views/InquiryView'),
+    MessagingView: () => import('./views/MessagingView'),
+    ActivityLogView: () => import('./views/ActivityLogView'),
+    PaymentsView: () => import('./views/PaymentsView'),
+    ContactsView: () => import('./views/ContactsView'),
+    CalendarView: () => import('./views/CalendarView'),
+    AttendanceView: () => import('./views/AttendanceView'),
+};
+
+const ArtworksView = lazy(() => viewLoaders.ArtworksView().then(m => ({ default: m.ArtworksView })));
+const CatalogsView = lazy(() => viewLoaders.CatalogsView().then(m => ({ default: m.CatalogsView })));
+const InvoiceView = lazy(() => viewLoaders.InvoiceView().then(m => ({ default: m.InvoiceView })));
+const CollectionsView = lazy(() => viewLoaders.CollectionsView().then(m => ({ default: m.CollectionsView })));
+const ProfileView = lazy(() => viewLoaders.ProfileView().then(m => ({ default: m.ProfileView })));
+const ArtworkDetailView = lazy(() => viewLoaders.ArtworkDetailView().then(m => ({ default: m.ArtworkDetailView })));
+const InquiryView = lazy(() => viewLoaders.InquiryView().then(m => ({ default: m.InquiryView })));
+const MessagingView = lazy(() => viewLoaders.MessagingView().then(m => ({ default: m.MessagingView })));
+const ActivityLogView = lazy(() => viewLoaders.ActivityLogView().then(m => ({ default: m.ActivityLogView })));
+const PaymentsView = lazy(() => viewLoaders.PaymentsView().then(m => ({ default: m.PaymentsView })));
+const ContactsView = lazy(() => viewLoaders.ContactsView().then(m => ({ default: m.ContactsView })));
+const CalendarView = lazy(() => viewLoaders.CalendarView().then(m => ({ default: m.CalendarView })));
+const AttendanceView = lazy(() => viewLoaders.AttendanceView().then(m => ({ default: m.AttendanceView })));
+
+/** Warm every view chunk once the app is idle after sign-in, one per idle
+ *  slot, so the first tap on a tab renders at once instead of showing the
+ *  spinner while its chunk downloads. Skipped on Save-Data / 2G. */
+const prefetchViews = () => {
+    const conn = (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection;
+    if (conn?.saveData || /2g/.test(conn?.effectiveType ?? '')) return;
+    const idle = (cb: () => void) =>
+        'requestIdleCallback' in globalThis ? requestIdleCallback(cb, { timeout: 3000 }) : setTimeout(cb, 300);
+    const queue = Object.values(viewLoaders);
+    const next = () => {
+        const load = queue.shift();
+        if (!load) return;
+        load().catch(() => { /* offline or a new deploy: the tap will retry */ }).finally(() => idle(next));
+    };
+    idle(next);
+};
+
+/** Shown in place of a screen the signed-in person's role can't open. */
+const NoAccessView: React.FC<{ onHome: () => void }> = ({ onHome }) => (
+    <PageRoot>
+        <PageHeader title="No access" />
+        <PageBody>
+            <EmptyState
+                icon={<Lock size={22} strokeWidth={1.5} />}
+                title="Your role can't open this section"
+                message="Ask an admin if you need access."
+                action={<Button onClick={onHome}>Back to Home</Button>}
+            />
+        </PageBody>
+    </PageRoot>
+);
 
 const ViewFallback = () => (
     <div className="h-full flex items-center justify-center">
@@ -120,6 +171,7 @@ const App: React.FC = () => {
                         await loadData(true);
                     }
                     backfillThumbnailsQuietly();
+                    prefetchViews();
                 } else {
                     globalThis.history.pushState({ view: 'login' }, '');
                     await loadData(false);
@@ -165,8 +217,12 @@ const App: React.FC = () => {
         if (migrated) {
             await loadData(true);
         }
+        prefetchViews();
         backfillThumbnailsQuietly();
     };
+
+    // Hooks must run before the loading early-return below.
+    const can = useMemo(() => makeCan(permissionsOf(authUser)), [authUser]);
 
     if (isLoading) {
         return (
@@ -179,6 +235,11 @@ const App: React.FC = () => {
     }
 
     const renderView = () => {
+        // Role gate: a screen this role can't open (via a notification link,
+        // say, or a role changed while the app was open) explains itself.
+        if (authUser && currentView !== 'login' && !canOpenView(can, currentView)) {
+            return <NoAccessView onHome={() => navigateTo('home')} />;
+        }
         switch (currentView) {
             case 'login':
                 return <LoginView onLogin={handleLogin} />;
@@ -204,7 +265,7 @@ const App: React.FC = () => {
             case 'calendar':
                 return <CalendarView events={events} onBack={() => navigateTo('home')} />;
             case 'attendance':
-                return authUser ? <AttendanceView authUser={authUser} isAdmin={authUser.role === 'admin'} onBack={() => navigateTo('home')} /> : null;
+                return authUser ? <AttendanceView authUser={authUser} canManage={can('attendance', 'edit')} onBack={() => navigateTo('home')} /> : null;
             case 'invoice':
                 return <InvoiceView invoices={invoices} artworks={artworks} onAddInvoice={handlers.handleAddInvoice} onUpdateInvoice={handlers.handleUpdateInvoice} onDeleteInvoice={handlers.handleDeleteInvoice} onArtworkClick={handleArtworkClick} />;
             case 'inquiry':
@@ -232,8 +293,8 @@ const App: React.FC = () => {
                         teamMembers={teamMembers}
                         currentUserId={userProfile?.id || authUser?.id || ''}
                         currentUserName={userProfile?.name || authUser?.name || 'You'}
-                        isAdmin={authUser?.role === 'admin'}
                         onSendMessage={handlers.handleSendMessage}
+                        onRetryMessage={handlers.handleRetryMessage}
                         onCreateConversation={handlers.handleCreateConversation}
                         onCreateGroup={handlers.handleCreateGroup}
                         onUpdateConversationDetails={handlers.handleUpdateConversationDetails}

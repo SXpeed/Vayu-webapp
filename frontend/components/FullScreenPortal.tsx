@@ -23,6 +23,9 @@ export const FullScreenPortal: React.FC<{ readonly children: React.ReactNode }> 
         el.style.position = 'absolute';
         el.style.inset = '0';
         el.style.zIndex = '50';
+        // On desktop the sheets inside are centred dialogs rather than
+        // full-screen, so the wrapper supplies the backdrop behind them.
+        el.className = 'neu-portal-scrim';
         shell.append(el);
         setContainer(el);
 

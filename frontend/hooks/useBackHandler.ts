@@ -7,7 +7,7 @@ export function useBackHandler(isOpen: boolean, onClose: () => void) {
         // Push a state when modal opens
         globalThis.history.pushState({ modalOpen: true }, '');
 
-        const handlePopState = (e: PopStateEvent) => {
+        const handlePopState = () => {
             // Prevent the global popstate in useNavigation from triggering
             (globalThis as any)._modalJustClosed = true;
             setTimeout(() => { (globalThis as any)._modalJustClosed = false; }, 50);

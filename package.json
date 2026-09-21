@@ -6,7 +6,8 @@
     "build": "cd frontend && npm install && npm run build",
     "dev": "concurrently \"npm run dev-frontend\" \"npm run dev-backend\"",
     "deploy": "npm run build && wrangler deploy",
-    "preview": "wrangler dev"
+    "preview": "wrangler dev",
+    "dev-phone": "concurrently \"npm run dev:phone --prefix frontend\" \"npm run dev-backend\""
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.42.2",

@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowLeft, Edit2, X, Image as ImageIcon } from 'lucide-react';
+import { ArrowLeft, Edit2, X, Image as ImageIcon, Palette, Ruler, MapPin } from 'lucide-react';
 import { Artwork } from '../types';
 import { ArtworkFormModal } from './ArtworksView';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { ZoomableImage } from '../components/ZoomableImage';
+import { IfCan } from '../components/Layout';
 
 /** Swaps the alpha channel of an `rgba(r, g, b, a)` color string. */
 const withAlpha = (rgba: string, alpha: number): string =>
@@ -93,156 +94,190 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
 
 
 
-    let artistText = '';
-    if (artwork.artist) {
-        artistText = artwork.artist;
-        if (artwork.artworkYear) artistText += `, ${artwork.artworkYear}`;
-        artistText += ' • ';
-    }
+    const artistLine = [artwork.artist, artwork.artworkYear].filter(Boolean).join(', ');
 
-    let statusClass = 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-400';
-    if (artwork.status === 'Available') statusClass = 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400';
-    else if (artwork.status === 'Sold') statusClass = 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400';
+    let statusClass = 'neu-status text-yellow-700 dark:text-yellow-400';
+    if (artwork.status === 'Available') statusClass = 'neu-status text-green-700 dark:text-green-400';
+    else if (artwork.status === 'Sold') statusClass = 'neu-status text-red-700 dark:text-red-400';
+
+    const imageCount = artwork.imageUrls.length;
+
+    /** Dots are tappable: scroll the carousel; its onScroll syncs the index. */
+    const goToImage = (idx: number) => {
+        const el = mainCarouselRef.current;
+        if (el) el.scrollTo({ left: idx * el.clientWidth, behavior: 'smooth' });
+    };
+
+    const specs: { label: string; value?: string; icon: React.ElementType; wide?: boolean }[] = [
+        { label: 'Medium', value: artwork.medium, icon: Palette },
+        { label: 'Dimensions', value: artwork.dimensions, icon: Ruler },
+        { label: 'Location', value: artwork.location, icon: MapPin, wide: true },
+    ];
 
     return (
-        <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-[60] flex flex-col animate-fade-in-up">
-            {/* Header with Back & Edit Buttons */}
-            <div className="px-[6px] pb-2 flex justify-between items-center bg-[#faf9f6] dark:bg-[#121212] shrink-0 z-20" style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}>
-                <button
-                    onClick={onClose}
-                    className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale"
-                >
-                    <ArrowLeft size={18} />
-                </button>
-                {artwork.imageUrls.length > 1 && (
-                    <span className="text-xs text-gray-500 dark:text-gray-400 font-medium tracking-widest">
-                        {activeImageIndex + 1} / {artwork.imageUrls.length}
-                    </span>
-                )}
-                <button
-                    onClick={() => setIsEditing(true)}
-                    className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale"
-                >
-                    <Edit2 size={16} />
-                </button>
+        <div className="absolute inset-0 bg-[var(--neu-bg)] z-[60] flex flex-col animate-fade-in-up">
+            {/* Header — raised back / edit buttons */}
+            <div className="shrink-0 z-20 px-5 lg:px-10 pb-2" style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}>
+                <div className="max-w-6xl mx-auto flex justify-between items-center">
+                    <button onClick={onClose} aria-label="Back" className="neu-icon-btn neu-btn active-scale">
+                        <ArrowLeft size={18} />
+                    </button>
+                    <IfCan section="inventory">
+                        <button onClick={() => setIsEditing(true)} aria-label="Edit artwork" className="neu-icon-btn neu-btn active-scale">
+                            <Edit2 size={16} />
+                        </button>
+                    </IfCan>
+                </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto no-scrollbar">
-                {/* Image Carousel with Dynamic Glow */}
-                <div className="w-full h-[55dvh] relative bg-[#faf9f6] dark:bg-[#121212] shrink-0 flex flex-col overflow-hidden">
-                    {/* Glow Background */}
-                    <div
-                        className="absolute inset-0 transition-colors duration-700 ease-in-out z-0"
-                        style={{ background: `radial-gradient(circle at center, ${glowColor} 0%, transparent 70%)` }}
-                    />
+            <div className="flex-1 overflow-y-auto no-scrollbar neu-scroll-fade px-5 lg:px-10 pt-3">
+                <div className="max-w-6xl mx-auto lg:grid lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)] lg:gap-10 lg:items-start">
 
-                    {artwork.imageUrls.length > 0 ? (
-                        <div
-                            ref={mainCarouselRef}
-                            className="flex-1 w-full flex overflow-x-auto snap-x snap-mandatory no-scrollbar relative z-10"
-                            onScroll={(e) => {
-                                const scrollLeft = (e.target as HTMLElement).scrollLeft;
-                                const width = (e.target as HTMLElement).clientWidth;
-                                setActiveImageIndex(Math.round(scrollLeft / width));
-                            }}
-                        >
-                            {artwork.imageUrls.map((url, idx) => (
-                                <div key={url} className="w-full h-full flex items-center justify-center snap-center shrink-0">
-                                    <button
-                                        type="button"
-                                        onClick={() => setIsFullScreen(true)}
-                                        className="w-full h-full p-0 border-none bg-transparent cursor-pointer"
+                    {/* Picture — raised frame around a recessed, colour-matched well */}
+                    <div className="lg:sticky lg:top-0">
+                        <div className="neu-raised rounded-[1.75rem] p-2.5">
+                            <div className="neu-picture-well rounded-[1.35rem] h-[46dvh] min-h-[260px] lg:h-[min(calc(100dvh-10rem),720px)] flex flex-col">
+                                {/* Dominant-colour glow */}
+                                <div
+                                    className="absolute inset-0 transition-colors duration-700 ease-in-out z-0"
+                                    style={{ background: `radial-gradient(circle at center, ${glowColor} 0%, transparent 70%)` }}
+                                />
+
+                                {imageCount > 0 ? (
+                                    <div
+                                        ref={mainCarouselRef}
+                                        className="flex-1 w-full flex overflow-x-auto snap-x snap-mandatory no-scrollbar relative z-10"
+                                        onScroll={(e) => {
+                                            const scrollLeft = (e.target as HTMLElement).scrollLeft;
+                                            const width = (e.target as HTMLElement).clientWidth;
+                                            setActiveImageIndex(Math.round(scrollLeft / width));
+                                        }}
                                     >
-                                        <img
-                                            src={url}
-                                            alt={`${artwork.title} - ${idx + 1}`}
-                                            loading="lazy"
-                                            decoding="async"
-                                            className="w-full h-full object-cover"
-                                        />
+                                        {artwork.imageUrls.map((url, idx) => (
+                                            <div key={url} className="w-full h-full snap-center shrink-0 p-5">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setIsFullScreen(true)}
+                                                    aria-label="View full screen"
+                                                    className="w-full h-full p-0 border-none bg-transparent cursor-zoom-in flex items-center justify-center"
+                                                >
+                                                    <img
+                                                        src={url}
+                                                        alt={`${artwork.title} - ${idx + 1}`}
+                                                        loading="lazy"
+                                                        decoding="async"
+                                                        className="max-w-full max-h-full object-contain rounded-xl shadow-[0_14px_28px_-12px_rgba(0,0,0,0.45)]"
+                                                    />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="flex-1 w-full flex items-center justify-center text-[var(--neu-text-dim)] relative z-10">
+                                        <ImageIcon size={64} strokeWidth={1} />
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Pager — gold pill marks the current image */}
+                        {imageCount > 1 && (imageCount <= 8 ? (
+                            <div className="flex justify-center items-center gap-0.5 mt-3">
+                                {artwork.imageUrls.map((url, idx) => (
+                                    <button
+                                        key={url}
+                                        type="button"
+                                        onClick={() => goToImage(idx)}
+                                        aria-label={`Image ${idx + 1} of ${imageCount}`}
+                                        aria-current={idx === activeImageIndex ? 'true' : undefined}
+                                        className="p-1.5"
+                                    >
+                                        <span className={`block h-2 rounded-full transition-all duration-300 ${idx === activeImageIndex ? 'w-5 neu-accent' : 'w-2 neu-inset'}`} />
                                     </button>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="flex justify-center mt-3">
+                                <span className="neu-status px-3 py-1 text-[11px] font-medium tracking-widest text-[var(--neu-text-dim)]">
+                                    {activeImageIndex + 1} / {imageCount}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* Details */}
+                    <div className="mt-5 lg:mt-0 space-y-4">
+                        {/* Summary */}
+                        <div className="neu-card p-4">
+                            <div className="flex items-center justify-between gap-3">
+                                <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--neu-gold)] truncate">{artwork.customId}</p>
+                                <span className={`shrink-0 text-[10px] px-2.5 py-1 font-semibold uppercase tracking-wider ${statusClass}`}>
+                                    <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                                    {artwork.status}
+                                </span>
+                            </div>
+                            <h1 className="mt-2 text-xl lg:text-2xl font-serif leading-snug text-[var(--neu-text)] break-words">{artwork.title}</h1>
+                            {artistLine && <p className="mt-1 text-xs text-[var(--neu-text-dim)]">{artistLine}</p>}
+
+                            <div className="neu-inset rounded-2xl mt-4 px-4 py-3 flex items-center justify-between gap-3">
+                                <span className="neu-label !mb-0">Price</span>
+                                <p className="text-lg font-semibold text-[var(--neu-gold)] text-right">
+                                    ₹{artwork.price.toLocaleString('en-IN')}
+                                    {artwork.plusGst && <span className="ml-1 text-[11px] font-medium text-[var(--neu-text-dim)]">+ GST</span>}
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* Specs — inset tiles */}
+                        <div className="grid grid-cols-2 gap-3">
+                            {specs.map(({ label, value, icon: Icon, wide }) => (
+                                <div key={label} className={`neu-inset rounded-2xl p-3 flex items-center gap-3 min-w-0 ${wide ? 'col-span-2' : ''}`}>
+                                    <span className="neu-raised-sm w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-[var(--neu-gold)]">
+                                        <Icon size={15} strokeWidth={1.8} />
+                                    </span>
+                                    <div className="min-w-0">
+                                        <p className="neu-label !mb-0.5">{label}</p>
+                                        <p className="text-[13px] font-medium text-[var(--neu-text)] break-words">{value || '—'}</p>
+                                    </div>
                                 </div>
                             ))}
                         </div>
-                    ) : (
-                        <div className="flex-1 w-full flex items-center justify-center text-gray-300 dark:text-gray-600 relative z-10">
-                            <ImageIcon size={64} strokeWidth={1} />
-                        </div>
-                    )}
-                </div>
 
-                {/* Details Section */}
-                <div className="p-[6px] bg-[#faf9f6] dark:bg-[#121212] relative z-30 space-y-4 -mt-4 rounded-t-[7px]">
-
-                    <div className="flex justify-between items-start">
-                        <div className="flex-1 min-w-0 mr-3">
-                            <h1 className="text-lg font-serif text-gray-900 dark:text-white leading-snug">{artwork.title}</h1>
-                            <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest mt-0.5">
-                                {artistText}
-                                {artwork.customId}
-                            </p>
-                        </div>
-                        <p className="text-base font-semibold text-gold-600 dark:text-gold-400 shrink-0">₹{artwork.price.toLocaleString('en-IN')}{artwork.plusGst ? ' + GST' : ''}</p>
-                    </div>
-
-                    <div className="w-full h-px bg-gray-100 dark:bg-gray-800"></div>
-
-                    <div className="grid grid-cols-2 gap-y-3 gap-x-4">
-                        <div>
-                            <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-0.5">Medium</p>
-                            <p className="text-xs text-gray-800 dark:text-gray-200">{artwork.medium}</p>
-                        </div>
-                        <div>
-                            <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-0.5">Dimensions</p>
-                            <p className="text-xs text-gray-800 dark:text-gray-200">{artwork.dimensions}</p>
-                        </div>
-                        <div>
-                            <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-0.5">Location</p>
-                            <p className="text-xs text-gray-800 dark:text-gray-200">{artwork.location}</p>
-                        </div>
-                        <div>
-                            <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-0.5">Status</p>
-                            <span className={`text-[9px] px-1.5 py-0.5 rounded-[3px] font-medium uppercase tracking-wider ${statusClass}`}>
-                                {artwork.status}
-                            </span>
-                        </div>
-                    </div>
-
-                    {(artwork.description) && (
-                        <>
-                            <div className="w-full h-px bg-gray-100 dark:bg-gray-800"></div>
-                            <div>
-                                <p className="text-[9px] text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-1">{artwork.descriptionTitle || "About this piece"}</p>
-                                <p className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed font-light whitespace-pre-wrap">
+                        {artwork.description && (
+                            <div className="neu-card p-4">
+                                <p className="neu-label">{artwork.descriptionTitle || 'About this piece'}</p>
+                                <p className="text-[13px] text-[var(--neu-text-dim)] leading-relaxed whitespace-pre-wrap">
                                     {artwork.description}
                                 </p>
                             </div>
-                        </>
-                    )}
-
-                    <div style={{ height: 'calc(2rem + env(safe-area-inset-bottom, 0px))' }}></div>
+                        )}
+                    </div>
                 </div>
+
+                {/* Clears the phone dock (it stays visible over this view) and the home indicator */}
+                <div className="h-[calc(6rem+var(--safe-bottom,env(safe-area-inset-bottom,0px)))] lg:h-10" />
             </div>
 
             {/* Full Screen Image Viewer */}
             {isFullScreen && artwork.imageUrls.length > 0 && (
-                <div className="absolute inset-0 z-[100] bg-[#faf9f6] dark:bg-[#121212] flex flex-col animate-fade-in overflow-hidden">
+                <div className="absolute inset-0 z-[100] bg-[var(--neu-bg)] flex flex-col animate-fade-in overflow-hidden">
                     {/* Full Screen Glow Background */}
                     <div
                         className="absolute inset-0 transition-colors duration-700 ease-in-out z-0"
                         style={{ background: `radial-gradient(circle at center, ${withAlpha(glowColor, 0.3)} 0%, transparent 80%)` }}
                     />
 
-                    <div className="px-[6px] pb-2 z-20 flex justify-between items-center" style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}>
+                    <div className="px-3 pb-2 z-20 flex justify-between items-center" style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}>
                         <div className="w-9"></div>
                         {artwork.imageUrls.length > 1 ? (
-                            <span className="text-xs text-gray-500 dark:text-gray-400 font-medium tracking-widest">
+                            <span className="neu-status px-3 py-1 text-[11px] font-medium tracking-widest text-[var(--neu-text-dim)]">
                                 {activeImageIndex + 1} / {artwork.imageUrls.length}
                             </span>
                         ) : <div />}
                         <button
                             onClick={() => setIsFullScreen(false)}
-                            className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale"
+                            aria-label="Close"
+                            className="neu-icon-btn neu-btn active-scale"
                         >
                             <X size={16} />
                         </button>
@@ -250,7 +285,7 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
 
                     <div
                         ref={fullScreenCarouselRef}
-                        className="flex-1 w-full h-full flex overflow-x-auto snap-x snap-mandatory no-scrollbar pb-[calc(72px+env(safe-area-inset-bottom,0px))] relative z-10"
+                        className="flex-1 w-full h-full flex overflow-x-auto snap-x snap-mandatory no-scrollbar pb-[calc(72px+var(--safe-bottom,env(safe-area-inset-bottom,0px)))] lg:pb-4 relative z-10"
                         onScroll={(e) => {
                             const scrollLeft = (e.target as HTMLElement).scrollLeft;
                             const width = (e.target as HTMLElement).clientWidth;
@@ -258,7 +293,7 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                         }}
                     >
                         {artwork.imageUrls.map((url, idx) => (
-                            <div key={url} className="w-full h-full snap-center shrink-0 p-[6px] flex items-center justify-center relative">
+                            <div key={url} className="w-full h-full snap-center shrink-0 p-3 flex items-center justify-center relative">
                                 <ZoomableImage
                                     src={url}
                                     alt={`${artwork.title} - ${idx + 1}`}

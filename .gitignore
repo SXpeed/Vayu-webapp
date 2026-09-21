@@ -12,10 +12,16 @@ frontend/dist/
 **/.env.*
 !**/.env.example
 
+# Binaries
+cloudflared.exe
+
 # OS files
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Misc dev files
+d
 
 # IDE files
 .vscode/

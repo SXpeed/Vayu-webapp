@@ -1,4 +1,8 @@
 import { getOrCreateVapidKeys, sendWebPush, type StoredPushSubscription } from './webpush';
+import {
+  ADMIN_PERMISSIONS, ADMIN_ROLE_ID, BUILT_IN_ROLES, STAFF_DEFAULT_PERMISSIONS, STAFF_ROLE_ID,
+  atLeast, normalizePermissions, type AccessLevel, type Permissions, type RoleDef, type SectionId,
+} from './permissions';
 
 interface Env {
   VAYU_KV: KVNamespace;
@@ -22,7 +26,8 @@ interface StoredUser {
   phone?: string;
   address?: string;
   hashedPassword: string;
-  role: 'admin' | 'user';
+  /** Role id: 'admin', 'user' (Staff) or a custom role's id. */
+  role: string;
   createdAt: number;
 }
 
@@ -32,7 +37,7 @@ interface PublicUser {
   email: string;
   phone?: string;
   address?: string;
-  role: 'admin' | 'user';
+  role: string;
   createdAt: number;
   isOnline?: boolean;
   lastSeen?: number;
@@ -43,7 +48,8 @@ interface SessionData {
   userId: string;
   email: string;
   name: string;
-  role: 'admin' | 'user';
+  /** Refreshed from the user record on every request (see getSession). */
+  role: string;
   expiresAt: number;
 }
 
@@ -99,7 +105,7 @@ async function logActivity(db: D1Database, userId: string, userName: string, act
 
 const CORS: HeadersInit = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
@@ -165,7 +171,25 @@ function bearerToken(request: Request): string | null {
   return auth?.startsWith('Bearer ') ? auth.slice(7).trim() : null;
 }
 
-async function getSession(request: Request, kv: KVNamespace): Promise<SessionData | null> {
+const sessionMemo = new WeakMap<Request, Promise<SessionData | null>>();
+
+/**
+ * The caller's session, or null. Memoised per request, so the access check
+ * in the router and the handler share one lookup. The role is re-read from
+ * the user record every time: a session used to keep the role it had at
+ * login, so a demoted admin kept admin rights until the session expired. A
+ * deleted user's sessions stop working at once for the same reason.
+ */
+function getSession(request: Request, kv: KVNamespace): Promise<SessionData | null> {
+  let pending = sessionMemo.get(request);
+  if (!pending) {
+    pending = loadSession(request, kv);
+    sessionMemo.set(request, pending);
+  }
+  return pending;
+}
+
+async function loadSession(request: Request, kv: KVNamespace): Promise<SessionData | null> {
   const token = bearerToken(request);
   if (!token) return null;
   const raw = await kv.get(`auth:session:${token}`);
@@ -175,7 +199,120 @@ async function getSession(request: Request, kv: KVNamespace): Promise<SessionDat
     await kv.delete(`auth:session:${token}`);
     return null;
   }
+  const userRaw = await kv.get(`auth:user:${session.userId}`);
+  if (!userRaw) return null;
+  session.role = (JSON.parse(userRaw) as StoredUser).role;
   return session;
+}
+
+// ── Roles & access ──────────────────────────────────────────────────────────
+// Custom roles live in KV under one key. "admin" always has everything and is
+// never stored; "user" (Staff) is built in but its permissions are editable.
+
+const ROLES_KEY = 'auth:roles';
+const ROLES_CACHE_MS = 15_000;
+let rolesCache: { at: number; roles: RoleDef[] } | null = null;
+
+async function getRoles(kv: KVNamespace): Promise<RoleDef[]> {
+  if (rolesCache && Date.now() - rolesCache.at < ROLES_CACHE_MS) return rolesCache.roles;
+  const raw = await kv.get(ROLES_KEY);
+  const stored: RoleDef[] = raw ? JSON.parse(raw) : [];
+  const staff = stored.find(r => r.id === STAFF_ROLE_ID);
+  const roles: RoleDef[] = [
+    { ...BUILT_IN_ROLES[0], permissions: ADMIN_PERMISSIONS },
+    {
+      ...BUILT_IN_ROLES[1],
+      name: staff?.name || BUILT_IN_ROLES[1].name,
+      permissions: staff ? normalizePermissions(staff.permissions) : STAFF_DEFAULT_PERMISSIONS,
+    },
+    ...stored
+      .filter(r => r.id !== ADMIN_ROLE_ID && r.id !== STAFF_ROLE_ID)
+      .map(r => ({ id: r.id, name: r.name, permissions: normalizePermissions(r.permissions) })),
+  ];
+  rolesCache = { at: Date.now(), roles };
+  return roles;
+}
+
+async function saveRoles(kv: KVNamespace, roles: RoleDef[]): Promise<void> {
+  const toStore = roles
+    .filter(r => r.id !== ADMIN_ROLE_ID)
+    .map(r => ({ id: r.id, name: r.name, permissions: r.permissions }));
+  await kv.put(ROLES_KEY, JSON.stringify(toStore));
+  rolesCache = null;
+}
+
+/** A role that no longer exists grants nothing. */
+function permissionsFor(roles: RoleDef[], roleId: string): Permissions {
+  if (roleId === ADMIN_ROLE_ID) return ADMIN_PERMISSIONS;
+  return roles.find(r => r.id === roleId)?.permissions ?? normalizePermissions({});
+}
+
+async function sessionCan(ctx: Ctx, session: SessionData, section: SectionId, level: AccessLevel): Promise<boolean> {
+  if (session.role === ADMIN_ROLE_ID) return true;
+  return atLeast(permissionsFor(await getRoles(ctx.env.VAYU_KV), session.role)[section], level);
+}
+
+/** Public user plus what the app needs to decide what to show. */
+async function withAccess(ctx: Ctx, user: StoredUser): Promise<PublicUser & { roleName: string; permissions: Permissions }> {
+  const roles = await getRoles(ctx.env.VAYU_KV);
+  return {
+    ...stripPassword(user),
+    roleName: roles.find(r => r.id === user.role)?.name || 'No role',
+    permissions: permissionsFor(roles, user.role),
+  };
+}
+
+interface AccessRule {
+  section: SectionId;
+  level: AccessLevel;
+  /** For reads only: other sections whose screens need this data too. */
+  readableBy?: SectionId[];
+}
+
+/**
+ * Which section guards a route. GET needs "view"; anything that changes data
+ * needs "edit". Routes not listed (auth, uploads, files, push, presence,
+ * settings, deleted items) have no section: their handlers do their own
+ * checks.
+ */
+function accessRule(path: string, method: string): AccessRule | null {
+  const read = method === 'GET';
+  const level: AccessLevel = read ? 'view' : 'edit';
+  const under = (prefix: string) => path === prefix || path.startsWith(`${prefix}/`) || path.startsWith(`${prefix}?`);
+
+  if (under('/artworks')) {
+    // Collections, catalogs, inquiries and invoices all show artworks.
+    return { section: 'inventory', level, readableBy: read ? ['collections', 'catalogs', 'inquiries', 'invoices'] : undefined };
+  }
+  if (under('/collections')) return { section: 'collections', level };
+  if (under('/catalogs')) return { section: 'catalogs', level };
+  if (under('/contacts')) return { section: 'contacts', level, readableBy: read ? ['inquiries', 'invoices', 'payments'] : undefined };
+  if (under('/inquiries') || under('/inquiry-messages')) return { section: 'inquiries', level };
+  if (under('/payments/webhook')) return null; // Razorpay calls this, no session
+  if (under('/payments')) return { section: 'payments', level };
+  if (under('/events') || under('/holidays')) return { section: 'calendar', level };
+  if (under('/conversations') || under('/messages')) return { section: 'messages', level };
+  if (under('/activity-logs')) return read ? { section: 'activity', level: 'view' } : null;
+  if (under('/attendance')) {
+    // Own check-in/out and history need "view"; managing the team and stores needs "edit".
+    const own = path === '/attendance/me' || path === '/attendance/check-in' || path === '/attendance/check-out'
+      || (read && (path === '/attendance/stores' || path === '/attendance/records'));
+    return { section: 'attendance', level: own ? 'view' : 'edit' };
+  }
+  return null;
+}
+
+/** Router gate: a 403 response when the caller's role doesn't allow this route. */
+async function checkAccess(ctx: Ctx): Promise<Response | null> {
+  const rule = accessRule(ctx.path, ctx.method);
+  if (!rule) return null;
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return null; // handlers answer 401 themselves
+  if (session.role === ADMIN_ROLE_ID) return null;
+  const perms = permissionsFor(await getRoles(ctx.env.VAYU_KV), session.role);
+  if (atLeast(perms[rule.section], rule.level)) return null;
+  if (rule.readableBy?.some(s => atLeast(perms[s], 'view'))) return null;
+  return err("Your role doesn't have access to this", 403);
 }
 
 function stripPassword(user: StoredUser): PublicUser {
@@ -751,7 +888,7 @@ async function handleAuthLogin(ctx: Ctx): Promise<Response> {
   await ctx.env.VAYU_KV.put(`auth:session:${token}`, JSON.stringify(session), {
     expirationTtl: SESSION_TTL_DAYS * 86_400,
   });
-  return json({ token, user: stripPassword(user) });
+  return json({ token, user: await withAccess(ctx, user) });
 }
 
 async function handleAuthMe(ctx: Ctx): Promise<Response> {
@@ -759,7 +896,7 @@ async function handleAuthMe(ctx: Ctx): Promise<Response> {
   if (!session) return err('Unauthorized', 401);
   const raw = await ctx.env.VAYU_KV.get(`auth:user:${session.userId}`);
   if (!raw) return err('User not found', 404);
-  return json(stripPassword(JSON.parse(raw)));
+  return json(await withAccess(ctx, JSON.parse(raw)));
 }
 
 /** Trimmed, length-capped string field; undefined when the value isn't a string. */
@@ -862,18 +999,20 @@ async function handleAuthUsersCreate(ctx: Ctx): Promise<Response> {
   if (password.length < 6) return err('Password must be at least 6 characters');
   const emailKey = `auth:email:${email.toLowerCase().trim()}`;
   if (await ctx.env.VAYU_KV.get(emailKey)) return err('A user with this email already exists', 409);
+  const roles = await getRoles(ctx.env.VAYU_KV);
+  const roleId = role && roles.some(r => r.id === role) ? role : STAFF_ROLE_ID;
   const id = `user_${Date.now()}`;
   const user: StoredUser = {
     id, name, email: email.toLowerCase().trim(),
     hashedPassword: await hashPassword(password),
-    role: role === 'admin' ? 'admin' : 'user',
+    role: roleId,
     createdAt: Date.now(),
   };
   await ctx.env.VAYU_KV.put(`auth:user:${id}`, JSON.stringify(user));
   await ctx.env.VAYU_KV.put(emailKey, id);
   const countRaw = await ctx.env.VAYU_KV.get('auth:count');
   await ctx.env.VAYU_KV.put('auth:count', String((countRaw ? Number.parseInt(countRaw, 10) : 0) + 1));
-  await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'created', 'user', id, `Created user "${name}" (${email}) with role "${role === 'admin' ? 'admin' : 'user'}"`);
+  await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'created', 'user', id, `Created user "${name}" (${email}) with role "${roles.find(r => r.id === roleId)?.name ?? roleId}"`);
   return json(stripPassword(user), 201);
 }
 
@@ -917,10 +1056,13 @@ async function handleAuthUsersUpdate(ctx: Ctx): Promise<Response> {
     await ctx.env.VAYU_KV.put(`auth:email:${newEmail}`, userId);
   }
   let resolvedRole = existing.role;
-  if (role === 'admin') {
-    resolvedRole = 'admin';
-  } else if (role === 'user') {
-    resolvedRole = 'user';
+  if (role !== undefined && role !== existing.role) {
+    const roles = await getRoles(ctx.env.VAYU_KV);
+    if (!roles.some(r => r.id === role)) return err('That role does not exist', 400);
+    if (userId === session.userId && existing.role === ADMIN_ROLE_ID) {
+      return err("You can't remove your own admin role", 400);
+    }
+    resolvedRole = role;
   }
   const updated: StoredUser = {
     ...existing,
@@ -933,6 +1075,91 @@ async function handleAuthUsersUpdate(ctx: Ctx): Promise<Response> {
   await ctx.env.VAYU_KV.put(`auth:user:${userId}`, JSON.stringify(updated));
   await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'updated', 'user', userId, `Updated user "${updated.name}" (${updated.email})`);
   return json(stripPassword(updated));
+}
+
+// ── Roles (admin only) ─────────────────────────────────────────────────────
+
+async function requireAdmin(ctx: Ctx): Promise<SessionData | Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  if (session.role !== ADMIN_ROLE_ID) return err('Forbidden', 403);
+  return session;
+}
+
+function readRoleName(value: unknown, roles: RoleDef[], exceptId?: string): string | Response {
+  const name = typeof value === 'string' ? value.trim().slice(0, 40) : '';
+  if (!name) return err('Give the role a name', 400);
+  if (roles.some(r => r.id !== exceptId && r.name.toLowerCase() === name.toLowerCase())) {
+    return err('A role with that name already exists', 409);
+  }
+  return name;
+}
+
+async function handleRolesList(ctx: Ctx): Promise<Response> {
+  const session = await requireAdmin(ctx);
+  if (session instanceof Response) return session;
+  return json(await getRoles(ctx.env.VAYU_KV));
+}
+
+async function handleRolesCreate(ctx: Ctx): Promise<Response> {
+  const session = await requireAdmin(ctx);
+  if (session instanceof Response) return session;
+  const body = await ctx.request.json() as { name?: unknown; permissions?: unknown };
+  const roles = await getRoles(ctx.env.VAYU_KV);
+  const name = readRoleName(body.name, roles);
+  if (name instanceof Response) return name;
+  const role: RoleDef = {
+    id: `role_${Date.now()}_${crypto.randomUUID().slice(0, 6)}`,
+    name,
+    permissions: normalizePermissions(body.permissions),
+  };
+  await saveRoles(ctx.env.VAYU_KV, [...roles, role]);
+  logEntityChange(ctx, session, 'created', 'role', role.id, `Created role "${name}"`);
+  return json(role, 201);
+}
+
+async function handleRolesUpdate(ctx: Ctx): Promise<Response> {
+  const session = await requireAdmin(ctx);
+  if (session instanceof Response) return session;
+  const roleId = ctx.path.slice('/auth/roles/'.length);
+  if (roleId === ADMIN_ROLE_ID) return err('The Admin role always has full access and can’t be changed', 400);
+  const roles = await getRoles(ctx.env.VAYU_KV);
+  const existing = roles.find(r => r.id === roleId);
+  if (!existing) return err('Role not found', 404);
+  const body = await ctx.request.json() as { name?: unknown; permissions?: unknown };
+  const name = body.name === undefined ? existing.name : readRoleName(body.name, roles, roleId);
+  if (name instanceof Response) return name;
+  const updated: RoleDef = {
+    ...existing,
+    name,
+    permissions: body.permissions === undefined ? existing.permissions : normalizePermissions(body.permissions),
+  };
+  await saveRoles(ctx.env.VAYU_KV, roles.map(r => (r.id === roleId ? updated : r)));
+  logEntityChange(ctx, session, 'updated', 'role', roleId, `Updated role "${name}"`);
+  return json(updated);
+}
+
+async function handleRolesDelete(ctx: Ctx): Promise<Response> {
+  const session = await requireAdmin(ctx);
+  if (session instanceof Response) return session;
+  const roleId = ctx.path.slice('/auth/roles/'.length);
+  const roles = await getRoles(ctx.env.VAYU_KV);
+  const role = roles.find(r => r.id === roleId);
+  if (!role) return err('Role not found', 404);
+  if (role.builtIn) return err('Built-in roles can’t be deleted', 400);
+  // Refuse while anyone still has it: they'd silently lose all access.
+  const list = await ctx.env.VAYU_KV.list({ prefix: 'auth:user:' });
+  let members = 0;
+  for (const key of list.keys) {
+    const raw = await ctx.env.VAYU_KV.get(key.name);
+    if (raw && (JSON.parse(raw) as StoredUser).role === roleId) members += 1;
+  }
+  if (members > 0) {
+    return err(`${members} ${members === 1 ? 'person has' : 'people have'} this role. Move them to another role first.`, 409);
+  }
+  await saveRoles(ctx.env.VAYU_KV, roles.filter(r => r.id !== roleId));
+  logEntityChange(ctx, session, 'deleted', 'role', roleId, `Deleted role "${role.name}"`);
+  return json({ success: true });
 }
 
 async function handleAuthPresence(ctx: Ctx): Promise<Response> {
@@ -961,7 +1188,7 @@ async function handleAuthPresenceOffline(ctx: Ctx): Promise<Response> {
 async function handleActivityLogsList(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
-  if (session.role !== 'admin') return err('Forbidden', 403);
+  if (!await sessionCan(ctx, session, 'activity', 'view')) return err('Forbidden', 403);
   const limit = Math.min(Number.parseInt(ctx.url.searchParams.get('limit') || '100', 10), 500);
   const results = await ctx.env.VAYU_DB.prepare(
     'SELECT * FROM activity_logs ORDER BY timestamp DESC LIMIT ?'
@@ -1107,6 +1334,9 @@ async function handleConversationsCreate(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json();
   const conv = body as any;
   if (!conv.id || !conv.participantIds) return err('id and participantIds are required');
+  if (!Array.isArray(conv.participantIds) || (!conv.participantIds.includes(session.userId) && session.role !== ADMIN_ROLE_ID)) {
+    return err('You can only start chats you are part of', 403);
+  }
   await ctx.env.VAYU_DB.prepare(
     `INSERT OR REPLACE INTO conversations
      (id, participant_ids, participant_names, last_message, last_message_time,
@@ -1225,6 +1455,20 @@ async function handleMessagesCreate(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json();
   const msg = body as any;
   if (!msg.id || !msg.conversationId) return err('id and conversationId are required');
+  // The chat must exist and the sender must be in it. Messages used to be
+  // stored into missing chats (or chats the sender wasn't part of), then
+  // never returned to anyone, so they silently vanished from the app.
+  const convRow = await ctx.env.VAYU_DB.prepare('SELECT participant_ids FROM conversations WHERE id = ?')
+    .bind(msg.conversationId).first();
+  if (!convRow) return err('This chat no longer exists on the server — start a new one', 404);
+  let members: string[] = [];
+  try { members = JSON.parse(convRow.participant_ids as string); } catch { /* malformed row */ }
+  if (!members.includes(session.userId) && session.role !== ADMIN_ROLE_ID) {
+    return err("You're not a member of this chat", 403);
+  }
+  // Sender is whoever is signed in — never trust the id the app sends.
+  msg.senderId = session.userId;
+  msg.senderName = session.name;
   // Detect re-syncs/migrations of existing messages so they don't re-notify.
   const alreadyExists = await ctx.env.VAYU_DB.prepare(
     'SELECT 1 FROM messages WHERE id = ?'
@@ -2485,7 +2729,7 @@ function readStoreBody(body: Record<string, unknown>): { error: Response } | { d
 async function handleStoresCreate(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
-  if (session.role !== 'admin') return err('Forbidden', 403);
+  if (!await sessionCan(ctx, session, 'attendance', 'edit')) return err('Forbidden', 403);
   await ensureStoresTable(ctx.env.VAYU_DB);
   const parsed = readStoreBody(await ctx.request.json() as Record<string, unknown>);
   if ('error' in parsed) return parsed.error;
@@ -2501,7 +2745,7 @@ async function handleStoresCreate(ctx: Ctx): Promise<Response> {
 async function handleStoresUpdate(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
-  if (session.role !== 'admin') return err('Forbidden', 403);
+  if (!await sessionCan(ctx, session, 'attendance', 'edit')) return err('Forbidden', 403);
   const storeId = ctx.path.slice('/attendance/stores/'.length);
   await ensureStoresTable(ctx.env.VAYU_DB);
   const parsed = readStoreBody(await ctx.request.json() as Record<string, unknown>);
@@ -2518,7 +2762,7 @@ async function handleStoresUpdate(ctx: Ctx): Promise<Response> {
 async function handleStoresDelete(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
-  if (session.role !== 'admin') return err('Forbidden', 403);
+  if (!await sessionCan(ctx, session, 'attendance', 'edit')) return err('Forbidden', 403);
   const storeId = ctx.path.slice('/attendance/stores/'.length);
   await ensureStoresTable(ctx.env.VAYU_DB);
   const result = await ctx.env.VAYU_DB.prepare('DELETE FROM stores WHERE id = ?').bind(storeId).run();
@@ -2614,22 +2858,65 @@ async function handleAttendanceCheckOut(ctx: Ctx): Promise<Response> {
   return json({ record: rowToAttendance(record), message: 'Check-out successful' });
 }
 
-/** GET /attendance/records — admins see everyone; employees see their own. */
+/**
+ * GET /attendance/records — attendance managers see everyone; others their own.
+ * Optional filters: storeId, employeeId (admins), and from / to (epoch ms,
+ * matched against check-in time) so a month or custom range isn't cut off
+ * by the row limit.
+ */
 async function handleAttendanceRecords(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
   await ensureAttendanceTable(ctx.env.VAYU_DB);
-  const storeId = ctx.url.searchParams.get('storeId');
-  let stmt;
-  if (session.role === 'admin') {
-    stmt = storeId
-      ? ctx.env.VAYU_DB.prepare('SELECT * FROM attendance WHERE store_id = ? ORDER BY check_in_at DESC LIMIT 300').bind(storeId)
-      : ctx.env.VAYU_DB.prepare('SELECT * FROM attendance ORDER BY check_in_at DESC LIMIT 300');
+  const params = ctx.url.searchParams;
+  const where: string[] = [];
+  const binds: (string | number)[] = [];
+  const canManage = await sessionCan(ctx, session, 'attendance', 'edit');
+  if (canManage) {
+    const storeId = params.get('storeId');
+    const employeeId = params.get('employeeId');
+    if (storeId) { where.push('store_id = ?'); binds.push(storeId); }
+    if (employeeId) { where.push('employee_id = ?'); binds.push(employeeId); }
   } else {
-    stmt = ctx.env.VAYU_DB.prepare('SELECT * FROM attendance WHERE employee_id = ? ORDER BY check_in_at DESC LIMIT 100').bind(session.userId);
+    where.push('employee_id = ?');
+    binds.push(session.userId);
   }
-  const results = await stmt.all();
+  const from = Number(params.get('from'));
+  const to = Number(params.get('to'));
+  if (params.get('from') && Number.isFinite(from)) { where.push('check_in_at >= ?'); binds.push(from); }
+  if (params.get('to') && Number.isFinite(to)) { where.push('check_in_at < ?'); binds.push(to); }
+  const limit = canManage ? 1000 : 300;
+  const sql = `SELECT * FROM attendance${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY check_in_at DESC LIMIT ${limit}`;
+  const results = await ctx.env.VAYU_DB.prepare(sql).bind(...binds).all();
   return json((results.results || []).map(rowToAttendance));
+}
+
+/**
+ * PATCH /attendance/records/:id — admin closes a check-in someone forgot to
+ * check out of, with a check-out time the admin sets. Must be after the
+ * check-in and not in the future; no location is recorded for it.
+ */
+async function handleAttendanceRecordClose(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  if (!await sessionCan(ctx, session, 'attendance', 'edit')) return err('Forbidden', 403);
+  await ensureAttendanceTable(ctx.env.VAYU_DB);
+  const recordId = ctx.path.slice('/attendance/records/'.length);
+  const body = await ctx.request.json() as { checkOutAt?: unknown };
+  const checkOutAt = typeof body.checkOutAt === 'number' ? body.checkOutAt : Number.NaN;
+  const row = await ctx.env.VAYU_DB.prepare('SELECT * FROM attendance WHERE id = ?').bind(recordId).first();
+  if (!row) return err('Record not found', 404);
+  const rec = row as Record<string, unknown>;
+  if (rec.status !== 'checked-in') return err('This record is already checked out', 409);
+  const checkInAt = rec.check_in_at as number;
+  if (!Number.isFinite(checkOutAt) || checkOutAt <= checkInAt) return err('Check-out time must be after the check-in time', 400);
+  if (checkOutAt > Date.now()) return err('Check-out time cannot be in the future', 400);
+  await ctx.env.VAYU_DB.prepare(
+    "UPDATE attendance SET check_out_at = ?, check_out_lat = NULL, check_out_lng = NULL, check_out_accuracy = NULL, status = 'checked-out' WHERE id = ?"
+  ).bind(checkOutAt, recordId).run();
+  logEntityChange(ctx, session, 'updated', 'attendance', recordId,
+    `Closed ${(rec.employee_name as string) || 'an employee'}'s open check-in (check-out set by admin)`);
+  return json(rowToAttendance({ ...rec, check_out_at: checkOutAt, check_out_lat: null, check_out_lng: null, check_out_accuracy: null, status: 'checked-out' }));
 }
 
 // ── Route table ─────────────────────────────────────────────────────────────
@@ -2647,6 +2934,10 @@ const routes: Route[] = [
   { method: 'POST', match: isExact('/auth/logout'), handler: handleAuthLogout },
   { method: 'GET', match: isExact('/auth/users'), handler: handleAuthUsersList },
   { method: 'GET', match: isExact('/auth/team'), handler: handleAuthTeam },
+  { method: 'GET', match: isExact('/auth/roles'), handler: handleRolesList },
+  { method: 'POST', match: isExact('/auth/roles'), handler: handleRolesCreate },
+  { method: 'PUT', match: isPrefix('/auth/roles/'), handler: handleRolesUpdate },
+  { method: 'DELETE', match: isPrefix('/auth/roles/'), handler: handleRolesDelete },
   { method: 'POST', match: isExact('/auth/users'), handler: handleAuthUsersCreate },
   { method: 'DELETE', match: isPrefix('/auth/users/'), handler: handleAuthUsersDelete },
   { method: 'PUT', match: isPrefix('/auth/users/'), handler: handleAuthUsersUpdate },
@@ -2744,6 +3035,7 @@ const routes: Route[] = [
   { method: 'POST', match: isExact('/attendance/check-in'), handler: handleAttendanceCheckIn },
   { method: 'POST', match: isExact('/attendance/check-out'), handler: handleAttendanceCheckOut },
   { method: 'GET', match: isExact('/attendance/records'), handler: handleAttendanceRecords },
+  { method: 'PATCH', match: isPrefix('/attendance/records/'), handler: handleAttendanceRecordClose },
 
   // Razorpay payment links
   { method: 'POST', match: isExact('/payments/link'), handler: handlePaymentLinkCreate },
@@ -2760,6 +3052,9 @@ async function handleSettingsGet(ctx: Ctx) {
 }
 
 async function handleSettingsUpdate(ctx: Ctx) {
+  // Shared app settings were writable without signing in.
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
   const body: Record<string, any> = await ctx.request.json();
   const raw = await ctx.env.VAYU_KV.get('global_settings');
   const existing = raw ? JSON.parse(raw) : {};
@@ -2784,6 +3079,8 @@ export default {
     try {
       for (const route of routes) {
         if (route.method === ctx.method && route.match(path)) {
+          const denied = await checkAccess(ctx);
+          if (denied) return denied;
           return await route.handler(ctx);
         }
       }

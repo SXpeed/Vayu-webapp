@@ -9,6 +9,29 @@ import { inquiryService } from '../services/inquiryService';
 import { eventService } from '../services/eventService';
 import { contactService } from '../services/contactService';
 import { authService, AuthUser } from '../services/authService';
+import { makeCan, permissionsOf } from '../access';
+import type { SectionId } from '../permissions';
+
+type Dataset = 'artworks' | 'messages' | 'collections' | 'catalogs' | 'inquiries' | 'events' | 'contacts';
+
+/**
+ * Sections whose screens read each dataset. Mirrors accessRule's
+ * `readableBy` in worker.ts, so the app never asks for data the server
+ * would refuse.
+ */
+const DATASET_READERS: Record<Dataset, SectionId[]> = {
+    artworks: ['inventory', 'collections', 'catalogs', 'inquiries', 'invoices'],
+    messages: ['messages'],
+    collections: ['collections'],
+    catalogs: ['catalogs'],
+    inquiries: ['inquiries'],
+    events: ['calendar'],
+    contacts: ['contacts', 'inquiries', 'invoices', 'payments'],
+};
+
+/** Run `load` only when allowed; otherwise an empty list. */
+const whenAllowed = <T,>(allowed: boolean, load: () => Promise<T[]>): Promise<T[]> =>
+    allowed ? load() : Promise.resolve([]);
 
 /**
  * Manages all entity state (artworks, catalogs, collections, invoices,
@@ -39,6 +62,22 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
         setter(data);
     }, []);
 
+    /** Server messages, plus any of ours it never accepted, so a failed
+     *  message stays on screen (marked "Not sent") instead of vanishing. */
+    const keepFailed = useCallback((remote: Message[]) => {
+        setAllMessages(prev => {
+            const ids = new Set(remote.map(m => m.id));
+            const failed = prev.filter(m => m.status === 'failed' && !ids.has(m.id));
+            return failed.length ? [...remote, ...failed] : remote;
+        });
+    }, []);
+
+    /** Can the signed-in person's role read this dataset? Read at call time from the ref. */
+    const canReadData = useCallback((dataset: Dataset): boolean => {
+        const can = makeCan(permissionsOf(authUserRef.current));
+        return DATASET_READERS[dataset].some(section => can(section, 'view'));
+    }, [authUserRef]);
+
     // loadData takes isAuthenticated as a parameter instead of reading from
     // state/closure, so it has NO state dependencies and a stable reference.
     const loadData = useCallback(async (isAuthenticated: boolean) => {
@@ -52,19 +91,21 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
                     loadedCollections, loadedCatalogs, loadedInquiries, loadedInquiryMessages,
                     loadedEvents, loadedContacts
                 ] = await Promise.all([
-                    artworkService.getArtworks(),
-                    messagingService.getConversations(),
-                    messagingService.getMessages(),
-                    collectionService.getCollections(),
-                    catalogService.getCatalogs(),
-                    inquiryService.getInquiries(),
-                    inquiryService.getInquiryMessages(),
-                    eventService.getEvents(),
-                    contactService.getContacts(),
+                    // Only what this role may read (same rules as the server);
+                    // the rest resolve empty instead of failing the whole load.
+                    whenAllowed(canReadData('artworks'), () => artworkService.getArtworks()),
+                    whenAllowed(canReadData('messages'), () => messagingService.getConversations()),
+                    whenAllowed(canReadData('messages'), () => messagingService.getMessages()),
+                    whenAllowed(canReadData('collections'), () => collectionService.getCollections()),
+                    whenAllowed(canReadData('catalogs'), () => catalogService.getCatalogs()),
+                    whenAllowed(canReadData('inquiries'), () => inquiryService.getInquiries()),
+                    whenAllowed(canReadData('inquiries'), () => inquiryService.getInquiryMessages()),
+                    whenAllowed(canReadData('events'), () => eventService.getEvents()),
+                    whenAllowed(canReadData('contacts'), () => contactService.getContacts()),
                 ]);
                 applyIfChanged('artworks', loadedArtworks, setArtworks);
                 applyIfChanged('conversations', loadedConversations, setConversations);
-                applyIfChanged('messages', loadedMessages, setAllMessages);
+                applyIfChanged('messages', loadedMessages, keepFailed);
                 applyIfChanged('collections', loadedCollections, setCollections);
                 applyIfChanged('catalogs', loadedCatalogs, setCatalogs);
                 applyIfChanged('events', loadedEvents, setEvents);
@@ -91,7 +132,7 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
             setInquiries(await db.getInquiries());
             setInquiryMessages(await db.getInquiryMessages());
         }
-    }, [applyIfChanged]);
+    }, [applyIfChanged, canReadData, keepFailed]);
 
     const loadTeamMembers = useCallback(async () => {
         try {
@@ -146,26 +187,32 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
                 db.getConversations(), db.getMessages(), db.getInquiryMessages(),
             ]);
 
+            // Only sections this role can edit: migrating writes to them.
+            const can = makeCan(permissionsOf(authUserRef.current));
             const [
                 d1Artworks, d1Catalogs, d1Collections, d1Inquiries,
                 d1Conversations, d1Messages, d1InquiryMessages
             ] = await Promise.all([
-                artworkService.getArtworks(), catalogService.getCatalogs(),
-                collectionService.getCollections(), inquiryService.getInquiries(),
-                messagingService.getConversations(), messagingService.getMessages(),
-                inquiryService.getInquiryMessages(),
+                whenAllowed(can('inventory', 'edit'), () => artworkService.getArtworks()),
+                whenAllowed(can('catalogs', 'edit'), () => catalogService.getCatalogs()),
+                whenAllowed(can('collections', 'edit'), () => collectionService.getCollections()),
+                whenAllowed(can('inquiries', 'edit'), () => inquiryService.getInquiries()),
+                whenAllowed(can('messages', 'edit'), () => messagingService.getConversations()),
+                whenAllowed(can('messages', 'edit'), () => messagingService.getMessages()),
+                whenAllowed(can('inquiries', 'edit'), () => inquiryService.getInquiryMessages()),
             ]);
 
             const idSet = (arr: { id: string }[]) => new Set(arr.map(x => x.id));
             const migrations: Promise<unknown>[] = [];
 
-            collectMigrations(localArtworks, idSet(d1Artworks), artworkService.saveArtwork, 'artwork', migrations);
-            collectMigrations(localCatalogs, idSet(d1Catalogs), catalogService.saveCatalog, 'catalog', migrations);
-            collectMigrations(localCollections, idSet(d1Collections), collectionService.saveCollection, 'collection', migrations);
-            collectMigrations(localInquiries, idSet(d1Inquiries), inquiryService.saveInquiry, 'inquiry', migrations);
-            collectMigrations(localConversations, idSet(d1Conversations), messagingService.createConversation, 'conversation', migrations);
-            collectMigrations(localMessages, idSet(d1Messages), messagingService.sendMessage, 'message', migrations);
-            collectMigrations(localInquiryMessages, idSet(d1InquiryMessages), inquiryService.saveInquiryMessage, 'inquiry message', migrations);
+            const only = <T,>(allowed: boolean, items: T[]) => (allowed ? items : []);
+            collectMigrations(only(can('inventory', 'edit'), localArtworks), idSet(d1Artworks), artworkService.saveArtwork, 'artwork', migrations);
+            collectMigrations(only(can('catalogs', 'edit'), localCatalogs), idSet(d1Catalogs), catalogService.saveCatalog, 'catalog', migrations);
+            collectMigrations(only(can('collections', 'edit'), localCollections), idSet(d1Collections), collectionService.saveCollection, 'collection', migrations);
+            collectMigrations(only(can('inquiries', 'edit'), localInquiries), idSet(d1Inquiries), inquiryService.saveInquiry, 'inquiry', migrations);
+            collectMigrations(only(can('messages', 'edit'), localConversations), idSet(d1Conversations), messagingService.createConversation, 'conversation', migrations);
+            collectMigrations(only(can('messages', 'edit'), localMessages), idSet(d1Messages), messagingService.sendMessage, 'message', migrations);
+            collectMigrations(only(can('inquiries', 'edit'), localInquiryMessages), idSet(d1InquiryMessages), inquiryService.saveInquiryMessage, 'inquiry message', migrations);
 
             if (migrations.length > 0) {
                 console.log(`D1 migration: pushing ${migrations.length} local-only items to D1...`);
@@ -202,6 +249,7 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
 
         const poll = async () => {
             if (cancelled || document.visibilityState === 'hidden') return;
+            if (!canReadData('messages')) return;
             try {
                 const [remoteConversations, remoteMessages] = await Promise.all([
                     messagingService.getConversations(),
@@ -209,7 +257,7 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
                 ]);
                 if (!cancelled) {
                     applyIfChanged('conversations', remoteConversations, setConversations);
-                    applyIfChanged('messages', remoteMessages, setAllMessages);
+                    applyIfChanged('messages', remoteMessages, keepFailed);
                 }
             } catch (err) {
                 console.warn('Failed to poll messages:', err);
@@ -227,7 +275,7 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
             clearInterval(interval);
             document.removeEventListener('visibilitychange', onVisibilityChange);
         };
-    }, [authUser, applyIfChanged]);
+    }, [authUser, applyIfChanged, canReadData, keepFailed]);
 
     // Polling: inquiry messages every 15 seconds
     useEffect(() => {
@@ -267,13 +315,15 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
         const pollEntities = async () => {
             if (cancelled || document.visibilityState === 'hidden') return;
             try {
+                // Only what this role may read — one refused section used to
+                // fail the whole poll, so nothing refreshed at all.
                 const [remoteArtworks, remoteCollections, remoteCatalogs, remoteInquiries, remoteEvents, remoteContacts] = await Promise.all([
-                    artworkService.getArtworks(),
-                    collectionService.getCollections(),
-                    catalogService.getCatalogs(),
-                    inquiryService.getInquiries(),
-                    eventService.getEvents(),
-                    contactService.getContacts(),
+                    whenAllowed(canReadData('artworks'), () => artworkService.getArtworks()),
+                    whenAllowed(canReadData('collections'), () => collectionService.getCollections()),
+                    whenAllowed(canReadData('catalogs'), () => catalogService.getCatalogs()),
+                    whenAllowed(canReadData('inquiries'), () => inquiryService.getInquiries()),
+                    whenAllowed(canReadData('events'), () => eventService.getEvents()),
+                    whenAllowed(canReadData('contacts'), () => contactService.getContacts()),
                 ]);
                 if (!cancelled) {
                     applyIfChanged('artworks', remoteArtworks, setArtworks);
@@ -299,7 +349,7 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
             clearInterval(interval);
             document.removeEventListener('visibilitychange', onVisibilityChange);
         };
-    }, [authUser, applyIfChanged]);
+    }, [authUser, applyIfChanged, canReadData]);
 
     return {
         artworks, setArtworks,

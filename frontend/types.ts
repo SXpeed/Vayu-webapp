@@ -163,7 +163,8 @@ export interface UserProfile {
 
 export type MessageTag = 'General' | 'Urgent' | 'Follow-up' | 'Artwork' | 'Inquiry' | 'Invoice';
 
-export type MessageStatus = 'sent' | 'delivered' | 'read';
+/** 'failed' is client-only: the server never accepted the message. */
+export type MessageStatus = 'sent' | 'delivered' | 'read' | 'failed';
 
 export interface MessageReplyTo {
     id: string;

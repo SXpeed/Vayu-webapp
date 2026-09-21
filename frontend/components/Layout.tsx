@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, createContext, useContext } from 'react';
 import Lenis from 'lenis';
 import { BottomNav } from '../components/BottomNav';
+import { Sidebar } from '../components/Sidebar';
 import { AdminPanel } from '../components/AdminPanel';
-import { User, ShieldCheck } from 'lucide-react';
 import { AuthUser } from '../services/authService';
 import { ViewState } from '../types';
+import { CanFn, makeCan, permissionsOf } from '../access';
+import type { AccessLevel, SectionId } from '../permissions';
 
 /** Smooth (Lenis) scrolling on the main content scroller. Wheel/desktop only —
  * touch stays native so iOS momentum scrolling is untouched. Nested scrollable
@@ -31,6 +33,43 @@ const useSmoothScroll = (ref: React.RefObject<HTMLElement | null>) => {
     }, [ref]);
 };
 
+/* ------------------------------------------------------------------ */
+/*  App chrome context                                                 */
+/*                                                                     */
+/*  The admin panel and the current user live in the shell, but the    */
+/*  buttons that open them belong in each view's own PageHeader (on    */
+/*  phones — on desktop the sidebar owns them). Sharing them through   */
+/*  context keeps App.tsx from having to thread the props through      */
+/*  every view.                                                        */
+/* ------------------------------------------------------------------ */
+
+interface AppChrome {
+    isAdmin: boolean;
+    /** What the signed-in person's role allows: can('inventory', 'edit'). */
+    can: CanFn;
+    openAdmin: () => void;
+    navigate: (view: ViewState) => void;
+}
+
+const AppChromeContext = createContext<AppChrome>({
+    isAdmin: false,
+    can: () => false,
+    openAdmin: () => { },
+    navigate: () => { },
+});
+
+export const useAppChrome = () => useContext(AppChromeContext);
+
+/**
+ * Renders its children only when the signed-in person's role allows it —
+ * by default, edit access to the section. For hiding add / edit / import
+ * buttons from view-only roles; the server enforces the same rule.
+ */
+export const IfCan: React.FC<{ section: SectionId; level?: AccessLevel; children?: React.ReactNode }> = ({ section, level = 'edit', children }) =>
+    useAppChrome().can(section, level) ? <>{children}</> : null;
+
+const SIDEBAR_KEY = 'vayu.sidebar.collapsed';
+
 const Layout: React.FC<{
   currentView: ViewState;
   onNavigate: (view: ViewState) => void;
@@ -39,54 +78,81 @@ const Layout: React.FC<{
 }> = ({ currentView, onNavigate, userProfile, children }) => {
   const [showAdmin, setShowAdmin] = useState(false);
   const isAdmin = userProfile?.role === 'admin';
+  const can = useMemo(() => makeCan(permissionsOf(userProfile)), [userProfile]);
   const mainRef = useRef<HTMLElement>(null);
   useSmoothScroll(mainRef);
 
+  // Rail vs. full sidebar — remembered per browser, like a desktop app.
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem(SIDEBAR_KEY) === '1'; } catch { return false; }
+  });
+
+  const toggleCollapsed = () => {
+    setCollapsed(prev => {
+      const next = !prev;
+      try { localStorage.setItem(SIDEBAR_KEY, next ? '1' : '0'); } catch { /* private mode */ }
+      return next;
+    });
+  };
+
+  const chrome = useMemo<AppChrome>(
+    () => ({ isAdmin, can, openAdmin: () => setShowAdmin(true), navigate: onNavigate }),
+    [isAdmin, can, onNavigate],
+  );
+
+  const isLogin = currentView === 'login';
+
   return (
-    <div className="min-h-app bg-white dark:bg-[#1a1a1a] md:bg-gray-200 md:dark:bg-gray-950 flex items-start md:items-center justify-center md:p-[6px] transition-colors duration-500">
-      <div
-        id="app-shell"
-        className="w-full h-app md:max-w-md lg:max-w-lg bg-[#faf9f6] dark:bg-[#121212] md:rounded-[6px] md:shadow-2xl relative overflow-hidden flex flex-col md:border-[6px] border-gray-800 dark:border-gray-900 transition-colors duration-500"
-      >
-        {/* Header — only on Home */}
-        {currentView === 'home' && (
-          <header className="bg-white dark:bg-[#1a1a1a] px-[6px] pb-3 shadow-sm border-b border-gray-100 dark:border-gray-800 animate-fade-in-up" style={{ paddingTop: 'calc(2rem + env(safe-area-inset-top, 0px))' }}>
-            <div className="flex justify-between items-start">
-              <div>
-                <h1 className="text-xl font-serif mb-0 tracking-wide text-gold-600 dark:text-gold-400">Vayu</h1>
-                <p className="text-gray-500 dark:text-gray-400 text-xs font-serif uppercase tracking-widest">Design for living</p>
-              </div>
-              <div className="flex items-center gap-2 mt-1">
-                {isAdmin && (
-                  <button onClick={() => setShowAdmin(true)} className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale shrink-0" title="Admin — deleted items, users & activity">
-                    <ShieldCheck size={16} className="text-brand-900 dark:text-gold-400" />
-                  </button>
-                )}
-                <button onClick={() => onNavigate('profile')} className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale shrink-0">
-                  <User size={18} className="text-brand-900 dark:text-gold-400" />
-                </button>
-              </div>
-            </div>
-          </header>
-        )}
+    <AppChromeContext.Provider value={chrome}>
+      <div className="h-app min-h-app bg-[var(--neu-bg)] flex items-stretch justify-center p-0 lg:p-3 xl:p-4 transition-colors duration-500">
+        <div
+          id="app-shell"
+          className="w-full h-full bg-[var(--neu-bg)] relative overflow-hidden flex flex-col lg:flex-row transition-colors duration-500 lg:rounded-[1.5rem] lg:ring-1 lg:ring-gray-900/5 dark:lg:ring-white/5"
+          style={{ boxShadow: '0 30px 70px -24px var(--neu-shadow-dark), 0 4px 14px var(--neu-shadow-light)' }}
+        >
+          {/* Desktop sidebar navigation (hidden below lg). Sole owner of the
+              brand mark, primary nav, admin entry and the profile link. */}
+          {!isLogin && (
+            <Sidebar
+              currentView={currentView}
+              onNavigate={onNavigate}
+              isAdmin={isAdmin}
+              can={can}
+              onOpenAdmin={() => setShowAdmin(true)}
+              collapsed={collapsed}
+              onToggleCollapsed={toggleCollapsed}
+              userName={userProfile?.name}
+            />
+          )}
 
-        {/* Main Content */}
-        <main ref={mainRef} className="flex-1 overflow-y-auto no-scrollbar transition-colors duration-500 animate-fade-in overscroll-contain" style={{ WebkitOverflowScrolling: 'touch' }}>
-          {children}
-        </main>
+          {/* Content column — page header (from the view), scroll area, phone dock.
+              Deliberately no second title bar: each view's PageHeader is the
+              only place its title and actions appear. `min-h-0` lets the
+              column shrink to the shell instead of growing to the page's
+              content height — without it the dock ends up below the clip. */}
+          <div className="flex-1 flex flex-col min-w-0 min-h-0 relative">
+            <main
+              ref={mainRef}
+              className="flex-1 overflow-y-auto no-scrollbar transition-colors duration-500 animate-fade-in overscroll-contain"
+              style={{ WebkitOverflowScrolling: 'touch' }}
+            >
+              {children}
+            </main>
 
-        {/* Bottom Navigation */}
-        {currentView !== 'login' && <BottomNav currentView={currentView} onChangeView={onNavigate} />}
+            {/* Bottom Navigation (phone only) */}
+            {!isLogin && <div className="lg:hidden"><BottomNav currentView={currentView} onChangeView={onNavigate} can={can} /></div>}
+          </div>
 
-        {/* Admin Panel (full-screen overlay — admins only) */}
-        {showAdmin && userProfile && (
-          <AdminPanel
-            currentUserId={userProfile.id}
-            onClose={() => setShowAdmin(false)}
-          />
-        )}
+          {/* Admin Panel (full-screen overlay — admins only) */}
+          {showAdmin && userProfile && (
+            <AdminPanel
+              currentUserId={userProfile.id}
+              onClose={() => setShowAdmin(false)}
+            />
+          )}
+        </div>
       </div>
-    </div>
+    </AppChromeContext.Provider>
   );
 };
 

@@ -3,6 +3,7 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { Plus, X, MessageSquare, MessageCircle, Send, Search, ArrowLeft, Edit2, Trash2, Phone, Mail, Image as ImageIcon, User, Clock, Tag, BookOpen, CheckCircle2, XCircle, Check, CheckCheck, Paperclip, Reply, Camera, Loader2, MapPin, FileText } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
+import { PageRoot, PageHeader, PageBody, PrimaryIconButton } from '../components/ui';
 import { Inquiry, Artwork, InquiryMessage, MessageReplyTo, MessageAttachment, MessageTag, UserProfile, Invoice } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
@@ -13,6 +14,7 @@ import { PhotoAttachments } from '../components/PhotoAttachments';
 import { makeDocumentNumber } from '../services/documentNumber';
 import { exportProformaPdf } from '../services/proformaPdf';
 import { InvoiceFormModal, ProformaPdfActions, type NewInvoice } from './InvoiceView';
+import { IfCan } from '../components/Layout';
 
 const renderArtworkStatusColor = (status: string) => {
     if (status === 'Available') return 'bg-green-500';
@@ -51,9 +53,9 @@ interface InquiryViewProps {
 const STATUS_COLORS: Record<Inquiry['status'], string> = {
     'New': 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400',
     'Contacted': 'bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-400',
-    'Interested': 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-400',
-    'Converted': 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400',
-    'Closed': 'bg-gray-50 dark:bg-gray-900/20 text-gray-700 dark:text-gray-400',
+    'Interested': 'neu-status text-yellow-700 dark:text-yellow-400',
+    'Converted': 'neu-status text-green-700 dark:text-green-400',
+    'Closed': 'neu-status text-gray-700 dark:text-gray-400',
 };
 
 const SOURCE_COLORS: Record<Inquiry['source'], string> = {
@@ -62,13 +64,13 @@ const SOURCE_COLORS: Record<Inquiry['source'], string> = {
     'Email': 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400',
     'Social Media': 'bg-pink-50 dark:bg-pink-900/20 text-pink-700 dark:text-pink-400',
     'Referral': 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400',
-    'Other': 'bg-gray-50 dark:bg-gray-900/20 text-gray-700 dark:text-gray-400',
+    'Other': 'neu-status text-gray-700 dark:text-gray-400',
 };
 
 const ARTWORK_STATUS_BADGE: Record<Artwork['status'], string> = {
-    'Available': 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400',
-    'Sold': 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400',
-    'Reserved': 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-400',
+    'Available': 'neu-status text-green-700 dark:text-green-400',
+    'Sold': 'neu-status text-red-700 dark:text-red-400',
+    'Reserved': 'neu-status text-yellow-700 dark:text-yellow-400',
 };
 
 export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, onAddInquiry, onUpdateInquiry, onDeleteInquiry, onArtworkClick, inquiryMessages, invoices, onAddInvoice, teamMembers, currentUserId, onSendInquiryMessage }) => {
@@ -141,57 +143,47 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
     };
 
     return (
-        <div className="h-full flex flex-col bg-[#faf9f6] dark:bg-[#121212] transition-colors duration-500 animate-fade-in">
-            <div className="bg-white dark:bg-[#1a1a1a] px-[6px] pt-[calc(1.75rem+env(safe-area-inset-top,0px))] pb-[6px] shadow-sm z-10 border-b border-gray-100 dark:border-gray-800">
-                <div className="flex justify-between items-center mb-[6px]">
-                    <h1 className="text-xl font-serif text-gray-900 dark:text-white">Inquiry</h1>
-                    <button
-                        onClick={() => setIsAdding(true)}
-                        className="bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 p-1.5 rounded-full shadow-md hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors active-scale"
-                    >
-                        <Plus size={20} />
-                    </button>
-                </div>
+        <PageRoot>
+            <PageHeader
+                title="Inquiry"
+                actions={<IfCan section="inquiries"><PrimaryIconButton onClick={() => setIsAdding(true)} label="New inquiry" icon={<Plus size={16} />} /></IfCan>}
+            >
                 <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search inquiries..." />
-            </div>
+            </PageHeader>
 
-            <div className="flex-1 overflow-y-auto p-[6px] space-y-4 no-scrollbar pb-20">
+            <PageBody space="md">
                 {/* Filter Buttons */}
-                <div className="flex gap-2 animate-fade-in-up" style={{ animationDelay: '50ms' }}>
+                <div className="flex gap-2 lg:w-fit animate-fade-in-up" style={{ animationDelay: '50ms' }}>
                     <button
                         onClick={() => setFilterTab('active')}
-                        className={`flex-1 py-2 rounded-full text-[9px] font-bold uppercase tracking-widest transition-colors active-scale ${filterTab === 'active'
-                            ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
-                            : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
+                        className={`flex-1 lg:flex-none lg:px-6 py-2 rounded-full text-[11px] font-bold uppercase tracking-widest transition-colors active-scale ${filterTab === 'active'
+                            ? 'neu-inset text-gold-700 dark:text-gold-300'
+                            : 'neu-raised-sm neu-btn text-gray-700 dark:text-gray-300'
                             }`}
                     >
                         Active ({activeCount})
                     </button>
                     <button
                         onClick={() => setFilterTab('closed')}
-                        className={`flex-1 py-2 rounded-full text-[9px] font-bold uppercase tracking-widest transition-colors active-scale ${filterTab === 'closed'
-                            ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
-                            : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
+                        className={`flex-1 lg:flex-none lg:px-6 py-2 rounded-full text-[11px] font-bold uppercase tracking-widest transition-colors active-scale ${filterTab === 'closed'
+                            ? 'neu-inset text-gold-700 dark:text-gold-300'
+                            : 'neu-raised-sm neu-btn text-gray-700 dark:text-gray-300'
                             }`}
                     >
                         Closed ({closedCount})
                     </button>
                     <button
                         onClick={() => setFilterTab('shared')}
-                        className={`flex-1 py-2 rounded-full text-[9px] font-bold uppercase tracking-widest transition-colors active-scale ${filterTab === 'shared'
-                            ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
-                            : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
+                        className={`flex-1 lg:flex-none lg:px-6 py-2 rounded-full text-[11px] font-bold uppercase tracking-widest transition-colors active-scale ${filterTab === 'shared'
+                            ? 'neu-inset text-gold-700 dark:text-gold-300'
+                            : 'neu-raised-sm neu-btn text-gray-700 dark:text-gray-300'
                             }`}
                     >
                         Shared ({sharedCount})
                     </button>
                 </div>
 
-                <h2 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-[6px] px-1 animate-fade-in-up" style={{ animationDelay: '100ms' }}>
-                    {getFilterTabLabel()} Inquiries
-                </h2>
-
-                <div className="space-y-2">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2 md:space-y-0">
                     {filteredInquiries.map((inquiry, index) => {
                         const coverArtwork = inquiry.artworkIds
                             .map(id => artworks.find(a => a.id === id))
@@ -201,7 +193,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                         return (
                             <div
                                 key={inquiry.id}
-                                className={`relative w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm p-[6px] border animate-fade-in-up active-scale ${inquiry.status === 'Closed' ? 'border-gray-200 dark:border-gray-800 opacity-70' : 'border-gray-100 dark:border-gray-800'
+                                className={`relative w-full text-left neu-raised rounded-2xl p-3 border animate-fade-in-up active-scale ${inquiry.status === 'Closed' ? 'border-gray-200 dark:border-gray-800 opacity-70' : 'border-gray-100 dark:border-gray-800'
                                     }`}
                                 style={{ animationDelay: `${250 + index * 50}ms` }}
                             >
@@ -211,41 +203,41 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                                 <button
                                     type="button"
                                     onClick={() => handleInquiryClick(inquiry)}
-                                    className="absolute inset-0 w-full h-full rounded-[6px] cursor-pointer"
+                                    className="absolute inset-0 w-full h-full rounded-lg cursor-pointer"
                                     aria-label={`Open inquiry ${inquiry.inquiryNumber} for ${inquiry.customerName}`}
                                 />
                                 <div className="relative pointer-events-none">
                                 {/* Top Row: Avatar + Name + Status */}
                                 <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-[6px]">
+                                    <div className="flex items-center gap-3">
                                         {coverImage ? (
                                             <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={inquiry.customerName} className="w-10 h-10 rounded-full object-cover" />
                                         ) : (
-                                            <div className="bg-gray-50 dark:bg-gray-800 p-2.5 rounded-full text-brand-900 dark:text-gold-400">
+                                            <div className="neu-inset p-2.5 rounded-full text-brand-900 dark:text-gold-400">
                                                 <User size={18} strokeWidth={1.5} />
                                             </div>
                                         )}
                                         <div>
                                             <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm">{inquiry.customerName}</h3>
-                                            <p className="text-[9px] text-gray-500 dark:text-gray-400 uppercase tracking-wider mt-0.5">
+                                            <p className="text-[11px] text-gray-700 dark:text-gray-300 uppercase tracking-wider mt-0.5">
                                                 {inquiry.inquiryNumber} • {new Date(inquiry.date).toLocaleDateString()}
                                             </p>
                                             {addedBy(inquiry) && (
-                                                <p className="text-[9px] text-gray-500 dark:text-gray-400 mt-0.5">
+                                                <p className="text-[11px] text-gray-700 dark:text-gray-300 mt-0.5">
                                                     Added by <span className="font-medium text-gray-700 dark:text-gray-300">{addedBy(inquiry)}</span>
                                                 </p>
                                             )}
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-1.5 shrink-0">
-                                        <span className={`text-[8px] px-1.5 py-0.5 rounded-[3px] font-medium uppercase tracking-wider inline-block ${STATUS_COLORS[inquiry.status]}`}>
+                                        <span className={`text-[10px] px-1.5 py-0.5 rounded-[3px] font-medium uppercase tracking-wider inline-block ${STATUS_COLORS[inquiry.status]}`}>
                                             {inquiry.status}
                                         </span>
                                         <button
                                             type="button"
                                             onClick={() => setChatInquiry(inquiry)}
                                             aria-label={`Open chat for ${inquiry.customerName}`}
-                                            className="pointer-events-auto p-2 text-gray-400 dark:text-gray-500 hover:text-gold-600 dark:hover:text-gold-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale"
+                                            className="pointer-events-auto neu-icon-btn text-gray-600 dark:text-gray-300 active-scale"
                                         >
                                             <MessageCircle size={18} />
                                         </button>
@@ -257,7 +249,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                                     {/* Phone & Source & Catalog */}
                                     <div className="flex items-center gap-2 flex-wrap">
                                         {inquiry.customerPhone && (
-                                            <span className="text-[9px] text-gray-500 dark:text-gray-400 flex items-center gap-1">
+                                            <span className="text-[11px] text-gray-700 dark:text-gray-300 flex items-center gap-1">
                                                 <a
                                                     href={telHref(inquiry.customerPhone)}
                                                     className="pointer-events-auto flex items-center gap-1 hover:text-gold-600 dark:hover:text-gold-400 active-scale"
@@ -276,23 +268,23 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                                                 </a>
                                             </span>
                                         )}
-                                        <span className={`text-[8px] px-1.5 py-0.5 rounded-[3px] font-medium uppercase tracking-wider ${SOURCE_COLORS[inquiry.source]}`}>
+                                        <span className={`text-[10px] px-1.5 py-0.5 rounded-[3px] font-medium uppercase tracking-wider ${SOURCE_COLORS[inquiry.source]}`}>
                                             {inquiry.source}
                                         </span>
                                         {inquiry.catalogShared && (
-                                            <span className="text-[8px] px-1.5 py-0.5 rounded-[3px] font-medium uppercase tracking-wider bg-gold-500/10 dark:bg-gold-900/20 text-gold-700 dark:text-gold-400 flex items-center gap-1">
+                                            <span className="text-[10px] px-1.5 py-0.5 rounded-[3px] font-medium uppercase tracking-wider bg-gold-500/10 dark:bg-gold-900/20 text-gold-700 dark:text-gold-400 flex items-center gap-1">
                                                 <BookOpen size={9} /> Catalog Sent
                                             </span>
                                         )}
                                         {photoCount > 0 && (
-                                            <span className="text-[8px] px-1.5 py-0.5 rounded-[3px] font-medium uppercase tracking-wider bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 flex items-center gap-1">
+                                            <span className="text-[10px] px-1.5 py-0.5 rounded-[3px] font-medium uppercase tracking-wider neu-inset text-gray-600 dark:text-gray-300 flex items-center gap-1">
                                                 <Camera size={9} /> {photoCount}
                                             </span>
                                         )}
                                     </div>
                                     {/* Notes Preview */}
                                     {inquiry.notes && (
-                                        <p className="text-[11px] text-gray-500 dark:text-gray-400 line-clamp-2 leading-relaxed font-light">
+                                        <p className="text-[11px] text-gray-700 dark:text-gray-300 line-clamp-2 leading-relaxed font-light">
                                             {inquiry.notes}
                                         </p>
                                     )}
@@ -302,12 +294,11 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                         );
                     })}
                     {filteredInquiries.length === 0 && (
-                        <div className="text-center text-gray-400 dark:text-gray-500 mt-10 font-light text-sm">
+                        <div className="text-center text-gray-600 dark:text-gray-300 mt-10 font-light text-sm">
                             {filterTab === 'active' ? 'No active inquiries.' : 'No closed inquiries.'}
                         </div>
                     )}
                 </div>
-            </div>
 
             {isAdding && (
                 <FullScreenPortal>
@@ -358,7 +349,8 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                     />
                 </FullScreenPortal>
             )}
-        </div>
+        </PageBody>
+        </PageRoot>
     );
 };
 
@@ -484,40 +476,40 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
     }, [messages, chatSearchQuery]);
 
     return (
-        <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-50 flex flex-col animate-fade-in-up">
-            <div className="bg-white dark:bg-[#1a1a1a] flex items-center gap-[6px] p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm z-10">
-                <button onClick={onClose} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
+        <div className="neu-sheet z-50 animate-fade-in-up">
+            <div className="flex items-center gap-3 p-3 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] z-10">
+                <button onClick={onClose} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale">
                     <ArrowLeft size={20} />
                 </button>
-                <div className="w-9 h-9 rounded-full bg-gray-50 dark:bg-gray-800 flex items-center justify-center text-brand-900 dark:text-gold-400 shrink-0">
+                <div className="w-9 h-9 rounded-full neu-inset flex items-center justify-center text-brand-900 dark:text-gold-400 shrink-0">
                     <User size={16} strokeWidth={1.5} />
                 </div>
                 <div className="flex-1 min-w-0">
                     <h2 className="text-sm font-serif text-gray-900 dark:text-white truncate">{inquiry.customerName}</h2>
-                    <p className="text-[9px] uppercase tracking-widest font-medium text-gray-400 dark:text-gray-500">{inquiry.inquiryNumber} • Inquiry Chat</p>
+                    <p className="text-[11px] uppercase tracking-widest font-medium text-gray-600 dark:text-gray-300">{inquiry.inquiryNumber} • Inquiry Chat</p>
                 </div>
                 <button
                     onClick={() => { setShowSearch(s => !s); setChatSearchQuery(''); }}
-                    className={`p-2 rounded-full transition-colors active-scale shrink-0 ${showSearch ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
+                    className={`p-2 rounded-full transition-colors active-scale shrink-0 ${showSearch ? 'neu-raised-sm neu-btn text-gold-700 dark:text-gold-300' : 'text-gray-700 dark:text-gray-300'}`}
                 >
                     <Search size={18} />
                 </button>
             </div>
 
             {showSearch && (
-                <div className="bg-white dark:bg-[#1a1a1a] border-b border-gray-100 dark:border-gray-800 px-[6px] py-2 animate-fade-in">
+                <div className="px-3 py-2 animate-fade-in">
                     <SearchBar value={chatSearchQuery} onChange={setChatSearchQuery} placeholder="Search in this chat..." />
                 </div>
             )}
 
-            <div className="flex-1 overflow-y-auto p-[6px] space-y-3 no-scrollbar">
+            <div className="flex-1 overflow-y-auto p-3 space-y-3 no-scrollbar">
                 {messages.length === 0 && (
-                    <div className="text-center text-gray-400 dark:text-gray-500 mt-10 font-light text-sm">
+                    <div className="text-center text-gray-600 dark:text-gray-300 mt-10 font-light text-sm">
                         No messages yet for this inquiry.
                     </div>
                 )}
                 {displayedMessages.length === 0 && chatSearchQuery.trim() && (
-                    <div className="text-center text-gray-400 dark:text-gray-500 mt-10 font-light text-sm">
+                    <div className="text-center text-gray-600 dark:text-gray-300 mt-10 font-light text-sm">
                         No messages match "{chatSearchQuery}".
                     </div>
                 )}
@@ -526,23 +518,23 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                     const bubble = (
                         <div className={`max-w-[80%] rounded-[12px] px-3.5 py-2.5 shadow-sm ${isMe
                             ? 'bg-[#FEFFF7] dark:bg-[#2a2a2a] text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-700 rounded-br-[4px]'
-                            : 'bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-800 rounded-bl-[4px]'
+                            : 'neu-raised text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-800 rounded-bl-[4px]'
                             }`}>
                             {!isMe && (
-                                <p className="text-[9px] font-bold uppercase tracking-widest mb-1 text-gold-600 dark:text-gold-400">{resolveName(msg.senderId, msg.senderName)}</p>
+                                <p className="text-[11px] font-bold uppercase tracking-widest mb-1 text-gold-700 dark:text-gold-300">{resolveName(msg.senderId, msg.senderName)}</p>
                             )}
                             {msg.replyTo && (
-                                <div className={`mb-1.5 pl-2 py-1 border-l-2 rounded-[4px] ${isMe ? 'border-gold-500/50 bg-gold-500/10 dark:border-gray-500/50 dark:bg-gray-700/50' : 'border-gold-400 bg-gray-50 dark:bg-gray-800/50'}`}>
-                                    <p className={`text-[9px] font-bold ${isMe ? 'text-gold-700 dark:text-gold-400' : 'text-gold-600 dark:text-gold-400'}`}>{replySenderName(msg.replyTo)}</p>
-                                    <p className={`text-[10px] line-clamp-1 ${isMe ? 'text-gray-600 dark:text-gray-400' : 'text-gray-500 dark:text-gray-400'}`}>{msg.replyTo.text}</p>
+                                <div className={`mb-1.5 pl-2 py-1 border-l-2 rounded-[4px] ${isMe ? 'border-gold-500/50 bg-gold-500/10 dark:border-gray-500/50 dark:bg-gray-700/50' : 'border-gold-400 neu-inset'}`}>
+                                    <p className={`text-[11px] font-bold ${isMe ? 'text-gold-700 dark:text-gold-400' : 'text-gold-700 dark:text-gold-300'}`}>{replySenderName(msg.replyTo)}</p>
+                                    <p className={`text-[11px] line-clamp-1 ${isMe ? 'text-gray-600 dark:text-gray-400' : 'text-gray-700 dark:text-gray-300'}`}>{msg.replyTo.text}</p>
                                 </div>
                             )}
                             {msg.attachment && (
                                 msg.attachment.type === 'image' ? (
                                     <img loading="lazy" decoding="async" src={getThumbUrl(msg.attachment.url)} alt={msg.attachment.name} className="rounded-[8px] max-w-full max-h-48 object-cover mb-1.5" />
                                 ) : (
-                                    <div className={`flex items-center gap-2 mb-1.5 p-2 rounded-[6px] ${isMe ? 'bg-gold-500/10 dark:bg-gray-700/50' : 'bg-gray-50 dark:bg-gray-800'}`}>
-                                        <Paperclip size={14} className="text-gold-600 dark:text-gold-400" />
+                                    <div className={`flex items-center gap-2 mb-1.5 p-2 rounded-lg ${isMe ? 'bg-gold-500/10 dark:bg-gray-700/50' : 'neu-inset'}`}>
+                                        <Paperclip size={14} className="text-gold-700 dark:text-gold-300" />
                                         <span className="text-[11px] truncate">{msg.attachment.name}</span>
                                     </div>
                                 )
@@ -556,7 +548,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                                         ))}
                                     </div>
                                 )}
-                                <span className={`flex items-center gap-1 text-[9px] shrink-0 ml-auto ${isMe ? 'text-gray-500 dark:text-gray-500' : 'text-gray-400 dark:text-gray-500'}`}>
+                                <span className={`flex items-center gap-1 text-[11px] shrink-0 ml-auto ${isMe ? 'text-gray-500 dark:text-gray-500' : 'text-gray-600 dark:text-gray-300'}`}>
                                     {formatMessageTime(msg.timestamp)}
                                     {isMe && renderMessageStatusIcon(msg.status)}
                                 </span>
@@ -566,7 +558,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                     const replyButton = (
                         <button
                             onClick={() => setReplyingTo({ id: msg.id, senderName: resolveName(msg.senderId, msg.senderName), text: msg.text || (msg.attachment ? msg.attachment.name : '') })}
-                            className="p-1 mb-1 text-gray-300 dark:text-gray-600 hover:text-gold-500 dark:hover:text-gold-400 transition-colors shrink-0 active-scale"
+                            className="p-1 mb-1 text-gray-600 dark:text-gray-300 hover:text-gold-500 dark:hover:text-gold-400 transition-colors shrink-0 active-scale"
                         >
                             <Reply size={14} />
                         </button>
@@ -584,15 +576,15 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
 
             {/* Tag Picker */}
             {showTagPicker && (
-                <div className="px-[6px] py-2 bg-white dark:bg-[#1a1a1a] border-t border-gray-100 dark:border-gray-800 animate-fade-in">
+                <div className="px-3 py-2 animate-fade-in">
                     <div className="flex gap-1.5 flex-wrap">
                         {ALL_TAGS.map(tag => (
                             <button
                                 key={tag}
                                 onClick={() => toggleTag(tag)}
-                                className={`text-[9px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wider transition-all active-scale ${selectedTags.has(tag)
-                                    ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950'
-                                    : TAG_COLORS[tag] + ' border border-gray-200 dark:border-gray-700'
+                                className={`text-[11px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wider transition-all active-scale ${selectedTags.has(tag)
+                                    ? 'neu-raised-sm neu-btn text-gold-700 dark:text-gold-300'
+                                    : TAG_COLORS[tag] + ''
                                     }`}
                             >
                                 {tag}
@@ -604,13 +596,13 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
 
             {/* Message Input — bottom padding follows the iPhone home indicator */}
             <div
-                className="bg-white dark:bg-[#1a1a1a] px-[6px] pt-[9px] border-t border-gray-100 dark:border-gray-800 transition-colors"
-                style={{ paddingBottom: 'calc(9px + env(safe-area-inset-bottom, 0px))' }}
+                className="px-3 pt-[9px] transition-colors"
+                style={{ paddingBottom: 'calc(9px + var(--safe-bottom, env(safe-area-inset-bottom, 0px)))' }}
             >
                 {selectedTags.size > 0 && (
                     <div className="flex gap-1 mb-2 flex-wrap">
                         {Array.from(selectedTags).map(tag => (
-                            <span key={tag} className={`text-[8px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider flex items-center gap-1 ${TAG_COLORS[tag]}`}>
+                            <span key={tag} className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider flex items-center gap-1 ${TAG_COLORS[tag]}`}>
                                 {tag}
                                 <button onClick={() => toggleTag(tag)} className="hover:opacity-70"><X size={8} /></button>
                             </span>
@@ -618,10 +610,10 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                     </div>
                 )}
                 {replyingTo && (
-                    <div className="flex items-center justify-between gap-2 mb-2 pl-3 pr-2 py-1.5 bg-gray-100 dark:bg-[#2a2a2a] rounded-[6px] border-l-2 border-gold-500 animate-fade-in">
+                    <div className="flex items-center justify-between gap-2 mb-2 pl-3 pr-2 py-1.5 neu-raised-sm neu-btn rounded-lg border-l-2 border-gold-500 animate-fade-in">
                         <div className="min-w-0">
-                            <p className="text-[9px] font-bold text-gold-600 dark:text-gold-400">Replying to {replyingTo.senderName}</p>
-                            <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate">{replyingTo.text}</p>
+                            <p className="text-[11px] font-bold text-gold-700 dark:text-gold-300">Replying to {replyingTo.senderName}</p>
+                            <p className="text-[11px] text-gray-700 dark:text-gray-300 truncate">{replyingTo.text}</p>
                         </div>
                         <button onClick={() => setReplyingTo(null)} className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 shrink-0 active-scale">
                             <X size={14} />
@@ -629,13 +621,13 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                     </div>
                 )}
                 {(pendingAttachments.length > 0 || isUploading) && (
-                    <div className="flex items-center gap-2 mb-2 p-2 bg-gray-100 dark:bg-[#2a2a2a] rounded-[6px] animate-fade-in overflow-x-auto no-scrollbar">
+                    <div className="flex items-center gap-2 mb-2 p-2 neu-raised-sm neu-btn rounded-lg animate-fade-in overflow-x-auto no-scrollbar">
                         {pendingAttachments.map((attachment) => (
                             <div key={attachment.url} className="relative shrink-0">
                                 {attachment.type === 'image' ? (
                                     <img loading="lazy" decoding="async" src={getThumbUrl(attachment.url)} alt={attachment.name} className="w-12 h-12 rounded-[4px] object-cover" />
                                 ) : (
-                                    <div className="w-12 h-12 rounded-[4px] bg-gray-200 dark:bg-gray-700 flex flex-col items-center justify-center text-gray-500 dark:text-gray-400 px-1">
+                                    <div className="w-12 h-12 rounded-[4px] neu-inset flex flex-col items-center justify-center text-gray-700 dark:text-gray-300 px-1">
                                         <Paperclip size={14} />
                                         <span className="text-[7px] truncate w-full text-center mt-0.5">{attachment.name}</span>
                                     </div>
@@ -651,7 +643,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                             </div>
                         ))}
                         {Array.from({ length: uploadingCount }, (_, i) => (
-                            <div key={`uploading-${i}`} className="w-12 h-12 rounded-[4px] bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-gray-400 shrink-0">
+                            <div key={`uploading-${i}`} className="w-12 h-12 rounded-[4px] neu-inset flex items-center justify-center text-gray-400 shrink-0">
                                 <Loader2 size={14} className="animate-spin" />
                             </div>
                         ))}
@@ -660,7 +652,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                 <div className="flex items-center gap-2">
                     <button
                         onClick={() => setShowTagPicker(!showTagPicker)}
-                        className={`p-2.5 rounded-full transition-colors active-scale shrink-0 ${showTagPicker ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800'
+                        className={`p-2.5 rounded-full transition-colors active-scale shrink-0 ${showTagPicker ? 'neu-raised-sm neu-btn text-gold-700 dark:text-gold-300' : 'text-gray-600 dark:text-gray-300'
                             }`}
                     >
                         <Tag size={18} />
@@ -670,7 +662,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                         onClick={camera.openCamera}
                         disabled={isUploading}
                         aria-label="Take photo"
-                        className="p-2.5 rounded-full text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors active-scale shrink-0 disabled:opacity-60"
+                        className="neu-icon-btn-lg text-gray-600 dark:text-gray-300 active-scale disabled:opacity-60"
                     >
                         <Camera size={18} />
                     </button>
@@ -679,7 +671,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                         onClick={() => fileInputRef.current?.click()}
                         disabled={isUploading}
                         aria-label="Attach file"
-                        className="p-2.5 rounded-full text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors active-scale shrink-0 disabled:opacity-60"
+                        className="neu-icon-btn-lg text-gray-600 dark:text-gray-300 active-scale disabled:opacity-60"
                     >
                         {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
                     </button>
@@ -701,14 +693,14 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                         spellCheck={false}
                         data-form-type="other"
                         data-1p-ignore
-                        className="flex-1 min-w-0 bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                        className="neu-field flex-1 min-w-0 text-xs"
                     />
                     <button
                         onClick={handleSend}
                         disabled={!text.trim() && pendingAttachments.length === 0}
                         className={`p-2.5 rounded-full transition-all active-scale shrink-0 ${text.trim() || pendingAttachments.length > 0
-                            ? 'bg-gold-500 dark:bg-gold-500 text-white dark:text-brand-950 shadow-md'
-                            : 'bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-600'
+                            ? 'neu-accent'
+                            : 'bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-300'
                             }`}
                     >
                         <Send size={18} />
@@ -786,27 +778,29 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
     };
 
     return (
-        <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-50 flex flex-col animate-fade-in-up">
-            <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm z-10">
-                <button onClick={onClose} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full flex items-center gap-2 transition-colors active-scale">
+        <div className="neu-sheet z-50 animate-fade-in-up">
+            <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] z-10">
+                <button onClick={onClose} className="neu-icon-btn w-auto px-3 gap-2 text-gray-700 dark:text-gray-300 active-scale">
                     <ArrowLeft size={20} />
                 </button>
-                <h2 className="text-base font-serif text-gray-900 dark:text-white truncate px-[6px]">{inquiry.inquiryNumber}</h2>
+                <h2 className="text-base font-serif text-gray-900 dark:text-white truncate px-3">{inquiry.inquiryNumber}</h2>
                 <div className="flex items-center gap-2">
-                    <button onClick={() => setIsEditing(true)} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
-                        <Edit2 size={18} />
-                    </button>
+                    <IfCan section="inquiries">
+                        <button onClick={() => setIsEditing(true)} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale">
+                            <Edit2 size={18} />
+                        </button>
+                    </IfCan>
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-[6px] no-scrollbar pb-20">
+            <div className="flex-1 overflow-y-auto p-4 lg:p-6 no-scrollbar pb-20 lg:pb-8">
                 {/* Action row — Close / Share / Proforma (catalog pill style, single line) */}
                 <div className="flex gap-1.5 mb-4 animate-fade-in-up" style={{ animationDelay: '50ms' }}>
                     <button
                         onClick={handleToggleStatus}
-                        className={`flex-1 min-w-0 flex items-center justify-center gap-1 py-2 rounded-full text-[9px] font-bold uppercase tracking-widest transition-colors active-scale whitespace-nowrap ${inquiry.status === 'Closed'
-                            ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
-                            : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400'
+                        className={`flex-1 min-w-0 flex items-center justify-center gap-1 py-2 rounded-full text-[11px] font-bold uppercase tracking-widest transition-colors active-scale whitespace-nowrap ${inquiry.status === 'Closed'
+                            ? 'neu-inset text-gold-700 dark:text-gold-300'
+                            : 'neu-raised-sm neu-btn text-gray-700 dark:text-gray-300 hover:text-red-600 dark:hover:text-red-400'
                             }`}
                     >
                         {inquiry.status === 'Closed' ? (
@@ -824,9 +818,9 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
 
                     <button
                         onClick={handleToggleCatalogShared}
-                        className={`flex-1 min-w-0 flex items-center justify-center gap-1 py-2 rounded-full text-[9px] font-bold uppercase tracking-widest transition-colors active-scale whitespace-nowrap ${inquiry.catalogShared
-                            ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
-                            : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400 hover:text-gold-600 dark:hover:text-gold-400'
+                        className={`flex-1 min-w-0 flex items-center justify-center gap-1 py-2 rounded-full text-[11px] font-bold uppercase tracking-widest transition-colors active-scale whitespace-nowrap ${inquiry.catalogShared
+                            ? 'neu-inset text-gold-700 dark:text-gold-300'
+                            : 'neu-raised-sm neu-btn text-gray-700 dark:text-gray-300 hover:text-gold-600 dark:hover:text-gold-400'
                             }`}
                     >
                         <BookOpen size={12} strokeWidth={2.5} />
@@ -836,7 +830,7 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
                     <button
                         type="button"
                         onClick={() => setIsCreatingProforma(true)}
-                        className="flex-1 min-w-0 flex items-center justify-center gap-1 py-2 rounded-full text-[9px] font-bold uppercase tracking-widest active-scale shadow-sm whitespace-nowrap bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950"
+                        className="flex-1 min-w-0 flex items-center justify-center gap-1 py-2 rounded-full text-[11px] font-bold uppercase tracking-widest active-scale shadow-sm whitespace-nowrap neu-raised-sm neu-btn text-gold-700 dark:text-gold-300"
                     >
                         <FileText size={12} strokeWidth={2.5} />
                         Proforma
@@ -844,15 +838,15 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
                 </div>
 
                 {/* Customer Info Card */}
-                <div className="bg-white dark:bg-[#1e1e1e] p-6 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 mb-4 animate-fade-in-up" style={{ animationDelay: '100ms' }}>
+                <div className="neu-raised p-6 rounded-lg shadow-sm mb-4 animate-fade-in-up" style={{ animationDelay: '100ms' }}>
                     <div className="flex justify-between items-start mb-6">
                         <div>
-                            <h3 className="text-[9px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-1">Customer</h3>
+                            <h3 className="text-[11px] font-bold text-gray-700 dark:text-gray-300 uppercase tracking-widest mb-1">Customer</h3>
                             <p className="font-serif text-lg text-gray-900 dark:text-white">{inquiry.customerName}</p>
                         </div>
                         <div className="text-right">
-                            <h3 className="text-[9px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-1">Status</h3>
-                            <span className={`text-[10px] px-2 py-1 rounded-[3px] font-medium uppercase tracking-wider inline-block ${STATUS_COLORS[inquiry.status]}`}>
+                            <h3 className="text-[11px] font-bold text-gray-700 dark:text-gray-300 uppercase tracking-widest mb-1">Status</h3>
+                            <span className={`text-[11px] px-2 py-1 rounded-[3px] font-medium uppercase tracking-wider inline-block ${STATUS_COLORS[inquiry.status]}`}>
                                 {inquiry.status}
                             </span>
                         </div>
@@ -860,10 +854,10 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
 
                     <div className="space-y-3 mb-6">
                         {inquiry.customerPhone && (
-                            <div className="flex items-center gap-[6px] text-sm text-gray-600 dark:text-gray-400">
+                            <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-400">
                                 <a
                                     href={telHref(inquiry.customerPhone)}
-                                    className="flex items-center gap-[6px] hover:text-gold-600 dark:hover:text-gold-400 active-scale"
+                                    className="flex items-center gap-3 hover:text-gold-600 dark:hover:text-gold-400 active-scale"
                                     aria-label={`Call ${inquiry.customerPhone}`}
                                 >
                                     <Phone size={14} className="text-gold-500" />
@@ -881,10 +875,10 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
                             </div>
                         )}
                         {inquiry.customerEmail && (
-                            <div className="flex items-center gap-[6px] text-sm text-gray-600 dark:text-gray-400">
+                            <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-400">
                                 <a
                                     href={`mailto:${inquiry.customerEmail}`}
-                                    className="flex items-center gap-[6px] hover:text-gold-600 dark:hover:text-gold-400 active-scale"
+                                    className="flex items-center gap-3 hover:text-gold-600 dark:hover:text-gold-400 active-scale"
                                     aria-label={`Email ${inquiry.customerEmail}`}
                                 >
                                     <Mail size={14} className="text-gold-500" />
@@ -893,30 +887,30 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
                             </div>
                         )}
                         {inquiry.customerAddress && (
-                            <div className="flex items-start gap-[6px] text-sm text-gray-600 dark:text-gray-400">
+                            <div className="flex items-start gap-3 text-sm text-gray-600 dark:text-gray-400">
                                 <MapPin size={14} className="text-gold-500 shrink-0 mt-0.5" />
                                 <span className="whitespace-pre-line">{inquiry.customerAddress}</span>
                             </div>
                         )}
-                        <div className="flex items-center gap-[6px] text-sm text-gray-600 dark:text-gray-400">
+                        <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-400">
                             <Tag size={14} className="text-gold-500" />
-                            <span className={`text-[10px] px-2 py-0.5 rounded-[3px] font-medium uppercase tracking-wider ${SOURCE_COLORS[inquiry.source]}`}>{inquiry.source}</span>
+                            <span className={`text-[11px] px-2 py-0.5 rounded-[3px] font-medium uppercase tracking-wider ${SOURCE_COLORS[inquiry.source]}`}>{inquiry.source}</span>
                         </div>
-                        <div className="flex items-center gap-[6px] text-sm text-gray-600 dark:text-gray-400">
+                        <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-400">
                             <Clock size={14} className="text-gold-500" />
                             <span>{new Date(inquiry.date).toLocaleDateString()} at {new Date(inquiry.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                         </div>
                         {addedBy && (
-                            <div className="flex items-center gap-[6px] text-sm text-gray-600 dark:text-gray-400">
+                            <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-400">
                                 <User size={14} className="text-gold-500" />
                                 <span>Added by <span className="font-medium text-gray-900 dark:text-gray-200">{addedBy}</span></span>
                             </div>
                         )}
-                        <div className="flex items-center gap-[6px] text-sm text-gray-600 dark:text-gray-400">
+                        <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-400">
                             <BookOpen size={14} className="text-gold-500" />
-                            <span className={`text-[10px] px-2 py-0.5 rounded-[3px] font-medium uppercase tracking-wider ${inquiry.catalogShared
+                            <span className={`text-[11px] px-2 py-0.5 rounded-[3px] font-medium uppercase tracking-wider ${inquiry.catalogShared
                                 ? 'bg-gold-500/10 dark:bg-gold-900/20 text-gold-700 dark:text-gold-400'
-                                : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'
+                                : 'neu-inset text-gray-700 dark:text-gray-300'
                                 }`}>
                                 {inquiry.catalogShared ? 'Catalog Shared' : 'Not Shared'}
                             </span>
@@ -925,8 +919,8 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
 
                     {inquiry.notes && (
                         <>
-                            <div className="w-full h-px bg-gray-100 dark:bg-gray-800 mb-4"></div>
-                            <h3 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-2">Notes</h3>
+                            <div className="neu-divider w-full mb-4"></div>
+                            <h3 className="text-[11px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-2">Notes</h3>
                             <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">{inquiry.notes}</p>
                         </>
                     )}
@@ -934,14 +928,14 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
 
                 {/* Proforma invoices from this inquiry */}
                 {proformas.length > 0 && (
-                    <div className="bg-white dark:bg-[#1e1e1e] p-6 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 mb-4 animate-fade-in-up" style={{ animationDelay: '115ms' }}>
-                        <h3 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-4">Proforma Invoices ({proformas.length})</h3>
+                    <div className="neu-raised p-6 rounded-lg shadow-sm mb-4 animate-fade-in-up" style={{ animationDelay: '115ms' }}>
+                        <h3 className="text-[11px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-4">Proforma Invoices ({proformas.length})</h3>
                         <div className="space-y-3">
                             {proformas.map(proforma => (
                                 <div key={proforma.id} className="flex items-center justify-between gap-2">
                                     <div className="min-w-0">
                                         <p className="text-sm font-serif text-gray-900 dark:text-white truncate">{proforma.invoiceNumber}</p>
-                                        <p className="text-[9px] text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                        <p className="text-[11px] text-gray-700 dark:text-gray-300 uppercase tracking-wider">
                                             ₹{proforma.total.toLocaleString('en-IN')} • {proforma.items.length} {proforma.items.length === 1 ? 'artwork' : 'artworks'} • {proforma.status}
                                         </p>
                                     </div>
@@ -953,8 +947,8 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
                 )}
 
                 {/* Photos */}
-                <div className="bg-white dark:bg-[#1e1e1e] p-6 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 mb-4 animate-fade-in-up" style={{ animationDelay: '125ms' }}>
-                    <h3 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-4">
+                <div className="neu-raised p-6 rounded-lg shadow-sm mb-4 animate-fade-in-up" style={{ animationDelay: '125ms' }}>
+                    <h3 className="text-[11px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-4">
                         Photos{inquiry.imageUrls?.length ? ` (${inquiry.imageUrls.length})` : ''}
                     </h3>
                     <PhotoAttachments urls={inquiry.imageUrls ?? []} onAdd={handleAddPhotos} />
@@ -962,22 +956,22 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
 
                 {/* Interested Artworks */}
                 {linkedArtworks.length > 0 && (
-                    <div className="bg-white dark:bg-[#1e1e1e] p-6 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 animate-fade-in-up" style={{ animationDelay: '150ms' }}>
-                        <h3 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-4">Interested In ({linkedArtworks.length})</h3>
+                    <div className="neu-raised p-6 rounded-lg shadow-sm animate-fade-in-up" style={{ animationDelay: '150ms' }}>
+                        <h3 className="text-[11px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-4">Interested In ({linkedArtworks.length})</h3>
                         <div className="space-y-3">
                             {linkedArtworks.map((art) => (
                                 <div key={art.id} className="flex justify-between items-center">
-                                    <div className="flex items-center gap-[6px]">
+                                    <div className="flex items-center gap-3">
                                         {art.imageUrls && art.imageUrls.length > 0 ? (
                                             <img loading="lazy" decoding="async" src={getThumbUrl(art.imageUrls[0])} alt={art.title} className="w-10 h-10 rounded-[3px] object-cover" />
                                         ) : (
-                                            <div className="w-10 h-10 rounded-[3px] bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-gray-400">
+                                            <div className="w-10 h-10 rounded-[3px] neu-inset flex items-center justify-center text-gray-400">
                                                 <ImageIcon size={14} />
                                             </div>
                                         )}
                                         <div>
                                             <p className="font-serif text-sm text-gray-900 dark:text-white">{art.title}</p>
-                                            <button onClick={() => setSelectedArtworkForPopup(art)} className="text-[9px] text-gold-600 dark:text-gold-400 uppercase tracking-wider hover:underline">
+                                            <button onClick={() => setSelectedArtworkForPopup(art)} className="text-[11px] text-gold-700 dark:text-gold-300 uppercase tracking-wider hover:underline">
                                                 View Details
                                             </button>
                                         </div>
@@ -1026,10 +1020,10 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
                         type="button"
                         aria-label="Close artwork details"
                         onClick={() => setSelectedArtworkForPopup(null)}
-                        className="absolute inset-0 w-full h-full bg-black/50 cursor-default"
+                        className="absolute inset-0 w-full h-full neu-scrim cursor-default"
                     />
-                    <div className="relative bg-white dark:bg-[#1e1e1e] rounded-[12px] w-full max-w-sm overflow-hidden shadow-2xl animate-scale-in">
-                        <div className="relative h-48 bg-gray-100 dark:bg-gray-800">
+                    <div className="relative neu-raised rounded-[12px] w-full max-w-sm overflow-hidden shadow-2xl animate-scale-in">
+                        <div className="relative h-48 neu-inset">
                             {selectedArtworkForPopup.imageUrls && selectedArtworkForPopup.imageUrls.length > 0 ? (
                                 <img loading="lazy" decoding="async" src={selectedArtworkForPopup.imageUrls[0]} alt={selectedArtworkForPopup.title} className="w-full h-full object-cover" />
                             ) : (
@@ -1047,27 +1041,27 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
                         <div className="p-5 space-y-4">
                             <div>
                                 <h3 className="font-serif text-xl text-gray-900 dark:text-white leading-tight">{selectedArtworkForPopup.title}</h3>
-                                <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-widest mt-1">
+                                <p className="text-[11px] text-gray-700 dark:text-gray-300 uppercase tracking-widest mt-1">
                                     {selectedArtworkForPopup.artist && `${selectedArtworkForPopup.artist} • `}{selectedArtworkForPopup.customId}
                                 </p>
                             </div>
-                            <div className="flex justify-between items-center pb-4 border-b border-gray-100 dark:border-gray-800">
-                                <span className="font-semibold text-gold-600 dark:text-gold-400">₹{selectedArtworkForPopup.price.toLocaleString('en-IN')}{selectedArtworkForPopup.plusGst ? ' + GST' : ''}</span>
-                                <span className={`text-[9px] px-2 py-1 rounded-[3px] font-medium uppercase tracking-wider ${ARTWORK_STATUS_BADGE[selectedArtworkForPopup.status]}`}>
+                            <div className="flex justify-between items-center pb-4">
+                                <span className="font-semibold text-gold-700 dark:text-gold-300">₹{selectedArtworkForPopup.price.toLocaleString('en-IN')}{selectedArtworkForPopup.plusGst ? ' + GST' : ''}</span>
+                                <span className={`text-[11px] px-2 py-1 rounded-[3px] font-medium uppercase tracking-wider ${ARTWORK_STATUS_BADGE[selectedArtworkForPopup.status]}`}>
                                     {selectedArtworkForPopup.status}
                                 </span>
                             </div>
                             <div className="grid grid-cols-2 gap-3 text-xs">
                                 <div>
-                                    <span className="block text-[9px] text-gray-400 uppercase tracking-widest mb-0.5">Medium</span>
+                                    <span className="block text-[11px] text-gray-400 uppercase tracking-widest mb-0.5">Medium</span>
                                     <span className="text-gray-800 dark:text-gray-200">{selectedArtworkForPopup.medium || '-'}</span>
                                 </div>
                                 <div>
-                                    <span className="block text-[9px] text-gray-400 uppercase tracking-widest mb-0.5">Dimensions</span>
+                                    <span className="block text-[11px] text-gray-400 uppercase tracking-widest mb-0.5">Dimensions</span>
                                     <span className="text-gray-800 dark:text-gray-200">{selectedArtworkForPopup.dimensions || '-'}</span>
                                 </div>
                                 <div>
-                                    <span className="block text-[9px] text-gray-400 uppercase tracking-widest mb-0.5">Location</span>
+                                    <span className="block text-[11px] text-gray-400 uppercase tracking-widest mb-0.5">Location</span>
                                     <span className="text-gray-800 dark:text-gray-200">{selectedArtworkForPopup.location || '-'}</span>
                                 </div>
                             </div>
@@ -1113,7 +1107,7 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
     };
 
     const handleSubmit = () => {
-        if (!customerName.trim()) return alert('Customer name is required');
+        if (!customerName.trim()) { toast.error('Customer name is required'); return; }
         if (isUploadingPhotos) return toast('Photos are still uploading — save again in a moment.');
 
         onSave({
@@ -1132,72 +1126,72 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
     };
 
     return (
-        <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-[70] flex flex-col animate-fade-in-up">
-            <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm z-10">
-                <button onClick={onClose} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
+        <div className="neu-sheet z-[70] animate-fade-in-up">
+            <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] z-10">
+                <button onClick={onClose} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale">
                     <X size={20} />
                 </button>
                 <h2 className="text-base font-serif text-gray-900 dark:text-white">{initialData ? 'Edit Inquiry' : 'New Inquiry'}</h2>
-                <button onClick={handleSubmit} className="text-gold-600 dark:text-gold-400 font-medium px-2 py-2 uppercase tracking-wider text-xs active-scale">
+                <button onClick={handleSubmit} className="text-gold-700 dark:text-gold-300 font-medium px-2 py-2 uppercase tracking-wider text-xs active-scale">
                     Save
                 </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-[6px] no-scrollbar flex flex-col gap-6">
+            <div className="flex-1 overflow-y-auto p-4 no-scrollbar flex flex-col gap-6">
                 {/* Customer Info */}
-                <div className="bg-white dark:bg-[#1e1e1e] p-5 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 space-y-5 animate-fade-in-up" style={{ animationDelay: '50ms' }}>
-                    <h3 className="font-bold text-gray-900 dark:text-gray-100 text-[10px] uppercase tracking-widest">Customer Details</h3>
+                <div className="neu-card p-5 space-y-5 animate-fade-in-up" style={{ animationDelay: '50ms' }}>
+                    <h3 className="font-bold text-gray-900 dark:text-gray-100 text-[11px] uppercase tracking-widest">Customer Details</h3>
                     <div>
-                        <label htmlFor="customerName" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Name *</label>
+                        <label htmlFor="customerName" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Name *</label>
                         <input
                             id="customerName"
                             value={customerName}
                             onChange={e => setCustomerName(e.target.value)}
-                            className="w-full bg-transparent border-b border-gray-300 dark:border-gray-700 py-1.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
+                            className="neu-field"
                             placeholder="Customer Name"
                         />
                     </div>
                     <div>
-                        <label htmlFor="customerPhone" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Phone</label>
+                        <label htmlFor="customerPhone" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Phone</label>
                         <input
                             id="customerPhone"
                             type="tel"
                             value={customerPhone}
                             onChange={e => setCustomerPhone(e.target.value)}
-                            className="w-full bg-transparent border-b border-gray-300 dark:border-gray-700 py-1.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
+                            className="neu-field"
                             placeholder="+91 98765 43210"
                         />
                     </div>
                     <div>
-                        <label htmlFor="customerEmail" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Email</label>
+                        <label htmlFor="customerEmail" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Email</label>
                         <input
                             id="customerEmail"
                             type="email"
                             value={customerEmail}
                             onChange={e => setCustomerEmail(e.target.value)}
-                            className="w-full bg-transparent border-b border-gray-300 dark:border-gray-700 py-1.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
+                            className="neu-field"
                             placeholder="customer@example.com"
                         />
                     </div>
                     <div>
-                        <label htmlFor="customerAddress" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Address</label>
+                        <label htmlFor="customerAddress" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Address</label>
                         <textarea
                             id="customerAddress"
                             value={customerAddress}
                             onChange={e => setCustomerAddress(e.target.value)}
                             rows={2}
-                            className="w-full bg-transparent border-b border-gray-300 dark:border-gray-700 py-1.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors resize-none"
+                            className="neu-field"
                             placeholder="House / street, area, city, PIN"
                         />
                     </div>
-                    <div className="grid grid-cols-2 gap-[6px]">
+                    <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <label htmlFor="inquirySource" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Source</label>
+                            <label htmlFor="inquirySource" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Source</label>
                             <select
                                 id="inquirySource"
                                 value={source}
                                 onChange={e => setSource(e.target.value as Inquiry['source'])}
-                                className="w-full bg-transparent border-b border-gray-300 dark:border-gray-700 py-1.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
+                                className="neu-field"
                             >
                                 <option value="Walk-in" className="dark:bg-gray-800">Walk-in</option>
                                 <option value="Phone" className="dark:bg-gray-800">Phone</option>
@@ -1208,12 +1202,12 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                             </select>
                         </div>
                         <div>
-                            <label htmlFor="inquiryStatus" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Status</label>
+                            <label htmlFor="inquiryStatus" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Status</label>
                             <select
                                 id="inquiryStatus"
                                 value={status}
                                 onChange={e => setStatus(e.target.value as Inquiry['status'])}
-                                className="w-full bg-transparent border-b border-gray-300 dark:border-gray-700 py-1.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
+                                className="neu-field"
                             >
                                 <option value="New" className="dark:bg-gray-800">New</option>
                                 <option value="Contacted" className="dark:bg-gray-800">Contacted</option>
@@ -1226,20 +1220,20 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                 </div>
 
                 {/* Notes */}
-                <div className="bg-white dark:bg-[#1e1e1e] p-5 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 animate-fade-in-up" style={{ animationDelay: '100ms' }}>
-                    <h3 className="font-bold text-gray-900 dark:text-gray-100 text-[10px] uppercase tracking-widest mb-[6px]">Notes</h3>
+                <div className="neu-card p-5 animate-fade-in-up" style={{ animationDelay: '100ms' }}>
+                    <h3 className="font-bold text-gray-900 dark:text-gray-100 text-[11px] uppercase tracking-widest mb-3">Notes</h3>
                     <textarea
                         value={notes}
                         onChange={e => setNotes(e.target.value)}
                         rows={3}
-                        className="w-full bg-transparent border border-gray-200 dark:border-gray-700 rounded-[6px] p-[6px] text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors resize-none"
+                        className="w-full bg-transparent rounded-lg p-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors resize-none"
                         placeholder="Add any notes about this inquiry..."
                     />
                 </div>
 
                 {/* Photos */}
-                <div className="bg-white dark:bg-[#1e1e1e] p-5 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 animate-fade-in-up" style={{ animationDelay: '125ms' }}>
-                    <h3 className="font-bold text-gray-900 dark:text-gray-100 text-[10px] uppercase tracking-widest mb-[6px]">Photos</h3>
+                <div className="neu-card p-5 animate-fade-in-up" style={{ animationDelay: '125ms' }}>
+                    <h3 className="font-bold text-gray-900 dark:text-gray-100 text-[11px] uppercase tracking-widest mb-3">Photos</h3>
                     <PhotoAttachments
                         urls={imageUrls}
                         onAdd={(urls) => setImageUrls(prev => [...prev, ...urls])}
@@ -1249,15 +1243,15 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                 </div>
 
                 {/* Select Artworks */}
-                <div className="bg-white dark:bg-[#1e1e1e] p-5 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 animate-fade-in-up" style={{ animationDelay: '150ms' }}>
+                <div className="neu-card p-5 animate-fade-in-up" style={{ animationDelay: '150ms' }}>
                     <div className="flex justify-between items-center mb-4">
-                        <h3 className="font-bold text-gray-900 dark:text-gray-100 text-[10px] uppercase tracking-widest">Interested Artworks</h3>
-                        <span className="text-[9px] bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-[3px] text-gray-600 dark:text-gray-300 uppercase tracking-wider">{selectedArtworkIds.size} selected</span>
+                        <h3 className="font-bold text-gray-900 dark:text-gray-100 text-[11px] uppercase tracking-widest">Interested Artworks</h3>
+                        <span className="text-[11px] neu-inset px-2 py-0.5 rounded-[3px] text-gray-600 dark:text-gray-300 uppercase tracking-wider">{selectedArtworkIds.size} selected</span>
                     </div>
 
                     <div className="space-y-2 max-h-60 overflow-y-auto pr-1 no-scrollbar">
                         {artworks.length === 0 && (
-                            <p className="text-xs text-gray-400 dark:text-gray-500 font-light">No artworks available.</p>
+                            <p className="text-xs text-gray-600 dark:text-gray-300 font-light">No artworks available.</p>
                         )}
                         {artworks.map((art, index) => {
                             const isSelected = selectedArtworkIds.has(art.id);
@@ -1265,9 +1259,9 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                             return (
                                 <div
                                     key={art.id}
-                                    className={`relative w-full text-left flex items-center p-2 rounded-[6px] border transition-colors cursor-pointer active-scale animate-scale-in ${isSelected ? 'border-gold-500 bg-gold-50/50 dark:bg-gold-900/10' : 'border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50'
+                                    className={`relative w-full text-left flex items-center p-2 rounded-lg border transition-colors cursor-pointer active-scale animate-scale-in ${isSelected ? 'border-gold-500 bg-gold-50/50 dark:bg-gold-900/10' : 'border-gray-100 dark:border-gray-800'
                                         }`}
-                                    style={{ animationDelay: `${index * 25}ms` }}
+                                    style={{ animationDelay: `${index * 45}ms` }}
                                 >
                                     {/* Row tap target; inner action buttons sit above it (z-[2]). */}
                                     <button
@@ -1275,18 +1269,18 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                                         onClick={() => toggleArtwork(art.id)}
                                         aria-label={`${isSelected ? 'Remove' : 'Add'} ${art.title}`}
                                         aria-pressed={isSelected}
-                                        className="absolute inset-0 z-[1] w-full h-full rounded-[6px] cursor-pointer"
+                                        className="absolute inset-0 z-[1] w-full h-full rounded-lg cursor-pointer"
                                     />
                                     {coverImage ? (
                                         <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={art.title} className="w-10 h-10 rounded-[3px] object-cover mr-3" />
                                     ) : (
-                                        <div className="w-10 h-10 rounded-[3px] bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-gray-400 mr-3">
+                                        <div className="w-10 h-10 rounded-[3px] neu-inset flex items-center justify-center text-gray-400 mr-3">
                                             <ImageIcon size={14} />
                                         </div>
                                     )}
                                     <div className="flex-1">
                                         <p className="font-serif text-xs text-gray-900 dark:text-gray-100 line-clamp-1">{art.title}</p>
-                                        <p className="text-[9px] text-gray-500 dark:text-gray-400 uppercase tracking-wider mt-0.5">{art.medium} • ₹{art.price.toLocaleString('en-IN')}</p>
+                                        <p className="text-[11px] text-gray-700 dark:text-gray-300 uppercase tracking-wider mt-0.5">{art.medium} • ₹{art.price.toLocaleString('en-IN')}</p>
                                     </div>
                                     <div className="flex items-center gap-2">
                                         <button type="button" aria-label="View artwork details"
@@ -1295,9 +1289,9 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                                         >
                                             <MessageSquare size={14} />
                                         </button>
-                                        <div className={`w-4 h-4 rounded-full border flex items-center justify-center transition-colors ${isSelected ? 'bg-gold-500 border-gold-500 text-white' : 'border-gray-300 dark:border-gray-600'
+                                        <div className={`w-4 h-4 rounded-full flex items-center justify-center transition-colors ${isSelected ? 'neu-check-on' : 'neu-check'
                                             }`}>
-                                            {isSelected && <span className="text-[8px] font-bold">✓</span>}
+                                            {isSelected && <span className="text-[10px] font-bold">✓</span>}
                                         </div>
                                     </div>
                                 </div>
@@ -1312,7 +1306,7 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                     <button
                         type="button"
                         onClick={() => setConfirmDelete(true)}
-                        className="w-full rounded-[6px] py-2.5 text-sm font-medium tracking-wide transition-colors active-scale flex items-center justify-center gap-2 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 hover:bg-red-50 dark:hover:bg-red-900/20 mb-4"
+                        className="neu-button neu-button-danger w-full mb-4"
                     >
                         <Trash2 size={14} /> Delete Inquiry
                     </button>

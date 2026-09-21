@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Search, X } from 'lucide-react';
+import { useHeaderTools } from './ui';
 
 interface SearchBarProps {
     value: string;
@@ -10,16 +11,33 @@ interface SearchBarProps {
 }
 
 /**
- * Shared fancy search field: pill shape, gold icon chip, subtle shadow,
- * gold focus ring and an inline clear button. Used app-wide.
+ * Shared fancy search field: raised pill with an etched icon well and an
+ * inline clear button. On focus the whole pill flips the other way — it
+ * presses in, the caret goes gold, and the icon chip lights up gold (the
+ * app's "active" accent). No outline ring: a gold ring reads as a hard line.
+ *
+ * If the field is rendered inside a PageHeader's tools row, it registers
+ * itself with that header (see HeaderToolsContext): that is what lets the
+ * folded row leave its magnifier on the title line, and what that magnifier
+ * focuses when tapped. Anywhere else — sheets, dialogs — the register call
+ * lands on a no-op.
  */
 export const SearchBar: React.FC<SearchBarProps> = ({ value, onChange, placeholder = 'Search…', className = '' }) => {
+    const inputRef = useRef<HTMLInputElement>(null);
+    const { registerSearch } = useHeaderTools();
+
+    useEffect(() => {
+        registerSearch(inputRef.current);
+        return () => registerSearch(null);
+    }, [registerSearch]);
+
     return (
-        <div className={`relative ${className}`}>
-            <div className="absolute left-1.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-gold-500/10 dark:bg-gold-500/15 flex items-center justify-center pointer-events-none">
-                <Search size={13} className="text-gold-600 dark:text-gold-400" />
+        <div className={`relative search-group ${className}`}>
+            <div className="search-chip absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full neu-inset flex items-center justify-center pointer-events-none">
+                <Search size={14} className="text-gold-700 dark:text-gold-300" />
             </div>
             <input
+                ref={inputRef}
                 type="text"
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
@@ -27,16 +45,16 @@ export const SearchBar: React.FC<SearchBarProps> = ({ value, onChange, placehold
                 autoComplete="off"
                 autoCorrect="off"
                 spellCheck={false}
-                className="w-full bg-white dark:bg-[#1e1e1e] border border-gray-200 dark:border-gray-800 rounded-full py-2 pl-11 pr-9 text-xs text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 shadow-sm focus:outline-none focus:border-gold-500 focus:ring-2 focus:ring-gold-500/20 transition-all"
+                className="neu-search w-full rounded-full py-2.5 pl-12 pr-10 text-sm text-gray-800 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none"
             />
             {value.length > 0 && (
                 <button
                     type="button"
                     onClick={() => onChange('')}
                     aria-label="Clear search"
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-300 flex items-center justify-center active-scale"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full neu-raised-sm text-gray-700 dark:text-gray-200 flex items-center justify-center active-scale"
                 >
-                    <X size={10} strokeWidth={2.5} />
+                    <X size={11} strokeWidth={2.5} />
                 </button>
             )}
         </div>

@@ -5,6 +5,8 @@ import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import toast from 'react-hot-toast';
 import { Users, UserPlus, Trash2, X, Phone, Mail, Upload, Download, Loader2, Briefcase, Edit2 } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
+import { PageRoot, PageHeader, PageBody, PrimaryIconButton, GhostIconButton, EmptyState } from '../components/ui';
+import { IfCan } from '../components/Layout';
 
 interface ContactsViewProps {
     contacts: Contact[];
@@ -75,9 +77,9 @@ function csvEscape(value: string): string {
 }
 
 const SOURCE_BADGES: Record<Contact['source'], { label: string; cls: string }> = {
-    inquiry: { label: 'Inquiry', cls: 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400' },
-    manual: { label: 'Manual', cls: 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400' },
-    import: { label: 'Imported', cls: 'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400' },
+    inquiry: { label: 'Inquiry', cls: 'text-blue-600 dark:text-blue-400' },
+    manual: { label: 'Manual', cls: 'text-green-700 dark:text-green-400' },
+    import: { label: 'Imported', cls: 'text-purple-600 dark:text-purple-400' },
 };
 
 type CsvColumnMap = { name: number; phone: number; email: number; notes: number };
@@ -277,130 +279,114 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
     ];
 
     return (
-        <div className="h-full flex flex-col bg-[#faf9f6] dark:bg-[#121212] transition-colors duration-500 animate-fade-in">
-            {/* Header */}
-            <div className="bg-white dark:bg-[#1a1a1a] px-[6px] pt-[calc(1.75rem+env(safe-area-inset-top,0px))] pb-[6px] shadow-sm z-10 border-b border-gray-100 dark:border-gray-800">
-                <div className="flex justify-between items-center mb-[6px]">
-                    <h1 className="text-xl font-serif text-gray-900 dark:text-white">Contacts</h1>
-                    <div className="flex items-center gap-2">
-                        <button
-                            onClick={handleExport}
-                            disabled={allContacts.length === 0}
-                            className="bg-gray-100 dark:bg-[#2a2a2a] text-gray-600 dark:text-gray-300 p-1.5 rounded-full shadow-sm hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale disabled:opacity-40"
-                            aria-label="Export contacts as CSV"
-                            title="Export CSV"
-                        >
-                            <Download size={16} />
-                        </button>
-                        <button
-                            onClick={() => fileInputRef.current?.click()}
-                            disabled={isImporting}
-                            className="bg-gray-100 dark:bg-[#2a2a2a] text-gray-600 dark:text-gray-300 p-1.5 rounded-full shadow-sm hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale disabled:opacity-40"
-                            aria-label="Import contacts from CSV"
-                            title="Import CSV"
-                        >
-                            {isImporting ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-                        </button>
-                        <button
-                            onClick={() => setShowAdd(true)}
-                            className="bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 p-1.5 rounded-full shadow-md hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors active-scale"
-                            aria-label="Add contact"
-                        >
-                            <UserPlus size={18} />
-                        </button>
+        <PageRoot>
+            <PageHeader
+                title="Contacts"
+                actions={(
+                    <>
+                        <GhostIconButton onClick={handleExport} label="Export contacts as CSV" icon={<Download size={16} />} disabled={allContacts.length === 0} />
+                        <IfCan section="contacts"><GhostIconButton onClick={() => fileInputRef.current?.click()} label="Import contacts from CSV" icon={isImporting ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />} disabled={isImporting} /></IfCan>
+                        <IfCan section="contacts"><PrimaryIconButton onClick={() => setShowAdd(true)} label="Add contact" icon={<UserPlus size={16} />} /></IfCan>
                         <input ref={fileInputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={handleImportFile} />
-                    </div>
-                </div>
+                    </>
+                )}
+            >
                 <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search contacts..." />
-                <div className="flex gap-[6px] overflow-x-auto no-scrollbar pb-1">
+                <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
                     {FILTERS.map(f => (
                         <button
                             key={f.id}
                             onClick={() => setFilter(f.id)}
-                            className={`shrink-0 px-3 py-1.5 rounded-full text-[9px] font-bold uppercase tracking-widest transition-all active-scale ${filter === f.id
-                                ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
-                                : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
+                            className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-widest transition-all active-scale ${filter === f.id
+                                ? 'neu-inset text-gold-700 dark:text-gold-300'
+                                : 'neu-raised-sm neu-btn text-gray-700 dark:text-gray-300'
                                 }`}
                         >
                             {f.label}
                         </button>
                     ))}
                 </div>
-            </div>
+            </PageHeader>
 
             {/* List */}
-            <div className="flex-1 overflow-y-auto p-[6px] space-y-2 no-scrollbar pb-20">
+            <PageBody columns={3}>
                 {filteredContacts.map((contact, index) => {
                     const badge = SOURCE_BADGES[contact.source];
                     const initial = contact.name.trim().charAt(0).toUpperCase() || '?';
                     return (
                         <div
                             key={contact.id}
-                            className="relative w-full bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm p-[6px] flex items-center gap-[6px] border border-gray-100 dark:border-gray-800 animate-fade-in-up"
-                            style={{ animationDelay: `${index * 25}ms` }}
+                            className="neu-card w-full p-3.5 min-h-[88px] flex items-center gap-3.5 animate-fade-in-up"
+                            style={{ animationDelay: `${Math.min(index, 12) * 45}ms` }}
                         >
-                            <div className="w-11 h-11 rounded-full bg-gray-50 dark:bg-gray-800 flex items-center justify-center text-brand-900 dark:text-gold-400 font-serif text-base shrink-0">
+                            <span className="w-12 h-12 rounded-full neu-inset flex items-center justify-center font-serif text-lg text-[var(--neu-gold)] shrink-0">
                                 {initial}
-                            </div>
+                            </span>
                             <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-1.5">
-                                    <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm truncate">{contact.name}</h3>
-                                    <span className={`text-[7px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider shrink-0 ${badge.cls}`}>{badge.label}</span>
-                                </div>
-                                <div className="flex items-center gap-2 mt-0.5">
+                                <h3 className="font-serif text-[15px] leading-snug text-[var(--neu-text)] truncate">{contact.name}</h3>
+                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 min-w-0">
+                                    <span className={`neu-status shrink-0 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider ${badge.cls}`}>
+                                        <span className="w-1 h-1 rounded-full bg-current" />
+                                        {badge.label}
+                                    </span>
                                     {contact.phone && (
-                                        <a href={`tel:${contact.phone}`} className="flex items-center gap-1 text-[10px] text-gray-500 dark:text-gray-400 hover:text-gold-600 dark:hover:text-gold-400 transition-colors">
-                                            <Phone size={10} /> {contact.phone}
-                                        </a>
-                                    )}
-                                    {contact.email && (
-                                        <a href={`mailto:${contact.email}`} className="flex items-center gap-1 text-[10px] text-gray-500 dark:text-gray-400 hover:text-gold-600 dark:hover:text-gold-400 transition-colors min-w-0">
-                                            <Mail size={10} className="shrink-0" /> <span className="truncate max-w-[150px]">{contact.email}</span>
-                                        </a>
+                                        <span className="text-[11.5px] text-[var(--neu-text-dim)] tabular-nums whitespace-nowrap">{contact.phone}</span>
                                     )}
                                 </div>
-                                {contact.notes && <p className="text-[10px] text-gray-400 dark:text-gray-500 font-light line-clamp-1 mt-0.5">{contact.notes}</p>}
+                                {contact.email && (
+                                    <a href={`mailto:${contact.email}`} className="mt-1 flex items-center gap-1 text-[11px] text-[var(--neu-text-dim)] hover:text-gold-600 dark:hover:text-gold-400 transition-colors min-w-0">
+                                        <Mail size={11} className="shrink-0" /> <span className="truncate">{contact.email}</span>
+                                    </a>
+                                )}
+                                {contact.notes && <p className="text-[11px] text-[var(--neu-text-dim)] line-clamp-1 mt-1">{contact.notes}</p>}
                             </div>
-                            {contact.source !== 'inquiry' && (
-                                <button
-                                    type="button"
-                                    onClick={() => openEditContact(contact)}
-                                    aria-label={`Edit contact ${contact.name}`}
-                                    className="p-1.5 text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale shrink-0"
-                                >
-                                    <Edit2 size={14} />
-                                </button>
-                            )}
+                            <div className="flex items-center gap-2 shrink-0">
+                                {contact.phone && (
+                                    <a
+                                        href={`tel:${contact.phone}`}
+                                        aria-label={`Call ${contact.name}`}
+                                        title="Call"
+                                        className="neu-icon-btn neu-btn active-scale text-[var(--neu-gold)]"
+                                    >
+                                        <Phone size={15} />
+                                    </a>
+                                )}
+                                {contact.source !== 'inquiry' && (
+                                    <IfCan section="contacts">
+                                        <button
+                                            type="button"
+                                            onClick={() => openEditContact(contact)}
+                                            aria-label={`Edit contact ${contact.name}`}
+                                            title="Edit"
+                                            className="neu-icon-btn neu-btn active-scale"
+                                        >
+                                            <Edit2 size={14} />
+                                        </button>
+                                    </IfCan>
+                                )}
+                            </div>
                         </div>
                     );
                 })}
                 {filteredContacts.length === 0 && (
-                    <div className="text-center py-12 px-6 bg-white dark:bg-[#1e1e1e] rounded-[6px] border border-gray-100 dark:border-gray-800 mt-2">
-                        <Users size={28} strokeWidth={1.25} className="mx-auto text-gray-300 dark:text-gray-600 mb-3" />
-                        {allContacts.length === 0 ? (
-                            <>
-                                <p className="text-sm font-serif text-gray-700 dark:text-gray-200 mb-1.5">No contacts yet</p>
-                                <p className="text-xs text-gray-400 dark:text-gray-500 font-light leading-relaxed">
-                                    Contacts from inquiries appear here automatically. You can also add contacts manually or import a CSV.
-                                </p>
-                            </>
-                        ) : (
-                            <p className="text-xs text-gray-400 dark:text-gray-500 font-light">
-                                No contacts match your search or filter.
-                            </p>
-                        )}
-                    </div>
+                    <EmptyState
+                        icon={<Users size={22} strokeWidth={1.25} />}
+                        title={allContacts.length === 0 ? 'No contacts yet' : 'No matches'}
+                        message={allContacts.length === 0
+                            ? 'Contacts from inquiries appear here automatically. You can also add contacts manually or import a CSV.'
+                            : 'No contacts match your search or filter.'}
+                    />
                 )}
-            </div>
+            </PageBody>
 
             {/* Add Contact Modal */}
             {showAdd && (
                 <FullScreenPortal>
-                    <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-50 flex flex-col animate-fade-in-up">
-                        <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm z-10">
+                    <div className="neu-sheet z-50 animate-fade-in-up">
+                        <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] z-10">
                             <button
                                 onClick={() => { setShowAdd(false); setEditingContact(null); }}
-                                className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale"
+                                className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale"
                                 aria-label="Close"
                             >
                                 <X size={20} />
@@ -408,9 +394,9 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
                             <h2 className="text-base font-serif text-gray-900 dark:text-white">{editingContact ? 'Edit Contact' : 'Add Contact'}</h2>
                             <div className="w-9"></div>
                         </div>
-                        <div className="flex-1 overflow-y-auto p-[6px] space-y-5 no-scrollbar">
+                        <div className="flex-1 overflow-y-auto p-3 space-y-5 no-scrollbar">
                             <div>
-                                <label htmlFor="contact-name" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Name *</label>
+                                <label htmlFor="contact-name" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">Name *</label>
                                 <input
                                     id="contact-name"
                                     value={form.name}
@@ -419,11 +405,11 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
                                     autoComplete="off"
                                     autoCorrect="off"
                                     spellCheck={false}
-                                    className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                                    className="neu-field"
                                 />
                             </div>
                             <div>
-                                <label htmlFor="contact-phone" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Phone</label>
+                                <label htmlFor="contact-phone" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">Phone</label>
                                 <input
                                     id="contact-phone"
                                     type="tel"
@@ -431,12 +417,12 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
                                     onChange={(e) => setForm(prev => ({ ...prev, phone: e.target.value }))}
                                     placeholder="+91 98765 43210"
                                     autoComplete="off"
-                                    className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                                    className="neu-field"
                                 />
                             </div>
 
                             <div>
-                                <label htmlFor="contact-email" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Email</label>
+                                <label htmlFor="contact-email" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">Email</label>
                                 <input
                                     id="contact-email"
                                     type="email"
@@ -446,28 +432,28 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
                                     autoComplete="off"
                                     autoCorrect="off"
                                     spellCheck={false}
-                                    className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                                    className="neu-field"
                                 />
                             </div>
                             <div>
-                                <label htmlFor="contact-notes" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Notes</label>
+                                <label htmlFor="contact-notes" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">Notes</label>
                                 <textarea
                                     id="contact-notes"
                                     value={form.notes}
                                     onChange={(e) => setForm(prev => ({ ...prev, notes: e.target.value }))}
                                     rows={3}
                                     placeholder="Any details (optional)"
-                                    className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors resize-none"
+                                    className="neu-field"
                                 />
                             </div>
-                            <p className="text-[9px] text-gray-400 dark:text-gray-500 font-light flex items-center gap-1.5">
+                            <p className="text-[11px] text-gray-600 dark:text-gray-300 font-light flex items-center gap-1.5">
                                 <Briefcase size={10} /> Name is required, plus a phone or email.
                             </p>
                             {editingContact && (
                                 <button
                                     type="button"
                                     onClick={() => setConfirmDelete(true)}
-                                    className="w-full rounded-[6px] py-2.5 text-sm font-medium tracking-wide transition-colors active-scale flex items-center justify-center gap-2 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 hover:bg-red-50 dark:hover:bg-red-900/20"
+                                    className="neu-button neu-button-danger w-full"
                                 >
                                     <Trash2 size={14} /> Delete Contact
                                 </button>
@@ -476,9 +462,9 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
                                 type="button"
                                 onClick={handleSave}
                                 disabled={!canSave || isSaving}
-                                className={`w-full rounded-[6px] py-3 text-sm font-medium tracking-wide transition-colors shadow-md active-scale flex items-center justify-center gap-2 ${canSave
-                                    ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 hover:bg-brand-800 dark:hover:bg-gold-400'
-                                    : 'bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-600'
+                                className={`w-full rounded-lg py-3 text-sm font-medium tracking-wide transition-colors shadow-md active-scale flex items-center justify-center gap-2 ${canSave
+                                    ? 'neu-raised-sm neu-btn text-gold-700 dark:text-gold-300'
+                                    : 'bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-300'
                                     }`}
                             >
                                 {isSaving && <Loader2 size={14} className="animate-spin" />}
@@ -498,6 +484,6 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
                 onClose={() => setConfirmDelete(false)}
                 onConfirm={confirmDeleteContact}
             />
-        </div>
+        </PageRoot>
     );
 };

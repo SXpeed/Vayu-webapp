@@ -1,16 +1,30 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, UserPlus, Trash2, Shield, User, Eye, EyeOff, Edit2, Check, Bell, BellOff } from 'lucide-react';
+import { X, UserPlus, Trash2, Eye, EyeOff, Edit2, Check, Bell, BellOff } from 'lucide-react';
+import { Button } from './ui';
 import { authService, AuthUser } from '../services/authService';
 import { TypeDeleteDialog } from './TypeDeleteDialog';
 import { StoreConfig } from '../types';
 import { apiCall } from '../services/apiClient';
+import { ADMIN_ROLE_ID, BUILT_IN_ROLES, type RoleDef } from '../permissions';
 
 interface Props {
   currentUserId: string;
-  onClose: () => void;
 }
 
-const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
+/** "Jane Doe" → "JD" for the avatar disc. */
+const initials = (name: string): string =>
+  name.trim().split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? '').join('') || '?';
+
+/** Role picker — Admin, Staff and any custom roles from the Roles tab. */
+const RoleSelect: React.FC<{ value: string; roles: RoleDef[]; onChange: (v: string) => void; id?: string }> = ({ value, roles, onChange, id }) => (
+  <select id={id} value={value} onChange={e => onChange(e.target.value)} aria-label="Role" className="neu-field">
+    {!roles.some(r => r.id === value) && <option value={value}>Unknown role</option>}
+    {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+  </select>
+);
+
+/** Team members and the add-user form — the Admin sheet's Users tab. */
+const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
   const [users, setUsers] = useState<AuthUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -18,7 +32,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<'user' | 'admin'>('user');
+  const [role, setRole] = useState('user');
   const [showPassword, setShowPassword] = useState(false);
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState('');
@@ -31,16 +45,26 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editEmail, setEditEmail] = useState('');
-  const [editRole, setEditRole] = useState<'user' | 'admin'>('user');
+  const [editRole, setEditRole] = useState('user');
   const [editPassword, setEditPassword] = useState('');
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
+
+  // Roles for the pickers. A server from before roles existed has no
+  // /auth/roles, so fall back to the two built-ins.
+  const [roles, setRoles] = useState<RoleDef[]>(BUILT_IN_ROLES);
+  const roleName = (id: string) => roles.find(r => r.id === id)?.name ?? 'Unknown role';
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      setUsers(await authService.getUsers());
+      const [list, roleList] = await Promise.all([
+        authService.getUsers(),
+        authService.getRoles().catch(() => BUILT_IN_ROLES),
+      ]);
+      setUsers(list);
+      setRoles(roleList);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -127,7 +151,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
     }
     setEditSaving(true);
     try {
-      const data: { name?: string; email?: string; role?: 'admin' | 'user'; password?: string; storeId?: string } = {
+      const data: { name?: string; email?: string; role?: string; password?: string; storeId?: string } = {
         name: editName.trim(),
         email: editEmail.trim(),
         role: editRole,
@@ -145,248 +169,172 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId, onClose }) => {
   };
 
   return (
-    <div className="absolute inset-0 z-50 flex flex-col bg-[#faf9f6] dark:bg-[#121212] animate-fade-in-up">
-      {/* Header */}
-      <div className="bg-white dark:bg-[#1a1a1a] px-[6px] pt-[calc(2rem+env(safe-area-inset-top,0px))] pb-4 shadow-sm border-b border-gray-100 dark:border-gray-800 flex items-center justify-between">
-        <div>
-          <h2 className="text-base font-serif text-gray-900 dark:text-white">User Management</h2>
-          <p className="text-[10px] text-gray-400 dark:text-gray-500 uppercase tracking-widest mt-0.5">
-            {users.length} {users.length === 1 ? 'member' : 'members'}
-          </p>
-        </div>
-        <button
-          onClick={onClose}
-          className="p-2 text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale"
-        >
-          <X size={20} />
-        </button>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-[6px] space-y-5 no-scrollbar">
-        {/* Current users */}
-        <section>
-          <h3 className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-2 px-1">
-            Current Users
-          </h3>
-          {loading && (
-            <p className="text-xs text-gray-400 dark:text-gray-500 text-center py-4">Loading…</p>
-          )}
-          {error && (
-            <p className="text-xs text-red-500 text-center py-2">{error}</p>
-          )}
-          {!loading && !error && users.length === 0 && (
-            <p className="text-xs text-gray-400 dark:text-gray-500 text-center py-4">No users yet.</p>
-          )}
-          <div className="space-y-2">
-            {users.map(u => (
-              <div
-                key={u.id}
-                className="bg-white dark:bg-[#1e1e1e] rounded-[6px] border border-gray-100 dark:border-gray-800 p-[6px] shadow-sm"
-              >
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start animate-fade-in">
+      {/* Members */}
+      <section>
+        <h3 className="neu-label px-1">
+          Members{!loading && !error ? ` · ${users.length}` : ''}
+        </h3>
+        {loading && (
+          <p className="neu-card text-xs text-[var(--neu-text-dim)] text-center py-8">Loading…</p>
+        )}
+        {error && (
+          <p className="neu-inset rounded-2xl text-xs text-red-600 dark:text-red-400 px-4 py-3">{error}</p>
+        )}
+        {!loading && !error && users.length === 0 && (
+          <p className="neu-card text-xs text-[var(--neu-text-dim)] text-center py-8">No users yet.</p>
+        )}
+        {users.length > 0 && (
+          <div className="neu-card px-1.5 py-1">
+            {users.map((u, index) => (
+              <React.Fragment key={u.id}>
+                {index > 0 && <div className="neu-divider mx-2.5" />}
                 {editingId === u.id ? (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest">Edit User</span>
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => handleEditSave(u.id)}
-                          disabled={editSaving}
-                          className="p-1.5 text-green-500 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-full transition-colors active-scale disabled:opacity-40 shrink-0"
-                          title="Save changes"
-                        >
-                          <Check size={14} />
-                        </button>
-                        <button
-                          onClick={cancelEdit}
-                          disabled={editSaving}
-                          className="p-1.5 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale disabled:opacity-40 shrink-0"
-                          title="Cancel"
-                        >
-                          <X size={14} />
-                        </button>
-                      </div>
-                    </div>
+                  <div className="neu-inset rounded-2xl p-4 my-1.5 space-y-3">
+                    <p className="neu-label !mb-0">Edit {u.name}</p>
                     {editError && (
-                      <p className="text-[11px] text-red-500 dark:text-red-400 bg-red-50 dark:bg-red-900/20 px-[6px] py-2 rounded-[6px]">{editError}</p>
+                      <p className="text-[11px] text-red-600 dark:text-red-400">{editError}</p>
                     )}
-                    <input
-                      type="text"
-                      value={editName}
-                      onChange={e => setEditName(e.target.value)}
-                      placeholder="Name"
-                      className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-1.5 px-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
-                    />
-                    <input
-                      type="email"
-                      value={editEmail}
-                      onChange={e => setEditEmail(e.target.value)}
-                      placeholder="Email"
-                      className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-1.5 px-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
-                    />
-                    <input
-                      type="password"
-                      value={editPassword}
-                      onChange={e => setEditPassword(e.target.value)}
-                      placeholder="New password (leave blank to keep)"
-                      className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-1.5 px-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
-                    />
-                    <select
-                      value={editRole}
-                      onChange={e => setEditRole(e.target.value as 'user' | 'admin')}
-                      className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-1.5 px-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
-                    >
-                      <option value="user">User</option>
-                      <option value="admin">Admin</option>
-                    </select>
+                    <div>
+                      <label htmlFor={`um-edit-name-${u.id}`} className="neu-label">Name</label>
+                      <input id={`um-edit-name-${u.id}`} type="text" value={editName} onChange={e => setEditName(e.target.value)} className="neu-field" />
+                    </div>
+                    <div>
+                      <label htmlFor={`um-edit-email-${u.id}`} className="neu-label">Email</label>
+                      <input id={`um-edit-email-${u.id}`} type="email" value={editEmail} onChange={e => setEditEmail(e.target.value)} className="neu-field" />
+                    </div>
+                    <div>
+                      <label htmlFor={`um-edit-pw-${u.id}`} className="neu-label">New password</label>
+                      <input id={`um-edit-pw-${u.id}`} type="password" autoComplete="new-password" value={editPassword} onChange={e => setEditPassword(e.target.value)} placeholder="Leave blank to keep" className="neu-field" />
+                    </div>
+                    <div>
+                      <label htmlFor={`um-edit-role-${u.id}`} className="neu-label">Role</label>
+                      <RoleSelect id={`um-edit-role-${u.id}`} value={editRole} roles={roles} onChange={setEditRole} />
+                    </div>
                     {stores.length > 0 && (
-                      <select
-                        value={editStoreId}
-                        onChange={e => setEditStoreId(e.target.value)}
-                        aria-label="Assigned attendance store"
-                        className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-1.5 px-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
-                      >
-                        <option value="">No assigned store</option>
-                        {stores.map(s => (
-                          <option key={s.id} value={s.id}>{s.name}</option>
-                        ))}
-                      </select>
+                      <div>
+                        <label htmlFor={`um-edit-store-${u.id}`} className="neu-label">Attendance store</label>
+                        <select
+                          id={`um-edit-store-${u.id}`}
+                          value={editStoreId}
+                          onChange={e => setEditStoreId(e.target.value)}
+                          className="neu-field"
+                        >
+                          <option value="">No assigned store</option>
+                          {stores.map(s => (
+                            <option key={s.id} value={s.id}>{s.name}</option>
+                          ))}
+                        </select>
+                      </div>
                     )}
+                    <div className="flex gap-2 pt-1">
+                      <Button type="button" variant="primary" className="flex-1" onClick={() => handleEditSave(u.id)} disabled={editSaving} icon={<Check size={14} />}>
+                        {editSaving ? 'Saving…' : 'Save'}
+                      </Button>
+                      <Button type="button" className="flex-1" onClick={cancelEdit} disabled={editSaving} icon={<X size={14} />}>
+                        Cancel
+                      </Button>
+                    </div>
                     {u.id !== currentUserId && (
-                      <button
-                        type="button"
-                        onClick={() => setDeleteTarget(u)}
-                        disabled={removingId === u.id}
-                        className="w-full py-2 text-xs font-medium tracking-wide text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-[6px] transition-colors active-scale flex items-center justify-center gap-1.5 disabled:opacity-40"
-                      >
-                        <Trash2 size={12} /> Delete User
-                      </button>
+                      <Button type="button" variant="danger" block onClick={() => setDeleteTarget(u)} disabled={removingId === u.id} icon={<Trash2 size={13} />}>
+                        Delete user
+                      </Button>
                     )}
                   </div>
                 ) : (
-                  <div className="flex items-center gap-[6px]">
-                    <div className="w-9 h-9 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center shrink-0 text-brand-900 dark:text-gold-400">
-                      {u.role === 'admin' ? <Shield size={16} strokeWidth={1.5} /> : <User size={16} strokeWidth={1.5} />}
-                    </div>
+                  <div className="flex items-center gap-3 px-2.5 py-3">
+                    <span className={`w-10 h-10 rounded-full neu-inset flex items-center justify-center shrink-0 text-[12px] font-semibold tracking-wide ${u.role === ADMIN_ROLE_ID ? 'text-[var(--neu-gold)]' : 'text-[var(--neu-text-dim)]'}`}>
+                      {initials(u.name)}
+                    </span>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-serif text-gray-900 dark:text-gray-100 truncate flex items-center gap-1.5">
+                      <p className="text-sm font-medium text-[var(--neu-text)] truncate flex items-center gap-1.5">
                         {u.name}
+                        {u.id === currentUserId && <span className="text-[10px] font-normal text-[var(--neu-text-dim)]">(you)</span>}
                         {u.notificationsEnabled ? (
-                          <span title="Notifications Enabled" className="shrink-0 inline-flex"><Bell size={12} className="text-gold-500" aria-hidden="true" /><span className="sr-only">Notifications enabled</span></span>
+                          <span title="Notifications enabled" className="shrink-0 inline-flex"><Bell size={12} className="text-gold-500" aria-hidden="true" /><span className="sr-only">Notifications enabled</span></span>
                         ) : (
-                          <span title="Notifications Disabled" className="shrink-0 inline-flex"><BellOff size={12} className="text-gray-400 dark:text-gray-600" aria-hidden="true" /><span className="sr-only">Notifications disabled</span></span>
+                          <span title="Notifications disabled" className="shrink-0 inline-flex"><BellOff size={12} className="text-[var(--neu-text-dim)]" aria-hidden="true" /><span className="sr-only">Notifications disabled</span></span>
                         )}
                       </p>
-                      <p className="text-[10px] text-gray-400 dark:text-gray-500 truncate">{u.email}</p>
+                      <p className="text-[11px] text-[var(--neu-text-dim)] truncate">{u.email}</p>
                     </div>
-                    <span className={`text-[8px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full shrink-0 ${u.role === 'admin'
-                      ? 'bg-gold-100 dark:bg-gold-900/30 text-gold-700 dark:text-gold-400'
-                      : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'
-                      }`}>
-                      {u.role}
+                    <span className={`neu-status text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 shrink-0 ${u.role === ADMIN_ROLE_ID ? 'text-gold-700 dark:text-gold-300' : 'text-[var(--neu-text-dim)]'}`}>
+                      {roleName(u.role)}
                     </span>
                     <button
                       onClick={() => startEdit(u)}
-                      className="p-1.5 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale shrink-0"
+                      aria-label={`Edit ${u.name}`}
                       title="Edit user"
+                      className="neu-icon-btn neu-btn active-scale"
                     >
                       <Edit2 size={14} />
                     </button>
                   </div>
                 )}
-              </div>
+              </React.Fragment>
             ))}
           </div>
-        </section>
+        )}
+      </section>
 
-        {/* Add user form */}
-        <section>
-          <h3 className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-2 px-1 flex items-center gap-1">
-            <UserPlus size={11} /> Add User
-          </h3>
-          <form onSubmit={handleAdd} className="bg-white dark:bg-[#1e1e1e] rounded-[6px] border border-gray-100 dark:border-gray-800 p-[6px] space-y-4 shadow-sm">
-            {addError && (
-              <p className="text-[11px] text-red-500 dark:text-red-400 bg-red-50 dark:bg-red-900/20 px-[6px] py-2 rounded-[6px]">
-                {addError}
-              </p>
-            )}
+      {/* Add user */}
+      <section className="lg:sticky lg:top-0">
+        <h3 className="neu-label px-1">Add user</h3>
+        <form onSubmit={handleAdd} className="neu-card p-4 space-y-4">
+          <div className="flex items-center gap-3">
+            <span className="w-10 h-10 rounded-full neu-inset flex items-center justify-center shrink-0 text-[var(--neu-gold)]">
+              <UserPlus size={17} />
+            </span>
+            <p className="text-xs text-[var(--neu-text-dim)] leading-relaxed">They sign in with this email and the temporary password, then change it.</p>
+          </div>
 
-            <div>
-              <label htmlFor="um-name" className="block text-[10px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">
-                Full Name
-              </label>
+          {addError && (
+            <p className="neu-inset rounded-xl text-[11px] text-red-600 dark:text-red-400 px-3 py-2">{addError}</p>
+          )}
+
+          <div>
+            <label htmlFor="um-name" className="neu-label">Full name</label>
+            <input id="um-name" type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Jane Doe" className="neu-field" />
+          </div>
+
+          <div>
+            <label htmlFor="um-email" className="neu-label">Email</label>
+            <input id="um-email" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="jane@vayu.com" className="neu-field" />
+          </div>
+
+          <div>
+            <label htmlFor="um-password" className="neu-label">Temporary password</label>
+            <div className="relative">
               <input
-                id="um-name"
-                type="text"
-                value={name}
-                onChange={e => setName(e.target.value)}
-                placeholder="Jane Doe"
-                className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-2 px-[6px] text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                id="um-password"
+                autoComplete="new-password"
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="Min 6 characters"
+                className="neu-field pr-10"
               />
-            </div>
-
-            <div>
-              <label htmlFor="um-email" className="block text-[10px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">
-                Email
-              </label>
-              <input
-                id="um-email"
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="jane@vayu.com"
-                className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-2 px-[6px] text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="um-password" className="block text-[10px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">
-                Temporary Password
-              </label>
-              <div className="relative">
-                <input
-                  id="um-password"
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  placeholder="Min 6 characters"
-                  className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-2 px-[6px] pr-9 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(s => !s)}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
-                >
-                  {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
-                </button>
-              </div>
-            </div>
-
-            <div>
-              <label htmlFor="um-role" className="block text-[10px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">
-                Role
-              </label>
-              <select
-                id="um-role"
-                value={role}
-                onChange={e => setRole(e.target.value as 'user' | 'admin')}
-                className="w-full bg-gray-50 dark:bg-[#2a2a2a] border border-gray-200 dark:border-gray-700 rounded-[6px] py-2 px-[6px] text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+              <button
+                type="button"
+                onClick={() => setShowPassword(s => !s)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--neu-text-dim)] hover:text-[var(--neu-text)]"
               >
-                <option value="user">User</option>
-                <option value="admin">Admin</option>
-              </select>
+                {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
             </div>
+          </div>
 
-            <button
-              type="submit"
-              disabled={adding}
-              className="w-full bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 rounded-[6px] py-2.5 text-sm font-medium tracking-wide hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors shadow-sm active-scale disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              <UserPlus size={16} />
-              {adding ? 'Adding…' : 'Add User'}
-            </button>
-          </form>
-        </section>
-      </div>
+          <div>
+            <label htmlFor="um-role" className="neu-label">Role</label>
+            <RoleSelect id="um-role" value={role} roles={roles} onChange={setRole} />
+          </div>
+
+          <Button type="submit" variant="primary" block disabled={adding} icon={<UserPlus size={16} />}>
+            {adding ? 'Adding…' : 'Add user'}
+          </Button>
+        </form>
+      </section>
 
       <TypeDeleteDialog
         isOpen={!!deleteTarget}

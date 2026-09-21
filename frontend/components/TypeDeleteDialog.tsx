@@ -54,26 +54,26 @@ export const TypeDeleteDialog: React.FC<TypeDeleteDialogProps> = ({
             {/* Backdrop */}
             <button
                 type="button"
-                className="fixed inset-0 bg-black/40 backdrop-blur-[2px] transition-opacity border-none p-0 cursor-default"
+                className="fixed inset-0 neu-scrim transition-opacity border-none p-0 cursor-default"
                 onClick={onClose}
                 aria-label="Close dialog"
             />
             {/* Panel */}
-            <div className="relative z-10 w-full max-w-md mx-4 transform rounded-2xl bg-white dark:bg-[#1e1e1e] p-5 text-left align-middle shadow-xl transition-all animate-scale-in">
+            <div className="relative z-10 w-[min(28rem,92vw)] neu-modal p-5 text-left align-middle animate-scale-in">
                 <div className="flex items-start gap-3">
-                    <div className="w-9 h-9 rounded-full bg-red-50 dark:bg-red-900/20 flex items-center justify-center shrink-0">
+                    <div className="w-9 h-9 rounded-full neu-inset flex items-center justify-center shrink-0">
                         <TriangleAlert size={18} className="text-red-500" />
                     </div>
                     <div className="flex-1 min-w-0">
                         <h3 className="text-base font-serif font-medium text-gray-900 dark:text-white">{title}</h3>
-                        <p className="mt-1 text-sm text-gray-500 dark:text-gray-300 font-light">
+                        <p className="mt-1 text-sm text-gray-700 dark:text-gray-200 font-light">
                             <span className="font-medium text-gray-700 dark:text-gray-200">“{itemName}”</span> will be removed
                             {message ? ` — ${message}` : '.'}
                         </p>
                     </div>
                 </div>
                 <div className="mt-4">
-                    <label htmlFor="type-delete-input" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">
+                    <label htmlFor="type-delete-input" className="neu-label">
                         Type <span className="text-red-500 dark:text-red-400 font-bold">{confirmWord}</span> to confirm
                     </label>
                     <input
@@ -86,24 +86,17 @@ export const TypeDeleteDialog: React.FC<TypeDeleteDialogProps> = ({
                         autoComplete="off"
                         autoCorrect="off"
                         spellCheck={false}
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-red-400 dark:focus:border-red-500 transition-colors"
+                        className="neu-field"
                     />
                 </div>
-                <div className="mt-4 flex justify-end space-x-2">
-                    <button
-                        type="button"
-                        className="inline-flex justify-center rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#2a2a2a] px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none transition-colors"
-                        onClick={onClose}
-                    >
+                <div className="mt-4 flex justify-end gap-2.5">
+                    <button type="button" className="neu-button" onClick={onClose}>
                         Cancel
                     </button>
                     <button
                         type="button"
                         disabled={!canConfirm}
-                        className={`inline-flex justify-center rounded-md border border-transparent px-3 py-2 text-sm font-medium text-white focus:outline-none transition-colors ${canConfirm
-                            ? 'bg-red-600 hover:bg-red-700'
-                            : 'bg-red-300 dark:bg-red-900/40 cursor-not-allowed opacity-60'
-                            }`}
+                        className="neu-button neu-button-danger"
                         onClick={onConfirm}
                     >
                         Delete

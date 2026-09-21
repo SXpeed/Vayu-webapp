@@ -1,21 +1,28 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { authService, ActivityLog } from '../services/authService';
 import { SearchBar } from '../components/SearchBar';
+import { PageRoot, PageHeader, PageBody, GhostIconButton } from '../components/ui';
+import { RefreshCw, Plus, Pencil, Trash2, LogIn, LogOut, Send, Activity, History } from 'lucide-react';
 
 interface ActivityLogViewProps {
     readonly onBack: () => void;
+    /** Inside the Admin sheet: skip the page chrome (the sheet's header owns
+     *  the title and back button) and render the toolbar inline. */
+    readonly embedded?: boolean;
 }
 
-const formatTimestamp = (ts: number): string => {
+const formatTime = (ts: number): string =>
+    new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+/** "Today" / "Yesterday" / "Mon, 14 Sep" — the heading for a day's group. */
+const dayLabel = (ts: number): string => {
     const date = new Date(ts);
-    const now = new Date();
-    const isToday = date.toDateString() === now.toDateString();
-
-    const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const dateStr = date.toLocaleDateString([], { day: 'numeric', month: 'short' });
-
-    if (isToday) return `Today, ${time}`;
-    return `${dateStr}, ${time}`;
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    if (date.toDateString() === today.toDateString()) return 'Today';
+    if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
+    return date.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
 };
 
 const getActionColor = (action: string): string => {
@@ -25,31 +32,21 @@ const getActionColor = (action: string): string => {
     if (a.includes('delete') || a.includes('remove')) return 'text-red-600 dark:text-red-400';
     if (a.includes('login') || a.includes('logout') || a.includes('auth')) return 'text-purple-600 dark:text-purple-400';
     if (a.includes('send') || a.includes('message')) return 'text-cyan-600 dark:text-cyan-400';
-    return 'text-gold-600 dark:text-gold-400';
+    return 'text-gold-700 dark:text-gold-300';
 };
 
-const getActionBgColor = (action: string): string => {
+const getActionIcon = (action: string): React.ElementType => {
     const a = action.toLowerCase();
-    if (a.includes('create') || a.includes('add')) return 'bg-green-50 dark:bg-green-900/20';
-    if (a.includes('update') || a.includes('edit')) return 'bg-blue-50 dark:bg-blue-900/20';
-    if (a.includes('delete') || a.includes('remove')) return 'bg-red-50 dark:bg-red-900/20';
-    if (a.includes('login') || a.includes('logout') || a.includes('auth')) return 'bg-purple-50 dark:bg-purple-900/20';
-    if (a.includes('send') || a.includes('message')) return 'bg-cyan-50 dark:bg-cyan-900/20';
-    return 'bg-gold-300/20 dark:bg-gold-500/10';
+    if (a.includes('create') || a.includes('add')) return Plus;
+    if (a.includes('update') || a.includes('edit')) return Pencil;
+    if (a.includes('delete') || a.includes('remove')) return Trash2;
+    if (a.includes('login')) return LogIn;
+    if (a.includes('logout')) return LogOut;
+    if (a.includes('send') || a.includes('message')) return Send;
+    return Activity;
 };
 
-const getActionIcon = (action: string): string => {
-    const a = action.toLowerCase();
-    if (a.includes('create') || a.includes('add')) return '＋';
-    if (a.includes('update') || a.includes('edit')) return '✎';
-    if (a.includes('delete') || a.includes('remove')) return '✕';
-    if (a.includes('login')) return '→';
-    if (a.includes('logout')) return '←';
-    if (a.includes('send') || a.includes('message')) return '✉';
-    return '•';
-};
-
-export function ActivityLogView({ onBack }: ActivityLogViewProps) {
+export function ActivityLogView({ onBack, embedded = false }: ActivityLogViewProps) {
     const [logs, setLogs] = useState<ActivityLog[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -90,21 +87,56 @@ export function ActivityLogView({ onBack }: ActivityLogViewProps) {
         return matchesSearch && matchesAction;
     });
 
+    // Logs arrive newest first, so consecutive runs of the same day form the groups.
+    const groups: { day: string; logs: ActivityLog[] }[] = [];
+    for (const log of filteredLogs) {
+        const day = dayLabel(log.timestamp);
+        const last = groups.at(-1);
+        if (last?.day === day) last.logs.push(log);
+        else groups.push({ day, logs: [log] });
+    }
+
+    const refreshButton = (
+        <GhostIconButton onClick={loadLogs} label="Refresh" icon={<RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />} disabled={isLoading} />
+    );
+
+    // Search gets its own full row on phones; the filter (and refresh, when
+    // embedded) share the next one instead of squeezing the field.
+    const filters = (extra?: React.ReactNode) => (
+        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+            <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search activity…" className="w-full sm:w-auto sm:flex-1" />
+            <select
+                value={actionFilter}
+                onChange={(e) => setActionFilter(e.target.value)}
+                aria-label="Filter by action"
+                className="neu-field flex-1 sm:flex-none sm:w-auto text-xs py-2"
+            >
+                <option value="all" className="dark:bg-gray-800">All Actions</option>
+                {actionTypes.map((action) => (
+                    <option key={action} value={action} className="dark:bg-gray-800">
+                        {action}
+                    </option>
+                ))}
+            </select>
+            {extra}
+        </div>
+    );
+
     let body: React.ReactNode;
     if (isLoading && logs.length === 0) {
         body = (
-            <div className="flex flex-col items-center justify-center py-20 text-gray-400 dark:text-gray-500">
+            <div className="flex flex-col items-center justify-center py-20 text-[var(--neu-text-dim)]">
                 <div className="w-8 h-8 border-2 border-gold-500/30 border-t-gold-500 rounded-full animate-spin mb-4" />
-                <p className="text-xs font-light">Loading activity logs…</p>
+                <p className="text-xs">Loading activity logs…</p>
             </div>
         );
     } else if (error) {
         body = (
-            <div className="flex flex-col items-center justify-center py-20 text-center">
-                <p className="text-red-500 dark:text-red-400 mb-4 text-sm">{error}</p>
+            <div className="neu-card flex flex-col items-center justify-center py-12 px-6 text-center">
+                <p className="text-red-600 dark:text-red-400 mb-4 text-sm">{error}</p>
                 <button
                     onClick={loadLogs}
-                    className="px-5 py-2.5 bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 rounded-[6px] text-xs font-medium uppercase tracking-wider hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors active-scale shadow-md"
+                    className="px-5 py-2.5 neu-raised-sm neu-btn text-gold-700 dark:text-gold-300 rounded-full text-xs font-medium uppercase tracking-wider active-scale"
                 >
                     Retry
                 </button>
@@ -112,125 +144,78 @@ export function ActivityLogView({ onBack }: ActivityLogViewProps) {
         );
     } else if (filteredLogs.length === 0) {
         body = (
-            <div className="flex flex-col items-center justify-center py-20 text-gray-400 dark:text-gray-500">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mb-4">
-                    <circle cx="12" cy="12" r="10" />
-                    <path d="M12 6v6l4 2" />
-                </svg>
-                <p className="text-xs font-light">
+            <div className="neu-card flex flex-col items-center justify-center py-12 px-6 text-center">
+                <span className="w-14 h-14 rounded-full neu-inset mb-4 flex items-center justify-center text-[var(--neu-gold)]">
+                    <History size={22} strokeWidth={1.5} />
+                </span>
+                <p className="text-xs text-[var(--neu-text-dim)]">
                     {logs.length === 0 ? 'No activity logged yet.' : 'No results match your search.'}
                 </p>
             </div>
         );
     } else {
         body = (
-            <>
-                <p className="text-[9px] text-gray-400 dark:text-gray-500 mb-[6px] uppercase tracking-widest font-medium px-1">
+            <div className="space-y-5 animate-fade-in">
+                <p className="neu-label px-1">
                     Showing {filteredLogs.length} of {logs.length} {logs.length === 1 ? 'entry' : 'entries'}
                 </p>
-                <div className="space-y-2">
-                    {filteredLogs.map((log, index) => (
-                        <div
-                            key={log.id}
-                            className="bg-white dark:bg-[#1e1e1e] border border-gray-100 dark:border-gray-800 rounded-[6px] p-3.5 shadow-sm animate-fade-in-up"
-                            style={{ animationDelay: `${Math.min(index * 15, 150)}ms` }}
-                        >
-                            <div className="flex items-start gap-[6px]">
-                                {/* Action icon */}
-                                <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm ${getActionBgColor(log.action)} ${getActionColor(log.action)}`}>
-                                    {getActionIcon(log.action)}
-                                </div>
-
-                                {/* Content */}
-                                <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-1.5 flex-wrap">
-                                        <span className={`font-medium text-xs ${getActionColor(log.action)}`}>
-                                            {log.action}
-                                        </span>
-                                        <span className="text-gray-300 dark:text-gray-600 text-[9px]">·</span>
-                                        <span className="text-[9px] text-gray-500 dark:text-gray-400 uppercase tracking-wider">{log.entity}</span>
-                                    </div>
-
-                                    {/* Details line */}
-                                    <p className="text-xs text-gray-600 dark:text-gray-400 mt-1 break-words leading-relaxed">
-                                        <span className="text-gray-900 dark:text-gray-200 font-medium">{log.userName}</span>
-                                        {log.details ? ` — ${log.details}` : ''}
-                                    </p>
-
-                                    {/* Timestamp */}
-                                    <p className="text-[9px] text-gray-400 dark:text-gray-500 mt-1.5 uppercase tracking-wider">
-                                        {formatTimestamp(log.timestamp)}
-                                    </p>
-                                </div>
-                            </div>
+                {/* One card per day, rows divided inside it — a timeline, not a
+                    stack of 200 separately extruded slabs. */}
+                {groups.map(({ day, logs: dayLogs }) => (
+                    <section key={day}>
+                        <h3 className="neu-label px-1">{day}</h3>
+                        <div className="neu-card px-1.5 py-1">
+                            {dayLogs.map((log, index) => {
+                                const Icon = getActionIcon(log.action);
+                                const color = getActionColor(log.action);
+                                return (
+                                    <React.Fragment key={log.id}>
+                                        {index > 0 && <div className="neu-divider mx-2.5" />}
+                                        <div className="flex items-start gap-3 px-2.5 py-3">
+                                            <span className={`w-9 h-9 rounded-full neu-inset flex items-center justify-center shrink-0 ${color}`}>
+                                                <Icon size={15} strokeWidth={2} />
+                                            </span>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-baseline justify-between gap-3">
+                                                    <p className="text-[13px] leading-snug text-[var(--neu-text)] min-w-0">
+                                                        <span className="font-semibold">{log.userName}</span>
+                                                        {' '}<span className={`font-medium ${color}`}>{log.action}</span>
+                                                        {' '}<span className="text-[11px] uppercase tracking-wider text-[var(--neu-text-dim)]">{log.entity}</span>
+                                                    </p>
+                                                    <span className="text-[11px] text-[var(--neu-text-dim)] tabular-nums shrink-0">{formatTime(log.timestamp)}</span>
+                                                </div>
+                                                {log.details && (
+                                                    <p className="text-xs text-[var(--neu-text-dim)] mt-1 break-words leading-relaxed">{log.details}</p>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </React.Fragment>
+                                );
+                            })}
                         </div>
-                    ))}
-                </div>
-            </>
+                    </section>
+                ))}
+            </div>
+        );
+    }
+
+    if (embedded) {
+        return (
+            <div className="max-w-4xl space-y-4">
+                {filters(refreshButton)}
+                {body}
+            </div>
         );
     }
 
     return (
-        <div className="h-full flex flex-col bg-[#faf9f6] dark:bg-[#121212] transition-colors duration-500 animate-fade-in">
-            {/* Header */}
-            <div className="sticky top-0 z-10 bg-white dark:bg-[#1a1a1a] shadow-sm border-b border-gray-100 dark:border-gray-800">
-                <div className="px-[6px] pb-[6px]" style={{ paddingTop: 'calc(1.75rem + env(safe-area-inset-top, 0px))' }}>
-                    <div className="flex items-center gap-[6px] mb-[6px]">
-                        <button
-                            onClick={onBack}
-                            className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale shrink-0"
-                            aria-label="Go back"
-                        >
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path d="M19 12H5M12 19l-7-7 7-7" />
-                            </svg>
-                        </button>
-                        <h1 className="text-xl font-serif text-gray-900 dark:text-white flex-1">Activity Logs</h1>
-                        <button
-                            onClick={loadLogs}
-                            disabled={isLoading}
-                            className="w-9 h-9 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active-scale shrink-0 disabled:opacity-30"
-                            aria-label="Refresh"
-                            title="Refresh"
-                        >
-                            <svg
-                                className={isLoading ? 'animate-spin' : ''}
-                                width="16"
-                                height="16"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                            >
-                                <path d="M23 4v6h-6M1 20v-6h6" />
-                                <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
-                            </svg>
-                        </button>
-                    </div>
-
-                    {/* Search + Filter */}
-                    <div className="flex gap-2">
-                        <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search activity…" className="flex-1" />
-                        <select
-                            value={actionFilter}
-                            onChange={(e) => setActionFilter(e.target.value)}
-                            className="bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] px-[6px] py-2 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors cursor-pointer"
-                        >
-                            <option value="all" className="dark:bg-gray-800">All Actions</option>
-                            {actionTypes.map((action) => (
-                                <option key={action} value={action} className="dark:bg-gray-800">
-                                    {action}
-                                </option>
-                            ))}
-                        </select>
-                    </div>
-                </div>
-            </div>
-
-            {/* Body */}
-            <div className="flex-1 overflow-y-auto no-scrollbar p-[6px] pb-0">
+        <PageRoot width="narrow">
+            <PageHeader title="Activity Logs" onBack={onBack} actions={refreshButton}>
+                {filters()}
+            </PageHeader>
+            <PageBody space="none">
                 {body}
-            </div>
-        </div>
+            </PageBody>
+        </PageRoot>
     );
 }

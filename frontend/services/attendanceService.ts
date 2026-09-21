@@ -63,8 +63,35 @@ export const attendanceService = {
         });
     },
 
-    async getRecords(storeId?: string): Promise<AttendanceRecord[]> {
-        const query = storeId ? `?storeId=${encodeURIComponent(storeId)}` : '';
-        return call<AttendanceRecord[]>(`/attendance/records${query}`);
+    /**
+     * Records, newest first. Admins get everyone's; employees their own. The
+     * filters are applied server-side when supported. Callers still filter
+     * client-side too, because older servers ignore everything but storeId.
+     */
+    async getRecords(filter: RecordsFilter = {}): Promise<AttendanceRecord[]> {
+        const params = new URLSearchParams();
+        if (filter.storeId) params.set('storeId', filter.storeId);
+        if (filter.employeeId) params.set('employeeId', filter.employeeId);
+        if (filter.from != null) params.set('from', String(filter.from));
+        if (filter.to != null) params.set('to', String(filter.to));
+        const query = params.toString();
+        return call<AttendanceRecord[]>(query ? '/attendance/records?' + query : '/attendance/records');
+    },
+
+    /** Admin: close a check-in someone forgot to check out of. */
+    async closeRecord(id: string, checkOutAt: number): Promise<AttendanceRecord> {
+        return call<AttendanceRecord>(`/attendance/records/${encodeURIComponent(id)}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ checkOutAt }),
+        });
     },
 };
+
+export interface RecordsFilter {
+    storeId?: string;
+    employeeId?: string;
+    /** Epoch ms, inclusive — matched against check-in time. */
+    from?: number;
+    /** Epoch ms, exclusive. */
+    to?: number;
+}

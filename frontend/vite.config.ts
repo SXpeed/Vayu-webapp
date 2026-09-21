@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { defineConfig, loadEnv, Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import basicSsl from '@vitejs/plugin-basic-ssl';
 
 // Plugin to copy static files (sw.js) to the dist folder after build
 function copyStaticFiles(): Plugin {
@@ -40,6 +41,10 @@ function copyStaticFiles(): Plugin {
 
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, process.cwd(), '');
+    // HTTPS dev mode (VITE_HTTPS=1, see `npm run dev:phone`): serves the dev
+    // server over self-signed HTTPS so the PWA can be installed on a phone
+    // over the LAN — browsers only offer "Install app" on secure origins.
+    const useHttps = !!env.VITE_HTTPS;
     return {
       define: {
         // This is just generic value for the GEMINI API key.
@@ -48,6 +53,7 @@ export default defineConfig(({ mode }) => {
       },
       server: {
         host: true,
+        ...(useHttps ? { https: {} } : {}),
         proxy: {
           //Target your Node.js backend
           '/api-proxy': 'http://localhost:5000',
@@ -64,7 +70,13 @@ export default defineConfig(({ mode }) => {
       preview: {
         allowedHosts: true,
       },
-      plugins: [react(), tailwindcss(), copyStaticFiles()],
+      // The catalog PDF generator runs in a module worker that code-splits
+      // (jsPDF's lazy plugins, background removal, onnxruntime). Vite's default
+      // worker format, iife, can't code-split and fails the build.
+      worker: {
+        format: 'es',
+      },
+      plugins: [react(), tailwindcss(), copyStaticFiles(), ...(useHttps ? [basicSsl()] : [])],
       resolve: {
         alias: {
           '@': path.resolve(__dirname, '.'),

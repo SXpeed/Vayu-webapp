@@ -7,9 +7,15 @@
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <!-- Single theme-color; the inline theme script below keeps it in sync
          with the user's app-level theme preference (from localStorage). -->
-    <meta name="theme-color" content="#faf9f6">
+    <meta name="theme-color" content="#e9edf4">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <!-- `default`, not `black-translucent`: with the translucent bar, iOS drew
+         the installed app from the very top of the screen but sized it as if
+         the status bar were solid, leaving an undrawable strip (a status bar's
+         height) below the nav bar. With `default` the view starts below the
+         status bar and reaches the bottom edge; the bar takes theme-color,
+         which matches the app background. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="Vayu Design">
     <meta name="format-detection" content="telephone=no">
     <meta name="mobile-web-app-capable" content="yes">
@@ -27,9 +33,9 @@
             const savedTheme = localStorage.getItem('vayu_theme') || 'light';
             if (savedTheme === 'dark') {
                 document.documentElement.classList.add('dark');
-                document.querySelector('meta[name="theme-color"]').setAttribute('content', '#121212');
+                document.querySelector('meta[name="theme-color"]').setAttribute('content', '#22252b');
             } else {
-                document.querySelector('meta[name="theme-color"]').setAttribute('content', '#faf9f6');
+                document.querySelector('meta[name="theme-color"]').setAttribute('content', '#e9edf4');
             }
         } catch (e) {
             console.warn('Failed to apply theme', e);
@@ -60,12 +66,13 @@
             /* Fix the layout viewport so it can't be shifted by overscroll. */
             position: fixed;
             width: 100%;
-            height: 100%;
+            height: var(--app-height, 100dvh);
             overflow: hidden;
         }
 
         body {
-            background-color: #faf9f6;
+            /* Same as --neu-bg, so nothing behind the shell ever reads as a band */
+            background-color: #e9edf4;
             margin: 0;
             font-family: 'Inter', sans-serif;
             -webkit-tap-highlight-color: transparent;
@@ -81,7 +88,7 @@
             /* Keep the body inside the fixed html viewport */
             position: fixed;
             width: 100%;
-            height: 100%;
+            height: var(--app-height, 100dvh);
             overflow: hidden;
         }
 
@@ -95,7 +102,7 @@
 
         /* Dark mode fallback for body before React loads */
         html.dark body {
-            background-color: #121212;
+            background-color: #22252b;
         }
 
         /* Prevent double-tap-to-zoom completely on the app
@@ -132,21 +139,24 @@
 
                 /* Ensure bottom nav doesn't overlap the home indicator */
                 .pb-safe-auto {
-                    padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+                    padding-bottom: var(--safe-bottom, env(safe-area-inset-bottom, 0px)) !important;
                 }
             }
         }
 
-        /* Custom Animations */
+        /* Custom Animations — quick and light. Content should feel *there*
+         * the moment you tap: entrances were 0.5–0.7s with per-card
+         * staggers up to ~0.5s, so a list took over a second to settle
+         * (measured ~1s to the 6th card at 4x CPU throttle). */
         @keyframes fadeInUp {
             from {
                 opacity: 0;
-                transform: translateY(15px);
+                transform: translateY(8px) scale(0.995);
             }
 
             to {
                 opacity: 1;
-                transform: translateY(0);
+                transform: translateY(0) scale(1);
             }
         }
 
@@ -163,7 +173,7 @@
         @keyframes scaleIn {
             from {
                 opacity: 0;
-                transform: scale(0.97);
+                transform: scale(0.94);
             }
 
             to {
@@ -172,30 +182,37 @@
             }
         }
 
+        /* `animation-delay` is pinned to 0: views set inline staggers (up to
+         * `400ms + index * 50ms`), which only postponed content. !important
+         * is what lets a stylesheet win over those inline styles. */
         .animate-fade-in-up {
-            animation: fadeInUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            animation: fadeInUp 0.28s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+            animation-delay: 0ms !important;
             opacity: 0;
         }
 
         .animate-fade-in {
-            animation: fadeIn 0.2s ease-out forwards;
+            animation: fadeIn 0.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+            animation-delay: 0ms !important;
             opacity: 0;
         }
 
         .animate-scale-in {
-            animation: scaleIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            animation: scaleIn 0.26s cubic-bezier(0.34, 1.2, 0.64, 1) forwards;
+            animation-delay: 0ms !important;
             opacity: 0;
         }
 
         .active-scale {
-            /* Fast, smooth press feedback. The :active scale itself applies
-               instantly (no transition delay on press); this only eases the
-               release so taps feel responsive but not abrupt. */
-            transition: transform 0.12s ease-out;
+            /* Smooth, springy press feedback: the :active scale applies
+               instantly (no delay on press); the release eases back with a
+               soft spring so taps feel fluid and substantial. */
+            transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
         }
 
         .active-scale:active {
-            transform: scale(0.96);
+            transform: scale(0.94);
+            transition: transform 0.08s ease-out;
         }
 
         /* Remove any residual double-tap-zoom tap delay on interactive
@@ -279,16 +296,100 @@
          * the app shell uses it instead of `100dvh`.
          */
         (function () {
+            // --app-height: set only while the keyboard is open, pinning the app
+            // to the visual viewport (iOS doesn't shrink the layout viewport).
+            // Otherwise html/body/#root simply fill the viewport (100%).
+            //
+            // --safe-bottom: the bottom inset every nav bar / page bottom uses.
+            // Normally it's just env(safe-area-inset-bottom). But on some
+            // iPhones the installed app is given a view shorter than the screen
+            // (short by about a status bar), and the strip below it can't be
+            // drawn into; content placed there is clipped. The home indicator
+            // then sits mostly or entirely *outside* the app's view, yet iOS
+            // still reports the full ~34pt inset, which pushed the nav bar up
+            // and left dead space. So when the view is short, only count the
+            // part of the home-indicator area that actually overlaps it.
+            //
+            // Add ?vpdebug to the URL to show the measured values on screen.
+            const debug = new URLSearchParams(globalThis.location.search).has('vpdebug');
+            let insetProbe = null;
+            function safeInsets() {
+                if (!insetProbe) {
+                    insetProbe = document.createElement('div');
+                    insetProbe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:100dvh;box-sizing:content-box;visibility:hidden;pointer-events:none;'
+                        + 'padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)';
+                    document.documentElement.appendChild(insetProbe);
+                }
+                const cs = getComputedStyle(insetProbe);
+                return {
+                    top: Number.parseFloat(cs.paddingTop) || 0,
+                    bottom: Number.parseFloat(cs.paddingBottom) || 0,
+                    // What 100dvh resolves to: if iOS lets the view reach past
+                    // innerHeight, this is the real height to measure against.
+                    dvh: Number.parseFloat(cs.height) || 0,
+                };
+            }
+            /** How far the app's view falls short of the physical screen (installed iPhone app only). */
+            function viewShortfall(insets) {
+                if (globalThis.navigator.standalone !== true) return 0;
+                // No top inset means the view already starts below the status
+                // bar, so being shorter than the screen is expected, not a bug.
+                if (insets.top < 1) return 0;
+                const portrait = globalThis.innerHeight >= globalThis.innerWidth;
+                const s = portrait
+                    ? Math.max(globalThis.screen.width, globalThis.screen.height)
+                    : Math.min(globalThis.screen.width, globalThis.screen.height);
+                const shortBy = s - Math.max(globalThis.innerHeight, insets.dvh);
+                return shortBy > 0 && shortBy <= 120 ? shortBy : 0;
+            }
             function setAppHeight() {
-                const vh = (globalThis.visualViewport && globalThis.visualViewport.height)
-                    ? globalThis.visualViewport.height
-                    : globalThis.innerHeight;
-                document.documentElement.style.setProperty('--app-height', vh + 'px');
+                const root = document.documentElement;
+                const vv = globalThis.visualViewport;
+                // A pinch-zoom also shrinks the visual viewport, but with scale > 1.
+                // Treating that as the keyboard shrank the whole app to the
+                // zoomed height and left the rest of the page blank.
+                const keyboardOpen = !!vv && vv.scale < 1.01 && globalThis.innerHeight - vv.height > 120;
+                const h = keyboardOpen ? vv.height : null;
+                if (h) {
+                    root.style.setProperty('--app-height', h + 'px');
+                } else {
+                    root.style.removeProperty('--app-height');
+                }
+
+                const insets = safeInsets();
+                const shortBy = keyboardOpen ? 0 : viewShortfall(insets);
+                const safeBottom = shortBy > 0 ? Math.max(0, insets.bottom - shortBy) : null;
+                if (safeBottom === null) {
+                    root.style.removeProperty('--safe-bottom');
+                } else {
+                    root.style.setProperty('--safe-bottom', safeBottom + 'px');
+                }
+                if (debug) showDebug({ vv, insets, shortBy, h, safeBottom, keyboardOpen });
                 if (globalThis.scrollY > 0) {
                     globalThis.scrollTo(0, 0);
                 }
             }
+            /** ?vpdebug readout, pinned under the status bar. */
+            function showDebug(m) {
+                const lines = [
+                    'innerH ' + globalThis.innerHeight + '  vvH ' + (m.vv ? Math.round(m.vv.height) : '-') + '  100dvh ' + Math.round(m.insets.dvh),
+                    'screen ' + globalThis.screen.width + 'x' + globalThis.screen.height
+                        + '  standalone ' + (globalThis.navigator.standalone === true),
+                    'inset top ' + m.insets.top + '  bottom ' + m.insets.bottom + '  short by ' + m.shortBy,
+                    '--app-height ' + (m.h ? m.h + 'px' : 'unset (100%)') + (m.keyboardOpen ? '  [keyboard]' : ''),
+                    '--safe-bottom ' + (m.safeBottom === null ? 'unset (env)' : m.safeBottom + 'px'),
+                ];
+                let el = document.getElementById('vp-debug');
+                if (!el) {
+                    el = document.createElement('div');
+                    el.id = 'vp-debug';
+                    el.style.cssText = 'position:fixed;left:8px;top:calc(env(safe-area-inset-top) + 4px);z-index:99999;font:11px/1.35 monospace;background:rgba(0,0,0,.75);color:#0f0;padding:6px 8px;border-radius:6px;pointer-events:none;white-space:pre';
+                    (document.body || document.documentElement).appendChild(el);
+                }
+                el.textContent = lines.join('\n');
+            }
             setAppHeight();
+            if (debug) document.addEventListener('DOMContentLoaded', setAppHeight);
             if (globalThis.visualViewport) {
                 globalThis.visualViewport.addEventListener('resize', setAppHeight);
                 globalThis.visualViewport.addEventListener('scroll', setAppHeight);

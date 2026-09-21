@@ -1,6 +1,8 @@
 import React, { useState, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
-import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit2, Check, CheckCheck, Pin, Archive, MoreVertical, Paperclip, Reply, Loader2, Eye, Trash2, Camera } from 'lucide-react';
+import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit2, Check, CheckCheck, Pin, Archive, MoreVertical, Paperclip, Reply, Loader2, Trash2, Camera, AlertCircle } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
+import { useIsDesktop } from '../hooks/useMediaQuery';
+import { PageRoot, PageHeader, PageBody, PrimaryIconButton } from '../components/ui';
 import { Conversation, ConversationDetails, Message, MessageTag, MessageReplyTo, MessageAttachment, UserProfile } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
@@ -8,6 +10,7 @@ import storageService, { getThumbUrl } from '../services/storageService';
 import { useMemberNames } from '../hooks/useMemberNames';
 import { usePhotoCapture } from '../hooks/usePhotoCapture';
 import toast from 'react-hot-toast';
+import { IfCan } from '../components/Layout';
 
 interface MessagingViewProps {
     conversations: Conversation[];
@@ -15,8 +18,9 @@ interface MessagingViewProps {
     teamMembers: UserProfile[];
     currentUserId: string;
     currentUserName: string;
-    isAdmin?: boolean;
     onSendMessage: (conversationId: string, text: string, tags: MessageTag[], replyTo?: MessageReplyTo, attachment?: MessageAttachment) => void;
+    /** Resend a message the server never accepted. */
+    onRetryMessage?: (messageId: string) => void;
     onCreateConversation: (participantId: string, details?: ConversationDetails) => Promise<Conversation>;
     onCreateGroup: (participantIds: string[], groupName: string, details?: ConversationDetails) => Promise<Conversation>;
     onUpdateConversationDetails: (conversationId: string, details: ConversationDetails) => void;
@@ -24,12 +28,11 @@ interface MessagingViewProps {
     onTogglePinConversation: (conversationId: string) => void;
     onToggleArchiveConversation: (conversationId: string) => void;
     onDeleteConversation?: (conversationId: string) => void;
-    onAdminAdvanceViewChange?: (enabled: boolean) => void;
 }
 
 export const TAG_COLORS: Record<MessageTag, string> = {
-    'General': 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400',
-    'Urgent': 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400',
+    'General': 'neu-inset text-gray-600 dark:text-gray-400',
+    'Urgent': 'neu-inset text-red-600 dark:text-red-400',
     'Follow-up': 'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
     'Artwork': 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400',
     'Inquiry': 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-600 dark:text-yellow-400',
@@ -38,13 +41,15 @@ export const TAG_COLORS: Record<MessageTag, string> = {
 
 export const ALL_TAGS: MessageTag[] = ['General', 'Urgent', 'Follow-up', 'Artwork', 'Inquiry', 'Invoice'];
 
-export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, messages, teamMembers, currentUserId, currentUserName, isAdmin, onSendMessage, onCreateConversation, onCreateGroup, onUpdateConversationDetails, onUpdateGroup, onTogglePinConversation, onToggleArchiveConversation, onDeleteConversation, onAdminAdvanceViewChange }) => {
+export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, messages, teamMembers, currentUserId, currentUserName, onSendMessage, onRetryMessage, onCreateConversation, onCreateGroup, onUpdateConversationDetails, onUpdateGroup, onTogglePinConversation, onToggleArchiveConversation, onDeleteConversation }) => {
+    // Desktop shows the thread inline beside the list; phones open it as a
+    // full-screen overlay. That's a choice of component, not just of styling.
+    const isDesktop = useIsDesktop();
     const [selectedConv, setSelectedConv] = useState<Conversation | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [showNewChat, setShowNewChat] = useState(false);
     const [showArchived, setShowArchived] = useState(false);
     const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-    const [adminAdvanceView, setAdminAdvanceView] = useState(false);
     const [editingGroup, setEditingGroup] = useState<Conversation | null>(null);
     const [deleteConvId, setDeleteConvId] = useState<string | null>(null);
 
@@ -69,12 +74,6 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
         } else {
             setSelectedConv(null);
         }
-    };
-
-    const toggleAdvanceView = () => {
-        const next = !adminAdvanceView;
-        setAdminAdvanceView(next);
-        onAdminAdvanceViewChange?.(next);
     };
 
     const onlineMembers = useMemo(() => teamMembers.filter(m => m.isOnline && m.id !== currentUserId), [teamMembers, currentUserId]);
@@ -109,14 +108,6 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
             return { name: conv.groupName || 'Group', id: conv.id };
         }
         const idx = conv.participantIds.indexOf(currentUserId);
-        // In admin advance view, the current user may not be a participant.
-        // Show the first participant that isn't the current user, or just the first.
-        if (idx === -1) {
-            return {
-                name: participantName(conv, 0),
-                id: conv.participantIds[0] || conv.id,
-            };
-        }
         const otherIdx = idx === 0 ? 1 : 0;
         const hasOther = otherIdx < conv.participantIds.length;
         return {
@@ -125,13 +116,8 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
         };
     };
 
-    // In admin advance view, show a descriptive label for conversations the
-    // admin is not part of (e.g. "A ↔ B" for 1-to-1 chats between other users)
     const getConvDisplayName = (conv: Conversation) => {
         if (conv.isGroup) return conv.groupName || 'Group';
-        if (adminAdvanceView && !conv.participantIds.includes(currentUserId)) {
-            return conv.participantIds.map((_, i) => participantName(conv, i)).join(' ↔ ');
-        }
         return getOtherParticipant(conv).name;
     };
 
@@ -153,22 +139,27 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
         const isOnline = getMemberOnlineStatus(other.id);
         const isMenuOpen = openMenuId === conv.id;
         const displayName = getConvDisplayName(conv);
-        const isForeign = adminAdvanceView && !conv.participantIds.includes(currentUserId);
+        // On desktop the thread sits beside the list, so the open conversation
+        // has to read as selected — pressed in, with a gold edge marker.
+        const isSelected = isDesktop && selectedConv?.id === conv.id;
         return (
             <div key={conv.id} className="relative">
                 <div
-                    className="relative w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm p-[6px] flex items-center gap-2 border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
-                    style={{ animationDelay: `${index * 25}ms` }}
+                    className={`relative w-full text-left rounded-2xl p-3 flex items-center gap-2 animate-fade-in-up cursor-pointer active-scale ${isSelected ? 'neu-inset' : 'neu-raised'}`}
+                    style={{ animationDelay: `${index * 45}ms` }}
                 >
+                    {isSelected && (
+                        <span className="absolute left-0 top-1/2 -translate-y-1/2 h-8 w-[3px] rounded-r-full bg-gold-500 z-[2]" />
+                    )}
                     {/* Row tap target; inner action buttons sit above it (z-[2]). */}
                     <button
                         type="button"
                         onClick={() => { setOpenMenuId(null); handleConvClick(conv); }}
                         aria-label={`Open conversation with ${displayName}`}
-                        className="absolute inset-0 z-[1] w-full h-full rounded-[6px] cursor-pointer"
+                        className="absolute inset-0 z-[1] w-full h-full rounded-lg cursor-pointer"
                     />
                     <div className="relative shrink-0">
-                        <div className="w-11 h-11 rounded-full bg-gray-50 dark:bg-gray-800 flex items-center justify-center text-brand-900 dark:text-gold-400">
+                        <div className="w-11 h-11 rounded-full neu-inset flex items-center justify-center text-brand-900 dark:text-gold-400">
                             <User size={20} strokeWidth={1.5} />
                         </div>
                         {isOnline && (
@@ -180,30 +171,30 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                             <div className="flex items-center gap-1">
                                 {conv.isPinned && <Pin size={9} className="text-gold-500 shrink-0" />}
                                 {conv.title && (
-                                    <p className="text-[8px] font-bold text-gold-600 dark:text-gold-400 uppercase tracking-widest truncate">{conv.title}</p>
+                                    <p className="text-[10px] font-bold text-gold-700 dark:text-gold-300 uppercase tracking-widest truncate">{conv.title}</p>
                                 )}
                             </div>
                         )}
                         <div className="flex justify-between items-baseline">
                             <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm truncate">{displayName}</h3>
-                            <span className="text-[9px] text-gray-400 dark:text-gray-500 shrink-0 ml-2">{formatTime(conv.lastMessageTime)}</span>
+                            <span className="text-[11px] text-gray-600 dark:text-gray-300 shrink-0 ml-2">{formatTime(conv.lastMessageTime)}</span>
                         </div>
-                        <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-1 font-light">{conv.lastMessage}</p>
+                        <p className="text-[11px] text-gray-700 dark:text-gray-300 mt-0.5 line-clamp-1 font-light">{conv.lastMessage}</p>
                     </div>
                     {conv.unreadCount > 0 && (
-                        <div className="w-5 h-5 rounded-full bg-gold-500 text-white text-[9px] font-bold flex items-center justify-center shrink-0">
+                        <div className="w-5 h-5 rounded-full bg-gold-500 text-white text-[11px] font-bold flex items-center justify-center shrink-0">
                             {conv.unreadCount}
                         </div>
                     )}
                     <button type="button" aria-label="Conversation options"
                         onClick={(e) => { e.stopPropagation(); setOpenMenuId(isMenuOpen ? null : conv.id); }}
-                        className="relative z-[2] p-1.5 text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale shrink-0"
+                        className="relative z-[2] neu-icon-btn-sm text-gray-600 dark:text-gray-300 active-scale"
                     >
                         <MoreVertical size={16} />
                     </button>
                 </div>
                 {isMenuOpen && (
-                    <div className="absolute right-10 top-1/2 -translate-y-1/2 z-20 bg-white dark:bg-[#262626] rounded-[6px] shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden animate-scale-in flex flex-col min-w-[110px]">
+                    <div className="absolute right-10 top-1/2 -translate-y-1/2 z-20 neu-raised-sm overflow-hidden animate-scale-in flex flex-col min-w-[110px]">
                         {conv.isGroup && onUpdateGroup && (
                             <button
                                 onClick={(e) => { e.stopPropagation(); setOpenMenuId(null); setEditingGroup(conv); }}
@@ -212,29 +203,25 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                                 <Edit2 size={12} /> Edit Group
                             </button>
                         )}
-                        {!isForeign && (
-                            <>
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); onTogglePinConversation(conv.id); setOpenMenuId(null); }}
-                                    className="w-full flex items-center gap-2 px-2 py-1.5 text-[11px] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
-                                >
-                                    <Pin size={12} /> {conv.isPinned ? 'Unpin' : 'Pin'}
-                                </button>
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); onToggleArchiveConversation(conv.id); setOpenMenuId(null); }}
-                                    className="w-full flex items-center gap-2 px-2 py-1.5 text-[11px] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors border-t border-gray-100 dark:border-gray-700 whitespace-nowrap"
-                                >
-                                    <Archive size={12} /> {conv.isArchived ? 'Unarchive' : 'Archive'}
-                                </button>
-                                {conv.isArchived && onDeleteConversation && (
-                                    <button
-                                        onClick={(e) => { e.stopPropagation(); setDeleteConvId(conv.id); setOpenMenuId(null); }}
-                                        className="w-full flex items-center gap-2 px-2 py-1.5 text-[11px] text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors border-t border-gray-100 dark:border-gray-700 whitespace-nowrap"
-                                    >
-                                        <Trash2 size={12} /> Delete
-                                    </button>
-                                )}
-                            </>
+                        <button
+                            onClick={(e) => { e.stopPropagation(); onTogglePinConversation(conv.id); setOpenMenuId(null); }}
+                            className="w-full flex items-center gap-2 px-2 py-1.5 text-[11px] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
+                        >
+                            <Pin size={12} /> {conv.isPinned ? 'Unpin' : 'Pin'}
+                        </button>
+                        <button
+                            onClick={(e) => { e.stopPropagation(); onToggleArchiveConversation(conv.id); setOpenMenuId(null); }}
+                            className="w-full flex items-center gap-2 px-2 py-1.5 text-[11px] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
+                        >
+                            <Archive size={12} /> {conv.isArchived ? 'Unarchive' : 'Archive'}
+                        </button>
+                        {conv.isArchived && onDeleteConversation && (
+                            <button
+                                onClick={(e) => { e.stopPropagation(); setDeleteConvId(conv.id); setOpenMenuId(null); }}
+                                className="w-full flex items-center gap-2 px-2 py-1.5 text-[11px] text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors whitespace-nowrap"
+                            >
+                                <Trash2 size={12} /> Delete
+                            </button>
                         )}
                     </div>
                 )}
@@ -243,69 +230,58 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
     };
 
     return (
-        <div className="h-full flex flex-col bg-[#faf9f6] dark:bg-[#121212] transition-colors duration-500 animate-fade-in">
+        <PageRoot width="full">
+            {/* Desktop is master-detail: the conversation list keeps a fixed
+                column on the left and the open thread renders beside it, so a
+                wide screen isn't three-quarters empty. Phones keep the list →
+                full-screen-thread flow. */}
+            <div className="flex-1 min-h-0 flex">
+            <div className="flex flex-col min-h-0 w-full lg:w-[26rem] lg:shrink-0 lg:border-r lg:border-gray-200/70 dark:lg:border-white/5">
             {/* Header */}
-            <div className="bg-white dark:bg-[#1a1a1a] px-[6px] pt-[calc(1.75rem+env(safe-area-inset-top,0px))] pb-[6px] shadow-sm z-10 border-b border-gray-100 dark:border-gray-800">
-                <div className="flex justify-between items-center mb-[6px]">
-                    <h1 className="text-xl font-serif text-gray-900 dark:text-white">Messages</h1>
-                    <div className="flex items-center gap-2">
-                        {isAdmin && (
-                            <button
-                                onClick={toggleAdvanceView}
-                                className={`flex items-center gap-1.5 px-[6px] py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all active-scale ${adminAdvanceView
-                                    ? 'bg-gold-500 text-white dark:text-brand-950 shadow-md'
-                                    : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
-                                    }`}
-                                title="Show all conversations across the team"
-                            >
-                                <Eye size={14} /> Advance
-                            </button>
-                        )}
-                        <button
-                            onClick={() => setShowNewChat(true)}
-                            className="bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 p-1.5 rounded-full shadow-md hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors active-scale"
-                        >
-                            <Plus size={20} />
-                        </button>
-                    </div>
-                </div>
+            <PageHeader
+                className="lg:px-5 lg:pt-5"
+                title="Messages"
+                actions={(
+                    <IfCan section="messages"><PrimaryIconButton onClick={() => setShowNewChat(true)} label="New chat" icon={<Plus size={16} />} /></IfCan>
+                )}
+            >
                 <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search messages..." />
-            </div>
+            </PageHeader>
 
-            <div className="flex-1 overflow-y-auto p-[6px] space-y-4 no-scrollbar pb-20">
+            <PageBody space="md" scrollClassName="lg:px-5">
                 {/* Group Chats */}
                 {groupConversations.length > 0 && (
-                    <div className="space-y-2 animate-fade-in-up">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-1 gap-2 md:space-y-0 animate-fade-in-up">
                         {groupConversations.map((group) => (
                             <div key={group.id} className="relative">
                                 <div
-                                    className="relative w-full bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm p-[6px] flex items-center gap-[6px] border border-gold-300 dark:border-gold-700 text-left cursor-pointer"
+                                    className="relative w-full neu-raised rounded-2xl p-3 flex items-center gap-3 border border-gold-300 dark:border-gold-700 text-left cursor-pointer"
                                 >
                                     {/* Row tap target; inner action buttons sit above it (z-[2]). */}
                                     <button
                                         type="button"
                                         onClick={() => { setOpenMenuId(null); handleConvClick(group); }}
                                         aria-label={`Open group ${group.groupName || 'Group'}`}
-                                        className="absolute inset-0 z-[1] w-full h-full rounded-[6px] cursor-pointer"
+                                        className="absolute inset-0 z-[1] w-full h-full rounded-lg cursor-pointer"
                                     />
-                                    <div className="w-11 h-11 rounded-full bg-gold-500/10 dark:bg-gold-900/20 flex items-center justify-center text-gold-600 dark:text-gold-400 shrink-0">
+                                    <div className="w-11 h-11 rounded-full bg-gold-500/10 dark:bg-gold-900/20 flex items-center justify-center text-gold-700 dark:text-gold-300 shrink-0">
                                         <Users size={20} strokeWidth={1.5} />
                                     </div>
                                     <div className="flex-1 min-w-0">
                                         <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm">{group.groupName || 'Group'}</h3>
-                                        <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-1 font-light">
+                                        <p className="text-[11px] text-gray-700 dark:text-gray-300 mt-0.5 line-clamp-1 font-light">
                                             {group.participantIds.length} members • {group.lastMessage || 'No messages yet'}
                                         </p>
                                     </div>
                                     <button type="button" aria-label="Group options"
                                         onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === group.id ? null : group.id); }}
-                                        className="relative z-[2] p-1.5 text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale shrink-0"
+                                        className="relative z-[2] neu-icon-btn-sm text-gray-600 dark:text-gray-300 active-scale"
                                     >
                                         <MoreVertical size={16} />
                                     </button>
                                 </div>
                                 {openMenuId === group.id && (
-                                    <div className="absolute right-10 top-1/2 -translate-y-1/2 z-20 bg-white dark:bg-[#262626] rounded-[6px] shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden animate-scale-in flex flex-col min-w-[110px]">
+                                    <div className="absolute right-10 top-1/2 -translate-y-1/2 z-20 neu-raised-sm overflow-hidden animate-scale-in flex flex-col min-w-[110px]">
                                         {onUpdateGroup && (
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); setOpenMenuId(null); setEditingGroup(group); }}
@@ -317,7 +293,7 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                                         {onDeleteConversation && (
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); setDeleteConvId(group.id); setOpenMenuId(null); }}
-                                                className="w-full flex items-center gap-2 px-2 py-1.5 text-[11px] text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors border-t border-gray-100 dark:border-gray-700 whitespace-nowrap"
+                                                className="w-full flex items-center gap-2 px-2 py-1.5 text-[11px] text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors whitespace-nowrap"
                                             >
                                                 <Trash2 size={12} /> Delete
                                             </button>
@@ -332,17 +308,17 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                 {/* Online Members */}
                 {onlineMembers.length > 0 && (
                     <div className="animate-fade-in-up" style={{ animationDelay: '50ms' }}>
-                        <h2 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-[6px] px-1">Online Now</h2>
-                        <div className="flex gap-[6px] overflow-x-auto no-scrollbar pb-1">
+                        <h2 className="text-[11px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-1">Online Now</h2>
+                        <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
                             {onlineMembers.map((member) => (
                                 <div key={member.id} className="flex flex-col items-center gap-1.5 shrink-0">
                                     <div className="relative">
-                                        <div className="w-12 h-12 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-brand-900 dark:text-gold-400 border-2 border-green-400 dark:border-green-500">
+                                        <div className="w-12 h-12 rounded-full neu-inset flex items-center justify-center text-brand-900 dark:text-gold-400 border-2 border-green-400 dark:border-green-500">
                                             <User size={20} strokeWidth={1.5} />
                                         </div>
                                         <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-white dark:border-[#121212]"></div>
                                     </div>
-                                    <span className="text-[9px] text-gray-600 dark:text-gray-400 font-medium text-center w-14 truncate">{member.name.split(' ')[0]}</span>
+                                    <span className="text-[11px] text-gray-600 dark:text-gray-400 font-medium text-center w-14 truncate">{member.name.split(' ')[0]}</span>
                                 </div>
                             ))}
                         </div>
@@ -352,10 +328,10 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                 {/* Pinned Conversations */}
                 {pinnedConversations.length > 0 && (
                     <div className="animate-fade-in-up" style={{ animationDelay: '80ms' }}>
-                        <h2 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-[6px] px-1 flex items-center gap-1">
+                        <h2 className="text-[11px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-1 flex items-center gap-1">
                             <Pin size={10} /> Pinned
                         </h2>
-                        <div className="space-y-2">
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-1 gap-2 md:space-y-0">
                             {pinnedConversations.map((conv, index) => renderConversationRow(conv, index))}
                         </div>
                     </div>
@@ -363,11 +339,11 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
 
                 {/* Conversations List */}
                 <div>
-                    <h2 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-[6px] px-1 animate-fade-in-up" style={{ animationDelay: '100ms' }}>Conversations</h2>
-                    <div className="space-y-2">
+                    <h2 className="text-[11px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-1 animate-fade-in-up" style={{ animationDelay: '100ms' }}>Conversations</h2>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-1 gap-2 md:space-y-0">
                         {filteredConversations.map((conv, index) => renderConversationRow(conv, index))}
                         {filteredConversations.length === 0 && pinnedConversations.length === 0 && (
-                            <div className="text-center text-gray-400 dark:text-gray-500 mt-10 font-light text-sm">
+                            <div className="text-center text-gray-600 dark:text-gray-300 mt-10 font-light text-sm">
                                 No conversations found.
                             </div>
                         )}
@@ -378,27 +354,63 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                 {archivedConversations.length > 0 && (
                     <button
                         onClick={() => setShowArchived(true)}
-                        className="w-full text-center text-[10px] font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider py-2 flex items-center justify-center gap-1.5 active-scale"
+                        className="w-full text-center text-[11px] font-medium text-gray-600 dark:text-gray-300 uppercase tracking-wider py-2 flex items-center justify-center gap-1.5 active-scale"
                     >
                         <Archive size={12} /> Archived ({archivedConversations.length})
                     </button>
                 )}
+            </PageBody>
+            </div>
+
+            {/* Detail pane (desktop only) */}
+            <div className="hidden lg:flex flex-1 min-w-0">
+                {selectedConv ? (() => {
+                    const liveConv = conversations.find(c => c.id === selectedConv.id) ?? selectedConv;
+                    return (
+                        <ChatDetailModal
+                            inline
+                            key={liveConv.id}
+                            conversation={liveConv}
+                            messages={messages.filter(m => m.conversationId === liveConv.id)}
+                            resolveName={resolveName}
+                            currentUserId={currentUserId}
+                            currentUserName={currentUserName}
+                            otherParticipant={getOtherParticipant(liveConv)}
+                            isOnline={getMemberOnlineStatus(getOtherParticipant(liveConv).id)}
+                            onClose={handleCloseModal}
+                            onSendMessage={onSendMessage}
+                            onRetryMessage={onRetryMessage}
+                            onUpdateConversationDetails={onUpdateConversationDetails}
+                        />
+                    );
+                })() : (
+                    <div className="flex-1 flex flex-col items-center justify-center text-center px-8">
+                        <div className="w-14 h-14 rounded-full neu-inset flex items-center justify-center text-gray-500 dark:text-gray-400 mb-4">
+                            <MessageCircle size={24} strokeWidth={1.5} />
+                        </div>
+                        <p className="font-serif text-base text-gray-700 dark:text-gray-200">Select a conversation</p>
+                        <p className="text-xs text-gray-600 dark:text-gray-400 font-light mt-1 max-w-xs">
+                            Pick a chat on the left, or start a new one with the + button.
+                        </p>
+                    </div>
+                )}
+            </div>
             </div>
 
             {/* Archived Conversations */}
             {showArchived && (
                 <FullScreenPortal>
-                    <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-50 flex flex-col animate-fade-in-up">
-                        <div className="bg-white dark:bg-[#1a1a1a] flex items-center gap-[6px] p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm z-10">
-                            <button onClick={() => setShowArchived(false)} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
+                    <div className="neu-sheet z-50 animate-fade-in-up">
+                        <div className="flex items-center gap-3 p-3 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] z-10">
+                            <button onClick={() => setShowArchived(false)} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale">
                                 <ArrowLeft size={20} />
                             </button>
                             <h2 className="text-base font-serif text-gray-900 dark:text-white">Archived</h2>
                         </div>
-                        <div className="flex-1 overflow-y-auto p-[6px] space-y-2 no-scrollbar">
+                        <div className="flex-1 overflow-y-auto p-3 grid grid-cols-1 md:grid-cols-2 gap-2 md:space-y-0 no-scrollbar">
                             {archivedConversations.map((conv, index) => renderConversationRow(conv, index))}
                             {archivedConversations.length === 0 && (
-                                <div className="text-center text-gray-400 dark:text-gray-500 mt-10 font-light text-sm">
+                                <div className="text-center text-gray-600 dark:text-gray-300 mt-10 font-light text-sm">
                                     No archived conversations.
                                 </div>
                             )}
@@ -407,8 +419,8 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                 </FullScreenPortal>
             )}
 
-            {/* Chat Detail Modal */}
-            {selectedConv && (() => {
+            {/* Chat Detail overlay — phones only (desktop renders it inline) */}
+            {selectedConv && !isDesktop && (() => {
                 const liveConv = conversations.find(c => c.id === selectedConv.id) ?? selectedConv;
                 return (
                     <FullScreenPortal>
@@ -422,6 +434,7 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                             isOnline={getMemberOnlineStatus(getOtherParticipant(liveConv).id)}
                             onClose={handleCloseModal}
                             onSendMessage={onSendMessage}
+                            onRetryMessage={onRetryMessage}
                             onUpdateConversationDetails={onUpdateConversationDetails}
                         />
                     </FullScreenPortal>
@@ -451,14 +464,18 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                         existingConvIds={conversations.flatMap(c => c.participantIds)}
                         onClose={() => setShowNewChat(false)}
                         onSelectMember={async (memberId, details) => {
-                            const conv = await onCreateConversation(memberId, details);
-                            setShowNewChat(false);
-                            handleConvClick(conv);
+                            try {
+                                const conv = await onCreateConversation(memberId, details);
+                                setShowNewChat(false);
+                                handleConvClick(conv);
+                            } catch { /* the reason is already shown; keep the picker open */ }
                         }}
                         onCreateGroup={async (participantIds, groupName, details) => {
-                            const conv = await onCreateGroup(participantIds, groupName, details);
-                            setShowNewChat(false);
-                            handleConvClick(conv);
+                            try {
+                                const conv = await onCreateGroup(participantIds, groupName, details);
+                                setShowNewChat(false);
+                                handleConvClick(conv);
+                            } catch { /* the reason is already shown; keep the picker open */ }
                         }}
                     />
                 </FullScreenPortal>
@@ -475,7 +492,7 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                     setDeleteConvId(null);
                 }}
             />
-        </div>
+        </PageRoot>
     );
 };
 
@@ -491,10 +508,15 @@ interface ChatDetailModalProps {
     isOnline: boolean;
     onClose: () => void;
     onSendMessage: (conversationId: string, text: string, tags: MessageTag[], replyTo?: MessageReplyTo, attachment?: MessageAttachment) => void;
+    /** Resend a message the server never accepted. */
+    onRetryMessage?: (messageId: string) => void;
     onUpdateConversationDetails: (conversationId: string, details: ConversationDetails) => void;
+    /** Rendered as the right-hand pane of the desktop master-detail layout
+     *  rather than as an overlay sheet over the whole app. */
+    inline?: boolean;
 }
 
-const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, messages, resolveName, currentUserId, currentUserName, otherParticipant, isOnline, onClose, onSendMessage, onUpdateConversationDetails }) => {
+const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, messages, resolveName, currentUserId, otherParticipant, isOnline, onClose, onSendMessage, onRetryMessage, onUpdateConversationDetails, inline = false }) => {
     // Quoted replies store the sender's name at reply time; resolve it through
     // the original message so placeholders and renames show correctly.
     const replySenderName = (replyTo: MessageReplyTo) => {
@@ -504,7 +526,6 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
     const [newMessage, setNewMessage] = useState('');
     const [selectedTags, setSelectedTags] = useState<Set<MessageTag>>(new Set());
     const [showTagPicker, setShowTagPicker] = useState(false);
-    const [isOtherTyping, setIsOtherTyping] = useState(false);
     const [isEditingDetails, setIsEditingDetails] = useState(false);
     const [replyingTo, setReplyingTo] = useState<MessageReplyTo | null>(null);
     const [pendingAttachment, setPendingAttachment] = useState<MessageAttachment | null>(null);
@@ -518,7 +539,6 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
         note: conversation.note || '',
     });
     const messagesEndRef = useRef<HTMLDivElement>(null);
-    const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const scrollToBottom = () => {
         const container = messagesEndRef.current?.parentElement;
@@ -540,7 +560,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
         if (!container) return;
         const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
         if (isNearBottom) container.scrollTop = container.scrollHeight;
-    }, [messages.length, isOtherTyping]);
+    }, [messages.length]);
 
     // Keyboard open/close: re-anchor to the bottom on the next frame after
     // the visual viewport resizes.
@@ -549,12 +569,6 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
         window.visualViewport?.addEventListener('resize', onViewportResize);
         return () => window.visualViewport?.removeEventListener('resize', onViewportResize);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
-
-    useEffect(() => {
-        return () => {
-            if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-        };
     }, []);
 
     useEffect(() => {
@@ -619,12 +633,6 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
         setShowTagPicker(false);
         setReplyingTo(null);
         setPendingAttachment(null);
-
-        if (!conversation.isGroup) {
-            if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-            setIsOtherTyping(true);
-            typingTimeoutRef.current = setTimeout(() => setIsOtherTyping(false), 2200);
-        }
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -644,13 +652,11 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
         return messages.filter(m => m.text.toLowerCase().includes(q));
     }, [messages, chatSearchQuery]);
 
-    let statusTextColor = 'text-gray-400 dark:text-gray-500';
-    if (isOtherTyping) statusTextColor = 'text-gold-600 dark:text-gold-400';
-    else if (isOnline) statusTextColor = 'text-green-500';
+    let statusTextColor = 'text-gray-600 dark:text-gray-300';
+    if (isOnline) statusTextColor = 'text-green-500';
 
     let statusText = 'Offline';
     if (conversation.isGroup) statusText = `${conversation.participantIds.length} members`;
-    else if (isOtherTyping) statusText = 'Typing...';
     else if (isOnline) statusText = 'Online';
 
     const renderMessageStatusIcon = (status?: string) => {
@@ -670,7 +676,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                         autoComplete="off"
                         autoCorrect="off"
                         spellCheck={false}
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 px-[6px] text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                        className="neu-field text-xs"
                     />
                     <input
                         value={detailsForm.reason}
@@ -679,7 +685,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                         autoComplete="off"
                         autoCorrect="off"
                         spellCheck={false}
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 px-[6px] text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                        className="neu-field text-xs"
                     />
                     <textarea
                         value={detailsForm.note}
@@ -689,18 +695,18 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                         autoComplete="off"
                         autoCorrect="off"
                         spellCheck={false}
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2 px-[6px] text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors resize-none"
+                        className="neu-field text-xs"
                     />
                     <div className="flex justify-end gap-2 pt-1">
                         <button
                             onClick={() => setIsEditingDetails(false)}
-                            className="text-[10px] font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 px-[6px] py-1.5 rounded-[6px] hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors active-scale"
+                            className="neu-button text-[11px] uppercase tracking-wider px-3 py-1.5"
                         >
                             Cancel
                         </button>
                         <button
                             onClick={handleSaveDetails}
-                            className="text-[10px] font-medium uppercase tracking-wider text-white dark:text-brand-950 bg-brand-900 dark:bg-gold-500 px-[6px] py-1.5 rounded-[6px] flex items-center gap-1 hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors active-scale"
+                            className="text-[11px] font-medium uppercase tracking-wider text-gold-700 dark:text-gold-300 neu-inset px-3 py-1.5 rounded-lg flex items-center gap-1 transition-colors active-scale"
                         >
                             <Check size={12} /> Save
                         </button>
@@ -717,15 +723,15 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                             <p className="text-xs font-serif text-gray-900 dark:text-white truncate">{conversation.title}</p>
                         )}
                         {conversation.reason && (
-                            <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">{conversation.reason}</p>
+                            <p className="text-[11px] text-gray-700 dark:text-gray-300 mt-0.5">{conversation.reason}</p>
                         )}
                         {conversation.note && (
-                            <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5 italic">{conversation.note}</p>
+                            <p className="text-[11px] text-gray-600 dark:text-gray-300 mt-0.5 italic">{conversation.note}</p>
                         )}
                     </div>
                     <button
                         onClick={() => setIsEditingDetails(true)}
-                        className="p-1.5 text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale shrink-0"
+                        className="neu-icon-btn-sm text-gray-600 dark:text-gray-300 active-scale"
                     >
                         <Edit2 size={14} />
                     </button>
@@ -736,7 +742,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
         return (
             <button
                 onClick={() => setIsEditingDetails(true)}
-                className="py-2.5 w-full text-left text-[10px] font-medium text-gold-600 dark:text-gold-400 uppercase tracking-wider flex items-center gap-1.5 active-scale"
+                className="py-2.5 w-full text-left text-[11px] font-medium text-gold-700 dark:text-gold-300 uppercase tracking-wider flex items-center gap-1.5 active-scale"
             >
                 <Plus size={12} /> Add title, reason &amp; note
             </button>
@@ -744,14 +750,20 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
     };
 
     return (
-        <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-50 flex flex-col animate-fade-in-up">
+        <div className={inline
+            ? 'flex-1 min-w-0 h-full flex flex-col bg-[var(--neu-bg)]'
+            : 'neu-sheet z-50 animate-fade-in-up'}>
             {/* Chat Header */}
-            <div className="bg-white dark:bg-[#1a1a1a] flex items-center gap-[6px] p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm z-10">
-                <button onClick={onClose} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
-                    <ArrowLeft size={20} />
-                </button>
+            <div className={`flex items-center gap-3 p-3 z-10 ${inline ? 'lg:px-5 lg:pt-5' : 'pt-[calc(1.75rem+env(safe-area-inset-top,0px))]'}`}>
+                {/* The list stays on screen beside this pane on desktop, so
+                    there is nothing to go "back" to. */}
+                {!inline && (
+                    <button onClick={onClose} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale" aria-label="Back to conversations">
+                        <ArrowLeft size={20} />
+                    </button>
+                )}
                 <div className="relative">
-                    <div className={`w-9 h-9 rounded-full flex items-center justify-center ${conversation.isGroup ? 'bg-gold-500/10 dark:bg-gold-900/20 text-gold-600 dark:text-gold-400' : 'bg-gray-50 dark:bg-gray-800 text-brand-900 dark:text-gold-400'
+                    <div className={`w-9 h-9 rounded-full flex items-center justify-center ${conversation.isGroup ? 'bg-gold-500/10 dark:bg-gold-900/20 text-gold-700 dark:text-gold-300' : 'neu-inset text-brand-900 dark:text-gold-400'
                         }`}>
                         {conversation.isGroup ? <Users size={16} strokeWidth={1.5} /> : <User size={16} strokeWidth={1.5} />}
                     </div>
@@ -761,13 +773,13 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                 </div>
                 <div className="flex-1">
                     <h2 className="text-sm font-serif text-gray-900 dark:text-white">{otherParticipant.name}</h2>
-                    <p className={`text-[9px] uppercase tracking-widest font-medium ${statusTextColor}`}>
+                    <p className={`text-[11px] uppercase tracking-widest font-medium ${statusTextColor}`}>
                         {statusText}
                     </p>
                 </div>
                 <button
                     onClick={() => { setShowSearch(s => !s); setChatSearchQuery(''); }}
-                    className={`p-2 rounded-full transition-colors active-scale shrink-0 ${showSearch ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
+                    className={`p-2 rounded-full transition-colors active-scale shrink-0 ${showSearch ? 'neu-raised-sm neu-btn text-gold-700 dark:text-gold-300' : 'text-gray-700 dark:text-gray-300'}`}
                 >
                     <Search size={18} />
                 </button>
@@ -775,45 +787,42 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
 
             {/* In-chat Search */}
             {showSearch && (
-                <div className="bg-white dark:bg-[#1a1a1a] border-b border-gray-100 dark:border-gray-800 px-[6px] py-2 animate-fade-in">
+                <div className="px-3 py-2 animate-fade-in">
                     <SearchBar value={chatSearchQuery} onChange={setChatSearchQuery} placeholder="Search in this chat..." />
                 </div>
             )}
 
             {/* Conversation Details (title / reason / note) */}
-            <div className="bg-white dark:bg-[#1a1a1a] border-b border-gray-100 dark:border-gray-800 px-[6px]">
+            <div className="px-3">
                 {renderConversationDetails()}
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-[6px] space-y-3 no-scrollbar pb-20">
+            <div className={`flex-1 overflow-y-auto p-4 md:p-6 space-y-3.5 no-scrollbar neu-scroll-fade w-full ${inline ? 'pb-4' : 'pb-[calc(6rem+var(--safe-bottom,env(safe-area-inset-bottom,0px)))] lg:pb-8 lg:max-w-5xl lg:mx-auto'}`}>
                 {displayedMessages.length === 0 && chatSearchQuery.trim() && (
-                    <div className="text-center text-gray-400 dark:text-gray-500 mt-10 font-light text-sm">
+                    <div className="text-center text-gray-600 dark:text-gray-300 mt-10 font-light text-sm">
                         No messages match "{chatSearchQuery}".
                     </div>
                 )}
                 {displayedMessages.map((msg) => {
                     const isMe = msg.senderId === currentUserId;
                     const bubble = (
-                        <div className={`max-w-[80%] rounded-[12px] px-3.5 py-2.5 shadow-sm ${isMe
-                            ? 'bg-[#FEFFF7] dark:bg-[#2a2a2a] text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-700 rounded-br-[4px]'
-                            : 'bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-800 rounded-bl-[4px]'
-                            }`}>
+                        <div className={`max-w-[80%] px-3.5 py-2.5 ${isMe ? 'neu-bubble-out' : 'neu-bubble-in'}`}>
                             {!isMe && (
-                                <p className="text-[9px] font-bold uppercase tracking-widest mb-1 text-gold-600 dark:text-gold-400">{resolveName(msg.senderId, msg.senderName)}</p>
+                                <p className="text-[11px] font-bold uppercase tracking-widest mb-1 text-gold-700 dark:text-gold-300">{resolveName(msg.senderId, msg.senderName)}</p>
                             )}
                             {msg.replyTo && (
-                                <div className={`mb-1.5 pl-2 py-1 border-l-2 rounded-[4px] ${isMe ? 'border-gold-500/50 bg-gold-500/10 dark:border-gray-500/50 dark:bg-gray-700/50' : 'border-gold-400 bg-gray-50 dark:bg-gray-800/50'}`}>
-                                    <p className={`text-[9px] font-bold ${isMe ? 'text-gold-700 dark:text-gold-400' : 'text-gold-600 dark:text-gold-400'}`}>{replySenderName(msg.replyTo)}</p>
-                                    <p className={`text-[10px] line-clamp-1 ${isMe ? 'text-gray-600 dark:text-gray-400' : 'text-gray-500 dark:text-gray-400'}`}>{msg.replyTo.text}</p>
+                                <div className="mb-2 pl-2.5 pr-2 py-1.5 neu-inset rounded-xl border-l-2 border-gold-500">
+                                    <p className="text-[11px] font-bold text-gold-700 dark:text-gold-300">{replySenderName(msg.replyTo)}</p>
+                                    <p className="text-[11px] line-clamp-1 text-[var(--neu-text-dim)]">{msg.replyTo.text}</p>
                                 </div>
                             )}
                             {msg.attachment && (
                                 msg.attachment.type === 'image' ? (
-                                    <img loading="lazy" decoding="async" src={getThumbUrl(msg.attachment.url)} alt={msg.attachment.name} className="rounded-[8px] max-w-full max-h-48 object-cover mb-1.5" />
+                                    <img loading="lazy" decoding="async" src={getThumbUrl(msg.attachment.url)} alt={msg.attachment.name} className="rounded-xl max-w-full max-h-48 object-cover mb-2" />
                                 ) : (
-                                    <div className={`flex items-center gap-2 mb-1.5 p-2 rounded-[6px] ${isMe ? 'bg-gold-500/10 dark:bg-gray-700/50' : 'bg-gray-50 dark:bg-gray-800'}`}>
-                                        <Paperclip size={14} className="text-gold-600 dark:text-gold-400" />
+                                    <div className="flex items-center gap-2 mb-2 p-2 neu-inset rounded-xl">
+                                        <Paperclip size={14} className="text-gold-700 dark:text-gold-300" />
                                         <span className="text-[11px] truncate">{msg.attachment.name}</span>
                                     </div>
                                 )
@@ -827,52 +836,54 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                                         ))}
                                     </div>
                                 )}
-                                <span className={`flex items-center gap-1 text-[9px] shrink-0 ml-auto ${isMe ? 'text-gray-500 dark:text-gray-500' : 'text-gray-400 dark:text-gray-500'}`}>
-                                    {formatMessageTime(msg.timestamp)}
-                                    {isMe && renderMessageStatusIcon(msg.status)}
-                                </span>
+                                {isMe && msg.status === 'failed' ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => onRetryMessage?.(msg.id)}
+                                        className="flex items-center gap-1 text-[11px] font-semibold shrink-0 ml-auto text-red-600 dark:text-red-400 active-scale"
+                                    >
+                                        <AlertCircle size={12} /> Not sent · Tap to retry
+                                    </button>
+                                ) : (
+                                    <span className="flex items-center gap-1 text-[11px] shrink-0 ml-auto text-[var(--neu-text-dim)]">
+                                        {formatMessageTime(msg.timestamp)}
+                                        {isMe && renderMessageStatusIcon(msg.status)}
+                                    </span>
+                                )}
                             </div>
                         </div>
                     );
                     const replyButton = (
                         <button
                             onClick={() => setReplyingTo({ id: msg.id, senderName: resolveName(msg.senderId, msg.senderName), text: msg.text || (msg.attachment ? msg.attachment.name : '') })}
-                            className="p-1 mb-1 text-gray-300 dark:text-gray-600 hover:text-gold-500 dark:hover:text-gold-400 transition-colors shrink-0 active-scale"
+                            aria-label="Reply"
+                            className="p-1.5 mb-1 text-[var(--neu-text-dim)] hover:text-gold-600 dark:hover:text-gold-400 transition-colors shrink-0 active-scale"
                         >
                             <Reply size={14} />
                         </button>
                     );
                     return (
-                        <div key={msg.id} className={`flex items-end gap-1 ${isMe ? 'justify-end' : 'justify-start'}`}>
+                        <div key={msg.id} className={`flex items-end gap-1.5 ${isMe ? 'justify-end' : 'justify-start'}`}>
                             {!isMe && replyButton}
                             {bubble}
                             {isMe && replyButton}
                         </div>
                     );
                 })}
-                {isOtherTyping && (
-                    <div className="flex justify-start">
-                        <div className="bg-white dark:bg-[#1e1e1e] border border-gray-100 dark:border-gray-800 rounded-[12px] rounded-bl-[4px] px-[6px] py-3 shadow-sm flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></span>
-                            <span className="w-1.5 h-1.5 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
-                            <span className="w-1.5 h-1.5 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
-                        </div>
-                    </div>
-                )}
                 <div ref={messagesEndRef} />
             </div>
 
             {/* Tag Picker */}
             {showTagPicker && (
-                <div className="px-[6px] py-2 bg-white dark:bg-[#1a1a1a] border-t border-gray-100 dark:border-gray-800 animate-fade-in">
+                <div className="px-3 py-2 animate-fade-in">
                     <div className="flex gap-1.5 flex-wrap">
                         {ALL_TAGS.map(tag => (
                             <button
                                 key={tag}
                                 onClick={() => toggleTag(tag)}
-                                className={`text-[9px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wider transition-all active-scale ${selectedTags.has(tag)
-                                    ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950'
-                                    : TAG_COLORS[tag] + ' border border-gray-200 dark:border-gray-700'
+                                className={`text-[11px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wider transition-all active-scale ${selectedTags.has(tag)
+                                    ? 'neu-raised-sm neu-btn text-gold-700 dark:text-gold-300'
+                                    : TAG_COLORS[tag] + ''
                                     }`}
                             >
                                 {tag}
@@ -885,14 +896,14 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
             {/* Message Input — bottom padding follows the iPhone home indicator
                 so the bar is never cropped, even with reply/tag previews stacked */}
             <div
-                className="bg-white dark:bg-[#1a1a1a] px-[6px] pt-[9px] border-t border-gray-100 dark:border-gray-800 transition-colors"
-                style={{ paddingBottom: 'calc(9px + env(safe-area-inset-bottom, 0px))' }}
+                className="px-3 pt-[9px] transition-colors"
+                style={{ paddingBottom: 'calc(9px + var(--safe-bottom, env(safe-area-inset-bottom, 0px)))' }}
             >
                 {replyingTo && (
-                    <div className="flex items-center justify-between gap-2 mb-2 pl-3 pr-2 py-1.5 bg-gray-100 dark:bg-[#2a2a2a] rounded-[6px] border-l-2 border-gold-500 animate-fade-in">
+                    <div className="flex items-center justify-between gap-2 mb-2 pl-3 pr-2 py-1.5 neu-raised-sm neu-btn rounded-lg border-l-2 border-gold-500 animate-fade-in">
                         <div className="min-w-0">
-                            <p className="text-[9px] font-bold text-gold-600 dark:text-gold-400">Replying to {replyingTo.senderName}</p>
-                            <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate">{replyingTo.text}</p>
+                            <p className="text-[11px] font-bold text-gold-700 dark:text-gold-300">Replying to {replyingTo.senderName}</p>
+                            <p className="text-[11px] text-gray-700 dark:text-gray-300 truncate">{replyingTo.text}</p>
                         </div>
                         <button onClick={() => setReplyingTo(null)} className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 shrink-0 active-scale">
                             <X size={14} />
@@ -900,12 +911,12 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                     </div>
                 )}
                 {pendingAttachment && (
-                    <div className="flex items-center justify-between gap-2 mb-2 p-2 bg-gray-100 dark:bg-[#2a2a2a] rounded-[6px] animate-fade-in">
+                    <div className="flex items-center justify-between gap-2 mb-2 p-2 neu-raised-sm neu-btn rounded-lg animate-fade-in">
                         <div className="flex items-center gap-2 min-w-0">
                             {pendingAttachment.type === 'image' ? (
                                 <img loading="lazy" decoding="async" src={getThumbUrl(pendingAttachment.url)} alt={pendingAttachment.name} className="w-10 h-10 rounded-[4px] object-cover shrink-0" />
                             ) : (
-                                <div className="w-10 h-10 rounded-[4px] bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-gray-500 dark:text-gray-400 shrink-0">
+                                <div className="w-10 h-10 rounded-[4px] neu-inset flex items-center justify-center text-gray-700 dark:text-gray-300 shrink-0">
                                     <Paperclip size={16} />
                                 </div>
                             )}
@@ -919,7 +930,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                 {selectedTags.size > 0 && (
                     <div className="flex gap-1 mb-2 flex-wrap">
                         {Array.from(selectedTags).map(tag => (
-                            <span key={tag} className={`text-[8px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider flex items-center gap-1 ${TAG_COLORS[tag]}`}>
+                            <span key={tag} className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider flex items-center gap-1 ${TAG_COLORS[tag]}`}>
                                 {tag}
                                 <button onClick={() => toggleTag(tag)} className="hover:opacity-70"><X size={8} /></button>
                             </span>
@@ -929,7 +940,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                 <div className="flex items-center gap-2">
                     <button
                         onClick={() => setShowTagPicker(!showTagPicker)}
-                        className={`p-2.5 rounded-full transition-colors active-scale shrink-0 ${showTagPicker ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950' : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800'
+                        className={`p-2.5 rounded-full transition-colors active-scale shrink-0 ${showTagPicker ? 'neu-raised-sm neu-btn text-gold-700 dark:text-gold-300' : 'text-gray-600 dark:text-gray-300'
                             }`}
                     >
                         <Tag size={18} />
@@ -939,7 +950,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                         onClick={camera.openCamera}
                         disabled={isUploading}
                         aria-label="Take photo"
-                        className="p-2.5 rounded-full text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors active-scale shrink-0 disabled:opacity-60"
+                        className="neu-icon-btn-lg text-gray-600 dark:text-gray-300 active-scale disabled:opacity-60"
                     >
                         <Camera size={18} />
                     </button>
@@ -948,7 +959,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                         onClick={() => fileInputRef.current?.click()}
                         disabled={isUploading}
                         aria-label="Attach file"
-                        className="p-2.5 rounded-full text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors active-scale shrink-0 disabled:opacity-60"
+                        className="neu-icon-btn-lg text-gray-600 dark:text-gray-300 active-scale disabled:opacity-60"
                     >
                         {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
                     </button>
@@ -970,14 +981,14 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                         spellCheck={false}
                         data-form-type="other"
                         data-1p-ignore
-                        className="flex-1 min-w-0 bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                        className="neu-field flex-1 min-w-0 text-xs"
                     />
                     <button
                         onClick={handleSend}
                         disabled={!newMessage.trim() && !pendingAttachment}
                         className={`p-2.5 rounded-full transition-all active-scale shrink-0 ${newMessage.trim() || pendingAttachment
-                            ? 'bg-gold-500 dark:bg-gold-500 text-white dark:text-brand-950 shadow-md'
-                            : 'bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-600'
+                            ? 'neu-accent'
+                            : 'bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-300'
                             }`}
                     >
                         <Send size={18} />
@@ -1022,17 +1033,17 @@ const EditGroupModal: React.FC<EditGroupModalProps> = ({ conversation, teamMembe
     const canSave = groupName.trim().length > 0 && selectedIds.size >= 2;
 
     return (
-        <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-[60] flex flex-col animate-fade-in-up">
-            <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm z-10">
-                <button onClick={onClose} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
+        <div className="neu-sheet z-[60] animate-fade-in-up">
+            <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] z-10">
+                <button onClick={onClose} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale">
                     <X size={20} />
                 </button>
                 <h2 className="text-base font-serif text-gray-900 dark:text-white">Edit Group</h2>
                 <div className="w-9"></div>
             </div>
-            <div className="flex-1 overflow-y-auto p-[6px] space-y-5 no-scrollbar">
+            <div className="flex-1 overflow-y-auto p-3 space-y-5 no-scrollbar">
                 <div>
-                    <label htmlFor="edit-group-name" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Group Name</label>
+                    <label htmlFor="edit-group-name" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">Group Name</label>
                     <input
                         id="edit-group-name"
                         value={groupName}
@@ -1041,13 +1052,13 @@ const EditGroupModal: React.FC<EditGroupModalProps> = ({ conversation, teamMembe
                         autoComplete="off"
                         autoCorrect="off"
                         spellCheck={false}
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                        className="neu-field"
                     />
                 </div>
                 <div>
-                    <div className="flex items-center justify-between mb-[6px] px-1">
-                        <h3 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest">Members</h3>
-                        <span className="text-[9px] bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-[3px] text-gray-600 dark:text-gray-300 uppercase tracking-wider">{selectedIds.size} selected</span>
+                    <div className="flex items-center justify-between mb-3 px-1">
+                        <h3 className="text-[11px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest">Members</h3>
+                        <span className="text-[11px] neu-inset px-2 py-0.5 rounded-[3px] text-gray-600 dark:text-gray-300 uppercase tracking-wider">{selectedIds.size} selected</span>
                     </div>
                     <div className="space-y-2">
                         {teamMembers.map((member, index) => {
@@ -1057,11 +1068,11 @@ const EditGroupModal: React.FC<EditGroupModalProps> = ({ conversation, teamMembe
                                     type="button"
                                     key={member.id}
                                     onClick={() => toggleMember(member.id)}
-                                    className={`w-full text-left rounded-[6px] shadow-sm p-[6px] flex items-center gap-[6px] border animate-fade-in-up cursor-pointer active-scale ${isSelected ? "border-gold-500 bg-gold-50/50 dark:bg-gold-900/10" : "bg-white dark:bg-[#1e1e1e] border-gray-100 dark:border-gray-800"}`}
-                                    style={{ animationDelay: `${index * 25}ms` }}
+                                    className={`w-full text-left rounded-lg shadow-sm p-3 flex items-center gap-3 border animate-fade-in-up cursor-pointer active-scale ${isSelected ? "border-gold-500 bg-gold-50/50 dark:bg-gold-900/10" : "neu-raised border-gray-100 dark:border-gray-800"}`}
+                                    style={{ animationDelay: `${index * 45}ms` }}
                                 >
                                     <div className="relative">
-                                        <div className="w-11 h-11 rounded-full bg-gray-50 dark:bg-gray-800 flex items-center justify-center text-brand-900 dark:text-gold-400">
+                                        <div className="w-11 h-11 rounded-full neu-inset flex items-center justify-center text-brand-900 dark:text-gold-400">
                                             <User size={20} strokeWidth={1.5} />
                                         </div>
                                         {member.isOnline && (
@@ -1070,11 +1081,11 @@ const EditGroupModal: React.FC<EditGroupModalProps> = ({ conversation, teamMembe
                                     </div>
                                     <div className="flex-1">
                                         <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm">{member.name}</h3>
-                                        <p className={"text-[9px] uppercase tracking-widest font-medium " + (member.isOnline ? "text-green-500" : "text-gray-400 dark:text-gray-500")}>
+                                        <p className={"text-[11px] uppercase tracking-widest font-medium " + (member.isOnline ? "text-green-500" : "text-gray-600 dark:text-gray-300")}>
                                             {member.isOnline ? "Online" : "Offline"}
                                         </p>
                                     </div>
-                                    <div className={"w-5 h-5 rounded-full border flex items-center justify-center transition-colors shrink-0 " + (isSelected ? "bg-gold-500 border-gold-500 text-white" : "border-gray-300 dark:border-gray-600")}>
+                                    <div className={"w-5 h-5 rounded-full flex items-center justify-center transition-colors shrink-0 " + (isSelected ? "neu-check-on" : "neu-check")}>
                                         {isSelected && <Check size={12} />}
                                     </div>
                                 </button>
@@ -1084,43 +1095,43 @@ const EditGroupModal: React.FC<EditGroupModalProps> = ({ conversation, teamMembe
                 </div>
 
                 <div>
-                    <label htmlFor="create-announcement-title" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Title</label>
+                    <label htmlFor="create-announcement-title" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">Title</label>
                     <input
                         id="create-announcement-title"
                         value={title}
                         onChange={(e) => setTitle(e.target.value)}
                         placeholder="e.g. End of Month Sales"
                         autoComplete="off"
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                        className="neu-field"
                     />
                 </div>
                 <div>
-                    <label htmlFor="create-announcement-reason" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Why are we starting this?</label>
+                    <label htmlFor="create-announcement-reason" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">Why are we starting this?</label>
                     <input
                         id="create-announcement-reason"
                         value={reason}
                         onChange={(e) => setReason(e.target.value)}
                         placeholder="e.g. To hit our targets"
                         autoComplete="off"
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                        className="neu-field"
                     />
                 </div>
                 <div>
-                    <label htmlFor="create-announcement-note" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Note</label>
+                    <label htmlFor="create-announcement-note" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">Note</label>
                     <textarea
                         id="create-announcement-note"
                         value={note}
                         onChange={(e) => setNote(e.target.value)}
                         placeholder="Any additional details..."
                         rows={3}
-                        className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors resize-none"
+                        className="neu-field"
                     />
                 </div>
 
                 <button
                     onClick={() => canSave && onSave(groupName.trim(), Array.from(selectedIds), { title: title.trim() || undefined, reason: reason.trim() || undefined, note: note.trim() || undefined })}
                     disabled={!canSave}
-                    className={"w-full rounded-[6px] py-3 text-sm font-medium tracking-wide transition-colors shadow-md active-scale " + (canSave ? "bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 hover:bg-brand-800 dark:hover:bg-gold-400" : "bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-600")}
+                    className={"w-full rounded-lg py-3 text-sm font-medium tracking-wide transition-colors shadow-md active-scale " + (canSave ? "neu-raised-sm neu-btn text-gold-700 dark:text-gold-300" : "bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-300")}
                 >
                     Save Changes
                 </button>
@@ -1136,7 +1147,7 @@ interface NewChatModalProps {
     onCreateGroup: (participantIds: string[], groupName: string, details: ConversationDetails) => void;
 }
 
-const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvIds, onClose, onSelectMember, onCreateGroup }) => {
+const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, onClose, onSelectMember, onCreateGroup }) => {
     const [mode, setMode] = useState<'direct' | 'group'>('direct');
     const [startingId, setStartingId] = useState<string | null>(null);
     const [formData, setFormData] = useState<ConversationDetails>({ title: '', reason: '', note: '' });
@@ -1171,11 +1182,11 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
     const headerTitle = mode === 'group' ? 'New Group' : 'New Message';
 
     return (
-        <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-[60] flex flex-col animate-fade-in-up">
-            <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm z-10">
+        <div className="neu-sheet z-[60] animate-fade-in-up">
+            <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] z-10">
                 <button
                     onClick={onClose}
-                    className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale"
+                    className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale"
                 >
                     <X size={20} />
                 </button>
@@ -1185,21 +1196,21 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                 <div className="w-9"></div>
             </div>
 
-            <div className="bg-white dark:bg-[#1a1a1a] border-b border-gray-100 dark:border-gray-800 px-[6px] pb-[6px] flex gap-2">
+            <div className="px-3 pb-2.5 flex gap-2">
                     <button
                         onClick={() => setMode('direct')}
-                        className={`flex-1 py-2 rounded-[6px] text-[10px] font-bold uppercase tracking-widest transition-all active-scale ${mode === 'direct'
-                            ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
-                            : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
+                        className={`flex-1 py-2 rounded-lg text-[11px] font-bold uppercase tracking-widest transition-all active-scale ${mode === 'direct'
+                            ? 'neu-inset text-gold-700 dark:text-gold-300'
+                            : 'neu-raised-sm neu-btn text-gray-700 dark:text-gray-300'
                             }`}
                     >
                         Direct Message
                     </button>
                     <button
                         onClick={() => setMode('group')}
-                        className={`flex-1 py-2 rounded-[6px] text-[10px] font-bold uppercase tracking-widest transition-all active-scale ${mode === 'group'
-                            ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 shadow-sm'
-                            : 'bg-gray-100 dark:bg-[#2a2a2a] text-gray-500 dark:text-gray-400'
+                        className={`flex-1 py-2 rounded-lg text-[11px] font-bold uppercase tracking-widest transition-all active-scale ${mode === 'group'
+                            ? 'neu-inset text-gold-700 dark:text-gold-300'
+                            : 'neu-raised-sm neu-btn text-gray-700 dark:text-gray-300'
                             }`}
                     >
                         New Group
@@ -1207,15 +1218,15 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                 </div>
 
             {mode === 'direct' && (
-                <div className="flex-1 overflow-y-auto p-[6px] space-y-2 no-scrollbar">
-                    <h3 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-[6px] px-1">Team Members</h3>
+                <div className="flex-1 overflow-y-auto p-3 space-y-2 no-scrollbar">
+                    <h3 className="text-[11px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-1">Team Members</h3>
                     {teamMembers.length === 0 ? (
                         <div className="text-center py-16 px-6 animate-fade-in">
-                            <div className="w-16 h-16 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center mx-auto mb-4 text-gray-400 dark:text-gray-500">
+                            <div className="w-16 h-16 rounded-full neu-inset flex items-center justify-center mx-auto mb-4 text-gray-600 dark:text-gray-300">
                                 <Users size={28} strokeWidth={1.5} />
                             </div>
                             <p className="text-sm font-serif text-gray-700 dark:text-gray-200 mb-1.5">No team members yet</p>
-                            <p className="text-xs text-gray-400 dark:text-gray-500 font-light leading-relaxed">
+                            <p className="text-xs text-gray-600 dark:text-gray-300 font-light leading-relaxed">
                                 Ask an admin to add team members from the User Management screen so you can start messaging.
                             </p>
                         </div>
@@ -1224,11 +1235,11 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                             type="button"
                             key={member.id}
                             onClick={() => handleSelectMember(member)}
-                            className="w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm p-[6px] flex items-center gap-[6px] border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
-                            style={{ animationDelay: `${index * 25}ms` }}
+                            className="w-full text-left neu-raised rounded-2xl p-3 flex items-center gap-3 animate-fade-in-up cursor-pointer active-scale"
+                            style={{ animationDelay: `${index * 45}ms` }}
                         >
                             <div className="relative">
-                                <div className="w-11 h-11 rounded-full bg-gray-50 dark:bg-gray-800 flex items-center justify-center text-brand-900 dark:text-gold-400">
+                                <div className="w-11 h-11 rounded-full neu-inset flex items-center justify-center text-brand-900 dark:text-gold-400">
                                     <User size={20} strokeWidth={1.5} />
                                 </div>
                                 {member.isOnline && (
@@ -1237,41 +1248,41 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                             </div>
                             <div className="flex-1">
                                 <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm">{member.name}</h3>
-                                <p className={`text-[9px] uppercase tracking-widest font-medium ${member.isOnline ? 'text-green-500' : 'text-gray-400 dark:text-gray-500'}`}>
+                                <p className={`text-[11px] uppercase tracking-widest font-medium ${member.isOnline ? 'text-green-500' : 'text-gray-600 dark:text-gray-300'}`}>
                                     {member.isOnline ? 'Online' : 'Offline'}
                                 </p>
                             </div>
                             {startingId === member.id
-                                ? <Loader2 size={18} className="text-gray-400 dark:text-gray-500 animate-spin" />
-                                : <MessageCircle size={18} className="text-gray-400 dark:text-gray-500" />}
+                                ? <Loader2 size={18} className="text-gray-600 dark:text-gray-300 animate-spin" />
+                                : <MessageCircle size={18} className="text-gray-600 dark:text-gray-300" />}
                         </button>
                     ))}
                 </div>
             )}
 
             {mode === 'group' && (
-                <div className="flex-1 overflow-y-auto p-[6px] space-y-5 no-scrollbar">
+                <div className="flex-1 overflow-y-auto p-3 space-y-5 no-scrollbar">
                     <div>
-                        <label htmlFor="create-group-name" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Group Name</label>
+                        <label htmlFor="create-group-name" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">Group Name</label>
                         <input
                             id="create-group-name"
                             value={groupName}
                             onChange={(e) => setGroupName(e.target.value)}
                             placeholder="e.g. Sales Team"
-                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                            className="neu-field"
                         />
                     </div>
 
                     <div>
-                        <div className="flex items-center justify-between mb-[6px] px-1">
-                            <h3 className="text-[10px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest">Add Members</h3>
-                            <span className="text-[9px] bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-[3px] text-gray-600 dark:text-gray-300 uppercase tracking-wider">{selectedGroupMemberIds.size} selected</span>
+                        <div className="flex items-center justify-between mb-3 px-1">
+                            <h3 className="text-[11px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest">Add Members</h3>
+                            <span className="text-[11px] neu-inset px-2 py-0.5 rounded-[3px] text-gray-600 dark:text-gray-300 uppercase tracking-wider">{selectedGroupMemberIds.size} selected</span>
                         </div>
                         <div className="space-y-2">
                             {teamMembers.length === 0 ? (
                                 <div className="text-center py-12 px-6 animate-fade-in">
                                     <p className="text-sm font-serif text-gray-700 dark:text-gray-200 mb-1.5">No team members to add</p>
-                                    <p className="text-xs text-gray-400 dark:text-gray-500 font-light leading-relaxed">
+                                    <p className="text-xs text-gray-600 dark:text-gray-300 font-light leading-relaxed">
                                         Ask an admin to add team members first.
                                     </p>
                                 </div>
@@ -1282,12 +1293,12 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                                         type="button"
                                         key={member.id}
                                         onClick={() => toggleGroupMember(member.id)}
-                                        className={`w-full text-left rounded-[6px] shadow-sm p-[6px] flex items-center gap-[6px] border animate-fade-in-up cursor-pointer active-scale ${isSelected ? 'border-gold-500 bg-gold-50/50 dark:bg-gold-900/10' : 'bg-white dark:bg-[#1e1e1e] border-gray-100 dark:border-gray-800'
+                                        className={`w-full text-left rounded-lg shadow-sm p-3 flex items-center gap-3 border animate-fade-in-up cursor-pointer active-scale ${isSelected ? 'border-gold-500 bg-gold-50/50 dark:bg-gold-900/10' : 'neu-raised border-gray-100 dark:border-gray-800'
                                             }`}
-                                        style={{ animationDelay: `${index * 25}ms` }}
+                                        style={{ animationDelay: `${index * 45}ms` }}
                                     >
                                         <div className="relative">
-                                            <div className="w-11 h-11 rounded-full bg-gray-50 dark:bg-gray-800 flex items-center justify-center text-brand-900 dark:text-gold-400">
+                                            <div className="w-11 h-11 rounded-full neu-inset flex items-center justify-center text-brand-900 dark:text-gold-400">
                                                 <User size={20} strokeWidth={1.5} />
                                             </div>
                                             {member.isOnline && (
@@ -1296,11 +1307,11 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                                         </div>
                                         <div className="flex-1">
                                             <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm">{member.name}</h3>
-                                            <p className={`text-[9px] uppercase tracking-widest font-medium ${member.isOnline ? 'text-green-500' : 'text-gray-400 dark:text-gray-500'}`}>
+                                            <p className={`text-[11px] uppercase tracking-widest font-medium ${member.isOnline ? 'text-green-500' : 'text-gray-600 dark:text-gray-300'}`}>
                                                 {member.isOnline ? 'Online' : 'Offline'}
                                             </p>
                                         </div>
-                                        <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors shrink-0 ${isSelected ? 'bg-gold-500 border-gold-500 text-white' : 'border-gray-300 dark:border-gray-600'
+                                        <div className={`w-5 h-5 rounded-full flex items-center justify-center transition-colors shrink-0 ${isSelected ? 'neu-check-on' : 'neu-check'
                                             }`}>
                                             {isSelected && <Check size={12} />}
                                         </div>
@@ -1311,43 +1322,43 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, existingConvId
                     </div>
 
                     <div>
-                        <label htmlFor="create-group-title" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Title</label>
+                        <label htmlFor="create-group-title" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">Title</label>
                         <input
                             id="create-group-title"
                             value={formData.title}
                             onChange={(e) => setFormData(prev => ({ ...prev, title: e.target.value }))}
                             placeholder="What's this conversation about?"
-                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                            className="neu-field"
                         />
                     </div>
                     <div>
-                        <label htmlFor="create-group-reason" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Why are we starting this?</label>
+                        <label htmlFor="create-group-reason" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">Why are we starting this?</label>
                         <input
                             id="create-group-reason"
                             value={formData.reason}
                             onChange={(e) => setFormData(prev => ({ ...prev, reason: e.target.value }))}
                             placeholder="Reason for reaching out"
-                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors"
+                            className="neu-field"
                         />
                     </div>
                     <div>
-                        <label htmlFor="create-group-note" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Note</label>
+                        <label htmlFor="create-group-note" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">Note</label>
                         <textarea
                             id="create-group-note"
                             value={formData.note}
                             onChange={(e) => setFormData(prev => ({ ...prev, note: e.target.value }))}
                             placeholder="Any extra context (optional)"
                             rows={3}
-                            className="w-full bg-gray-100 dark:bg-[#2a2a2a] border border-transparent dark:border-gray-700 rounded-[6px] py-2.5 px-3.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 dark:focus:border-gold-500 transition-colors resize-none"
+                            className="neu-field"
                         />
                     </div>
 
                     <button
                         onClick={handleCreateGroup}
                         disabled={!canCreateGroup}
-                        className={`w-full rounded-[6px] py-3 text-sm font-medium tracking-wide transition-colors shadow-md active-scale ${canCreateGroup
-                            ? 'bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 hover:bg-brand-800 dark:hover:bg-gold-400'
-                            : 'bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-600'
+                        className={`w-full rounded-lg py-3 text-sm font-medium tracking-wide transition-colors shadow-md active-scale ${canCreateGroup
+                            ? 'neu-raised-sm neu-btn text-gold-700 dark:text-gold-300'
+                            : 'bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-300'
                             }`}
                     >
                         Create Group

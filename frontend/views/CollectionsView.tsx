@@ -1,10 +1,13 @@
 import React, { useState, useRef } from 'react';
 import { Plus, X, Check, Image as ImageIcon, Edit2, Trash2, Camera, Loader2 } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
+import { PageRoot, PageHeader, PageBody, PrimaryIconButton, EmptyState } from '../components/ui';
 import { Collection, Artwork } from '../types';
 import storageService, { getThumbUrl } from '../services/storageService';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { ArtworkFormModal } from './ArtworksView';
+import toast from 'react-hot-toast';
+import { IfCan } from '../components/Layout';
 
 interface CollectionsViewProps {
     collections: Collection[];
@@ -49,66 +52,87 @@ export const CollectionsView: React.FC<CollectionsViewProps> = ({ collections, a
         collection.description.toLowerCase().includes(searchQuery.toLowerCase())
     );
 
-    const getCoverImage = (collection: Collection) => {
-        if (collection.coverImageUrl) return collection.coverImageUrl;
-        if (collection.artworkIds.length === 0) return null;
-        const firstArt = artworks.find(a => a.id === collection.artworkIds[0]);
-        return firstArt?.imageUrls?.[0] || null;
+    /** Up to three pictures for the tile: the chosen cover, then the
+     *  collection's artworks in order (first photo of each, no repeats). */
+    const getMosaicImages = (collection: Collection): string[] => {
+        const urls: string[] = [];
+        if (collection.coverImageUrl) urls.push(collection.coverImageUrl);
+        for (const id of collection.artworkIds) {
+            if (urls.length >= 3) break;
+            const url = artworks.find(a => a.id === id)?.imageUrls?.[0];
+            if (url && !urls.includes(url)) urls.push(url);
+        }
+        return urls;
     };
 
     return (
-        <div className="h-full flex flex-col bg-[#faf9f6] dark:bg-[#121212] transition-colors duration-500 animate-fade-in">
-            <div className="bg-white dark:bg-[#1a1a1a] px-[6px] pb-[6px] shadow-sm z-10 border-b border-gray-100 dark:border-gray-800" style={{ paddingTop: 'calc(1.75rem + env(safe-area-inset-top, 0px))' }}>
-                <div className="flex justify-between items-center mb-[6px]">
-                    <h1 className="text-xl font-serif text-gray-900 dark:text-white">Collections</h1>
-                    <button
-                        onClick={() => setIsAdding(true)}
-                        className="bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 p-1.5 rounded-full shadow-md hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors active-scale"
-                    >
-                        <Plus size={20} />
-                    </button>
-                </div>
+        <PageRoot>
+            <PageHeader
+                title="Collections"
+                actions={<IfCan section="collections"><PrimaryIconButton onClick={() => setIsAdding(true)} label="Add collection" icon={<Plus size={16} />} /></IfCan>}
+            >
                 <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search collections..." />
-            </div>
+            </PageHeader>
 
-            <div className="flex-1 overflow-y-auto p-[6px] space-y-2 no-scrollbar pb-20">
+            <PageBody columns="gallery">
                 {filteredCollections.map((collection, index) => {
-                    const coverImage = getCoverImage(collection);
+                    const images = getMosaicImages(collection);
+                    const count = collection.artworkIds.length;
                     return (
                         <button
                             type="button"
                             key={collection.id}
                             onClick={() => handleCollectionClick(collection)}
-                            className="w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm overflow-hidden flex h-28 border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
-                            style={{ animationDelay: `${index * 25}ms` }}
+                            className="neu-tile neu-tile-interactive w-full animate-fade-in-up cursor-pointer active-scale"
+                            style={{ animationDelay: `${Math.min(index, 12) * 45}ms` }}
                         >
-                            <div className="w-28 h-full relative shrink-0 bg-gray-50 dark:bg-gray-800">
-                                {coverImage ? (
-                                    <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={collection.name} className="w-full h-full object-cover" />
-                                ) : (
-                                    <div className="w-full h-full flex items-center justify-center text-gray-300 dark:text-gray-600">
+                            {/* Cover mosaic, set into the card — the well shows through the seams */}
+                            <div className="neu-picture-well neu-picture-well-sm w-full aspect-[4/3] rounded-[1rem]">
+                                {images.length === 0 && (
+                                    <div className="w-full h-full flex items-center justify-center text-[var(--neu-text-dim)]">
                                         <ImageIcon size={28} strokeWidth={1} />
                                     </div>
                                 )}
-                            </div>
-                            <div className="p-[6px] flex flex-col justify-between flex-1">
-                                <div>
-                                    <h3 className="font-serif text-gray-900 dark:text-gray-100 line-clamp-1 text-sm">{collection.name}</h3>
-                                    <p className="text-[9px] text-gray-500 dark:text-gray-400 mt-1 uppercase tracking-wider">{collection.artworkIds.length} Artworks</p>
-                                </div>
-                                {collection.description && (
-                                    <p className="text-[10px] text-gray-400 dark:text-gray-500 font-light line-clamp-2">{collection.description}</p>
+                                {images.length > 0 && images.length < 3 && (
+                                    <img loading="lazy" decoding="async" src={getThumbUrl(images[0])} alt={collection.name} className="w-full h-full object-cover" />
                                 )}
+                                {images.length >= 3 && (
+                                    <div className="w-full h-full grid grid-cols-3 grid-rows-2 gap-[3px]">
+                                        {images.map((url, i) => (
+                                            <img
+                                                key={url}
+                                                loading="lazy"
+                                                decoding="async"
+                                                src={getThumbUrl(url)}
+                                                alt={i === 0 ? collection.name : ''}
+                                                className={`w-full h-full object-cover ${i === 0 ? 'col-span-2 row-span-2' : ''}`}
+                                            />
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="flex-1 flex flex-col px-1.5 pt-3 pb-1 min-w-0">
+                                <h3 className="font-serif text-[15px] leading-snug text-[var(--neu-text)] line-clamp-2">{collection.name}</h3>
+                                {collection.description && (
+                                    <p className="mt-1 text-[11px] text-[var(--neu-text-dim)] line-clamp-2">{collection.description}</p>
+                                )}
+                                <div className="mt-auto pt-2.5">
+                                    <span className="neu-status px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--neu-gold)]">
+                                        {count} {count === 1 ? 'artwork' : 'artworks'}
+                                    </span>
+                                </div>
                             </div>
                         </button>
                     );
                 })}
                 {filteredCollections.length === 0 && (
-                    <div className="text-center text-gray-400 dark:text-gray-500 mt-10 font-light text-sm">
-                        No collections found.
-                    </div>
+                    <EmptyState
+                        icon={<ImageIcon size={22} strokeWidth={1.25} />}
+                        title="No collections found"
+                        message="Create a collection with the + button above."
+                    />
                 )}
-            </div>
 
             {isAdding && (
                 <CollectionFormModal
@@ -138,7 +162,8 @@ export const CollectionsView: React.FC<CollectionsViewProps> = ({ collections, a
                     onAddArtwork={onAddArtwork}
                 />
             )}
-        </div>
+        </PageBody>
+        </PageRoot>
     );
 };
 
@@ -152,7 +177,7 @@ export interface CollectionDetailModalProps {
     onAddArtwork: (artwork: Omit<Artwork, 'id' | 'createdAt'>) => Promise<Artwork>;
 }
 
-export const CollectionDetailModal: React.FC<CollectionDetailModalProps> = ({ collection, artworks, onClose, onArtworkClick, onUpdateCollection, onDeleteCollection, onAddArtwork }) => {
+export const CollectionDetailModal: React.FC<CollectionDetailModalProps> = ({ collection, artworks, onArtworkClick, onUpdateCollection, onDeleteCollection, onAddArtwork }) => {
     const [isEditing, setIsEditing] = useState(false);
     const [isAddingProduct, setIsAddingProduct] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
@@ -174,7 +199,7 @@ export const CollectionDetailModal: React.FC<CollectionDetailModalProps> = ({ co
             onUpdateCollection({ ...collection, coverImageUrl: result.url });
         } catch (error) {
             console.error('Upload failed:', error);
-            alert('Failed to upload cover image.');
+            toast.error('Failed to upload cover image.');
         } finally {
             setIsUploading(false);
         }
@@ -196,28 +221,32 @@ export const CollectionDetailModal: React.FC<CollectionDetailModalProps> = ({ co
     };
 
     return (
-        <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-50 flex flex-col animate-fade-in-up">
-            <div className="bg-white dark:bg-[#1a1a1a] px-[6px] pb-[6px] shadow-sm z-10 border-b border-gray-100 dark:border-gray-800" style={{ paddingTop: 'calc(1.75rem + env(safe-area-inset-top, 0px))' }}>
-                <div className="flex justify-between items-center mb-[6px]">
+        <div className="neu-sheet z-50 animate-fade-in-up">
+            <div className="px-3 pb-2.5 z-10" style={{ paddingTop: 'calc(1.75rem + env(safe-area-inset-top, 0px))' }}>
+                <div className="flex justify-between items-center mb-3">
                     <h2 className="text-xl font-serif text-gray-900 dark:text-white truncate px-1">{collection.name}</h2>
                     <div className="flex items-center gap-2">
-                        <button onClick={() => setIsEditing(true)} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
-                            <Edit2 size={18} />
-                        </button>
-                        <button onClick={handleDelete} className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors active-scale">
-                            <Trash2 size={18} />
-                        </button>
+                        <IfCan section="collections">
+                            <button onClick={() => setIsEditing(true)} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale">
+                                <Edit2 size={18} />
+                            </button>
+                        </IfCan>
+                        <IfCan section="collections">
+                            <button onClick={handleDelete} className="neu-icon-btn text-red-500 active-scale">
+                                <Trash2 size={18} />
+                            </button>
+                        </IfCan>
                     </div>
                 </div>
                 <SearchBar value={detailSearchQuery} onChange={setDetailSearchQuery} placeholder="Search artworks..." />
             </div>
 
-            <div className="flex-1 overflow-y-auto no-scrollbar pb-20">
-                <div className="w-full aspect-[21/9] relative bg-gray-100 dark:bg-gray-800 animate-fade-in group">
+            <div className="flex-1 overflow-y-auto no-scrollbar pb-20 lg:pb-8">
+                <div className="w-full aspect-[21/9] relative neu-inset animate-fade-in group">
                     {coverImage ? (
                         <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={collection.name} className="w-full h-full object-cover" />
                     ) : (
-                        <div className="w-full h-full flex items-center justify-center text-gray-300 dark:text-gray-600">
+                        <div className="w-full h-full flex items-center justify-center text-gray-600 dark:text-gray-300">
                             <ImageIcon size={40} strokeWidth={1} />
                         </div>
                     )}
@@ -226,7 +255,7 @@ export const CollectionDetailModal: React.FC<CollectionDetailModalProps> = ({ co
                     <button
                         onClick={() => fileInputRef.current?.click()}
                         disabled={isUploading}
-                        className="absolute top-[6px] right-4 p-2 bg-black/40 hover:bg-black/60 text-white rounded-full backdrop-blur-sm transition-colors z-10 disabled:opacity-50"
+                        className="absolute top-3 right-4 p-2 bg-black/40 hover:bg-black/60 text-white rounded-full backdrop-blur-sm transition-colors z-10 disabled:opacity-50"
                         title="Upload Cover Image"
                     >
                         {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Camera size={18} />}
@@ -234,12 +263,12 @@ export const CollectionDetailModal: React.FC<CollectionDetailModalProps> = ({ co
                     <input type="file" accept="image/*" ref={fileInputRef} className="hidden" onChange={handleUploadCoverImage} />
                 </div>
 
-                <div className="p-[6px] bg-[#faf9f6] dark:bg-[#121212] relative z-20 min-h-[50dvh] flex flex-col gap-[6px]">
-                    <div className="flex justify-between items-center mb-[6px]">
-                        <h3 className="font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest text-[10px]">Artworks in Collection ({collectionArtworks.length})</h3>
+                <div className="p-4 bg-[var(--neu-bg)] relative z-20 min-h-[50dvh] flex flex-col gap-3">
+                    <div className="flex justify-between items-center mb-3">
+                        <h3 className="font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest text-[11px]">Artworks in Collection ({collectionArtworks.length})</h3>
                         <button
                             onClick={() => setIsAddingProduct(true)}
-                            className="bg-brand-900 dark:bg-gold-500 text-white dark:text-brand-950 p-1.5 rounded-full shadow-md hover:bg-brand-800 dark:hover:bg-gold-400 transition-colors active-scale"
+                            className="neu-raised-sm neu-btn text-gold-700 dark:text-gold-300 p-1.5 rounded-full shadow-md transition-colors active-scale"
                             title="Add New Product to Collection"
                         >
                             <Plus size={16} />
@@ -259,28 +288,28 @@ export const CollectionDetailModal: React.FC<CollectionDetailModalProps> = ({ co
                                 type="button"
                                 key={artwork.id}
                                 onClick={() => onArtworkClick(artwork)}
-                                className="w-full text-left bg-white dark:bg-[#1e1e1e] rounded-[6px] shadow-sm overflow-hidden flex h-28 border border-gray-100 dark:border-gray-800 animate-fade-in-up cursor-pointer active-scale"
+                                className="w-full text-left neu-raised rounded-2xl overflow-hidden flex h-28 animate-fade-in-up cursor-pointer active-scale"
                                 style={{ animationDelay: `${index * 50}ms` }}
                             >
-                                <div className="w-28 h-full relative shrink-0 bg-gray-50 dark:bg-gray-800">
+                                <div className="w-28 h-full relative shrink-0 neu-inset">
                                     {artwork.imageUrls.length > 0 ? (
                                         <img loading="lazy" decoding="async" src={getThumbUrl(artwork.imageUrls[0])} alt={artwork.title} className="w-full h-full object-cover" />
                                     ) : (
-                                        <div className="w-full h-full flex items-center justify-center text-gray-300 dark:text-gray-600">
+                                        <div className="w-full h-full flex items-center justify-center text-gray-600 dark:text-gray-300">
                                             <ImageIcon size={28} strokeWidth={1} />
                                         </div>
                                     )}
                                 </div>
-                                <div className="p-[6px] flex flex-col justify-between flex-1">
+                                <div className="p-3 flex flex-col justify-between flex-1">
                                     <div>
                                         <h3 className="font-serif text-gray-900 dark:text-gray-100 line-clamp-1 text-sm">{artwork.title}</h3>
-                                        <p className="text-[9px] text-gray-500 dark:text-gray-400 mt-1 uppercase tracking-wider line-clamp-1">
+                                        <p className="text-[11px] text-gray-700 dark:text-gray-300 mt-1 uppercase tracking-wider line-clamp-1">
                                             {artistText}
                                             {artwork.customId} • {artwork.medium}
                                         </p>
                                     </div>
                                     <div className="flex justify-between items-end">
-                                        <p className="text-[10px] text-gray-400 dark:text-gray-500 font-light">{artwork.dimensions}</p>
+                                        <p className="text-[11px] text-gray-600 dark:text-gray-300 font-light">{artwork.dimensions}</p>
                                         <p className="font-medium text-brand-900 dark:text-gold-400 text-sm">₹{artwork.price.toLocaleString('en-IN')}{artwork.plusGst ? ' + GST' : ''}</p>
                                     </div>
                                 </div>
@@ -358,8 +387,8 @@ export const CollectionFormModal: React.FC<CollectionFormModalProps> = ({ initia
     };
 
     const handleSubmit = () => {
-        if (!name.trim()) return alert("Name is required");
-        if (selectedArtworks.size === 0) return alert("Select at least one artwork");
+        if (!name.trim()) { toast.error('Name is required'); return; }
+        if (selectedArtworks.size === 0) { toast.error('Select at least one artwork'); return; }
 
         onSave({
             name,
@@ -370,52 +399,52 @@ export const CollectionFormModal: React.FC<CollectionFormModalProps> = ({ initia
     };
 
     return (
-        <div className="absolute inset-0 bg-[#faf9f6] dark:bg-[#121212] z-[70] flex flex-col animate-fade-in-up">
-            <div className="bg-white dark:bg-[#1a1a1a] flex justify-between items-center p-[6px] border-b border-gray-100 dark:border-gray-800 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] shadow-sm">
-                <button onClick={onClose} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active-scale">
+        <div className="neu-sheet z-[70] animate-fade-in-up">
+            <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+env(safe-area-inset-top,0px))]">
+                <button onClick={onClose} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale">
                     <X size={20} />
                 </button>
                 <h2 className="text-base font-serif text-gray-900 dark:text-white">{initialData ? 'Edit Collection' : 'Create Collection'}</h2>
-                <button onClick={handleSubmit} className="text-gold-600 dark:text-gold-400 font-medium px-2 py-2 uppercase tracking-wider text-xs active-scale">
+                <button onClick={handleSubmit} className="text-gold-700 dark:text-gold-300 font-medium px-2 py-2 uppercase tracking-wider text-xs active-scale">
                     Save
                 </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-[6px] no-scrollbar flex flex-col gap-6">
-                <div className="space-y-5 bg-white dark:bg-[#1e1e1e] p-5 rounded-[6px] shadow-sm border border-gray-100 dark:border-gray-800 animate-fade-in-up" style={{ animationDelay: '100ms' }}>
+            <div className="flex-1 overflow-y-auto p-3 no-scrollbar flex flex-col gap-6">
+                <div className="space-y-5 neu-card p-5 animate-fade-in-up" style={{ animationDelay: '100ms' }}>
                     <div>
-                        <label htmlFor="collection-name" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Collection Name *</label>
+                        <label htmlFor="collection-name" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Collection Name *</label>
                         <input
                             id="collection-name"
                             value={name}
                             onChange={e => setName(e.target.value)}
-                            className="w-full bg-transparent border-b border-gray-300 dark:border-gray-700 py-1.5 text-base font-serif text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors"
+                            className="neu-field text-base font-serif"
                             placeholder="e.g. Modern Abstracts"
                         />
                     </div>
                     <div>
-                        <label htmlFor="collection-desc" className="block text-[9px] font-medium text-gray-500 dark:text-gray-400 mb-2 uppercase tracking-wider">Description</label>
+                        <label htmlFor="collection-desc" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-2 uppercase tracking-wider">Description</label>
                         <textarea
                             id="collection-desc"
                             value={description}
                             onChange={e => setDescription(e.target.value)}
                             rows={2}
-                            className="w-full bg-transparent border border-gray-300 dark:border-gray-700 rounded-[6px] p-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors resize-none"
+                            className="w-full bg-transparent border border-gray-300 dark:border-gray-700 rounded-lg p-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors resize-none"
                             placeholder="Brief description of this collection..."
                         ></textarea>
                     </div>
                 </div>
 
                 <div className="animate-fade-in-up" style={{ animationDelay: '200ms' }}>
-                    <div className="flex justify-between items-end mb-[6px]">
-                        <h3 className="font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest text-[10px]">Select Artworks</h3>
-                        <span className="text-[9px] text-gray-500 dark:text-gray-400 uppercase tracking-wider">{selectedArtworks.size} selected</span>
+                    <div className="flex justify-between items-end mb-3">
+                        <h3 className="font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest text-[11px]">Select Artworks</h3>
+                        <span className="text-[11px] text-gray-700 dark:text-gray-300 uppercase tracking-wider">{selectedArtworks.size} selected</span>
                     </div>
 
                     {/* Search Bar for Artworks */}
                     <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search artworks to add..." className="mb-4" />
 
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
                         {filteredArtworks.map((art, index) => {
                             const isSelected = selectedArtworks.has(art.id);
                             const coverImage = art.imageUrls?.[0];
@@ -424,19 +453,19 @@ export const CollectionFormModal: React.FC<CollectionFormModalProps> = ({ initia
                                     type="button"
                                     key={art.id}
                                     onClick={() => toggleArtwork(art.id)}
-                                    className={`relative w-full text-left rounded-[6px] overflow-hidden border-2 cursor-pointer transition-all bg-gray-50 dark:bg-gray-800 animate-scale-in active-scale ${isSelected ? 'border-gold-500 shadow-md' : 'border-transparent shadow-sm'
+                                    className={`relative w-full text-left rounded-lg overflow-hidden border-2 cursor-pointer transition-all neu-inset animate-scale-in active-scale ${isSelected ? 'border-gold-500 shadow-md' : 'border-transparent shadow-sm'
                                         }`}
                                     style={{ animationDelay: `${index * 30}ms` }}
                                 >
                                     {coverImage ? (
                                         <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={art.title} className="w-full h-32 object-cover" />
                                     ) : (
-                                        <div className="w-full h-32 flex items-center justify-center text-gray-300 dark:text-gray-600">
+                                        <div className="w-full h-32 flex items-center justify-center text-gray-600 dark:text-gray-300">
                                             <ImageIcon size={20} strokeWidth={1.5} />
                                         </div>
                                     )}
                                     <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2 pt-6">
-                                        <p className="text-white text-[10px] font-serif truncate">{art.title}</p>
+                                        <p className="text-white text-[11px] font-serif truncate">{art.title}</p>
                                     </div>
                                     {isSelected && (
                                         <div className="absolute top-1.5 right-1.5 bg-gold-500 text-white rounded-full p-1 shadow-sm">
@@ -447,7 +476,7 @@ export const CollectionFormModal: React.FC<CollectionFormModalProps> = ({ initia
                             );
                         })}
                         {filteredArtworks.length === 0 && (
-                            <div className="col-span-2 text-center text-gray-400 dark:text-gray-500 py-6 text-xs font-light">
+                            <div className="col-span-2 text-center text-gray-600 dark:text-gray-300 py-6 text-xs font-light">
                                 No artworks found matching "{searchQuery}".
                             </div>
                         )}

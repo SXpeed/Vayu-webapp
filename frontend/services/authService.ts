@@ -1,10 +1,15 @@
+import type { Permissions, RoleDef } from '../permissions';
 export interface AuthUser {
   id: string;
   name: string;
   email: string;
   phone?: string;
   address?: string;
-  role: 'admin' | 'user';
+  /** Role id: 'admin', 'user' (Staff) or a custom role's id. */
+  role: string;
+  /** Sent by the server for the signed-in user (login and /auth/me). */
+  roleName?: string;
+  permissions?: Permissions;
   /** Assigned attendance store (geofence target), set by an admin. */
   storeId?: string;
   createdAt: number;
@@ -120,7 +125,24 @@ export const authService = {
     return call<AuthUser[]>('/auth/team');
   },
 
-  async addUser(name: string, email: string, password: string, role: 'admin' | 'user' = 'user'): Promise<AuthUser> {
+  // ── Roles (admin) ──
+  async getRoles(): Promise<RoleDef[]> {
+    return call<RoleDef[]>('/auth/roles');
+  },
+
+  async createRole(name: string, permissions: Permissions): Promise<RoleDef> {
+    return call<RoleDef>('/auth/roles', { method: 'POST', body: JSON.stringify({ name, permissions }) });
+  },
+
+  async updateRole(id: string, data: { name?: string; permissions?: Permissions }): Promise<RoleDef> {
+    return call<RoleDef>(`/auth/roles/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) });
+  },
+
+  async deleteRole(id: string): Promise<void> {
+    await call<{ success: boolean }>(`/auth/roles/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  },
+
+  async addUser(name: string, email: string, password: string, role: string = 'user'): Promise<AuthUser> {
     const user = await call<AuthUser>('/auth/users', {
       method: 'POST',
       body: JSON.stringify({ name, email, password, role }),
@@ -129,7 +151,7 @@ export const authService = {
     return user;
   },
 
-  async updateUser(id: string, data: { name?: string; email?: string; role?: 'admin' | 'user'; password?: string; storeId?: string }): Promise<AuthUser> {
+  async updateUser(id: string, data: { name?: string; email?: string; role?: string; password?: string; storeId?: string }): Promise<AuthUser> {
     const user = await call<AuthUser>(`/auth/users/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data),

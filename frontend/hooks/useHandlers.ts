@@ -1,4 +1,5 @@
 import { useCallback } from 'react';
+import toast from 'react-hot-toast';
 import {
     Artwork, CalendarEvent, Catalog, Invoice, Collection, Contact, Inquiry, Conversation,
     ConversationDetails, Message, MessageTag, MessageReplyTo, MessageAttachment,
@@ -293,17 +294,19 @@ export function useHandlers(args: HandlerArgs) {
             senderName: userProfile?.name || authUser?.name || 'You',
             text, tags, timestamp: Date.now(), status: 'sent', replyTo, attachment,
         };
-        try { await messagingService.sendMessage(msg); } catch (err) { console.error('Failed to send message to D1:', err); }
-        await db.saveMessage(msg);
+        // Show it straight away, then confirm with the server. A failure used
+        // to be swallowed while fake "delivered"/"read" ticks appeared, and the
+        // next refresh silently removed the message. Now it stays, marked
+        // "Not sent", with the reason and a retry.
         setAllMessages((prev: Message[]) => [...prev, msg]);
-        setTimeout(
-            () => setAllMessages(makeMessageStatusUpdater<Message>(msg.id, 'delivered')),
-            700,
-        );
-        setTimeout(
-            () => setAllMessages(makeMessageStatusUpdater<Message>(msg.id, 'read')),
-            2200,
-        );
+        try {
+            await messagingService.sendMessage(msg);
+        } catch (err) {
+            setAllMessages(makeMessageStatusUpdater<Message>(msg.id, 'failed'));
+            toast.error(`Message not sent: ${(err as Error).message || 'check your connection'}`);
+            return;
+        }
+        await db.saveMessage(msg);
 
         const conv = conversations.find(c => c.id === conversationId);
         if (conv) {
@@ -356,11 +359,36 @@ export function useHandlers(args: HandlerArgs) {
             lastMessage: '', lastMessageTime: Date.now(), unreadCount: 0,
             title: details?.title, reason: details?.reason, note: details?.note,
         };
-        try { await messagingService.createConversation(conv); } catch (e) { console.error('D1 sync failed (create conversation):', e); }
+        // A chat that only exists on this phone can't be used: messages sent
+        // into it are never returned by the server. So fail loudly instead.
+        try {
+            await messagingService.createConversation(conv);
+        } catch (e) {
+            toast.error(`Couldn't start the chat: ${(e as Error).message || 'check your connection'}`);
+            throw e;
+        }
         await db.saveConversation(conv);
         setConversations((prev: Conversation[]) => [conv, ...prev]);
         return conv;
     }, [userProfile, authUser, conversations, teamMembers, setConversations]);
+
+    /** Send a message that failed again. */
+    const handleRetryMessage = useCallback(async (messageId: string) => {
+        let target: Message | undefined;
+        setAllMessages((prev: Message[]) => {
+            target = prev.find(m => m.id === messageId);
+            return prev.map(m => (m.id === messageId ? { ...m, status: 'sent' as const } : m));
+        });
+        if (!target) return;
+        try {
+            await messagingService.sendMessage({ ...target, status: 'sent' });
+            await db.saveMessage({ ...target, status: 'sent' });
+            toast.success('Message sent');
+        } catch (err) {
+            setAllMessages(makeMessageStatusUpdater<Message>(messageId, 'failed'));
+            toast.error(`Still not sent: ${(err as Error).message || 'check your connection'}`);
+        }
+    }, [setAllMessages]);
 
     const handleCreateGroup = useCallback(async (participantIds: string[], groupName: string, details?: ConversationDetails): Promise<Conversation> => {
         const selfId = userProfile?.id || authUser?.id || '';
@@ -376,7 +404,12 @@ export function useHandlers(args: HandlerArgs) {
             isGroup: true, groupName,
             title: details?.title, reason: details?.reason, note: details?.note,
         };
-        try { await messagingService.createConversation(conv); } catch (e) { console.error('D1 sync failed (create group):', e); }
+        try {
+            await messagingService.createConversation(conv);
+        } catch (e) {
+            toast.error(`Couldn't create the group: ${(e as Error).message || 'check your connection'}`);
+            throw e;
+        }
         await db.saveConversation(conv);
         setConversations((prev: Conversation[]) => [conv, ...prev]);
         return conv;
@@ -423,7 +456,7 @@ export function useHandlers(args: HandlerArgs) {
         // Inquiry messages
         handleSendInquiryMessage,
         // Messaging
-        handleSendMessage, handleTogglePinConversation, handleToggleArchiveConversation, handleDeleteConversation,
+        handleSendMessage, handleRetryMessage, handleTogglePinConversation, handleToggleArchiveConversation, handleDeleteConversation,
         handleCreateConversation, handleCreateGroup, handleUpdateConversationDetails,
         handleUpdateGroup,
     };
