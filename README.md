@@ -1,7 +1,7 @@
 # Vayu Design for Living
 
 Mobile-first PWA for Vayu Design: artworks, collections, catalogs, invoices,
-inquiries, team messaging and attendance. Live at https://ateliersupport.com.
+inquiries, team messaging and attendance. Live at https://ateliersupport.com (moving to https://app.ateliersupport.com).
 
 ## Stack
 

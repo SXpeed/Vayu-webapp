@@ -6,7 +6,10 @@
     { "pattern": "ateliersupport.com", "custom_domain": true },
     // www should 301 to the apex via a Cloudflare Redirect Rule, so logins,
     // the installed PWA and push subscriptions stay on one origin.
-    { "pattern": "www.ateliersupport.com", "custom_domain": true }
+    { "pattern": "www.ateliersupport.com", "custom_domain": true },
+    // The organization app's own address. The apex keeps serving the app
+    // until everyone has moved, then becomes the marketing site.
+    { "pattern": "app.ateliersupport.com", "custom_domain": true }
   ],
   "compatibility_date": "2026-06-24",
   "compatibility_flags": ["nodejs_compat"],
