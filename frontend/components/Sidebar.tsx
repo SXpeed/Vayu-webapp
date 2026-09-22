@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { ViewState } from '../types';
 import { CanFn, canOpenView } from '../access';
-import { APP_NAME } from '../brand';
+import { useBranding } from '../useBranding';
 
 interface NavItem {
     id: ViewState;
@@ -74,6 +74,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     currentView, onNavigate, isAdmin = false, can, onOpenAdmin,
     collapsed = false, onToggleCollapsed, userName,
 }) => {
+    const branding = useBranding();
     // Only what this role can open; groups left empty disappear.
     const groups = NAV_GROUPS
         .map(g => ({ ...g, items: g.items.filter(item => canOpenView(can, item.id)) }))
@@ -156,7 +157,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className={`flex items-center ${collapsed ? 'justify-center mb-4' : 'gap-3 px-0.5 mb-5'}`}>
                 <button
                     onClick={() => onNavigate('home')}
-                    onMouseEnter={showTip(`${APP_NAME} — Home`)}
+                    onMouseEnter={showTip(`${branding.appName} — Home`)}
                     onMouseLeave={hideTip}
                     aria-label="Go to home"
                     className="w-11 h-11 rounded-2xl neu-accent neu-btn flex items-center justify-center shrink-0 active-scale"
@@ -165,7 +166,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </button>
                 {!collapsed && (
                     <div className="min-w-0 flex-1">
-                        <p className="font-serif text-lg leading-tight text-gold-700 dark:text-gold-300 truncate">{APP_NAME}</p>
+                        <p className="font-serif text-lg leading-tight text-gold-700 dark:text-gold-300 truncate">{branding.appName}</p>
                     </div>
                 )}
             </div>

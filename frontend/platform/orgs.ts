@@ -6,7 +6,7 @@
 
 import { hashPassword } from 'better-auth/crypto';
 import { auditStmt } from './audit';
-import { insertMemberWithinSeatLimit, resolveEntitlements, seatUsage } from './plans';
+import { insertMemberWithinSeatLimit, limitOf, resolveEntitlements, seatUsage } from './plans';
 
 export const BUSINESS_TYPES = ['artist', 'studio', 'gallery', 'store', 'multi_store', 'other'] as const;
 export const ORG_ROLES = ['owner', 'admin', 'manager', 'staff'] as const;
@@ -182,11 +182,11 @@ export async function addMember(db: D1Database, orgId: string, body: Record<stri
   const id = crypto.randomUUID();
   // Seats come from the plan. The insert itself carries the check, so two
   // people claiming the last seat at the same moment cannot both succeed.
-  const { limits } = await resolveEntitlements(db, orgId);
+  const entitlements = await resolveEntitlements(db, orgId);
   let result;
   try {
     [result] = await db.batch([
-      insertMemberWithinSeatLimit(db, { id, orgId, userId, role, actorId: actor.userId, maxMembers: limits.maxMembers }),
+      insertMemberWithinSeatLimit(db, { id, orgId, userId, role, actorId: actor.userId, maxMembers: limitOf(entitlements, 'maxMembers') }),
       auditStmt(db, { actorUserId: actor.userId, actorKind: 'provider_admin', action: 'membership.add', targetType: 'membership', targetId: id, orgId, details: { email, role }, ip: actor.ip }),
     ]);
   } catch (e) {

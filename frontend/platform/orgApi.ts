@@ -12,10 +12,12 @@
 import type { Env } from '../workerEnv';
 import type { PlatformAuth } from './auth';
 import type { Actor } from './orgStore';
+import { limitOf, resolveEntitlements } from './plans';
 
 export interface OrgContext {
   orgId: string;
   orgName: string;
+  db: D1Database;
   actor: Actor;
   store: DurableObjectStub<import('./orgStore').OrgStore>;
 }
@@ -52,7 +54,7 @@ export async function resolveOrgContext(env: Env, db: D1Database, auth: Platform
   // Named by organization id: one object, one database, per organization.
   const store = env.ORG_STORE.get(env.ORG_STORE.idFromName(orgId)) as DurableObjectStub<import('./orgStore').OrgStore>;
 
-  return { orgId, orgName: row.name, actor: { userId: session.user.id, role: row.role }, store };
+  return { orgId, orgName: row.name, db, actor: { userId: session.user.id, role: row.role }, store };
 }
 
 /** Organizations the signed-in person can open, for the workspace switcher. */
@@ -66,6 +68,25 @@ export async function listMyOrganizations(db: D1Database, auth: PlatformAuth, re
      ORDER BY o.name`,
   ).bind(session.user.id).all();
   return results;
+}
+
+/**
+ * Stops a create when the organization is at its plan's limit. Nothing is
+ * deleted or hidden when a plan shrinks: existing records stay, only new ones
+ * are refused.
+ */
+async function requireRoomFor(ctx: OrgContext, limitKey: string, countKey: string, label: string): Promise<void> {
+  const entitlements = await resolveEntitlements(ctx.db, ctx.orgId);
+  if (!entitlements.active) {
+    throw new OrgAccessError(402, 'subscription_inactive', 'This organization’s plan is not active. Contact support to continue.');
+  }
+  const limit = limitOf(entitlements, limitKey);
+  if (limit === null) return;
+  const counts = await ctx.store.counts();
+  const used = counts[countKey] ?? 0;
+  if (used >= limit) {
+    throw new OrgAccessError(409, 'limit_reached', `This organization's plan allows ${limit} ${label} and ${used} are stored. Remove some, or move to a larger plan.`);
+  }
 }
 
 function requireRole(ctx: OrgContext, allowed: Set<string>): void {
@@ -99,6 +120,7 @@ export async function handleOrgRequest(ctx: OrgContext, request: Request, rest: 
 
     if (rest === '/artworks' && method === 'POST') {
       requireRole(ctx, WRITE_ROLES);
+      await requireRoomFor(ctx, 'maxItems', 'artworks', 'inventory items');
       return await ctx.store.putArtwork(await body(), ctx.actor);
     }
 

@@ -21,10 +21,14 @@ export interface PlanVersion {
 
 type PlanDetail = Omit<PlanRow, 'versions'> & { versions: PlanVersion[] };
 
+interface FieldDef { key: string; label: string; hint: string; nullable?: boolean; max?: number; period?: string; default: unknown; alwaysOn?: boolean; enforced?: boolean }
+interface PlanSchema { limits: FieldDef[]; modules: FieldDef[]; features: FieldDef[]; billingTypes: string[] }
+
 interface Limits {
-    maxMembers: number | null; maxStores: number | null; maxItems: number | null; storageMb: number | null;
-    exports: boolean; catalogPdf: boolean; customRoles: boolean; branding: boolean;
-    modules: Record<string, boolean>; auditRetentionDays: number; integrations: string[];
+    limits: Record<string, number | null>;
+    modules: Record<string, boolean>;
+    features: Record<string, boolean>;
+    integrations: string[];
 }
 
 const money = (minor: number, currency: string) =>
@@ -97,7 +101,10 @@ export const PlansPanel: React.FC = () => {
 
 const PlanDetailView: React.FC<{ planId: string; onBack: () => void }> = ({ planId, onBack }) => {
     const [plan, setPlan] = useState<PlanDetail | null>(null);
+    const [schema, setSchema] = useState<PlanSchema | null>(null);
     const [adding, setAdding] = useState(false);
+
+    useEffect(() => { api<PlanSchema>('/admin/plans/schema').then(setSchema).catch(() => setSchema(null)); }, []);
 
     const load = useCallback(async () => {
         try { setPlan(await api(`/admin/plans/${planId}`)); }
@@ -142,7 +149,7 @@ const PlanDetailView: React.FC<{ planId: string; onBack: () => void }> = ({ plan
                 <SectionTitle actions={<Button icon={<Plus size={16} />} onClick={() => setAdding(a => !a)}>New version</Button>}>
                     Versions
                 </SectionTitle>
-                {adding && <NewVersionForm planId={planId} onDone={(p) => { setAdding(false); setPlan(p); }} />}
+                {adding && <NewVersionForm planId={planId} schema={schema} onDone={(p) => { setAdding(false); setPlan(p); }} />}
                 <ul className="space-y-3">
                     {plan.versions.map(v => {
                         const limits = JSON.parse(v.limits) as Limits;
@@ -163,12 +170,13 @@ const PlanDetailView: React.FC<{ planId: string; onBack: () => void }> = ({ plan
                                     </span>
                                 </div>
                                 <p className="text-[12px] text-gray-700 dark:text-gray-300">
-                                    {limitText(limits.maxMembers)} members · {limitText(limits.maxStores)} stores · {limitText(limits.maxItems)} items · {limitText(limits.storageMb)} MB
-                                    {limits.exports ? ' · exports' : ''}{limits.catalogPdf ? ' · catalog PDF' : ''}
-                                    {limits.customRoles ? ' · custom roles' : ''}{limits.branding ? ' · branding' : ''}
+                                    {schema?.limits.map(f => `${f.label}: ${limitText(limits.limits[f.key] ?? null)}`).join(' · ')}
                                 </p>
                                 <p className="text-[11px] text-gray-600 dark:text-gray-400">
                                     Modules: {Object.entries(limits.modules).filter(([, on]) => on).map(([m]) => m).join(', ') || 'none'}
+                                </p>
+                                <p className="text-[11px] text-gray-600 dark:text-gray-400">
+                                    Features: {Object.entries(limits.features).filter(([, on]) => on).map(([m]) => m).join(', ') || 'none'}
                                 </p>
                                 {v.status === 'published' && (
                                     <p className="text-[11px] text-gray-600 dark:text-gray-400 mt-1">
@@ -184,71 +192,111 @@ const PlanDetailView: React.FC<{ planId: string; onBack: () => void }> = ({ plan
     );
 };
 
-const NewVersionForm: React.FC<{ planId: string; onDone: (plan: PlanDetail) => void }> = ({ planId, onDone }) => {
+/** Every field comes from the server's schema, so the two never drift apart. */
+const NewVersionForm: React.FC<{ planId: string; schema: PlanSchema | null; onDone: (plan: PlanDetail) => void }> = ({ planId, schema, onDone }) => {
     const [billingType, setBillingType] = useState('paid');
     const [priceMonthly, setPriceMonthly] = useState('999');
     const [priceAnnual, setPriceAnnual] = useState('9990');
     const [trialDays, setTrialDays] = useState('14');
-    const [maxMembers, setMaxMembers] = useState('5');
-    const [maxStores, setMaxStores] = useState('1');
-    const [maxItems, setMaxItems] = useState('1000');
-    const [storageMb, setStorageMb] = useState('5120');
-    const [exports, setExports] = useState(false);
-    const [customRoles, setCustomRoles] = useState(false);
-    const [branding, setBranding] = useState(false);
-    const [attendance, setAttendance] = useState(false);
+    const [notes, setNotes] = useState('');
+    const [limits, setLimits] = useState<Record<string, string>>({});
+    const [flags, setFlags] = useState<Record<string, boolean>>({});
+    const [busy, setBusy] = useState(false);
 
-    const numOrNull = (v: string) => (v.trim() === '' ? null : Number(v));
+    useEffect(() => {
+        if (!schema) return;
+        setLimits(Object.fromEntries(schema.limits.map(f => [f.key, f.default === null ? '' : String(f.default)])));
+        setFlags(Object.fromEntries([...schema.modules, ...schema.features].map(f => [f.key, f.alwaysOn === true || f.default === true])));
+    }, [schema]);
+
+    if (!schema) return <p className="text-sm">Loading plan options\u2026</p>;
+
+    const included = [...schema.modules, ...schema.features];
+    const alwaysOn = included.filter(f => f.alwaysOn);
 
     const submit = async (e: React.FormEvent) => {
         e.preventDefault();
+        setBusy(true);
         try {
             const plan = await api<PlanDetail>(`/admin/plans/${planId}/versions`, {
                 method: 'POST',
                 body: JSON.stringify({
                     billingType,
                     currency: 'INR',
-                    // Prices are entered in rupees and stored in paise.
+                    // Prices are typed in rupees and stored in paise.
                     priceMonthly: Math.round(Number(priceMonthly || 0) * 100),
                     priceAnnual: Math.round(Number(priceAnnual || 0) * 100),
                     trialDays: Number(trialDays || 0),
+                    notes,
                     limits: {
-                        maxMembers: numOrNull(maxMembers), maxStores: numOrNull(maxStores),
-                        maxItems: numOrNull(maxItems), storageMb: numOrNull(storageMb),
-                        exports, customRoles, branding,
-                        modules: { catalogs: true, invoices: true, inquiries: true, messaging: true, attendance, calendar: true },
+                        limits: Object.fromEntries(schema.limits.map(f => [f.key, limits[f.key]?.trim() === '' ? null : Number(limits[f.key])])),
+                        modules: Object.fromEntries(schema.modules.map(f => [f.key, !!flags[f.key]])),
+                        features: Object.fromEntries(schema.features.map(f => [f.key, !!flags[f.key]])),
                     },
                 }),
             });
             toast.success('Draft version added');
             onDone(plan);
-        } catch (err) { toast.error((err as ApiError).message); }
+        } catch (err) { toast.error((err as ApiError).message); } finally { setBusy(false); }
     };
 
     return (
-        <form onSubmit={submit} className="neu-inset rounded-xl p-4 mb-4 grid gap-3 sm:grid-cols-3">
-            <Field label="Billing type" htmlFor="v-type">
-                <Select id="v-type" value={billingType} onChange={e => setBillingType(e.target.value)}>
-                    <option value="free">Free</option>
-                    <option value="trial">Trial</option>
-                    <option value="paid">Paid</option>
-                    <option value="custom">Custom</option>
-                </Select>
-            </Field>
-            <Field label="Monthly price (₹)" htmlFor="v-pm"><Input id="v-pm" inputMode="decimal" value={priceMonthly} onChange={e => setPriceMonthly(e.target.value)} /></Field>
-            <Field label="Annual price (₹)" htmlFor="v-pa"><Input id="v-pa" inputMode="decimal" value={priceAnnual} onChange={e => setPriceAnnual(e.target.value)} /></Field>
-            <Field label="Trial days" htmlFor="v-td"><Input id="v-td" inputMode="numeric" value={trialDays} onChange={e => setTrialDays(e.target.value)} /></Field>
-            <Field label="Members" htmlFor="v-mm" hint="Blank = unlimited"><Input id="v-mm" inputMode="numeric" value={maxMembers} onChange={e => setMaxMembers(e.target.value)} /></Field>
-            <Field label="Stores" htmlFor="v-ms" hint="Blank = unlimited"><Input id="v-ms" inputMode="numeric" value={maxStores} onChange={e => setMaxStores(e.target.value)} /></Field>
-            <Field label="Items" htmlFor="v-mi" hint="Blank = unlimited"><Input id="v-mi" inputMode="numeric" value={maxItems} onChange={e => setMaxItems(e.target.value)} /></Field>
-            <Field label="Storage (MB)" htmlFor="v-sm" hint="Blank = unlimited"><Input id="v-sm" inputMode="numeric" value={storageMb} onChange={e => setStorageMb(e.target.value)} /></Field>
-            <div className="sm:col-span-3 space-y-1">
-                <ToggleRow title="Exports" checked={exports} onChange={() => setExports(v => !v)} />
-                <ToggleRow title="Custom roles" checked={customRoles} onChange={() => setCustomRoles(v => !v)} />
-                <ToggleRow title="Branding" checked={branding} onChange={() => setBranding(v => !v)} />
-                <ToggleRow title="Attendance module" checked={attendance} onChange={() => setAttendance(v => !v)} />
+        <form onSubmit={submit} className="neu-inset rounded-xl p-4 mb-4 space-y-5">
+            <div className="grid gap-3 sm:grid-cols-4">
+                <Field label="Billing type" htmlFor="v-type">
+                    <Select id="v-type" value={billingType} onChange={e => setBillingType(e.target.value)}>
+                        {schema.billingTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                    </Select>
+                </Field>
+                <Field label="Monthly price (\u20b9)" htmlFor="v-pm"><Input id="v-pm" inputMode="decimal" value={priceMonthly} onChange={e => setPriceMonthly(e.target.value)} /></Field>
+                <Field label="Annual price (\u20b9)" htmlFor="v-pa"><Input id="v-pa" inputMode="decimal" value={priceAnnual} onChange={e => setPriceAnnual(e.target.value)} /></Field>
+                <Field label="Trial days" htmlFor="v-td"><Input id="v-td" inputMode="numeric" value={trialDays} onChange={e => setTrialDays(e.target.value)} /></Field>
             </div>
-            <div className="sm:col-span-3"><Button type="submit" variant="primary">Add draft version</Button></div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+                {schema.limits.map(f => (
+                    <Field key={f.key} label={f.label} htmlFor={`lim-${f.key}`}
+                        hint={`${f.hint}${f.nullable ? ' Blank = unlimited.' : ''}${f.enforced === false ? ' (not enforced yet)' : ''}`}>
+                        <Input id={`lim-${f.key}`} inputMode="numeric" value={limits[f.key] ?? ''}
+                            onChange={e => setLimits(l => ({ ...l, [f.key]: e.target.value }))} />
+                    </Field>
+                ))}
+                <Field label="Reason for this version" htmlFor="v-notes" hint="Kept with the version, for your own records.">
+                    <Input id="v-notes" value={notes} onChange={e => setNotes(e.target.value)} />
+                </Field>
+            </div>
+
+            <fieldset className="border border-black/10 dark:border-white/10 rounded-xl p-3">
+                <legend className="px-1 text-[11px] uppercase tracking-[0.14em] text-gray-700 dark:text-gray-200">Included features</legend>
+                <div className="grid gap-x-6 sm:grid-cols-2">
+                    {included.map(f => (
+                        <label key={f.key} className="flex items-start gap-2 py-1.5 text-sm text-gray-800 dark:text-gray-200">
+                            <input
+                                type="checkbox"
+                                className="mt-0.5"
+                                checked={f.alwaysOn ? true : !!flags[f.key]}
+                                disabled={!!f.alwaysOn}
+                                onChange={() => setFlags(x => ({ ...x, [f.key]: !x[f.key] }))}
+                            />
+                            <span>
+                                {f.label}
+                                <span className="block text-[11px] text-gray-600 dark:text-gray-400">
+                                    {f.hint}{f.enforced === false ? ' (not enforced yet)' : ''}
+                                </span>
+                            </span>
+                        </label>
+                    ))}
+                </div>
+            </fieldset>
+
+            <p className="text-[11px] text-gray-600 dark:text-gray-400">
+                {alwaysOn.length > 0 && `${alwaysOn.map(f => f.label).join(' and ')} ${alwaysOn.length === 1 ? 'is' : 'are'} part of every plan. `}
+                Organizations already on this plan keep the version they were given until you move them.
+            </p>
+
+            <div className="flex gap-2">
+                <Button type="submit" variant="primary" disabled={busy}>Create plan version</Button>
+            </div>
         </form>
     );
 };

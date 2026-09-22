@@ -11,35 +11,23 @@
 
 import { auditStmt } from './audit';
 import { OrgError, type Actor } from './orgs';
+import { FEATURE_FIELDS, LIMIT_FIELDS, MODULE_FIELDS } from './planFields';
 
+/**
+ * What a plan allows. Countable limits (null = unlimited), module switches and
+ * feature flags, all defined in planFields.ts.
+ */
 export interface PlanLimits {
-  /** Enabled members, owner included. null = unlimited. */
-  maxMembers: number | null;
-  maxStores: number | null;
-  /** Artworks and other inventory items. */
-  maxItems: number | null;
-  storageMb: number | null;
-  /** Feature switches. */
-  modules: { catalogs: boolean; invoices: boolean; inquiries: boolean; messaging: boolean; attendance: boolean; calendar: boolean };
-  exports: boolean;
-  catalogPdf: boolean;
-  customRoles: boolean;
-  branding: boolean;
-  auditRetentionDays: number;
+  limits: Record<string, number | null>;
+  modules: Record<string, boolean>;
+  features: Record<string, boolean>;
   integrations: string[];
 }
 
 export const DEFAULT_LIMITS: PlanLimits = {
-  maxMembers: 3,
-  maxStores: 1,
-  maxItems: 500,
-  storageMb: 1024,
-  modules: { catalogs: true, invoices: true, inquiries: true, messaging: true, attendance: false, calendar: true },
-  exports: false,
-  catalogPdf: true,
-  customRoles: false,
-  branding: false,
-  auditRetentionDays: 90,
+  limits: Object.fromEntries(LIMIT_FIELDS.map(f => [f.key, f.default])),
+  modules: Object.fromEntries(MODULE_FIELDS.map(f => [f.key, f.default])),
+  features: Object.fromEntries(FEATURE_FIELDS.map(f => [f.key, f.default])),
   integrations: [],
 };
 
@@ -49,43 +37,47 @@ const PLAN_STATUSES = ['draft', 'published', 'retired', 'archived'] as const;
 type BillingType = typeof BILLING_TYPES[number];
 
 function num(v: unknown, field: string, { min = 0, max = 100_000_000, nullable = false } = {}): number | null {
-  if ((v === null || v === undefined) && nullable) return null;
+  if ((v === null || v === undefined || v === '') && nullable) return null;
   if (typeof v !== 'number' || !Number.isFinite(v) || v < min || v > max) {
     throw new OrgError(400, 'invalid', `${field} must be a number between ${min} and ${max}${nullable ? ', or empty for unlimited' : ''}.`);
   }
   return Math.floor(v);
 }
 
-function bool(v: unknown, fallback: boolean): boolean {
-  return typeof v === 'boolean' ? v : fallback;
+function flags(raw: unknown, fields: typeof MODULE_FIELDS): Record<string, boolean> {
+  const src = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return Object.fromEntries(fields.map(f => [
+    f.key,
+    // Part of every plan: never switchable, whatever the caller sends.
+    f.alwaysOn ? true : (typeof src[f.key] === 'boolean' ? src[f.key] as boolean : f.default),
+  ]));
 }
 
+/** Validates and fills in anything the caller left out. */
 export function parseLimits(raw: unknown): PlanLimits {
   const l = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  const modulesRaw = (l.modules && typeof l.modules === 'object' ? l.modules : {}) as Record<string, unknown>;
+  // Accept either the nested shape or a flat one (older payloads and
+  // single-key overrides both arrive flat).
+  const limitsSrc = (l.limits && typeof l.limits === 'object' ? l.limits : l) as Record<string, unknown>;
+  const limits: Record<string, number | null> = {};
+  for (const f of LIMIT_FIELDS) {
+    const value = limitsSrc[f.key] === undefined ? f.default : limitsSrc[f.key];
+    limits[f.key] = num(value, f.label, { nullable: f.nullable, max: f.max, min: f.nullable ? 0 : 1 });
+  }
   const integrations = Array.isArray(l.integrations)
-    ? l.integrations.filter(i => typeof i === 'string').slice(0, 20) as string[]
+    ? (l.integrations as unknown[]).filter(i => typeof i === 'string').slice(0, 20) as string[]
     : [];
   return {
-    maxMembers: num(l.maxMembers ?? DEFAULT_LIMITS.maxMembers, 'Member limit', { nullable: true, max: 100_000 }),
-    maxStores: num(l.maxStores ?? DEFAULT_LIMITS.maxStores, 'Store limit', { nullable: true, max: 10_000 }),
-    maxItems: num(l.maxItems ?? DEFAULT_LIMITS.maxItems, 'Item limit', { nullable: true }),
-    storageMb: num(l.storageMb ?? DEFAULT_LIMITS.storageMb, 'Storage limit (MB)', { nullable: true }),
-    modules: {
-      catalogs: bool(modulesRaw.catalogs, DEFAULT_LIMITS.modules.catalogs),
-      invoices: bool(modulesRaw.invoices, DEFAULT_LIMITS.modules.invoices),
-      inquiries: bool(modulesRaw.inquiries, DEFAULT_LIMITS.modules.inquiries),
-      messaging: bool(modulesRaw.messaging, DEFAULT_LIMITS.modules.messaging),
-      attendance: bool(modulesRaw.attendance, DEFAULT_LIMITS.modules.attendance),
-      calendar: bool(modulesRaw.calendar, DEFAULT_LIMITS.modules.calendar),
-    },
-    exports: bool(l.exports, DEFAULT_LIMITS.exports),
-    catalogPdf: bool(l.catalogPdf, DEFAULT_LIMITS.catalogPdf),
-    customRoles: bool(l.customRoles, DEFAULT_LIMITS.customRoles),
-    branding: bool(l.branding, DEFAULT_LIMITS.branding),
-    auditRetentionDays: num(l.auditRetentionDays ?? DEFAULT_LIMITS.auditRetentionDays, 'Audit retention (days)', { min: 1, max: 3650 }) as number,
+    limits,
+    modules: flags(l.modules, MODULE_FIELDS),
+    features: flags(l.features ?? l, FEATURE_FIELDS),
     integrations,
   };
+}
+
+/** One limit's value for an organization, after overrides. */
+export function limitOf(entitlements: { limits: PlanLimits }, key: string): number | null {
+  return entitlements.limits.limits[key] ?? null;
 }
 
 const str = (v: unknown, field: string, max = 200, min = 1): string => {
@@ -246,11 +238,7 @@ export async function publicPlans(db: D1Database) {
     return {
       key: r.key, name: r.name, description: r.description, billingType: r.billing_type,
       currency: r.currency, priceMonthly: r.price_monthly, priceAnnual: r.price_annual, trialDays: r.trial_days,
-      highlights: {
-        maxMembers: limits.maxMembers, maxStores: limits.maxStores, maxItems: limits.maxItems,
-        storageMb: limits.storageMb, modules: limits.modules, exports: limits.exports,
-        catalogPdf: limits.catalogPdf, customRoles: limits.customRoles, branding: limits.branding,
-      },
+      highlights: { limits: limits.limits, modules: limits.modules, features: limits.features },
     };
   });
 }
@@ -291,7 +279,10 @@ export async function resolveEntitlements(db: D1Database, orgId: string): Promis
     try {
       const value = JSON.parse(o.value);
       overrides[o.key] = value;
-      if (o.key in limits) (limits as unknown as Record<string, unknown>)[o.key] = value;
+      // An override names one field: a countable limit, a module or a feature.
+      if (o.key in limits.limits) limits.limits[o.key] = value as number | null;
+      else if (o.key in limits.modules) limits.modules[o.key] = value === true;
+      else if (o.key in limits.features) limits.features[o.key] = value === true;
     } catch { /* ignore an unreadable override rather than failing the request */ }
   }
 
@@ -321,7 +312,7 @@ export async function seatUsage(db: D1Database, orgId: string) {
     "SELECT COUNT(*) AS n FROM memberships WHERE org_id = ? AND status = 'active'",
   ).bind(orgId).first<{ n: number }>();
   const used = row?.n ?? 0;
-  const limit = entitlements.limits.maxMembers;
+  const limit = limitOf(entitlements, 'maxMembers');
   return { used, limit, remaining: limit === null ? null : Math.max(limit - used, 0), overLimit: limit !== null && used > limit };
 }
 
@@ -414,12 +405,16 @@ export async function extendTrial(db: D1Database, orgId: string, body: Record<st
 
 export async function setOverride(db: D1Database, orgId: string, body: Record<string, unknown>, actor: Actor) {
   const key = str(body.key, 'Key', 40);
-  if (!(key in DEFAULT_LIMITS)) throw new OrgError(400, 'invalid', `"${key}" is not a limit that can be overridden.`);
+  const limitField = LIMIT_FIELDS.find(f => f.key === key);
+  const isFlag = [...MODULE_FIELDS, ...FEATURE_FIELDS].some(f => f.key === key);
+  if (!limitField && !isFlag) throw new OrgError(400, 'invalid', `"${key}" is not something a plan controls.`);
+  const alwaysOn = [...MODULE_FIELDS, ...FEATURE_FIELDS].find(f => f.key === key)?.alwaysOn;
+  if (alwaysOn && body.value !== true) throw new OrgError(400, 'invalid', `${key} is part of every plan and cannot be switched off.`);
   const reason = str(body.reason, 'Reason', 500, 3);
   const expiresAt = body.expiresAt === undefined || body.expiresAt === null ? null : num(body.expiresAt, 'Expiry', { max: 4_102_444_800_000 });
   if (body.value === undefined) throw new OrgError(400, 'invalid', 'A value is required.');
-  // Validate by parsing a limits object with this key replaced.
-  parseLimits({ ...DEFAULT_LIMITS, [key]: body.value });
+  if (limitField) num(body.value, limitField.label, { nullable: limitField.nullable, max: limitField.max });
+  else if (typeof body.value !== 'boolean') throw new OrgError(400, 'invalid', `${key} must be true or false.`);
   await db.batch([
     db.prepare(`INSERT INTO entitlement_overrides (org_id, key, value, reason, expires_at, created_at, created_by)
                 VALUES (?, ?, ?, ?, ?, ?, ?)

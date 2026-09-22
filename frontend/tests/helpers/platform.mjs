@@ -48,10 +48,12 @@ export async function startPlatform(envExtra = {}) {
             async call(path, { method = 'GET', body, headers = {}, envOverride = {} } = {}) {
                 const h = new Headers(headers);
                 if (jar.size) h.set('Cookie', [...jar].map(([k, v]) => `${k}=${v}`).join('; '));
-                if (body !== undefined) h.set('Content-Type', 'application/json');
+                const isRaw = body instanceof Uint8Array || Buffer.isBuffer(body);
+                if (body !== undefined && !isRaw && !h.has('Content-Type')) h.set('Content-Type', 'application/json');
                 if (method !== 'GET' && !h.has('Origin')) h.set('Origin', origin);
                 h.set('cf-connecting-ip', ip);
-                const req = new Request(`${origin}/api/v2${path}`, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) });
+                const payload = body === undefined ? undefined : (isRaw ? body : JSON.stringify(body));
+                const req = new Request(`${origin}/api/v2${path}`, { method, headers: h, body: payload });
                 const res = await platform.handlePlatformRequest(req, { ...env, ...envOverride });
                 for (const c of res.headers.getSetCookie?.() ?? []) {
                     const [pair] = c.split(';');

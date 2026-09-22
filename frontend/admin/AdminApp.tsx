@@ -8,6 +8,8 @@ import toast from 'react-hot-toast';
 import { api, authClient, type ApiError } from './api';
 import { OrgsPanel } from './OrgsPanel';
 import { PlansPanel } from './PlansPanel';
+import { BrandingPanel } from './BrandingPanel';
+import { useBranding } from '../useBranding';
 import { KeyRound, LogOut, ShieldCheck, History } from 'lucide-react';
 import { Pill } from '../components/ui';
 import { APP_NAME } from '../brand';
@@ -45,9 +47,10 @@ type Screen =
     | { kind: 'ready'; email: string; role: string }
     | { kind: 'unavailable'; message: string };
 
-type Tab = 'orgs' | 'plans' | 'settings' | 'audit';
+type Tab = 'orgs' | 'plans' | 'branding' | 'settings' | 'audit';
 
 export const AdminApp: React.FC = () => {
+    const branding = useBranding();
     const [screen, setScreen] = useState<Screen>({ kind: 'loading' });
     const [tab, setTab] = useState<Tab>('orgs');
     // Sensitive actions may need a sign-in newer than 30 minutes. The panel
@@ -79,9 +82,12 @@ export const AdminApp: React.FC = () => {
         <div className="min-h-dvh px-4 py-8 lg:py-12">
             <div className="w-full max-w-4xl mx-auto space-y-6">
                 <header className="flex items-center justify-between gap-3">
-                    <div>
-                        <h1 className="font-serif text-2xl text-gold-700 dark:text-gold-300">{APP_NAME}</h1>
-                        <p className="text-[11px] uppercase tracking-[0.14em] text-gray-600 dark:text-gray-400">Provider control panel</p>
+                    <div className="flex items-center gap-3">
+                        {branding.logoUrl && <img src={branding.logoUrl} alt="" className="w-9 h-9 rounded-xl object-contain" />}
+                        <div>
+                            <h1 className="font-serif text-2xl text-gold-700 dark:text-gold-300">{branding.appName}</h1>
+                            <p className="text-[11px] uppercase tracking-[0.14em] text-gray-600 dark:text-gray-400">Provider control panel</p>
+                        </div>
                     </div>
                     {(screen.kind === 'ready' || screen.kind === 'setup-2fa' || screen.kind === 'not-admin') && (
                         <Button onClick={signOut} icon={<LogOut size={16} />}>Sign out</Button>
@@ -103,6 +109,7 @@ export const AdminApp: React.FC = () => {
                         <div className="flex flex-wrap gap-2">
                             <Pill active={tab === 'orgs'} onClick={() => setTab('orgs')}>Organizations</Pill>
                             <Pill active={tab === 'plans'} onClick={() => setTab('plans')}>Plans</Pill>
+                            <Pill active={tab === 'branding'} onClick={() => setTab('branding')}>Branding</Pill>
                             <Pill active={tab === 'settings'} onClick={() => setTab('settings')}>Login methods</Pill>
                             <Pill active={tab === 'audit'} onClick={() => setTab('audit')}>Audit</Pill>
                         </div>
@@ -115,6 +122,7 @@ export const AdminApp: React.FC = () => {
                         )}
                         {tab === 'orgs' && <OrgsPanel reauth={reauth} />}
                         {tab === 'plans' && <PlansPanel />}
+                        {tab === 'branding' && <BrandingPanel />}
                         {tab === 'settings' && <LoginMethodsPanel email={screen.email} />}
                         {tab === 'audit' && <AuditPanel />}
                     </>

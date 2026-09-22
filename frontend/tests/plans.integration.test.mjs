@@ -44,7 +44,7 @@ test('a plan is created as a draft and only shows publicly once published', asyn
 
     res = await post(`/admin/plans/${planId}/versions`, {
         billingType: 'paid', currency: 'INR', priceMonthly: 99900, priceAnnual: 999000, trialDays: 14,
-        limits: { maxMembers: 2, maxStores: 1, maxItems: 100, storageMb: 512, exports: false },
+        limits: { limits: { maxMembers: 2, maxStores: 1, maxItems: 100, storageMb: 512 }, features: { exports: false } },
     });
     assert.equal(res.status, 201, JSON.stringify(res.body));
     starterVersion = res.body.versions[0];
@@ -59,7 +59,7 @@ test('a plan is created as a draft and only shows publicly once published', asyn
     assert.equal(publicList.length, 1);
     assert.equal(publicList[0].key, 'starter');
     assert.equal(publicList[0].priceMonthly, 99900);
-    assert.equal(publicList[0].highlights.maxMembers, 2);
+    assert.equal(publicList[0].highlights.limits.maxMembers, 2);
     assert.equal(publicList[0].id, undefined, 'internal ids stay private');
     assert.equal(publicList[0].notes, undefined);
 });
@@ -79,7 +79,7 @@ test('assigning a paid plan waits for payment; a waiver activates it', async () 
     assert.equal(res.status, 200, JSON.stringify(res.body));
     assert.equal(res.body.subscription.status, 'payment_required');
     assert.equal(res.body.plan.key, 'starter');
-    assert.equal(res.body.limits.maxMembers, 2);
+    assert.equal(res.body.limits.limits.maxMembers, 2);
 
     res = await post(`/admin/orgs/${org.id}/subscription`, { planVersionId: starterVersion.id, waivePayment: true, reason: 'Founding customer' });
     assert.equal(res.body.subscription.status, 'active');
@@ -121,7 +121,7 @@ test('seat limits are enforced, and two people cannot take the last seat', async
 test('an override raises the limit for one organization, with a reason, and expires', async () => {
     let res = await post(`/admin/orgs/${org.id}/entitlements`, { key: 'maxMembers', value: 5, reason: 'Migration period' });
     assert.equal(res.status, 200, JSON.stringify(res.body));
-    assert.equal(res.body.limits.maxMembers, 5);
+    assert.equal(res.body.limits.limits.maxMembers, 5);
     assert.equal((await admin.call(`/admin/orgs/${org.id}/subscription`)).body.seats.limit, 5);
 
     const members = (await admin.call(`/admin/orgs/${org.id}`)).body.members;
@@ -134,7 +134,7 @@ test('an override raises the limit for one organization, with a reason, and expi
     // An expired override stops counting.
     await db.prepare('UPDATE entitlement_overrides SET expires_at = ? WHERE org_id = ? AND key = ?')
         .bind(Date.now() - 1000, org.id, 'maxMembers').run();
-    assert.equal((await admin.call(`/admin/orgs/${org.id}/subscription`)).body.limits.maxMembers, 2);
+    assert.equal((await admin.call(`/admin/orgs/${org.id}/subscription`)).body.limits.limits.maxMembers, 2);
 
     res = await admin.call(`/admin/orgs/${org.id}/entitlements/maxMembers`, { method: 'DELETE' });
     assert.equal(res.status, 200);
@@ -143,7 +143,7 @@ test('an override raises the limit for one organization, with a reason, and expi
 
 test('a downgrade keeps every member and only blocks new ones', async () => {
     const smaller = (await post(`/admin/plans/${planId}/versions`, {
-        billingType: 'free', limits: { maxMembers: 1, maxItems: 10 },
+        billingType: 'free', limits: { limits: { maxMembers: 1, maxItems: 10 } },
     })).body.versions.find(v => v.status === 'draft');
     await patch(`/admin/plans/${planId}/versions/${smaller.id}`, { status: 'published' });
 
@@ -151,7 +151,7 @@ test('a downgrade keeps every member and only blocks new ones', async () => {
     const res = await post(`/admin/orgs/${org.id}/subscription`, { planVersionId: smaller.id });
     assert.equal(res.status, 200, JSON.stringify(res.body));
     assert.equal(res.body.subscription.status, 'active', 'a free plan activates on assignment');
-    assert.equal(res.body.limits.maxMembers, 1);
+    assert.equal(res.body.limits.limits.maxMembers, 1);
 
     const after = (await admin.call(`/admin/orgs/${org.id}`)).body.members;
     assert.equal(after.length, membersBefore, 'nobody was removed by the downgrade');
@@ -166,7 +166,7 @@ test('a downgrade keeps every member and only blocks new ones', async () => {
 
 test('a trial starts its clock, can be extended, and expiry shows up', async () => {
     const trialVersion = (await post(`/admin/plans/${planId}/versions`, {
-        billingType: 'trial', trialDays: 14, limits: { maxMembers: 10 },
+        billingType: 'trial', trialDays: 14, limits: { limits: { maxMembers: 10 } },
     })).body.versions.find(v => v.status === 'draft');
     await patch(`/admin/plans/${planId}/versions/${trialVersion.id}`, { status: 'published' });
 
@@ -189,6 +189,53 @@ test('an organization with no plan gets conservative defaults', async () => {
     const res = await admin.call(`/admin/orgs/${fresh.id}/subscription`);
     assert.equal(res.body.plan, null);
     assert.equal(res.body.subscription.status, 'none');
-    assert.equal(res.body.limits.maxMembers, 3);
-    assert.equal(res.body.limits.exports, false);
+    assert.equal(res.body.limits.limits.maxMembers, 3);
+    assert.equal(res.body.limits.features.exports, false);
+});
+
+test('the plan schema drives the editor, and every field it lists is settable', async () => {
+    const schema = (await admin.call('/admin/plans/schema')).body;
+    assert.ok(schema.limits.some(f => f.key === 'pdfGenerationsPerMonth' && f.period === 'month'), 'per-month allowances are part of the schema');
+    assert.ok(schema.limits.some(f => f.key === 'maxPrivateRooms'));
+    assert.ok(schema.features.some(f => f.key === 'backgroundRemoval'));
+    assert.ok(schema.modules.some(f => f.key === 'attendance'));
+
+    // Set every limit and flag the schema advertises, then read them back.
+    const limits = Object.fromEntries(schema.limits.map((f, i) => [f.key, f.nullable && i === 0 ? null : 7]));
+    const modules = Object.fromEntries(schema.modules.map(f => [f.key, true]));
+    const features = Object.fromEntries(schema.features.map(f => [f.key, true]));
+    const version = (await post(`/admin/plans/${planId}/versions`, {
+        billingType: 'custom', limits: { limits, modules, features },
+    })).body.versions.find(v => v.status === 'draft');
+    const saved = JSON.parse(version.limits);
+    assert.equal(saved.limits.maxMembers, null, 'blank means unlimited');
+    assert.equal(saved.limits.pdfGenerationsPerMonth, 7);
+    assert.equal(saved.limits.invoicesPerMonth, 7);
+    assert.equal(saved.features.backgroundRemoval, true);
+    assert.equal(saved.modules.attendance, true);
+
+    // Features every plan includes stay on, whatever is sent.
+    const lockedVersion = (await post(`/admin/plans/${planId}/versions`, {
+        billingType: 'free',
+        limits: { modules: { inventory: false }, features: { auditHistory: false } },
+    })).body.versions.find(v => v.status === 'draft');
+    const lockedLimits = JSON.parse(lockedVersion.limits);
+    assert.equal(lockedLimits.modules.inventory, true, 'inventory is part of every plan');
+    assert.equal(lockedLimits.features.auditHistory, true, 'activity history is part of every plan');
+    assert.equal((await post(`/admin/orgs/${org.id}/entitlements`, { key: 'auditHistory', value: false, reason: 'x' })).body.code, 'invalid');
+
+    // A value outside the field's range is refused.
+    const bad = await post(`/admin/plans/${planId}/versions`, {
+        billingType: 'free', limits: { limits: { maxItems: -5 } },
+    });
+    assert.equal(bad.body.code, 'invalid');
+});
+
+test('a feature can be switched on for one organization with an override', async () => {
+    let res = await admin.call(`/admin/orgs/${org.id}/subscription`);
+    assert.equal(res.body.limits.features.exports, false);
+    res = await post(`/admin/orgs/${org.id}/entitlements`, { key: 'exports', value: true, reason: 'Agreed during onboarding' });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.limits.features.exports, true);
+    assert.equal((await post(`/admin/orgs/${org.id}/entitlements`, { key: 'exports', value: 'yes', reason: 'x' })).body.code, 'invalid');
 });

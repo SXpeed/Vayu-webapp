@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { authService, AuthUser } from '../services/authService';
-import { APP_NAME } from '../brand';
+import { useBranding } from '../useBranding';
 
 interface LoginViewProps {
   onLogin: (user: AuthUser) => void;
@@ -9,6 +9,7 @@ interface LoginViewProps {
 type Screen = 'checking' | 'setup' | 'login';
 
 export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
+  const branding = useBranding();
   const [screen, setScreen] = useState<Screen>('checking');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -66,7 +67,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
   if (screen === 'checking') {
     return (
       <div className="h-full flex items-center justify-center bg-[var(--neu-bg)]">
-        <div className="animate-pulse text-gold-500 font-serif text-xl">{APP_NAME}</div>
+        <div className="animate-pulse text-gold-500 font-serif text-xl">{branding.appName}</div>
       </div>
     );
   }
@@ -80,7 +81,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
     <div className="h-full flex flex-col bg-[var(--neu-bg)] items-center justify-center p-6 transition-colors duration-500 animate-fade-in">
       <div className="w-full max-w-sm space-y-10">
         <div className="text-center space-y-1 animate-fade-in-up">
-          <h1 className="text-5xl font-serif text-gold-500 tracking-wide">{APP_NAME}</h1>
+          {branding.logoUrl && <img src={branding.logoUrl} alt="" className="w-20 h-20 mx-auto mb-2 rounded-2xl object-contain" />}
+          <h1 className="text-5xl font-serif text-gold-500 tracking-wide">{branding.appName}</h1>
+          {branding.tagline && <p className="text-sm text-gold-400 tracking-widest uppercase">{branding.tagline}</p>}
         </div>
 
         <form

@@ -166,3 +166,31 @@ test('a disabled member loses access while their session is still valid', async 
     assert.equal(res.body.code, 'no_access');
     assert.deepEqual((await staffA.call('/me/orgs')).body.organizations, []);
 });
+
+test('plan limits stop new records without touching existing ones', async () => {
+    // A plan that allows a single inventory item.
+    const plan = (await admin.call('/admin/plans', { method: 'POST', body: { name: 'Tiny' } })).body;
+    const version = (await admin.call(`/admin/plans/${plan.id}/versions`, {
+        method: 'POST', body: { billingType: 'free', limits: { limits: { maxItems: 1, maxMembers: 10 } } },
+    })).body.versions[0];
+    await admin.call(`/admin/plans/${plan.id}/versions/${version.id}`, { method: 'PATCH', body: { status: 'published' } });
+    assert.equal((await admin.call(`/admin/orgs/${orgB.id}/subscription`, { method: 'POST', body: { planVersionId: version.id } })).status, 200);
+
+    const first = await ownerB.call(`/org/${orgB.id}/artworks`, { method: 'POST', body: { title: 'Only one' } });
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    const second = await ownerB.call(`/org/${orgB.id}/artworks`, { method: 'POST', body: { title: 'One too many' } });
+    assert.equal(second.status, 409);
+    assert.equal(second.body.code, 'limit_reached');
+    assert.match(second.body.error, /allows 1 inventory items/);
+
+    // What is already stored stays readable and editable.
+    const list = (await ownerB.call(`/org/${orgB.id}/artworks`)).body.artworks;
+    assert.equal(list.length, 1);
+    const edit = await ownerB.call(`/org/${orgB.id}/artworks/${list[0].id}`, {
+        method: 'PUT', body: { ...list[0], title: 'Still editable', version: list[0].version },
+    });
+    assert.equal(edit.status, 200, 'a plan limit never freezes existing records');
+
+    // Organization A is on no plan and is unaffected by B's limit.
+    assert.equal((await ownerA.call(`/org/${orgA.id}/artworks`, { method: 'POST', body: { title: 'Unaffected' } })).status, 200);
+});

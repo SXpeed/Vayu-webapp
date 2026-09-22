@@ -15,6 +15,7 @@
 //   POST            /api/v2/admin/orgs/:id/payments/razorpay/verify
 //   POST            /api/v2/admin/users                      create a sign-in account
 //   GET|POST        /api/v2/admin/orgs/:id/import-legacy     move the original app in
+//   GET             /api/v2/admin/plans/schema               every limit/feature a plan can set
 //   GET|POST        /api/v2/admin/plans                      plans and versions
 //   GET|PATCH       /api/v2/admin/plans/:id
 //   POST            /api/v2/admin/plans/:id/versions
@@ -23,6 +24,10 @@
 //   POST            /api/v2/admin/orgs/:id/subscription/extend-trial
 //   POST|DELETE     /api/v2/admin/orgs/:id/entitlements      documented overrides
 //   GET             /api/v2/public/plans                     published public plans
+//   GET             /api/v2/public/branding                  platform name, tagline, logo
+//   GET             /api/v2/public/branding/logo             the logo file
+//   GET|PATCH       /api/v2/admin/settings/branding          name, tagline, accent colour
+//   POST            /api/v2/admin/settings/branding/logo     upload a logo (raw image body)
 //   POST            /api/v2/webhooks/razorpay/:orgId         signed, per organization
 //   GET             /api/v2/me/orgs                          my organizations
 //   /api/v2/org/:orgId/*                                     that org's own data
@@ -44,6 +49,8 @@ import {
 } from './orgs';
 import { connectRazorpay, describeRazorpay, disconnectRazorpay, receiveRazorpayWebhook, verifyRazorpay } from './payments';
 import { importLegacyWorkspace, listImports } from './legacyImport';
+import { PLAN_SCHEMA } from './planFields';
+import { getBranding, publicBranding, serveLogo, updateBranding, uploadLogo } from './branding';
 import {
   createPlan, createPlanVersion, extendTrial, getPlan, listPlans, publicPlans,
   removeOverride, resolveEntitlements, seatUsage, setOverride, setSubscription,
@@ -151,6 +158,30 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
     return reply({ stored: next, effective: await getEffectiveLoginMethods(env, db) });
   }
 
+  if (path === '/admin/settings/branding' && method === 'GET') {
+    return reply(await getBranding(db));
+  }
+
+  if (path === '/admin/settings/branding' && method === 'PATCH') {
+    try {
+      return reply(await updateBranding(db, await request.json().catch(() => ({})) as Record<string, unknown>, {
+        userId: admin.userId, ip: request.headers.get('cf-connecting-ip'),
+      }));
+    } catch (e) {
+      if (e instanceof OrgError) return fail(e.status, e.code, e.message);
+      throw e;
+    }
+  }
+
+  if (path === '/admin/settings/branding/logo' && method === 'POST') {
+    try {
+      return reply(await uploadLogo(env, db, request, { userId: admin.userId, ip: request.headers.get('cf-connecting-ip') }));
+    } catch (e) {
+      if (e instanceof OrgError) return fail(e.status, e.code, e.message);
+      throw e;
+    }
+  }
+
   if (path === '/admin/audit' && method === 'GET') {
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 200);
     const { results } = await db.prepare(
@@ -171,6 +202,11 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
     try {
       const planId = planRoute[1];
       const rest = planRoute[2] ?? '';
+      if (planId === 'schema' && method === 'GET') {
+        // Everything a plan can control, so the editor never drifts from the
+        // server's validation.
+        return reply(PLAN_SCHEMA);
+      }
       if (!planId) {
         if (method === 'GET') return reply({ plans: await listPlans(db) });
         if (method === 'POST') return reply(await createPlan(db, await planBody(), actor), 201);
@@ -306,6 +342,14 @@ export async function handlePlatformRequest(request: Request, env: Env): Promise
       const res = await auth.handler(request);
       res.headers.set('Cache-Control', 'no-store');
       return res;
+    }
+    if (path === '/public/branding' && request.method === 'GET') {
+      const res = reply(await publicBranding(db));
+      res.headers.set('Cache-Control', 'public, max-age=60');
+      return res;
+    }
+    if (path === '/public/branding/logo' && request.method === 'GET') {
+      return await serveLogo(env, db);
     }
     if (path === '/public/plans' && request.method === 'GET') {
       // Public: only published, public plans, and only what a price card needs.
