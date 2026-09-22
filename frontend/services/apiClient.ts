@@ -31,14 +31,28 @@ export async function parseApiResponse<T>(res: Response): Promise<T> {
     return data as T;
 }
 
+/**
+ * Reads are cancelled after this long. A request the server never answers
+ * otherwise holds its connection open forever: the 15-second refresh kept
+ * adding hung requests until the browser's few connections per server were
+ * all stuck and nothing in the app could load. Writes are left alone (a large
+ * upload can legitimately take longer).
+ */
+const READ_TIMEOUT_MS = 20_000;
+
 export async function apiCall<T>(path: string, options?: RequestInit): Promise<T> {
+    const isRead = !options?.method || options.method.toUpperCase() === 'GET';
     let res: Response;
     try {
         res = await fetch(`/api${path}`, {
             ...options,
+            signal: options?.signal ?? (isRead ? AbortSignal.timeout(READ_TIMEOUT_MS) : undefined),
             headers: { ...authHeaders(), ...options?.headers },
         });
-    } catch {
+    } catch (e) {
+        if ((e as Error).name === 'TimeoutError') {
+            throw new Error('The server took too long to answer. Please try again.');
+        }
         throw new Error('Cannot reach the server. Check your connection and try again.');
     }
     return parseApiResponse<T>(res);

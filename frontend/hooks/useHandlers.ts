@@ -8,6 +8,7 @@ import {
 import { AuthUser } from '../services/authService';
 import { db } from '../services/db';
 import { messagingService } from '../services/messagingService';
+import { invoiceService, isSyncUnavailable } from '../services/invoiceService';
 import { artworkService } from '../services/artworkService';
 import { collectionService } from '../services/collectionService';
 import { catalogService } from '../services/catalogService';
@@ -137,21 +138,41 @@ export function useHandlers(args: HandlerArgs) {
         setArtworks(prev => prev.map(art => (soldIds.has(art.id) ? { ...art, status: 'Sold' as const } : art)));
     }, [artworks, setArtworks]);
 
+    /** Save to the server (so every device sees it) and keep a device copy. */
+    const syncInvoice = useCallback(async (invoice: Invoice) => {
+        await db.saveInvoice(invoice);
+        try {
+            await invoiceService.saveInvoice(invoice);
+        } catch (err) {
+            if (!isSyncUnavailable(err)) {
+                toast.error(`Saved on this device only — ${(err as Error).message || 'the server could not be reached'}`);
+            }
+        }
+    }, []);
+
     const handleAddInvoice = useCallback(async (newInv: Omit<Invoice, 'id' | 'date'>): Promise<Invoice> => {
         const invoice: Invoice = { ...newInv, id: `inv_${Date.now()}`, date: Date.now() };
-        await db.saveInvoice(invoice);
+        await syncInvoice(invoice);
         setInvoices((prev: Invoice[]) => [invoice, ...prev]);
         markPaidInvoiceArtworksSold(invoice);
         return invoice;
-    }, [setInvoices, markPaidInvoiceArtworksSold]);
+    }, [setInvoices, markPaidInvoiceArtworksSold, syncInvoice]);
 
     const handleUpdateInvoice = useCallback(async (updatedInv: Invoice) => {
-        await db.saveInvoice(updatedInv);
+        await syncInvoice(updatedInv);
         setInvoices((prev: Invoice[]) => prev.map((i: Invoice) => i.id === updatedInv.id ? updatedInv : i));
         markPaidInvoiceArtworksSold(updatedInv);
-    }, [setInvoices, markPaidInvoiceArtworksSold]);
+    }, [setInvoices, markPaidInvoiceArtworksSold, syncInvoice]);
 
     const handleDeleteInvoice = useCallback(async (id: string) => {
+        try {
+            await invoiceService.deleteInvoice(id);
+        } catch (err) {
+            if (!isSyncUnavailable(err)) {
+                toast.error(`Couldn't delete it on the server — ${(err as Error).message || 'try again'}`);
+                return;
+            }
+        }
         await db.deleteInvoice(id);
         setInvoices((prev: Invoice[]) => prev.filter((i: Invoice) => i.id !== id));
     }, [setInvoices]);

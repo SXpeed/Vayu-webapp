@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Artwork, CalendarEvent, Catalog, Collection, Contact, Invoice, Inquiry, Conversation, Message, InquiryMessage, UserProfile } from '../types';
-import { db } from '../services/db';
+import { db, SavedList } from '../services/db';
 import { messagingService } from '../services/messagingService';
 import { artworkService } from '../services/artworkService';
 import { collectionService } from '../services/collectionService';
@@ -8,11 +8,12 @@ import { catalogService } from '../services/catalogService';
 import { inquiryService } from '../services/inquiryService';
 import { eventService } from '../services/eventService';
 import { contactService } from '../services/contactService';
+import { invoiceService } from '../services/invoiceService';
 import { authService, AuthUser } from '../services/authService';
 import { makeCan, permissionsOf } from '../access';
 import type { SectionId } from '../permissions';
 
-type Dataset = 'artworks' | 'messages' | 'collections' | 'catalogs' | 'inquiries' | 'events' | 'contacts';
+type Dataset = 'artworks' | 'messages' | 'collections' | 'catalogs' | 'inquiries' | 'events' | 'contacts' | 'invoices';
 
 /**
  * Sections whose screens read each dataset. Mirrors accessRule's
@@ -27,7 +28,24 @@ const DATASET_READERS: Record<Dataset, SectionId[]> = {
     inquiries: ['inquiries'],
     events: ['calendar'],
     contacts: ['contacts', 'inquiries', 'invoices', 'payments'],
+    invoices: ['invoices'],
 };
+
+/** Set once this device's local-only invoices have been uploaded. */
+const INVOICES_MIGRATED_KEY = 'vayu_invoices_synced';
+
+/** How long one section may take to load before its saved copy is shown. */
+const LOAD_TIMEOUT_MS = 12_000;
+
+/** Reject if `promise` hasn't settled within `ms`. */
+const withTimeout = <T,>(promise: Promise<T>, ms: number): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`timed out after ${ms / 1000}s`)), ms);
+        promise.then(
+            value => { clearTimeout(timer); resolve(value); },
+            error => { clearTimeout(timer); reject(error); },
+        );
+    });
 
 /** Run `load` only when allowed; otherwise an empty list. */
 const whenAllowed = <T,>(allowed: boolean, load: () => Promise<T[]>): Promise<T[]> =>
@@ -72,6 +90,33 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
         });
     }, []);
 
+    /**
+     * Server invoices, after (once per device) uploading any that were only
+     * ever saved on this device — proformas used to live in localStorage
+     * alone. After that first sync the server is the source of truth: an
+     * invoice deleted on another phone must not come back from a stale copy
+     * here, so later loads replace the device copy instead of merging it.
+     */
+    const syncInvoices = useCallback(async (): Promise<Invoice[]> => {
+        const remote = await invoiceService.getInvoices();
+        const canEdit = makeCan(permissionsOf(authUserRef.current))('invoices', 'edit');
+        let firstSync = false;
+        try { firstSync = !localStorage.getItem(INVOICES_MIGRATED_KEY); } catch { /* private mode */ }
+        if (firstSync && canEdit) {
+            const onServer = new Set(remote.map(i => i.id));
+            for (const inv of await db.getInvoices()) {
+                if (onServer.has(inv.id)) continue;
+                try { remote.push(await invoiceService.saveInvoice(inv)); } catch (err) { console.warn('Could not upload invoice', inv.invoiceNumber, err); }
+            }
+            try { localStorage.setItem(INVOICES_MIGRATED_KEY, '1'); } catch { /* private mode */ }
+        }
+        // Mirror the server list on the device for offline use.
+        const onServer = new Set(remote.map(i => i.id));
+        for (const inv of await db.getInvoices()) if (!onServer.has(inv.id)) await db.deleteInvoice(inv.id);
+        for (const inv of remote) await db.saveInvoice(inv);
+        return remote.sort((a, b) => b.date - a.date);
+    }, [authUserRef]);
+
     /** Can the signed-in person's role read this dataset? Read at call time from the ref. */
     const canReadData = useCallback((dataset: Dataset): boolean => {
         const can = makeCan(permissionsOf(authUserRef.current));
@@ -85,44 +130,45 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
         setInvoices(loadedInvoices);
 
         if (isAuthenticated) {
-            try {
-                const [
-                    loadedArtworks, loadedConversations, loadedMessages,
-                    loadedCollections, loadedCatalogs, loadedInquiries, loadedInquiryMessages,
-                    loadedEvents, loadedContacts
-                ] = await Promise.all([
-                    // Only what this role may read (same rules as the server);
-                    // the rest resolve empty instead of failing the whole load.
-                    whenAllowed(canReadData('artworks'), () => artworkService.getArtworks()),
-                    whenAllowed(canReadData('messages'), () => messagingService.getConversations()),
-                    whenAllowed(canReadData('messages'), () => messagingService.getMessages()),
-                    whenAllowed(canReadData('collections'), () => collectionService.getCollections()),
-                    whenAllowed(canReadData('catalogs'), () => catalogService.getCatalogs()),
-                    whenAllowed(canReadData('inquiries'), () => inquiryService.getInquiries()),
-                    whenAllowed(canReadData('inquiries'), () => inquiryService.getInquiryMessages()),
-                    whenAllowed(canReadData('events'), () => eventService.getEvents()),
-                    whenAllowed(canReadData('contacts'), () => contactService.getContacts()),
-                ]);
-                applyIfChanged('artworks', loadedArtworks, setArtworks);
-                applyIfChanged('conversations', loadedConversations, setConversations);
-                applyIfChanged('messages', loadedMessages, keepFailed);
-                applyIfChanged('collections', loadedCollections, setCollections);
-                applyIfChanged('catalogs', loadedCatalogs, setCatalogs);
-                applyIfChanged('events', loadedEvents, setEvents);
-                applyIfChanged('contacts', loadedContacts, setContacts);
-                applyIfChanged('inquiries', loadedInquiries, setInquiries);
-                applyIfChanged('inquiryMessages', loadedInquiryMessages, setInquiryMessages);
-                for (const art of loadedArtworks) await db.saveArtwork(art);
-            } catch (err) {
-                console.error('Failed to load cloud data from D1:', err);
-                setArtworks(await db.getArtworks());
-                setConversations(await db.getConversations());
-                setAllMessages(await db.getMessages());
-                setCollections(await db.getCollections());
-                setCatalogs(await db.getCatalogs());
-                setInquiries(await db.getInquiries());
-                setInquiryMessages(await db.getInquiryMessages());
-            }
+            // Each section loads on its own, with a time limit. This used to be
+            // one all-or-nothing batch: a single stuck endpoint (GET /catalogs
+            // hung on the server) held the whole app on its loading screen and
+            // left every other section empty.
+            //
+            // A slow section is retried once. Only if it still fails does the
+            // device's saved copy show — and only when that copy has something
+            // in it, so a failure never blanks a list. Successful loads refresh
+            // the saved copy, so it's never far out of date.
+            const section = async <T,>(
+                name: string, allowed: boolean, load: () => Promise<T[]>,
+                saved: () => Promise<T[]>, apply: (data: T[]) => void, savedList?: SavedList,
+            ) => {
+                if (!allowed) { apply([]); return; }
+                for (let attempt = 1; attempt <= 2; attempt++) {
+                    try {
+                        const data = await withTimeout(load(), LOAD_TIMEOUT_MS);
+                        apply(data);
+                        if (savedList) void db.replaceSaved(savedList, data);
+                        return;
+                    } catch (err) {
+                        if (attempt === 2) console.warn(`Loading ${name} failed twice; using the saved copy if there is one.`, err);
+                    }
+                }
+                const copy = await saved();
+                if (copy.length) apply(copy);
+            };
+            await Promise.all([
+                section('artworks', canReadData('artworks'), () => artworkService.getArtworks(), () => db.getArtworks(), data => applyIfChanged('artworks', data, setArtworks), 'artworks'),
+                section('conversations', canReadData('messages'), () => messagingService.getConversations(), () => db.getConversations(), data => applyIfChanged('conversations', data, setConversations), 'conversations'),
+                section('messages', canReadData('messages'), () => messagingService.getMessages(), () => db.getMessages(), data => applyIfChanged('messages', data, keepFailed), 'messages'),
+                section('collections', canReadData('collections'), () => collectionService.getCollections(), () => db.getCollections(), data => applyIfChanged('collections', data, setCollections), 'collections'),
+                section('catalogs', canReadData('catalogs'), () => catalogService.getCatalogs(), () => db.getCatalogs(), data => applyIfChanged('catalogs', data, setCatalogs), 'catalogs'),
+                section('inquiries', canReadData('inquiries'), () => inquiryService.getInquiries(), () => db.getInquiries(), data => applyIfChanged('inquiries', data, setInquiries), 'inquiries'),
+                section('inquiry messages', canReadData('inquiries'), () => inquiryService.getInquiryMessages(), () => db.getInquiryMessages(), data => applyIfChanged('inquiryMessages', data, setInquiryMessages), 'inquiryMessages'),
+                section('events', canReadData('events'), () => eventService.getEvents(), () => db.getEvents(), data => applyIfChanged('events', data, setEvents), 'events'),
+                section('contacts', canReadData('contacts'), () => contactService.getContacts(), () => db.getContacts(), data => applyIfChanged('contacts', data, setContacts), 'contacts'),
+                section('invoices', canReadData('invoices'), () => syncInvoices(), () => db.getInvoices(), data => applyIfChanged('invoices', data, setInvoices)),
+            ]);
         } else {
             setArtworks(await db.getArtworks());
             setConversations(await db.getConversations());
@@ -132,7 +178,7 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
             setInquiries(await db.getInquiries());
             setInquiryMessages(await db.getInquiryMessages());
         }
-    }, [applyIfChanged, canReadData, keepFailed]);
+    }, [applyIfChanged, canReadData, keepFailed, syncInvoices]);
 
     const loadTeamMembers = useCallback(async () => {
         try {
@@ -264,7 +310,9 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
             }
         };
 
-        poll();
+        // No immediate run: the initial load already fetched this, and the
+        // effect restarts as sign-in settles, so running here multiplied the
+        // startup requests (4 copies of each were seen).
         const interval = setInterval(poll, 15000);
         const onVisibilityChange = () => {
             if (document.visibilityState === 'visible') poll();
@@ -315,30 +363,34 @@ export function useEntityData(authUser: AuthUser | null, authUserRef: React.RefO
         const pollEntities = async () => {
             if (cancelled || document.visibilityState === 'hidden') return;
             try {
-                // Only what this role may read — one refused section used to
-                // fail the whole poll, so nothing refreshed at all.
-                const [remoteArtworks, remoteCollections, remoteCatalogs, remoteInquiries, remoteEvents, remoteContacts] = await Promise.all([
+                // Only what this role may read, and each section on its own:
+                // one failing endpoint used to stop every section refreshing.
+                const [arts, cols, cats, inqs, evs, cons, invs] = await Promise.allSettled([
                     whenAllowed(canReadData('artworks'), () => artworkService.getArtworks()),
                     whenAllowed(canReadData('collections'), () => collectionService.getCollections()),
                     whenAllowed(canReadData('catalogs'), () => catalogService.getCatalogs()),
                     whenAllowed(canReadData('inquiries'), () => inquiryService.getInquiries()),
                     whenAllowed(canReadData('events'), () => eventService.getEvents()),
                     whenAllowed(canReadData('contacts'), () => contactService.getContacts()),
+                    whenAllowed(canReadData('invoices'), () => invoiceService.getInvoices()),
                 ]);
                 if (!cancelled) {
-                    applyIfChanged('artworks', remoteArtworks, setArtworks);
-                    applyIfChanged('collections', remoteCollections, setCollections);
-                    applyIfChanged('catalogs', remoteCatalogs, setCatalogs);
-                    applyIfChanged('inquiries', remoteInquiries, setInquiries);
-                    applyIfChanged('events', remoteEvents, setEvents);
-                    applyIfChanged('contacts', remoteContacts, setContacts);
+                    if (arts.status === 'fulfilled') applyIfChanged('artworks', arts.value, setArtworks);
+                    if (cols.status === 'fulfilled') applyIfChanged('collections', cols.value, setCollections);
+                    if (cats.status === 'fulfilled') applyIfChanged('catalogs', cats.value, setCatalogs);
+                    if (inqs.status === 'fulfilled') applyIfChanged('inquiries', inqs.value, setInquiries);
+                    if (evs.status === 'fulfilled') applyIfChanged('events', evs.value, setEvents);
+                    if (cons.status === 'fulfilled') applyIfChanged('contacts', cons.value, setContacts);
+                    if (invs.status === 'fulfilled') applyIfChanged('invoices', [...invs.value].sort((a, b) => b.date - a.date), setInvoices);
                 }
             } catch (err) {
                 console.warn('Failed to poll entities:', err);
             }
         };
 
-        pollEntities();
+        // No immediate run: the initial load already fetched this, and the
+        // effect restarts as sign-in settles, so running here multiplied the
+        // startup requests (4 copies of each were seen).
         const interval = setInterval(pollEntities, 15000);
         const onVisibilityChange = () => {
             if (document.visibilityState === 'visible') pollEntities();

@@ -288,6 +288,7 @@ function accessRule(path: string, method: string): AccessRule | null {
   if (under('/catalogs')) return { section: 'catalogs', level };
   if (under('/contacts')) return { section: 'contacts', level, readableBy: read ? ['inquiries', 'invoices', 'payments'] : undefined };
   if (under('/inquiries') || under('/inquiry-messages')) return { section: 'inquiries', level };
+  if (under('/invoices')) return { section: 'invoices', level };
   if (under('/payments/webhook')) return null; // Razorpay calls this, no session
   if (under('/payments')) return { section: 'payments', level };
   if (under('/events') || under('/holidays')) return { section: 'calendar', level };
@@ -402,13 +403,30 @@ function rowToCatalog(row: Record<string, unknown>): any {
 
 // The catalogs table predates pdf_url/source — add them lazily (once per
 // isolate) so no manual D1 migration is required.
-let catalogsColumnsPromise: Promise<void> | null = null;
+/**
+ * Run a table's one-time schema setup (CREATE TABLE / ALTER TABLE) at most
+ * once per isolate — remembering only a *completed* setup.
+ *
+ * These used to cache the in-flight promise in a module variable and share
+ * it with later requests. On Workers, I/O belongs to the request that started
+ * it: when that first request was cancelled (the app closed mid-load), its
+ * database calls were cancelled too, the shared promise never settled, and
+ * every later request awaiting it hung forever on that isolate — which is
+ * how GET /catalogs and /events stopped answering. Now each request does its
+ * own (idempotent) setup until one finishes.
+ */
+const setupDone = new Set<string>();
+async function runSetupOnce(key: string, setup: () => Promise<unknown>): Promise<void> {
+  if (setupDone.has(key)) return;
+  await setup();
+  setupDone.add(key);
+}
+
 function ensureCatalogsColumns(db: D1Database): Promise<void> {
-  catalogsColumnsPromise ??= (async () => {
+  return runSetupOnce('catalogsColumns', () => (async () => {
     try { await db.prepare('ALTER TABLE catalogs ADD COLUMN pdf_url TEXT').run(); } catch { /* already exists */ }
     try { await db.prepare(`ALTER TABLE catalogs ADD COLUMN source TEXT NOT NULL DEFAULT 'generated'`).run(); } catch { /* already exists */ }
-  })();
-  return catalogsColumnsPromise;
+  })());
 }
 
 function rowToInquiry(row: Record<string, unknown>): any {
@@ -1610,9 +1628,8 @@ function logEntityChange(ctx: Ctx, session: SessionData, action: string, entity:
 // Every destructive delete snapshots the record into `deleted_items` so admins
 // can audit what was removed, by whom and when (Admin → Deleted).
 
-let deletedItemsTablePromise: Promise<void> | null = null;
 function ensureDeletedItemsTable(db: D1Database): Promise<void> {
-  deletedItemsTablePromise ??= db.prepare(`
+  return runSetupOnce('deletedItemsTable', () => db.prepare(`
       CREATE TABLE IF NOT EXISTS deleted_items (
         id TEXT PRIMARY KEY,
         entity TEXT NOT NULL,
@@ -1623,8 +1640,7 @@ function ensureDeletedItemsTable(db: D1Database): Promise<void> {
         deleted_by TEXT,
         deleted_by_name TEXT
       )
-    `).run().then(() => undefined);
-  return deletedItemsTablePromise;
+    `).run().then(() => undefined));
 }
 
 /** Archives a snapshot of a just-deleted record. Fire-and-forget — never blocks the response. */
@@ -1701,6 +1717,7 @@ const RESTORABLE_TABLES: Record<string, string> = {
   event: 'events',
   contact: 'contacts',
   conversation: 'conversations',
+  invoice: 'invoices',
 };
 
 /** POST /deleted-items/:id/restore — puts an archived record back into its table. Admin only. */
@@ -2291,9 +2308,8 @@ function rowToEvent(row: Record<string, unknown>): any {
 // The events table is created lazily (once per isolate) so no manual D1
 // migration is required before first use. Column ALTERs handle tables created
 // before end_date/todos existed.
-let eventsTablePromise: Promise<void> | null = null;
 function ensureEventsTable(db: D1Database): Promise<void> {
-  eventsTablePromise ??= db.prepare(`
+  return runSetupOnce('eventsTable', () => db.prepare(`
       CREATE TABLE IF NOT EXISTS events (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL DEFAULT '',
@@ -2312,8 +2328,7 @@ function ensureEventsTable(db: D1Database): Promise<void> {
       try { await db.prepare('ALTER TABLE events ADD COLUMN end_date INTEGER').run(); } catch { /* already exists */ }
       try { await db.prepare(`ALTER TABLE events ADD COLUMN todos TEXT NOT NULL DEFAULT '[]'`).run(); } catch { /* already exists */ }
       try { await db.prepare('ALTER TABLE events ADD COLUMN color TEXT').run(); } catch { /* already exists */ }
-    });
-  return eventsTablePromise;
+    }));
 }
 
 async function handleEventsList(ctx: Ctx): Promise<Response> {
@@ -2427,9 +2442,8 @@ function rowToContact(row: Record<string, unknown>): any {
 
 // The contacts table is created lazily (once per isolate) so no manual D1
 // migration is required before first use.
-let contactsTablePromise: Promise<void> | null = null;
 function ensureContactsTable(db: D1Database): Promise<void> {
-  contactsTablePromise ??= db.prepare(`
+  return runSetupOnce('contactsTable', () => db.prepare(`
       CREATE TABLE IF NOT EXISTS contacts (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL DEFAULT '',
@@ -2441,8 +2455,7 @@ function ensureContactsTable(db: D1Database): Promise<void> {
         created_by TEXT,
         created_by_name TEXT
       )
-    `).run().then(() => undefined);
-  return contactsTablePromise;
+    `).run().then(() => undefined));
 }
 
 async function handleContactsList(ctx: Ctx): Promise<Response> {
@@ -2603,9 +2616,8 @@ function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number)
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-let storesTablePromise: Promise<void> | null = null;
 function ensureStoresTable(db: D1Database): Promise<void> {
-  storesTablePromise ??= db.prepare(`
+  return runSetupOnce('storesTable', () => db.prepare(`
       CREATE TABLE IF NOT EXISTS stores (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL DEFAULT '',
@@ -2616,13 +2628,11 @@ function ensureStoresTable(db: D1Database): Promise<void> {
         wifi_ssid TEXT NOT NULL DEFAULT '',
         created_at INTEGER NOT NULL DEFAULT 0
       )
-    `).run().then(() => undefined);
-  return storesTablePromise;
+    `).run().then(() => undefined));
 }
 
-let attendanceTablePromise: Promise<void> | null = null;
 function ensureAttendanceTable(db: D1Database): Promise<void> {
-  attendanceTablePromise ??= db.prepare(`
+  return runSetupOnce('attendanceTable', () => db.prepare(`
       CREATE TABLE IF NOT EXISTS attendance (
         id TEXT PRIMARY KEY,
         employee_id TEXT NOT NULL,
@@ -2640,8 +2650,7 @@ function ensureAttendanceTable(db: D1Database): Promise<void> {
         status TEXT NOT NULL DEFAULT 'checked-in',
         created_at INTEGER NOT NULL DEFAULT 0
       )
-    `).run().then(() => undefined);
-  return attendanceTablePromise;
+    `).run().then(() => undefined));
 }
 
 /** Shared pre-flight validation for check-in AND check-out. */
@@ -2919,6 +2928,83 @@ async function handleAttendanceRecordClose(ctx: Ctx): Promise<Response> {
   return json(rowToAttendance({ ...rec, check_out_at: checkOutAt, check_out_lat: null, check_out_lng: null, check_out_accuracy: null, status: 'checked-out' }));
 }
 
+// ── Proforma invoices ──────────────────────────────────────────────────────
+// Used to live only in each device's localStorage, so they never synced
+// between phones. The whole invoice is stored as JSON (its shape is owned by
+// the app), with a few columns alongside for ordering and the archive.
+
+function ensureInvoicesTable(db: D1Database): Promise<void> {
+  return runSetupOnce('invoicesTable', () => db.prepare(`
+      CREATE TABLE IF NOT EXISTS invoices (
+        id TEXT PRIMARY KEY,
+        invoice_number TEXT NOT NULL DEFAULT '',
+        customer_name TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'Draft',
+        date INTEGER NOT NULL DEFAULT 0,
+        data TEXT NOT NULL DEFAULT '{}',
+        created_by TEXT,
+        created_by_name TEXT,
+        updated_at INTEGER NOT NULL DEFAULT 0
+      )
+    `).run());
+}
+
+async function handleInvoicesList(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  await ensureInvoicesTable(ctx.env.VAYU_DB);
+  const results = await ctx.env.VAYU_DB.prepare('SELECT data FROM invoices ORDER BY date DESC').all();
+  const invoices = (results.results || []).map(row => {
+    try { return JSON.parse(row.data as string); } catch { return null; }
+  }).filter(Boolean);
+  return json(invoices);
+}
+
+/** PUT /invoices/:id — create or update (the app assigns ids). */
+async function handleInvoicesSave(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const invoiceId = decodeURIComponent(ctx.path.slice('/invoices/'.length));
+  const inv = await ctx.request.json() as Record<string, unknown>;
+  if (!invoiceId || inv.id !== invoiceId) return err('Invoice id mismatch', 400);
+  if (typeof inv.invoiceNumber !== 'string' || !Array.isArray(inv.items)) return err('Invalid invoice', 400);
+  await ensureInvoicesTable(ctx.env.VAYU_DB);
+  const existing = await ctx.env.VAYU_DB.prepare('SELECT created_by, created_by_name FROM invoices WHERE id = ?')
+    .bind(invoiceId).first<{ created_by: string | null; created_by_name: string | null }>();
+  await ctx.env.VAYU_DB.prepare(
+    `INSERT OR REPLACE INTO invoices
+     (id, invoice_number, customer_name, status, date, data, created_by, created_by_name, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    invoiceId,
+    inv.invoiceNumber,
+    String(inv.customerName || ''),
+    String(inv.status || 'Draft'),
+    Number(inv.date) || Date.now(),
+    JSON.stringify(inv),
+    existing ? existing.created_by : session.userId,
+    existing ? existing.created_by_name : session.name,
+    Date.now(),
+  ).run();
+  logEntityChange(ctx, session, existing ? 'updated' : 'created', 'invoice', invoiceId,
+    `${existing ? 'Updated' : 'Created'} proforma ${inv.invoiceNumber} (${String(inv.customerName || '')})`);
+  return json(inv, existing ? 200 : 201);
+}
+
+async function handleInvoicesDelete(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const invoiceId = decodeURIComponent(ctx.path.slice('/invoices/'.length));
+  await ensureInvoicesTable(ctx.env.VAYU_DB);
+  const row = await ctx.env.VAYU_DB.prepare('SELECT * FROM invoices WHERE id = ?').bind(invoiceId).first();
+  await ctx.env.VAYU_DB.prepare('DELETE FROM invoices WHERE id = ?').bind(invoiceId).run();
+  if (row) {
+    archiveDeletedAsync(ctx, session, 'invoice', invoiceId, `Proforma ${row.invoice_number as string}`, row);
+    logEntityChange(ctx, session, 'deleted', 'invoice', invoiceId, `Deleted proforma ${row.invoice_number as string}`);
+  }
+  return json({ success: true });
+}
+
 // ── Route table ─────────────────────────────────────────────────────────────
 
 const isExact = (p: string) => (path: string) => path === p;
@@ -3003,6 +3089,9 @@ const routes: Route[] = [
   { method: 'DELETE', match: isPrefix('/events/'), handler: handleEventsDelete },
 
   // Contacts
+  { method: 'GET', match: isExact('/invoices'), handler: handleInvoicesList },
+  { method: 'PUT', match: isPrefix('/invoices/'), handler: handleInvoicesSave },
+  { method: 'DELETE', match: isPrefix('/invoices/'), handler: handleInvoicesDelete },
   { method: 'GET', match: isExact('/contacts'), handler: handleContactsList },
   { method: 'POST', match: isExact('/contacts'), handler: handleContactsCreate },
   { method: 'POST', match: isExact('/contacts/import'), handler: handleContactsImport },

@@ -73,7 +73,7 @@ export interface InvoiceItem {
     price: number;
 }
 
-/** A proforma invoice (quotation) — stored per device in localStorage. */
+/** A proforma invoice (quotation). Synced through the server; a copy is kept on each device for offline use. */
 export interface Invoice {
     id: string;
     invoiceNumber: string;

@@ -46,7 +46,24 @@ function upsertById<T extends { id: string }>(arr: T[], item: T): T[] {
   return arr;
 }
 
+/** Lists the device keeps a full offline copy of, replaced wholesale from the server. */
+export type SavedList = 'artworks' | 'catalogs' | 'collections' | 'inquiries' | 'conversations'
+  | 'messages' | 'inquiryMessages' | 'events' | 'contacts';
+
 export const db = {
+  /**
+   * Replace a saved list with the server's copy. Only artworks used to be
+   * mirrored, so e.g. the saved inquiries could be months old — and a
+   * fallback to them looked like inquiries had vanished.
+   */
+  async replaceSaved(list: SavedList, items: unknown[]): Promise<void> {
+    try {
+      setArray(STORAGE_KEYS[list], items);
+    } catch {
+      /* storage full or unavailable — the offline copy just stays older */
+    }
+  },
+
   async init() {
     const storedVersion = Number(localStorage.getItem(STORAGE_KEYS.seedVersion) ?? 0);
 
