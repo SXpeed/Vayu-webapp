@@ -3,7 +3,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { ArrowLeft, Building2, CreditCard, Plus, UserPlus, Users } from 'lucide-react';
+import { ArrowLeft, Building2, CreditCard, Gauge, Plus, UserPlus, Users } from 'lucide-react';
 import { Badge, Button, Card, Field, Input, SectionTitle, Select } from '../components/ui';
 import { api, type ApiError } from './api';
 
@@ -212,6 +212,7 @@ const OrgDetailView: React.FC<{ orgId: string; reauth: Reauth; onBack: () => voi
                     </div>
                 </div>
             </Card>
+            <SubscriptionCard orgId={org.id} reauth={reauth} />
             <MembersCard org={org} onChange={setOrg} />
             <RazorpayCard orgId={org.id} reauth={reauth} />
         </div>
@@ -263,6 +264,99 @@ const MembersCard: React.FC<{ org: OrgDetail; onChange: (o: OrgDetail) => void }
                 </Select>
                 <Button type="submit" icon={<UserPlus size={16} />}>Add member</Button>
             </form>
+        </Card>
+    );
+};
+
+interface Entitlements {
+    limits: { maxMembers: number | null; maxStores: number | null; maxItems: number | null; storageMb: number | null };
+    plan: { key: string; name: string; version: number; billingType: string } | null;
+    subscription: { status: string; trialEndsAt: number | null; paymentWaived: boolean };
+    overrides: Record<string, unknown>;
+    active: boolean;
+    seats: { used: number; limit: number | null; remaining: number | null; overLimit: boolean };
+}
+
+interface PlanOption { id: string; name: string; versionId: string; version: number; billingType: string }
+
+const SubscriptionCard: React.FC<{ orgId: string; reauth: Reauth }> = ({ orgId, reauth }) => {
+    const [info, setInfo] = useState<Entitlements | null>(null);
+    const [options, setOptions] = useState<PlanOption[]>([]);
+    const [choice, setChoice] = useState('');
+
+    const load = useCallback(async () => {
+        try {
+            setInfo(await api<Entitlements>(`/admin/orgs/${orgId}/subscription`));
+            const { plans } = await api<{ plans: { id: string; name: string }[] }>('/admin/plans');
+            const opts: PlanOption[] = [];
+            for (const p of plans) {
+                const detail = await api<{ name: string; versions: { id: string; version: number; status: string; billing_type: string }[] }>(`/admin/plans/${p.id}`);
+                for (const v of detail.versions.filter(v => v.status === 'published')) {
+                    opts.push({ id: p.id, name: detail.name, versionId: v.id, version: v.version, billingType: v.billing_type });
+                }
+            }
+            setOptions(opts);
+        } catch (e) { toast.error((e as ApiError).message); }
+    }, [orgId]);
+    useEffect(() => { load(); }, [load]);
+
+    if (!info) return <Card><p className="text-sm">Loading plan…</p></Card>;
+
+    const act = async (path: string, body: Record<string, unknown>) => {
+        const next = await guarded(reauth, () => api<Entitlements>(`/admin/orgs/${orgId}${path}`, { method: 'POST', ...json(body) }));
+        if (next) { toast.success('Updated'); load(); }
+    };
+
+    const assign = (waive: boolean) => {
+        if (!choice) { toast.error('Choose a plan version first'); return; }
+        const reason = waive ? window.prompt('Why is payment being waived?') : 'Plan assigned from the control panel';
+        if (!reason) return;
+        act('/subscription', { planVersionId: choice, waivePayment: waive, reason });
+    };
+
+    const extend = () => {
+        const days = window.prompt('Extend the trial by how many days?', '14');
+        if (!days) return;
+        const reason = window.prompt('Reason?');
+        if (!reason) return;
+        act('/subscription/extend-trial', { days: Number(days), reason });
+    };
+
+    const override = () => {
+        const value = window.prompt('New member limit for this organization only (blank = unlimited)');
+        if (value === null) return;
+        const reason = window.prompt('Reason (recorded in the audit log)');
+        if (!reason) return;
+        act('/entitlements', { key: 'maxMembers', value: value.trim() === '' ? null : Number(value), reason });
+    };
+
+    return (
+        <Card padding="lg">
+            <SectionTitle actions={<Gauge size={16} />}>Plan and limits</SectionTitle>
+            <div className="neu-inset rounded-xl p-3 text-[13px] space-y-1 text-gray-800 dark:text-gray-200">
+                <p>Plan: <strong>{info.plan ? `${info.plan.name} v${info.plan.version} (${info.plan.billingType})` : 'none — default limits'}</strong></p>
+                <p>Status: <strong>{info.subscription.status}</strong>
+                    {info.subscription.paymentWaived ? ' · payment waived' : ''}
+                    {info.subscription.trialEndsAt ? ` · trial ends ${new Date(info.subscription.trialEndsAt).toLocaleDateString()}` : ''}</p>
+                <p>Members: {info.seats.used} of {info.seats.limit ?? 'unlimited'}
+                    {info.seats.overLimit && <span className="text-amber-700 dark:text-amber-400"> · over the limit: existing members keep working, new ones are blocked until someone is disabled</span>}</p>
+                <p className="text-[12px] text-gray-600 dark:text-gray-400">
+                    Stores {info.limits.maxStores ?? '∞'} · items {info.limits.maxItems ?? '∞'} · storage {info.limits.storageMb ?? '∞'} MB
+                    {Object.keys(info.overrides).length > 0 && ` · overrides: ${Object.keys(info.overrides).join(', ')}`}
+                </p>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2 items-end">
+                <Field label="Change plan" htmlFor="sub-plan" className="flex-1 min-w-[14rem]">
+                    <Select id="sub-plan" value={choice} onChange={e => setChoice(e.target.value)}>
+                        <option value="">Choose a published version…</option>
+                        {options.map(o => <option key={o.versionId} value={o.versionId}>{o.name} v{o.version} ({o.billingType})</option>)}
+                    </Select>
+                </Field>
+                <Button variant="primary" onClick={() => assign(false)}>Assign</Button>
+                <Button onClick={() => assign(true)}>Assign &amp; waive payment</Button>
+                <Button onClick={extend}>Extend trial</Button>
+                <Button onClick={override}>Override member limit</Button>
+            </div>
         </Card>
     );
 };

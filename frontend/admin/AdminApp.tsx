@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { api, authClient, type ApiError } from './api';
 import { OrgsPanel } from './OrgsPanel';
+import { PlansPanel } from './PlansPanel';
 import { KeyRound, LogOut, ShieldCheck, History } from 'lucide-react';
 import { Pill } from '../components/ui';
 import { APP_NAME } from '../brand';
@@ -44,7 +45,7 @@ type Screen =
     | { kind: 'ready'; email: string; role: string }
     | { kind: 'unavailable'; message: string };
 
-type Tab = 'orgs' | 'settings' | 'audit';
+type Tab = 'orgs' | 'plans' | 'settings' | 'audit';
 
 export const AdminApp: React.FC = () => {
     const [screen, setScreen] = useState<Screen>({ kind: 'loading' });
@@ -101,6 +102,7 @@ export const AdminApp: React.FC = () => {
                         </p>
                         <div className="flex flex-wrap gap-2">
                             <Pill active={tab === 'orgs'} onClick={() => setTab('orgs')}>Organizations</Pill>
+                            <Pill active={tab === 'plans'} onClick={() => setTab('plans')}>Plans</Pill>
                             <Pill active={tab === 'settings'} onClick={() => setTab('settings')}>Login methods</Pill>
                             <Pill active={tab === 'audit'} onClick={() => setTab('audit')}>Audit</Pill>
                         </div>
@@ -112,6 +114,7 @@ export const AdminApp: React.FC = () => {
                             />
                         )}
                         {tab === 'orgs' && <OrgsPanel reauth={reauth} />}
+                        {tab === 'plans' && <PlansPanel />}
                         {tab === 'settings' && <LoginMethodsPanel email={screen.email} />}
                         {tab === 'audit' && <AuditPanel />}
                     </>

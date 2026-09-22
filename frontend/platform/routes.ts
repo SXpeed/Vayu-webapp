@@ -15,6 +15,14 @@
 //   POST            /api/v2/admin/orgs/:id/payments/razorpay/verify
 //   POST            /api/v2/admin/users                      create a sign-in account
 //   GET|POST        /api/v2/admin/orgs/:id/import-legacy     move the original app in
+//   GET|POST        /api/v2/admin/plans                      plans and versions
+//   GET|PATCH       /api/v2/admin/plans/:id
+//   POST            /api/v2/admin/plans/:id/versions
+//   PATCH           /api/v2/admin/plans/:id/versions/:vid    edit a draft / publish / retire
+//   GET|POST        /api/v2/admin/orgs/:id/subscription      plan, trial, waiver
+//   POST            /api/v2/admin/orgs/:id/subscription/extend-trial
+//   POST|DELETE     /api/v2/admin/orgs/:id/entitlements      documented overrides
+//   GET             /api/v2/public/plans                     published public plans
 //   POST            /api/v2/webhooks/razorpay/:orgId         signed, per organization
 //   GET             /api/v2/me/orgs                          my organizations
 //   /api/v2/org/:orgId/*                                     that org's own data
@@ -36,6 +44,11 @@ import {
 } from './orgs';
 import { connectRazorpay, describeRazorpay, disconnectRazorpay, receiveRazorpayWebhook, verifyRazorpay } from './payments';
 import { importLegacyWorkspace, listImports } from './legacyImport';
+import {
+  createPlan, createPlanVersion, extendTrial, getPlan, listPlans, publicPlans,
+  removeOverride, resolveEntitlements, seatUsage, setOverride, setSubscription,
+  updatePlan, updatePlanVersion,
+} from './plans';
 import { SecretsUnavailable } from './secrets';
 import { OrgAccessError, handleOrgRequest, listMyOrganizations, resolveOrgContext } from './orgApi';
 
@@ -148,6 +161,36 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
     return reply({ entries: results });
   }
 
+  const planRoute = /^\/admin\/plans(?:\/([A-Za-z0-9-]{1,64})(\/.*)?)?$/.exec(path);
+  if (planRoute) {
+    const actor: Actor = { userId: admin.userId, ip: request.headers.get('cf-connecting-ip') };
+    const planBody = async () => {
+      const b = await request.json().catch(() => null);
+      return (b && typeof b === 'object' ? b : {}) as Record<string, unknown>;
+    };
+    try {
+      const planId = planRoute[1];
+      const rest = planRoute[2] ?? '';
+      if (!planId) {
+        if (method === 'GET') return reply({ plans: await listPlans(db) });
+        if (method === 'POST') return reply(await createPlan(db, await planBody(), actor), 201);
+      } else if (rest === '' && method === 'GET') {
+        return reply(await getPlan(db, planId));
+      } else if (rest === '' && method === 'PATCH') {
+        return reply(await updatePlan(db, planId, await planBody(), actor));
+      } else if (rest === '/versions' && method === 'POST') {
+        return reply(await createPlanVersion(db, planId, await planBody(), actor), 201);
+      } else if (rest.startsWith('/versions/') && method === 'PATCH') {
+        const vid = rest.slice('/versions/'.length);
+        if (!/^[A-Za-z0-9-]{1,64}$/.test(vid)) return fail(404, 'not_found', 'Not found');
+        return reply(await updatePlanVersion(db, planId, vid, await planBody(), actor));
+      }
+    } catch (e) {
+      if (e instanceof OrgError) return fail(e.status, e.code, e.message);
+      throw e;
+    }
+  }
+
   const orgRoute = /^\/admin\/orgs(?:\/([A-Za-z0-9-]{1,64})(\/.*)?)?$/.exec(path);
   if (orgRoute || path === '/admin/users') {
     const actor: Actor = { userId: admin.userId, ip: request.headers.get('cf-connecting-ip') };
@@ -193,6 +236,20 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
           await disconnectRazorpay(db, orgId, actor);
           return reply(await describeRazorpay(db, orgId, webhookUrl));
         }
+      } else if (rest === '/subscription' && method === 'GET') {
+        const [entitlements, seats] = await Promise.all([resolveEntitlements(db, orgId), seatUsage(db, orgId)]);
+        return reply({ ...entitlements, seats });
+      } else if (rest === '/subscription' && method === 'POST') {
+        if (!fresh) return needFresh();
+        return reply(await setSubscription(db, orgId, await body(), actor));
+      } else if (rest === '/subscription/extend-trial' && method === 'POST') {
+        return reply(await extendTrial(db, orgId, await body(), actor));
+      } else if (rest === '/entitlements' && method === 'POST') {
+        if (!fresh) return needFresh();
+        return reply(await setOverride(db, orgId, await body(), actor));
+      } else if (rest.startsWith('/entitlements/') && method === 'DELETE') {
+        if (!fresh) return needFresh();
+        return reply(await removeOverride(db, orgId, rest.slice('/entitlements/'.length).slice(0, 40), actor));
       } else if (rest === '/import-legacy' && method === 'GET') {
         return reply({ imports: await listImports(db, orgId) });
       } else if (rest === '/import-legacy' && method === 'POST') {
@@ -248,6 +305,12 @@ export async function handlePlatformRequest(request: Request, env: Env): Promise
     if (path.startsWith('/auth/')) {
       const res = await auth.handler(request);
       res.headers.set('Cache-Control', 'no-store');
+      return res;
+    }
+    if (path === '/public/plans' && request.method === 'GET') {
+      // Public: only published, public plans, and only what a price card needs.
+      const res = reply({ plans: await publicPlans(db) });
+      res.headers.set('Cache-Control', 'public, max-age=60');
       return res;
     }
     if (path === '/public/login-methods' && request.method === 'GET') {

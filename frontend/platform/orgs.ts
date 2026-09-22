@@ -6,6 +6,7 @@
 
 import { hashPassword } from 'better-auth/crypto';
 import { auditStmt } from './audit';
+import { insertMemberWithinSeatLimit, resolveEntitlements, seatUsage } from './plans';
 
 export const BUSINESS_TYPES = ['artist', 'studio', 'gallery', 'store', 'multi_store', 'other'] as const;
 export const ORG_ROLES = ['owner', 'admin', 'manager', 'staff'] as const;
@@ -178,17 +179,23 @@ export async function addMember(db: D1Database, orgId: string, body: Record<stri
   if (org.status === 'closed') throw new OrgError(409, 'org_closed', 'This organization is closed.');
   const userId = await userIdByEmail(db, email);
   if (!userId) throw new OrgError(404, 'user_not_found', 'No account with that email. Create the account first.');
-  const now = Date.now();
   const id = crypto.randomUUID();
+  // Seats come from the plan. The insert itself carries the check, so two
+  // people claiming the last seat at the same moment cannot both succeed.
+  const { limits } = await resolveEntitlements(db, orgId);
+  let result;
   try {
-    await db.batch([
-      db.prepare(`INSERT INTO memberships (id, org_id, user_id, role, status, created_at, created_by, updated_at)
-                  VALUES (?, ?, ?, ?, 'active', ?, ?, ?)`).bind(id, orgId, userId, role, now, actor.userId, now),
+    [result] = await db.batch([
+      insertMemberWithinSeatLimit(db, { id, orgId, userId, role, actorId: actor.userId, maxMembers: limits.maxMembers }),
       auditStmt(db, { actorUserId: actor.userId, actorKind: 'provider_admin', action: 'membership.add', targetType: 'membership', targetId: id, orgId, details: { email, role }, ip: actor.ip }),
     ]);
   } catch (e) {
     if (isUniqueViolation(e)) throw new OrgError(409, 'already_member', 'That person is already a member of this organization.');
     throw e;
+  }
+  if ((result?.meta?.changes ?? 0) === 0) {
+    const seats = await seatUsage(db, orgId);
+    throw new OrgError(409, 'seat_limit', `This organization's plan allows ${seats.limit} member${seats.limit === 1 ? '' : 's'} and ${seats.used} are enabled. Disable someone, or raise the limit for this organization.`);
   }
   return getOrganization(db, orgId);
 }
@@ -197,6 +204,13 @@ export async function updateMember(db: D1Database, orgId: string, membershipId: 
   const current = await db.prepare('SELECT role, status FROM memberships WHERE id = ? AND org_id = ?')
     .bind(membershipId, orgId).first<{ role: string; status: string }>();
   if (!current) throw new OrgError(404, 'member_not_found', 'Member not found in this organization.');
+  // Re-enabling someone takes a seat, so it is checked like adding one.
+  if (current.status === 'disabled' && body.status === 'active') {
+    const seats = await seatUsage(db, orgId);
+    if (seats.remaining !== null && seats.remaining < 1) {
+      throw new OrgError(409, 'seat_limit', `This organization's plan allows ${seats.limit} member${seats.limit === 1 ? '' : 's'} and ${seats.used} are already enabled.`);
+    }
+  }
   const role = body.role === undefined ? current.role : oneOf(body.role, ORG_ROLES, 'Role');
   const status = body.status === undefined ? current.status : oneOf(body.status, ['active', 'disabled'] as const, 'Status');
   if (role === current.role && status === current.status) return getOrganization(db, orgId);

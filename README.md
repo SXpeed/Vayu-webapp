@@ -37,4 +37,5 @@ Pushing to `main` deploys production (GitHub Actions →
 - `docs/ORGANIZATIONS.md`: organizations, members, and each organization's own Razorpay account
 - `docs/ORG_DATABASES.md`: one database per organization, the request pipeline, concurrent edits
 - `docs/VAYU_MIGRATION.md`: moving the current business in as the first organization
+- `docs/PLANS.md`: plans, versions, limits, subscriptions and overrides
 - `IMPROVEMENTS.txt`: open TODO list
