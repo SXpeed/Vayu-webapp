@@ -14,6 +14,7 @@
 //   GET|PUT|DELETE  /api/v2/admin/orgs/:id/payments/razorpay the org's own Razorpay
 //   POST            /api/v2/admin/orgs/:id/payments/razorpay/verify
 //   POST            /api/v2/admin/users                      create a sign-in account
+//   GET|POST        /api/v2/admin/orgs/:id/import-legacy     move the original app in
 //   POST            /api/v2/webhooks/razorpay/:orgId         signed, per organization
 //   GET             /api/v2/me/orgs                          my organizations
 //   /api/v2/org/:orgId/*                                     that org's own data
@@ -34,6 +35,7 @@ import {
   listOrganizations, setOrganizationStatus, updateMember, type Actor,
 } from './orgs';
 import { connectRazorpay, describeRazorpay, disconnectRazorpay, receiveRazorpayWebhook, verifyRazorpay } from './payments';
+import { importLegacyWorkspace, listImports } from './legacyImport';
 import { SecretsUnavailable } from './secrets';
 import { OrgAccessError, handleOrgRequest, listMyOrganizations, resolveOrgContext } from './orgApi';
 
@@ -191,6 +193,13 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
           await disconnectRazorpay(db, orgId, actor);
           return reply(await describeRazorpay(db, orgId, webhookUrl));
         }
+      } else if (rest === '/import-legacy' && method === 'GET') {
+        return reply({ imports: await listImports(db, orgId) });
+      } else if (rest === '/import-legacy' && method === 'POST') {
+        // Dry run by default; a real import needs a recent sign-in.
+        const b = await body();
+        if (b.dryRun === false && !fresh) return needFresh();
+        return reply(await importLegacyWorkspace(env, db, orgId, b, actor));
       } else if (rest === '/payments/razorpay/verify' && method === 'POST') {
         return reply(await verifyRazorpay(env, db, orgId, actor));
       }

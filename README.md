@@ -36,4 +36,5 @@ Pushing to `main` deploys production (GitHub Actions →
 - `docs/PLATFORM_AUTH.md`: platform login (Better Auth), provider control panel, enabling Google
 - `docs/ORGANIZATIONS.md`: organizations, members, and each organization's own Razorpay account
 - `docs/ORG_DATABASES.md`: one database per organization, the request pipeline, concurrent edits
+- `docs/VAYU_MIGRATION.md`: moving the current business in as the first organization
 - `IMPROVEMENTS.txt`: open TODO list

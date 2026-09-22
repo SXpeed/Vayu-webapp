@@ -78,6 +78,13 @@ function toArtwork(r: ArtworkRow) {
   };
 }
 
+/** Tables an import may write into (also the tables counts() reports). */
+const IMPORTABLE_TABLES = new Set([
+  'artworks', 'collections', 'catalogs', 'contacts', 'inquiries', 'inquiry_messages',
+  'conversations', 'messages', 'invoices', 'events', 'stores', 'attendance',
+  'activity_logs', 'deleted_items',
+]);
+
 const text = (v: unknown, max = 500): string => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
 export class OrgStore extends DurableObject<Env> {
@@ -204,11 +211,11 @@ export class OrgStore extends DurableObject<Env> {
       throw new OrgStoreError('invalid', `Status must be one of: ${ARTWORK_STATUSES.join(', ')}.`);
     }
     const sql = this.sql();
-    sql.exec(
+    const cursor = sql.exec(
       'UPDATE artworks SET status = ?, version = version + 1, updated_at = ?, updated_by = ? WHERE id = ? AND status = ?',
       next, Date.now(), actor.userId, id, expected,
     );
-    if (sql.exec<{ n: number }>('SELECT changes() AS n').one().n === 0) {
+    if (cursor.rowsWritten === 0) {
       const [row] = [...sql.exec<{ status: string }>('SELECT status FROM artworks WHERE id = ?', id)];
       if (!row) throw new OrgStoreError('not_found', 'Artwork not found.');
       throw new OrgStoreError('conflict', `This artwork is already marked ${row.status}.`);
@@ -220,10 +227,84 @@ export class OrgStore extends DurableObject<Env> {
   deleteArtwork(id: string, actor: Actor): { deleted: boolean } {
     this.migrate();
     const sql = this.sql();
-    sql.exec('DELETE FROM artworks WHERE id = ?', id);
-    const deleted = sql.exec<{ n: number }>('SELECT changes() AS n').one().n > 0;
+    const deleted = sql.exec('DELETE FROM artworks WHERE id = ?', id).rowsWritten > 0;
     if (deleted) this.audit(actor, 'artwork.delete', 'artwork', id);
     return { deleted };
+  }
+
+  /** Column metadata for a table, read from the database itself. */
+  private columnsOf(table: string): Map<string, { notNull: boolean; hasDefault: boolean; type: string }> {
+    const cols = new Map<string, { notNull: boolean; hasDefault: boolean; type: string }>();
+    // "notnull" is an SQLite keyword (the IS NOT NULL operator), so it has to
+    // be quoted and aliased here.
+    for (const row of this.sql().exec<{ name: string; not_null: number; dflt_value: string | null; type: string; pk: number }>(
+      `SELECT name, "notnull" AS not_null, dflt_value, type, pk FROM pragma_table_info(?)`, table,
+    )) {
+      cols.set(row.name, { notNull: row.not_null === 1 && row.pk === 0, hasDefault: row.dflt_value !== null, type: (row.type || '').toUpperCase() });
+    }
+    return cols;
+  }
+
+  /**
+   * A value for a column the source table does not have but this one requires.
+   * Timestamps follow the record's own created_at, so imported history keeps
+   * its dates instead of jumping to today.
+   */
+  private static fillFor(name: string, meta: { type: string }, row: Record<string, unknown>): SqlStorageValue {
+    if (name === 'version') return 1;
+    if (name.endsWith('_at')) return (typeof row.created_at === 'number' ? row.created_at : Date.now()) as number;
+    if (meta.type.includes('INT') || meta.type.includes('REAL') || meta.type.includes('NUM')) return 0;
+    return '';
+  }
+
+  /**
+   * Copies rows in, keeping their ids and timestamps. Used when moving an
+   * existing business into its own database. A row whose id is already here is
+   * counted as "already there" and left untouched, so re-running an import
+   * changes nothing. Any other failure is raised rather than silently skipped.
+   */
+  importRows(table: string, rows: Record<string, unknown>[]): { inserted: number; alreadyThere: number } {
+    this.migrate();
+    if (!IMPORTABLE_TABLES.has(table)) throw new OrgStoreError('invalid', `Table "${table}" cannot be imported.`);
+    const sql = this.sql();
+    const columns = this.columnsOf(table);
+    if (columns.size === 0) throw new OrgStoreError('invalid', `Table "${table}" does not exist.`);
+
+    let inserted = 0;
+    let alreadyThere = 0;
+    for (const row of rows) {
+      const values = new Map<string, SqlStorageValue>();
+      for (const [name, meta] of columns) {
+        if (name in row && row[name] !== undefined) values.set(name, row[name] as SqlStorageValue);
+        else if (meta.notNull && !meta.hasDefault) values.set(name, OrgStore.fillFor(name, meta, row));
+      }
+      if (values.size === 0) continue;
+      const names = [...values.keys()];
+      try {
+        sql.exec(
+          `INSERT INTO ${table} (${names.map(c => `"${c}"`).join(', ')}) VALUES (${names.map(() => '?').join(', ')})`,
+          ...names.map(c => values.get(c) as SqlStorageValue),
+        );
+        inserted += 1;
+      } catch (e) {
+        // Only "this row is already here" is expected; anything else (a
+        // missing column, a bad value) must be visible, not swallowed.
+        if (/UNIQUE constraint failed/i.test(String((e as Error)?.message ?? e))) alreadyThere += 1;
+        else throw new OrgStoreError('invalid', `Importing into ${table} failed: ${(e as Error)?.message ?? e}`);
+      }
+    }
+    return { inserted, alreadyThere };
+  }
+
+  /** Row counts per table, for verifying an import. */
+  counts(): Record<string, number> {
+    this.migrate();
+    const out: Record<string, number> = {};
+    for (const table of IMPORTABLE_TABLES) {
+      const [row] = [...this.sql().exec<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table}`)];
+      out[table] = row?.n ?? 0;
+    }
+    return out;
   }
 
   recentAudit(limit = 50) {

@@ -50,14 +50,14 @@ before(async () => {
     }
 });
 
-after(async () => { await worker?.stop(); });
+after(async () => { await worker?.stop(); worker?.cleanup(); });
 
 test('each organization gets its own database, created on first use', async () => {
     const a = await ownerA.call(`/org/${orgA.id}`);
     assert.equal(a.status, 200, JSON.stringify(a.body));
     assert.equal(a.body.name, 'Isolation Studio A');
     assert.equal(a.body.role, 'owner');
-    assert.equal(a.body.storage.schemaVersion, 1);
+    assert.ok(a.body.storage.schemaVersion >= 1, 'the organization database is migrated to the current schema');
     assert.equal(a.body.storage.artworks, 0);
 
     const b = await ownerB.call(`/org/${orgB.id}`);

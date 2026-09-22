@@ -3,7 +3,7 @@
 // run. Gives back a fetch client with a cookie jar per simulated browser.
 import { execFileSync, spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,9 +19,23 @@ const runWrangler = (args, opts = {}) =>
  * Applies the platform migrations to a fresh local database, creates one
  * provider admin, and starts the Worker.
  */
-export async function startDevWorker({ port = 8810, inspectorPort = 9240, adminEmail = 'admin@example.com', adminPassword = 'provider-admin-password' } = {}) {
+export async function startDevWorker({ port = 8810, inspectorPort = 9240, adminEmail = 'admin@example.com', adminPassword = 'provider-admin-password', seedLegacy } = {}) {
     const persistDir = mkdtempSync(join(tmpdir(), 'as-dev-'));
     const origin = `http://127.0.0.1:${port}`;
+
+    /** Runs SQL against a local D1 database in this test's storage. */
+    const execSql = (binding, sql) => {
+        const file = join(persistDir, `seed-${Date.now()}.sql`);
+        writeFileSync(file, Array.isArray(sql) ? sql.map(s => `${s};`).join('\n') : sql);
+        return runWrangler(['d1', 'execute', binding, '--local', '-c', 'wrangler.json', '--persist-to', persistDir, '--file', file, '--json'], { stdio: 'pipe' });
+    };
+
+    // Seeding happens before the Worker starts, so nothing else holds the
+    // database files.
+    if (seedLegacy?.sql) execSql('VAYU_DB', seedLegacy.sql);
+    for (const [key, value] of seedLegacy?.kv ?? []) {
+        runWrangler(['kv', 'key', 'put', key, JSON.stringify(value), '--binding', 'VAYU_KV', '--local', '-c', 'wrangler.json', '--persist-to', persistDir], { stdio: 'pipe' });
+    }
 
     runWrangler(['d1', 'migrations', 'apply', 'PLATFORM_DB', '--local', '-c', 'wrangler.json', '--persist-to', persistDir], { stdio: 'pipe' });
     execFileSync(process.execPath, [join(frontend, 'scripts/create-provider-admin.mjs'),
@@ -90,9 +104,20 @@ export async function startDevWorker({ port = 8810, inspectorPort = 9240, adminE
         origin,
         browser,
         log: () => log,
+        /** Reads from the legacy shared database (after the Worker stops). */
+        queryLegacy(sql) {
+            const out = execSql('VAYU_DB', sql);
+            const parsed = JSON.parse(out.slice(out.indexOf('[')));
+            return parsed[0]?.results ?? [];
+        },
+        /** Stops the Worker; storage stays so it can still be inspected. */
         async stop() {
-            child.kill();
-            await new Promise(r => setTimeout(r, 500));
+            if (child.exitCode === null) {
+                child.kill();
+                await new Promise(r => setTimeout(r, 500));
+            }
+        },
+        cleanup() {
             try { rmSync(persistDir, { recursive: true, force: true }); } catch { /* windows file locks */ }
         },
     };

@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "deploy": "vite build && wrangler deploy",
     "typecheck": "tsc -p tsconfig.web.json --noEmit && tsc -p tsconfig.json --noEmit",
-    "test": "node --test tests/refreshScheduler.test.mjs tests/syncMerge.test.mjs tests/deltaSyncClient.test.mjs tests/workerAccess.test.mjs tests/sync.integration.test.mjs tests/platformAuth.integration.test.mjs tests/platformOrgs.integration.test.mjs tests/orgStore.integration.test.mjs",
+    "test": "node --test tests/refreshScheduler.test.mjs tests/syncMerge.test.mjs tests/deltaSyncClient.test.mjs tests/workerAccess.test.mjs tests/sync.integration.test.mjs tests/platformAuth.integration.test.mjs tests/platformOrgs.integration.test.mjs tests/orgStore.integration.test.mjs tests/legacyImport.integration.test.mjs",
     "test:smoke": "node tests/realtime.smoke.mjs",
     "dev:phone": "set VITE_HTTPS=1&& vite --host"
   },
