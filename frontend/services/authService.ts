@@ -21,7 +21,7 @@ export interface AuthUser {
   /** Effective limit, null = unlimited (admins). Admin user list only. */
   deviceLimit?: number | null;
   /** Devices currently signed in. Admin user list only. */
-  devices?: { label: string; createdAt: number; lastUsedAt: number }[];
+  devices?: { id: string; label: string; createdAt: number; lastUsedAt: number }[];
 }
 
 export interface ActivityLog {
@@ -129,8 +129,18 @@ export const authService = {
   },
 
   /** Devices the signed-in person is signed in on, and their limit (null = unlimited). */
-  async getMyDevices(): Promise<{ limit: number | null; devices: { label: string; createdAt: number; lastUsedAt: number; current?: boolean }[] }> {
+  async getMyDevices(): Promise<{ limit: number | null; devices: { id: string; label: string; createdAt: number; lastUsedAt: number; current?: boolean }[] }> {
     return call('/auth/devices');
+  },
+
+  /** Sign out one of your other devices. */
+  async signOutDevice(id: string): Promise<void> {
+    await call('/auth/devices/signout', { method: 'POST', body: JSON.stringify({ id }) });
+  },
+
+  /** Sign out every device except this one; returns how many. */
+  async signOutOtherDevices(): Promise<number> {
+    return (await call<{ signedOut: number }>('/auth/devices/signout-others', { method: 'POST' })).signedOut;
   },
 
   async getUsers(): Promise<AuthUser[]> {

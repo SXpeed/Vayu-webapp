@@ -260,6 +260,38 @@ try {
         assert.equal((await api('/auth/devices')).status, 401);
     });
 
+    await check('sign out one other device, then all other devices', async () => {
+        const ua = n => `Mozilla/5.0 (Windows NT 10.0) Chrome/13${n}.0 Safari/537.36`;
+        const me = await loginAs('smoke@test.local', 'smoke-pass', ua(1));
+        const a = await loginAs('smoke@test.local', 'smoke-pass', ua(2));
+        const b = await loginAs('smoke@test.local', 'smoke-pass', ua(3));
+        const list = (await api('/auth/devices', { token: me })).data.devices;
+        assert.ok(list.every(d => /^[0-9a-f]{24}$/.test(d.id)), 'opaque ids');
+        const current = list.find(d => d.current);
+        // Can't sign yourself out this way (that's the normal logout).
+        assert.equal((await api('/auth/devices/signout', { method: 'POST', token: me, body: { id: current.id } })).status, 404);
+        assert.equal((await api('/auth/devices/signout', { method: 'POST', token: me, body: { id: 'nope' } })).status, 400);
+
+        // Device "a" reports its own id; sign it out from "me".
+        const aId = (await api('/auth/devices', { token: a })).data.devices.find(d => d.current).id;
+        const one = await api('/auth/devices/signout', { method: 'POST', token: me, body: { id: aId } });
+        assert.equal(one.data.signedOut, 1);
+        const gone = await api('/auth/me', { token: a });
+        assert.equal(gone.status, 401);
+        assert.equal(gone.data.reason, 'signed-out-remotely');
+        assert.equal(await works(b), true);
+        assert.equal(await works(me), true);
+
+        const all = await api('/auth/devices/signout-others', { method: 'POST', token: me });
+        assert.ok(all.data.signedOut >= 1);
+        assert.equal(await works(b), false);
+        assert.equal(await works(me), true, 'this device stays signed in');
+        const after = (await api('/auth/devices', { token: me })).data.devices;
+        assert.equal(after.length, 1);
+        assert.equal(after[0].current, true);
+        token = me; // earlier admin tokens were signed out too
+    });
+
     await check('logging out frees the device slot', async () => {
         const users = (await api('/auth/users', { token })).data;
         const before = users.find(u => u.email === 'old@test.local').devices.length;

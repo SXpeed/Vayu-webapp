@@ -29,7 +29,7 @@ import {
 import { SyncHub } from './realtime';
 import {
   deviceLimit, enforceDeviceLimit, forgetAllDevices, forgetDevice, listDevices,
-  parseMaxDevices, registerDevice, revokedReason, touchDevice, type DeviceSummary,
+  parseMaxDevices, registerDevice, revokedReason, signOutDevices, touchDevice, type DeviceSummary,
 } from './deviceSessions';
 
 // Durable Object classes must be exported from the entry module.
@@ -772,6 +772,29 @@ async function handleAuthDevices(ctx: Ctx): Promise<Response> {
     return json({ limit: deviceLimit(user), devices: await listDevices(ctx.env.VAYU_KV, session.userId, token) });
   }
   return json({ limit: deviceLimit(user), devices });
+}
+
+/**
+ * POST /auth/devices/signout { id } — sign one of your other devices out.
+ * POST /auth/devices/signout-others — sign out every device but this one.
+ */
+async function handleAuthDevicesSignOut(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const token = bearerToken(ctx.request);
+  let only: string | undefined;
+  if (ctx.path === '/auth/devices/signout') {
+    const body = await ctx.request.json().catch(() => ({})) as { id?: unknown };
+    if (typeof body.id !== 'string' || !/^[0-9a-f]{24}$/.test(body.id)) return err('Device id is required');
+    only = body.id;
+  }
+  const signedOut = await signOutDevices(ctx.env.VAYU_KV, session.userId, token, only);
+  if (only !== undefined && signedOut === 0) return err('That device is not signed in (or is this device)', 404);
+  // Their live connections drop; this device's socket reconnects on its own.
+  if (signedOut > 0) revokeHubAsync(ctx, session.userId);
+  logEntityChange(ctx, session, 'updated', 'user', session.userId,
+    only === undefined ? `Signed out ${signedOut} other device(s)` : 'Signed out another device');
+  return json({ signedOut });
 }
 
 async function handleAuthLogout(ctx: Ctx): Promise<Response> {
@@ -3071,6 +3094,8 @@ const routes: Route[] = [
   { method: 'POST', match: isExact('/auth/logout'), handler: handleAuthLogout },
   { method: 'GET', match: isExact('/auth/users'), handler: handleAuthUsersList },
   { method: 'GET', match: isExact('/auth/devices'), handler: handleAuthDevices },
+  { method: 'POST', match: isExact('/auth/devices/signout'), handler: handleAuthDevicesSignOut },
+  { method: 'POST', match: isExact('/auth/devices/signout-others'), handler: handleAuthDevicesSignOut },
   { method: 'GET', match: isExact('/auth/team'), handler: handleAuthTeam },
   { method: 'GET', match: isExact('/auth/roles'), handler: handleRolesList },
   { method: 'POST', match: isExact('/auth/roles'), handler: handleRolesCreate },

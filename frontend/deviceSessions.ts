@@ -31,8 +31,10 @@ export interface DeviceEntry {
   expiresAt: number;
 }
 
-/** What admins see — never the token. */
+/** What the app sees — never the token. */
 export interface DeviceSummary {
+  /** Opaque id (hash of the token) used to sign one device out. */
+  id: string;
   label: string;
   createdAt: number;
   lastUsedAt: number;
@@ -220,12 +222,41 @@ export async function forgetAllDevices(kv: KVNamespace, userId: string): Promise
   await kv.delete(indexKey(userId));
 }
 
+/** A stable, non-reversible id for a device, so the token never leaves the server. */
+async function deviceId(token: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`device:${token}`)));
+  return Array.from(digest.slice(0, 12), b => b.toString(16).padStart(2, '0')).join('');
+}
+
 export async function listDevices(kv: KVNamespace, userId: string, currentToken?: string | null): Promise<DeviceSummary[]> {
-  return (await loadIndex(kv, userId))
-    .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
-    .map(({ token, label, createdAt, lastUsedAt }) => (
-      currentToken ? { label, createdAt, lastUsedAt, current: token === currentToken } : { label, createdAt, lastUsedAt }
-    ));
+  const entries = (await loadIndex(kv, userId)).sort((a, b) => b.lastUsedAt - a.lastUsedAt);
+  return Promise.all(entries.map(async ({ token, label, createdAt, lastUsedAt }) => {
+    const summary: DeviceSummary = { id: await deviceId(token), label, createdAt, lastUsedAt };
+    if (currentToken) summary.current = token === currentToken;
+    return summary;
+  }));
+}
+
+/**
+ * Sign out some of a user's devices — one by id, or every device except
+ * `keepToken`. The requesting device is never signed out here (that's the
+ * ordinary logout). Returns how many devices were signed out.
+ */
+export async function signOutDevices(
+  kv: KVNamespace, userId: string, keepToken: string | null, only?: string,
+): Promise<number> {
+  const entries = await loadIndex(kv, userId);
+  const keep: DeviceEntry[] = [];
+  let removed = 0;
+  for (const entry of entries) {
+    const matches = entry.token !== keepToken && (only === undefined || await deviceId(entry.token) === only);
+    if (!matches) { keep.push(entry); continue; }
+    await kv.delete(sessionKey(entry.token));
+    await kv.put(revokedKey(entry.token), 'signed-out-remotely', { expirationTtl: REVOKED_TTL_SECONDS });
+    removed++;
+  }
+  if (removed > 0) await saveIndex(kv, userId, keep);
+  return removed;
 }
 
 /** Why a token stopped working, if it was signed out by the device limit. */

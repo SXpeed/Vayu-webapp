@@ -1,7 +1,8 @@
 import React from 'react';
-import { Monitor, Smartphone, Tablet } from 'lucide-react';
+import { LogOut, Monitor, Smartphone, Tablet } from 'lucide-react';
 
 export interface DeviceInfo {
+    id?: string;
     label: string;
     createdAt: number;
     lastUsedAt: number;
@@ -34,8 +35,14 @@ function DeviceIcon({ label }: { label: string }) {
     return <Monitor size={15} />;
 }
 
-/** Devices someone is signed in on, most recently used first. */
-export const DeviceList: React.FC<{ devices?: DeviceInfo[]; emptyText?: string }> = ({ devices, emptyText = 'No devices.' }) => {
+/** Devices someone is signed in on, most recently used first. With
+ *  `onSignOut`, every device except the current one gets a Sign out button. */
+export const DeviceList: React.FC<{
+    devices?: DeviceInfo[];
+    emptyText?: string;
+    onSignOut?: (device: DeviceInfo) => void;
+    busyId?: string | null;
+}> = ({ devices, emptyText = 'No devices.', onSignOut, busyId }) => {
     if (!devices) return null;
     if (devices.length === 0) return <p className="text-[11px] text-[var(--neu-text-dim)]">{emptyText}</p>;
     return (
@@ -54,6 +61,18 @@ export const DeviceList: React.FC<{ devices?: DeviceInfo[]; emptyText?: string }
                             {d.current ? 'In use now' : `Last used ${timeAgo(d.lastUsedAt)}`}
                         </span>
                     </span>
+                    {onSignOut && !d.current && d.id && (
+                        <button
+                            type="button"
+                            onClick={() => onSignOut(d)}
+                            disabled={busyId != null}
+                            aria-label={`Sign out ${d.label}`}
+                            className="neu-btn active-scale shrink-0 inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-[11px] font-semibold text-red-600 dark:text-red-400 disabled:opacity-50"
+                        >
+                            <LogOut size={12} aria-hidden="true" />
+                            {busyId === d.id ? 'Signing out…' : 'Sign out'}
+                        </button>
+                    )}
                 </li>
             ))}
         </ul>

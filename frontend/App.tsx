@@ -158,9 +158,10 @@ const App: React.FC = () => {
             navigateTo('login');
             if (!shown) {
                 shown = true;
-                toast.error(reason === 'device-limit'
-                    ? 'You were signed out because your account was signed in on another device.'
-                    : 'You were signed out. Please sign in again.', { duration: 8000 });
+                let message = 'You were signed out. Please sign in again.';
+                if (reason === 'device-limit') message = 'You were signed out because your account was signed in on another device.';
+                else if (reason === 'signed-out-remotely') message = 'This device was signed out from another device.';
+                toast.error(message, { duration: 8000 });
             }
         };
         window.addEventListener(SIGNED_OUT_EVENT, onSignedOut);
