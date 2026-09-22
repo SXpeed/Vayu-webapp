@@ -27,6 +27,16 @@ export default defineConfig(({ mode }) => {
       preview: {
         allowedHosts: true,
       },
+      // Two pages: the organization app (index.html) and the provider control
+      // panel (admin.html), so the panel's code never ships in the app bundle.
+      build: {
+        rollupOptions: {
+          input: {
+            main: path.resolve(__dirname, 'index.html'),
+            admin: path.resolve(__dirname, 'admin.html'),
+          },
+        },
+      },
       // The catalog PDF generator runs in a module worker that code-splits
       // (jsPDF's lazy plugins, background removal, onnxruntime). Vite's default
       // worker format, iife, can't code-split and fails the build.

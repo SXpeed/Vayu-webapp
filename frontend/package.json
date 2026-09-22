@@ -9,12 +9,13 @@
     "preview": "vite preview",
     "deploy": "vite build && wrangler deploy",
     "typecheck": "tsc -p tsconfig.web.json --noEmit && tsc -p tsconfig.json --noEmit",
-    "test": "node --test tests/refreshScheduler.test.mjs tests/syncMerge.test.mjs tests/deltaSyncClient.test.mjs tests/workerAccess.test.mjs tests/sync.integration.test.mjs",
+    "test": "node --test tests/refreshScheduler.test.mjs tests/syncMerge.test.mjs tests/deltaSyncClient.test.mjs tests/workerAccess.test.mjs tests/sync.integration.test.mjs tests/platformAuth.integration.test.mjs",
     "test:smoke": "node tests/realtime.smoke.mjs",
     "dev:phone": "set VITE_HTTPS=1&& vite --host"
   },
   "dependencies": {
     "@imgly/background-removal": "^1.7.0",
+    "better-auth": "^1.7.5",
     "jspdf": "^4.2.1",
     "lenis": "^1.3.11",
     "localforage": "^1.10.0",

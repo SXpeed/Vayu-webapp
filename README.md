@@ -33,4 +33,5 @@ Pushing to `main` deploys production (GitHub Actions →
 
 - `docs/ARCHITECTURE.md`: sync and realtime design
 - `docs/DEPLOYMENT.md`: feature flags, rollout, rollback, measurement
+- `docs/PLATFORM_AUTH.md`: platform login (Better Auth), provider control panel, enabling Google
 - `IMPROVEMENTS.txt`: open TODO list

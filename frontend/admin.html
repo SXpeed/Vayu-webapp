@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="theme-color" content="#e9edf4">
+    <title>ateliersupport · Control panel</title>
+    <link rel="icon" type="image/png" href="/icon.png">
+    <script>
+        // Same theme preference key as the app, so the panel matches it.
+        try {
+            if (localStorage.getItem('vayu_theme') === 'dark') document.documentElement.classList.add('dark');
+        } catch (e) { }
+    </script>
+</head>
+
+<body class="bg-[var(--neu-bg)]">
+    <div id="root"></div>
+    <script type="module" src="/admin/main.tsx"></script>
+</body>
+
+</html>

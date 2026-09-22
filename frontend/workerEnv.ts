@@ -32,6 +32,31 @@ export interface Env {
   // Same-origin always works; set this only if the app is served from another
   // origin than the API.
   REALTIME_ALLOWED_ORIGIN?: string;
+
+  // ── Platform (SaaS) layer — see frontend/platform/ ──────────────────────
+  // Central platform database: identity, provider admins, settings, audit.
+  // Absent until the database is created; /api/v2 then answers 503.
+  PLATFORM_DB?: D1Database;
+  // Better Auth signing/encryption secret (`wrangler secret put
+  // BETTER_AUTH_SECRET`), at least 32 characters, different per environment.
+  BETTER_AUTH_SECRET?: string;
+  // Comma-separated origins the auth layer serves, e.g.
+  // "https://app.ateliersupport.com,https://admin.ateliersupport.com".
+  // A request's origin must be one of these, or auth fails closed.
+  AUTH_ORIGINS?: string;
+  // Google OAuth client. Google sign-in stays unavailable until both are set
+  // AND a provider admin switches it on in the control panel.
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  // Host the provider control panel is served on (e.g.
+  // admin.ateliersupport.com). When set, admin APIs answer only there. This
+  // is defense in depth; the provider_admins check is the real boundary.
+  ADMIN_HOST?: string;
+  // "development" relaxes nothing security-relevant except letting a single
+  // AUTH_ORIGINS entry stand in for the dev proxy's rewritten Host header.
+  PLATFORM_ENV?: string;
+  // "off" lets provider admins work without 2FA. Only for local development.
+  ADMIN_REQUIRE_2FA?: string;
 }
 
 /** Per-request context, shared by the router and the route handlers. */

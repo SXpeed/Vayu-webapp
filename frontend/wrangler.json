@@ -26,6 +26,12 @@
       "binding": "VAYU_DB",
       "database_name": "vayu-messaging-db",
       "database_id": "33da1221-1883-4220-a193-b4bb40c82d59"
+    },
+    {
+      "binding": "PLATFORM_DB",
+      "database_name": "ateliersupport-platform-local",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "platform/migrations"
     }
   ],
   "durable_objects": {

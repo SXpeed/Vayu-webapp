@@ -19,6 +19,7 @@
     "hooks",
     "services",
     "views",
+    "admin",
     "assets"
   ],
   "exclude": [

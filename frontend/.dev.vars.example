@@ -1,0 +1,18 @@
+# Local development secrets for `wrangler dev -c wrangler.json` (frontend/).
+# Copy to .dev.vars (git-ignored) and fill in. Never commit real values.
+
+# Better Auth secret: 32+ random bytes, different in every environment.
+#   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+BETTER_AUTH_SECRET=
+
+# Origin(s) the browser uses. With the Vite dev server:
+AUTH_ORIGINS=http://localhost:5173
+PLATFORM_ENV=development
+
+# Google OAuth client (optional). Redirect URI to register in Google Cloud:
+#   http://localhost:5173/api/v2/auth/callback/google
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+
+# Local only: allow provider admins without 2FA. Never set this in staging/production.
+# ADMIN_REQUIRE_2FA=off

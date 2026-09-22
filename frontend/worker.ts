@@ -27,6 +27,7 @@ import {
   fileCookieToken, fileCookieValid, forgetFileToken, issueFileCookie,
 } from './fileAuth';
 import { SyncHub } from './realtime';
+import { handlePlatformRequest } from './platform/routes';
 import {
   deviceLimit, enforceDeviceLimit, forgetAllDevices, forgetDevice, listDevices,
   parseMaxDevices, registerDevice, revokedReason, signOutDevices, touchDevice, type DeviceSummary,
@@ -3397,6 +3398,10 @@ function writeAnalytics(
 export default {
   async fetch(request: Request, env: Env, execCtx: ExecutionContext): Promise<Response> {
     const startedAt = Date.now();
+    // Platform (SaaS) API. Handled first so the legacy wildcard CORS below
+    // never applies to cookie-authenticated routes.
+    const platform = await handlePlatformRequest(request, env);
+    if (platform) return platform;
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS });
     }
