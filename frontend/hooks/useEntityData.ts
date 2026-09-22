@@ -455,6 +455,11 @@ export function useEntityData(
                     pending = true;
                     catchUp();
                 }
+            } else if (event.type === 'status' && event.connected) {
+                // The team list may have loaded before any socket (ours or a
+                // colleague's) was up; refresh it once now that presence events
+                // keep it current.
+                void loadTeamMembers();
             } else if (event.type === 'presence') {
                 const online = new Map(event.changes.map(c => [c.userId, c.online]));
                 setTeamMembers(prev => {
@@ -469,7 +474,7 @@ export function useEntityData(
             document.removeEventListener('visibilitychange', catchUp);
             realtimeService.stop();
         };
-    }, [userId, getEngine]);
+    }, [userId, getEngine, loadTeamMembers]);
 
     return {
         artworks, setArtworks,

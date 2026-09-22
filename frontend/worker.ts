@@ -793,9 +793,7 @@ async function handleAuthTeam(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
   const list = await ctx.env.VAYU_KV.list({ prefix: 'auth:user:' });
-  // Connection-based presence from the hub when realtime is on; the KV
-  // heartbeat map remains the fallback (and the path for old clients).
-  const presenceMap = await hubPresence(ctx).catch(() => null) ?? await getPresenceMap(ctx.env.VAYU_KV);
+  const presenceMap = await combinedPresence(ctx);
   const users: PublicUser[] = [];
   for (const key of list.keys) {
     const raw = await ctx.env.VAYU_KV.get(key.name);
@@ -991,8 +989,7 @@ async function handleRolesDelete(ctx: Ctx): Promise<Response> {
 async function handleAuthPresence(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
-  const presenceMap = await hubPresence(ctx).catch(() => null) ?? await getPresenceMap(ctx.env.VAYU_KV);
-  return json(presenceMap);
+  return json(await combinedPresence(ctx));
 }
 
 async function handleAuthPresenceHeartbeat(ctx: Ctx): Promise<Response> {
@@ -3185,6 +3182,25 @@ async function hubPresence(ctx: Ctx): Promise<Record<string, { isOnline: boolean
   if (!res.ok) return null;
   const body = await res.json<{ presence?: Record<string, { isOnline: boolean; lastSeen: number }> }>();
   return body.presence ?? null;
+}
+
+/**
+ * Who is online: anyone with a live hub socket OR a recent KV heartbeat.
+ * Both are needed while clients are mixed — app versions from before realtime
+ * (and clients whose socket is down) only send heartbeats, and must not show
+ * as offline just because the hub is up.
+ */
+async function combinedPresence(ctx: Ctx): Promise<Record<string, { isOnline: boolean; lastSeen: number }>> {
+  const [hub, kv] = await Promise.all([
+    hubPresence(ctx).catch(() => null),
+    getPresenceMap(ctx.env.VAYU_KV),
+  ]);
+  if (!hub) return kv;
+  const merged = { ...kv };
+  for (const [userId, entry] of Object.entries(hub)) {
+    merged[userId] = { isOnline: true, lastSeen: Math.max(entry.lastSeen, kv[userId]?.lastSeen ?? 0) };
+  }
+  return merged;
 }
 
 /** POST /realtime/ticket — a short-lived single-use connection ticket. */

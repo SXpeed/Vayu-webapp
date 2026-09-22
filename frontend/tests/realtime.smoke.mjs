@@ -180,6 +180,16 @@ try {
         assert.equal(me?.isOnline, true);
     });
 
+    await check('a heartbeat-only client (older app) still shows online while the hub is up', async () => {
+        const created = await api('/auth/users', { method: 'POST', token, body: { name: 'Old Client', email: 'old@test.local', password: 'old-pass-1', role: 'user' } });
+        assert.ok(created.status === 200 || created.status === 201, JSON.stringify(created.data));
+        const oldToken = (await api('/auth/login', { method: 'POST', body: { email: 'old@test.local', password: 'old-pass-1' } })).data.token;
+        assert.equal((await api('/auth/presence/heartbeat', { method: 'POST', token: oldToken })).status, 200);
+        const team = (await api('/auth/team', { token })).data;
+        assert.equal(team.find(u => u.email === 'old@test.local')?.isOnline, true, 'heartbeat user');
+        assert.equal(team.find(u => u.email === 'smoke@test.local')?.isOnline, true, 'socket user');
+    });
+
     await check('logout revokes the socket (4403)', async () => {
         assert.equal((await api('/auth/logout', { method: 'POST', token })).status, 200);
         const code = await Promise.race([socket.closed, new Promise(r => setTimeout(() => r('timeout'), 5_000))]);
