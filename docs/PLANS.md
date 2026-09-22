@@ -99,9 +99,9 @@ mostly static.
 - **Taking payment** (Razorpay subscriptions for the platform's own billing) and
   what happens on failed renewals — `past_due` exists as a state but nothing
   sets it yet.
-- **Item and storage limits are defined but not yet enforced** at write time;
-  seats are. Enforcing the rest needs usage counters fed from each
-  organization's database.
+- **Most limits are defined but not yet enforced** at write time; seats and
+  inventory items are. Enforcing the rest needs usage counters fed from each
+  organization's database (see the list above).
 - **Custom roles** as a plan feature: the flag exists, the feature does not.
 - **Self-serve plan choice** during sign-up comes with the onboarding flow.
 
