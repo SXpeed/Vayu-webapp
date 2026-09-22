@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import { UserProfile } from '../types';
 import { Moon, Sun, LogOut, Check, Bell, BellOff, Pencil, X } from 'lucide-react';
 import { pushService } from '../services/pushService';
+import { MyDevicesCard } from '../components/MyDevicesCard';
 import {
     PageRoot, PageHeader, PageBody, Card, SectionTitle, Field, Input, Textarea,
     ReadOnlyValue, ToggleRow, Button, Divider,
@@ -147,6 +148,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ profile, onUpdateProfi
                         onChange={() => onUpdateProfile({ ...profile, isOnline: !profile.isOnline })}
                     />
                 </Card>
+
+                <MyDevicesCard />
 
                 {/* Logout */}
                 <Button

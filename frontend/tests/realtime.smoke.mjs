@@ -249,6 +249,17 @@ try {
         for (const t of adminTokens) assert.equal(await works(t), true, 'admin logins are never limited');
     });
 
+    await check('everyone can list their own devices, with this device marked', async () => {
+        const mine = await api('/auth/devices', { token: staffTokens[1] });
+        assert.equal(mine.status, 200);
+        assert.equal(mine.data.limit, 2);
+        assert.equal(mine.data.devices.filter(d => d.current).length, 1, 'exactly one "this device"');
+        assert.ok(mine.data.devices.every(d => !('token' in d)), 'tokens are never exposed');
+        const admin = await api('/auth/devices', { token });
+        assert.equal(admin.data.limit, null, 'admins: unlimited');
+        assert.equal((await api('/auth/devices')).status, 401);
+    });
+
     await check('logging out frees the device slot', async () => {
         const users = (await api('/auth/users', { token })).data;
         const before = users.find(u => u.email === 'old@test.local').devices.length;

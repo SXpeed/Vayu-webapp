@@ -128,6 +128,11 @@ export const authService = {
     }
   },
 
+  /** Devices the signed-in person is signed in on, and their limit (null = unlimited). */
+  async getMyDevices(): Promise<{ limit: number | null; devices: { label: string; createdAt: number; lastUsedAt: number; current?: boolean }[] }> {
+    return call('/auth/devices');
+  },
+
   async getUsers(): Promise<AuthUser[]> {
     return call<AuthUser[]>('/auth/users');
   },

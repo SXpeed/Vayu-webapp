@@ -36,6 +36,8 @@ export interface DeviceSummary {
   label: string;
   createdAt: number;
   lastUsedAt: number;
+  /** True for the device making the request (own list only). */
+  current?: boolean;
 }
 
 const indexKey = (userId: string) => `auth:devices:${userId}`;
@@ -218,10 +220,12 @@ export async function forgetAllDevices(kv: KVNamespace, userId: string): Promise
   await kv.delete(indexKey(userId));
 }
 
-export async function listDevices(kv: KVNamespace, userId: string): Promise<DeviceSummary[]> {
+export async function listDevices(kv: KVNamespace, userId: string, currentToken?: string | null): Promise<DeviceSummary[]> {
   return (await loadIndex(kv, userId))
     .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
-    .map(({ label, createdAt, lastUsedAt }) => ({ label, createdAt, lastUsedAt }));
+    .map(({ token, label, createdAt, lastUsedAt }) => (
+      currentToken ? { label, createdAt, lastUsedAt, current: token === currentToken } : { label, createdAt, lastUsedAt }
+    ));
 }
 
 /** Why a token stopped working, if it was signed out by the device limit. */

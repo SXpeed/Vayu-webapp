@@ -1,46 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, UserPlus, Trash2, Eye, EyeOff, Edit2, Check, Bell, BellOff } from 'lucide-react';
+import { X, UserPlus, Trash2, Eye, EyeOff, Edit2, Check, Bell, BellOff, Smartphone } from 'lucide-react';
 import { Button } from './ui';
 import { authService, AuthUser } from '../services/authService';
 import { TypeDeleteDialog } from './TypeDeleteDialog';
 import { StoreConfig } from '../types';
 import { apiCall } from '../services/apiClient';
 import { ADMIN_ROLE_ID, BUILT_IN_ROLES, type RoleDef } from '../permissions';
+import { DeviceList, DEFAULT_MAX_DEVICES, deviceCountText } from './DeviceList';
 
-/** Matches DEFAULT_MAX_DEVICES in deviceSessions.ts (server). */
-const DEFAULT_MAX_DEVICES = 2;
-
-function timeAgo(ts: number): string {
-  if (!ts) return 'a while ago';
-  const minutes = Math.round((Date.now() - ts) / 60_000);
-  if (minutes < 60) return minutes <= 1 ? 'just now' : `${minutes} min ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours} h ago`;
-  const days = Math.round(hours / 24);
-  return `${days} ${days === 1 ? 'day' : 'days'} ago`;
-}
-
-/** Devices a person is signed in on, most recently used first. */
-const DeviceList: React.FC<{ devices?: AuthUser['devices'] }> = ({ devices }) => {
-  if (!devices) return null;
-  return (
-    <div>
-      <p className="neu-label">Signed in on</p>
-      {devices.length === 0 ? (
-        <p className="text-[11px] text-[var(--neu-text-dim)]">No devices.</p>
-      ) : (
-        <ul className="space-y-1">
-          {devices.map((d, i) => (
-            <li key={`${d.label}-${d.createdAt}-${i}`} className="text-[11px] text-[var(--neu-text)] flex justify-between gap-3">
-              <span className="truncate">{d.label}</span>
-              <span className="text-[var(--neu-text-dim)] shrink-0">used {timeAgo(d.lastUsedAt)}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-};
 
 interface Props {
   currentUserId: string;
@@ -84,6 +51,8 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
   const [editPassword, setEditPassword] = useState('');
   /** '' = default limit; otherwise '1'..'10'. */
   const [editMaxDevices, setEditMaxDevices] = useState('');
+  /** Row whose device list is expanded (outside edit mode). */
+  const [devicesOpenId, setDevicesOpenId] = useState<string | null>(null);
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
 
@@ -272,7 +241,12 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
                     ) : (
                       <p className="text-[11px] text-[var(--neu-text-dim)]">Admins can sign in on any number of devices.</p>
                     )}
-                    <DeviceList devices={u.devices} />
+                    {u.devices && (
+                      <div>
+                        <p className="neu-label">Signed in on {deviceCountText(u.devices.length, u.deviceLimit)}</p>
+                        <DeviceList devices={u.devices} emptyText="Not signed in anywhere." />
+                      </div>
+                    )}
                     {stores.length > 0 && (
                       <div>
                         <label htmlFor={`um-edit-store-${u.id}`} className="neu-label">Attendance store</label>
@@ -318,12 +292,23 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
                           <span title="Notifications disabled" className="shrink-0 inline-flex"><BellOff size={12} className="text-[var(--neu-text-dim)]" aria-hidden="true" /><span className="sr-only">Notifications disabled</span></span>
                         )}
                       </p>
-                      <p className="text-[11px] text-[var(--neu-text-dim)] truncate">
-                        {u.email}
-                        {u.devices && (
-                          <span> · {u.devices.length}{u.deviceLimit ? ` of ${u.deviceLimit}` : ''} {u.devices.length === 1 && !u.deviceLimit ? 'device' : 'devices'}</span>
-                        )}
-                      </p>
+                      <p className="text-[11px] text-[var(--neu-text-dim)] truncate">{u.email}</p>
+                      {u.devices && (
+                        <button
+                          type="button"
+                          onClick={() => setDevicesOpenId(id => (id === u.id ? null : u.id))}
+                          aria-expanded={devicesOpenId === u.id}
+                          title="Show signed-in devices"
+                          className={`mt-1 inline-flex items-center gap-1 text-[11px] font-medium rounded-full px-2 py-0.5 neu-inset ${
+                            u.deviceLimit && u.devices.length >= u.deviceLimit
+                              ? 'text-amber-700 dark:text-amber-400'
+                              : 'text-[var(--neu-text-dim)]'
+                          }`}
+                        >
+                          <Smartphone size={11} aria-hidden="true" />
+                          {deviceCountText(u.devices.length, u.deviceLimit)}
+                        </button>
+                      )}
                     </div>
                     <span className={`neu-status text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 shrink-0 ${u.role === ADMIN_ROLE_ID ? 'text-gold-700 dark:text-gold-300' : 'text-[var(--neu-text-dim)]'}`}>
                       {roleName(u.role)}
@@ -336,6 +321,11 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
                     >
                       <Edit2 size={14} />
                     </button>
+                  </div>
+                )}
+                {editingId !== u.id && devicesOpenId === u.id && u.devices && (
+                  <div className="neu-inset rounded-2xl p-3.5 mx-1 mb-2">
+                    <DeviceList devices={u.devices} emptyText="Not signed in anywhere." />
                   </div>
                 )}
               </React.Fragment>

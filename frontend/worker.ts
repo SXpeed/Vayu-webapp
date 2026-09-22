@@ -756,6 +756,24 @@ async function handleAuthMeUpdate(ctx: Ctx): Promise<Response> {
   return json(stripPassword(updated));
 }
 
+/** GET /auth/devices — the devices the caller is signed in on, and their limit. */
+async function handleAuthDevices(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const raw = await ctx.env.VAYU_KV.get(`auth:user:${session.userId}`);
+  if (!raw) return err('User not found', 404);
+  const user: StoredUser = JSON.parse(raw);
+  const token = bearerToken(ctx.request);
+  const devices = await listDevices(ctx.env.VAYU_KV, session.userId, token);
+  // A session created in a lost race may be missing from the index; the
+  // caller is certainly signed in here, so never show an empty list.
+  if (token && !devices.some(d => d.current)) {
+    await touchDevice(ctx.env.VAYU_KV, session.userId, token, ctx.request.headers.get('User-Agent'));
+    return json({ limit: deviceLimit(user), devices: await listDevices(ctx.env.VAYU_KV, session.userId, token) });
+  }
+  return json({ limit: deviceLimit(user), devices });
+}
+
 async function handleAuthLogout(ctx: Ctx): Promise<Response> {
   const auth = ctx.request.headers.get('Authorization');
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
@@ -3052,6 +3070,7 @@ const routes: Route[] = [
   { method: 'PUT', match: isExact('/auth/me'), handler: handleAuthMeUpdate },
   { method: 'POST', match: isExact('/auth/logout'), handler: handleAuthLogout },
   { method: 'GET', match: isExact('/auth/users'), handler: handleAuthUsersList },
+  { method: 'GET', match: isExact('/auth/devices'), handler: handleAuthDevices },
   { method: 'GET', match: isExact('/auth/team'), handler: handleAuthTeam },
   { method: 'GET', match: isExact('/auth/roles'), handler: handleRolesList },
   { method: 'POST', match: isExact('/auth/roles'), handler: handleRolesCreate },
