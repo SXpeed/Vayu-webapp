@@ -7,6 +7,9 @@ export function authHeaders(): Record<string, string> {
     return base;
 }
 
+/** Fired on window when the server says this device was signed out. */
+export const SIGNED_OUT_EVENT = 'vayu:signed-out';
+
 /**
  * Parse an API response without assuming the body is JSON. When the backend
  * is briefly unavailable (dev proxy down, deploy in progress, Cloudflare
@@ -26,6 +29,12 @@ export async function parseApiResponse<T>(res: Response): Promise<T> {
         }
     }
     if (!res.ok) {
+        // Signed out elsewhere (e.g. the per-person device limit): tell the
+        // app so it can return to the login screen with an explanation.
+        const reason = (data as { reason?: string } | null)?.reason;
+        if (res.status === 401 && reason && typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent(SIGNED_OUT_EVENT, { detail: { reason } }));
+        }
         throw new Error((data as { error?: string } | null)?.error ?? `Request failed (${res.status})`);
     }
     return data as T;

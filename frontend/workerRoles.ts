@@ -22,6 +22,8 @@ export interface StoredUser {
   /** Role id: 'admin', 'user' (Staff) or a custom role's id. */
   role: string;
   createdAt: number;
+  /** Max devices signed in at once; unset = default. Ignored for admins. */
+  maxDevices?: number;
 }
 
 export function bearerToken(request: Request): string | null {

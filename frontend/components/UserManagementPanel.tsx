@@ -7,6 +7,41 @@ import { StoreConfig } from '../types';
 import { apiCall } from '../services/apiClient';
 import { ADMIN_ROLE_ID, BUILT_IN_ROLES, type RoleDef } from '../permissions';
 
+/** Matches DEFAULT_MAX_DEVICES in deviceSessions.ts (server). */
+const DEFAULT_MAX_DEVICES = 2;
+
+function timeAgo(ts: number): string {
+  if (!ts) return 'a while ago';
+  const minutes = Math.round((Date.now() - ts) / 60_000);
+  if (minutes < 60) return minutes <= 1 ? 'just now' : `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.round(hours / 24);
+  return `${days} ${days === 1 ? 'day' : 'days'} ago`;
+}
+
+/** Devices a person is signed in on, most recently used first. */
+const DeviceList: React.FC<{ devices?: AuthUser['devices'] }> = ({ devices }) => {
+  if (!devices) return null;
+  return (
+    <div>
+      <p className="neu-label">Signed in on</p>
+      {devices.length === 0 ? (
+        <p className="text-[11px] text-[var(--neu-text-dim)]">No devices.</p>
+      ) : (
+        <ul className="space-y-1">
+          {devices.map((d, i) => (
+            <li key={`${d.label}-${d.createdAt}-${i}`} className="text-[11px] text-[var(--neu-text)] flex justify-between gap-3">
+              <span className="truncate">{d.label}</span>
+              <span className="text-[var(--neu-text-dim)] shrink-0">used {timeAgo(d.lastUsedAt)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
+
 interface Props {
   currentUserId: string;
 }
@@ -47,6 +82,8 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
   const [editEmail, setEditEmail] = useState('');
   const [editRole, setEditRole] = useState('user');
   const [editPassword, setEditPassword] = useState('');
+  /** '' = default limit; otherwise '1'..'10'. */
+  const [editMaxDevices, setEditMaxDevices] = useState('');
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
 
@@ -125,6 +162,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
     setEditEmail(u.email);
     setEditRole(u.role);
     setEditStoreId(u.storeId || '');
+    setEditMaxDevices(u.maxDevices ? String(u.maxDevices) : '');
     setEditPassword('');
     setEditError('');
   };
@@ -135,6 +173,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
     setEditEmail('');
     setEditRole('user');
     setEditStoreId('');
+    setEditMaxDevices('');
     setEditPassword('');
     setEditError('');
   };
@@ -151,12 +190,13 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
     }
     setEditSaving(true);
     try {
-      const data: { name?: string; email?: string; role?: string; password?: string; storeId?: string } = {
+      const data: { name?: string; email?: string; role?: string; password?: string; storeId?: string; maxDevices?: number | null } = {
         name: editName.trim(),
         email: editEmail.trim(),
         role: editRole,
         storeId: editStoreId,
       };
+      if (editRole !== ADMIN_ROLE_ID) data.maxDevices = editMaxDevices ? Number(editMaxDevices) : null;
       if (editPassword) data.password = editPassword;
       const updated = await authService.updateUser(id, data);
       setUsers(prev => prev.map(u => u.id === id ? updated : u));
@@ -211,6 +251,28 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
                       <label htmlFor={`um-edit-role-${u.id}`} className="neu-label">Role</label>
                       <RoleSelect id={`um-edit-role-${u.id}`} value={editRole} roles={roles} onChange={setEditRole} />
                     </div>
+                    {editRole !== ADMIN_ROLE_ID ? (
+                      <div>
+                        <label htmlFor={`um-edit-devices-${u.id}`} className="neu-label">Max devices signed in</label>
+                        <select
+                          id={`um-edit-devices-${u.id}`}
+                          value={editMaxDevices}
+                          onChange={e => setEditMaxDevices(e.target.value)}
+                          className="neu-field"
+                        >
+                          <option value="">Default ({DEFAULT_MAX_DEVICES})</option>
+                          {Array.from({ length: 10 }, (_, i) => i + 1).map(n => (
+                            <option key={n} value={String(n)}>{n} {n === 1 ? 'device' : 'devices'}</option>
+                          ))}
+                        </select>
+                        <p className="text-[11px] text-[var(--neu-text-dim)] mt-1.5 leading-relaxed">
+                          Signing in on one more device signs out the one used longest ago.
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-[var(--neu-text-dim)]">Admins can sign in on any number of devices.</p>
+                    )}
+                    <DeviceList devices={u.devices} />
                     {stores.length > 0 && (
                       <div>
                         <label htmlFor={`um-edit-store-${u.id}`} className="neu-label">Attendance store</label>
@@ -256,7 +318,12 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
                           <span title="Notifications disabled" className="shrink-0 inline-flex"><BellOff size={12} className="text-[var(--neu-text-dim)]" aria-hidden="true" /><span className="sr-only">Notifications disabled</span></span>
                         )}
                       </p>
-                      <p className="text-[11px] text-[var(--neu-text-dim)] truncate">{u.email}</p>
+                      <p className="text-[11px] text-[var(--neu-text-dim)] truncate">
+                        {u.email}
+                        {u.devices && (
+                          <span> · {u.devices.length}{u.deviceLimit ? ` of ${u.deviceLimit}` : ''} {u.devices.length === 1 && !u.deviceLimit ? 'device' : 'devices'}</span>
+                        )}
+                      </p>
                     </div>
                     <span className={`neu-status text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 shrink-0 ${u.role === ADMIN_ROLE_ID ? 'text-gold-700 dark:text-gold-300' : 'text-[var(--neu-text-dim)]'}`}>
                       {roleName(u.role)}

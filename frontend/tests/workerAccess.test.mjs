@@ -104,3 +104,22 @@ test('realtime fails closed without a proper secret', async () => {
     assert.doesNotMatch(standIn, /vayu|default|dev/i);
     assert.equal(envMod.rawRealtimeSecret({ REALTIME_SECRET: strong }), strong);
 });
+
+test('device limits: defaults, admin exemption, validation, labels', async () => {
+    const d = await load('deviceSessions.ts');
+    assert.equal(d.deviceLimit({ role: 'user' }), 2);
+    assert.equal(d.deviceLimit({ role: 'user', maxDevices: 3 }), 3);
+    assert.equal(d.deviceLimit({ role: 'user', maxDevices: 50 }), 10, 'capped');
+    assert.equal(d.deviceLimit({ role: 'user', maxDevices: 0 }), 2, 'invalid falls back to default');
+    assert.equal(d.deviceLimit({ role: 'admin', maxDevices: 1 }), null, 'admins are never limited');
+
+    assert.deepEqual(d.parseMaxDevices(undefined), { ok: true, value: undefined });
+    assert.deepEqual(d.parseMaxDevices(null), { ok: true, value: null });
+    assert.deepEqual(d.parseMaxDevices('3'), { ok: true, value: 3 });
+    for (const bad of [0, 11, 1.5, 'x', -1]) assert.equal(d.parseMaxDevices(bad).ok, false);
+
+    assert.equal(d.deviceLabel('Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36'), 'Chrome on Android');
+    assert.equal(d.deviceLabel('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1'), 'Safari on iPhone');
+    assert.equal(d.deviceLabel('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0 Safari/537.36 Edg/130.0'), 'Edge on Windows');
+    assert.equal(d.deviceLabel(null), 'Browser');
+});

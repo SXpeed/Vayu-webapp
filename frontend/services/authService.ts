@@ -16,6 +16,12 @@ export interface AuthUser {
   isOnline?: boolean;
   lastSeen?: number;
   notificationsEnabled?: boolean;
+  /** Admin-set device limit; unset = the default. */
+  maxDevices?: number;
+  /** Effective limit, null = unlimited (admins). Admin user list only. */
+  deviceLimit?: number | null;
+  /** Devices currently signed in. Admin user list only. */
+  devices?: { label: string; createdAt: number; lastUsedAt: number }[];
 }
 
 export interface ActivityLog {
@@ -101,6 +107,11 @@ export const authService = {
     }
   },
 
+  /** Drop this device's token without calling the server (already signed out there). */
+  clearLocalSession(): void {
+    localStorage.removeItem(TOKEN_KEY);
+  },
+
   async getMe(): Promise<AuthUser | null> {
     if (!getToken()) return null;
     try {
@@ -151,7 +162,7 @@ export const authService = {
     return user;
   },
 
-  async updateUser(id: string, data: { name?: string; email?: string; role?: string; password?: string; storeId?: string }): Promise<AuthUser> {
+  async updateUser(id: string, data: { name?: string; email?: string; role?: string; password?: string; storeId?: string; maxDevices?: number | null }): Promise<AuthUser> {
     const user = await call<AuthUser>(`/auth/users/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data),

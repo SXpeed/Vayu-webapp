@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, lazy, Suspense } from 'react';
 import { Lock } from 'lucide-react';
 
-import { Toaster } from 'react-hot-toast';
+import toast, { Toaster } from 'react-hot-toast';
 import Layout from './components/Layout';
 import { LoginView } from './views/LoginView';
 import { AuthUser, authService } from './services/authService';
@@ -23,6 +23,7 @@ import { useHandlers } from './hooks/useHandlers';
 import { pushService } from './services/pushService';
 import { syncService } from './services/syncService';
 import { canOpenView, makeCan, permissionsOf } from './access';
+import { SIGNED_OUT_EVENT } from './services/apiClient';
 import { PageRoot, PageHeader, PageBody, EmptyState, Button } from './components/ui';
 
 /** Views a push-notification click may deep-link into. */
@@ -118,7 +119,7 @@ const App: React.FC = () => {
     // ── Auth ───────────────────────────────────────────────────────────────
     const {
         authUser, authUserRef, userProfile, theme,
-        applyAuthUser, handleUpdateProfile, handleToggleTheme, handleLogout,
+        applyAuthUser, clearAuth, handleUpdateProfile, handleToggleTheme, handleLogout,
     } = useAuth();
 
     // ── Entity Data ────────────────────────────────────────────────────────
@@ -144,6 +145,28 @@ const App: React.FC = () => {
         setConversations, setAllMessages, setInquiryMessages, setSelectedArtwork,
         setEvents, setContacts,
     });
+
+    // ── Signed out by the server (device limit) ──────────────────────────
+    // Registered before the bootstrap effect so a device that was signed out
+    // while closed also gets the explanation on its next start.
+    useEffect(() => {
+        let shown = false;
+        const onSignedOut = (event: Event) => {
+            const reason = (event as CustomEvent<{ reason?: string }>).detail?.reason;
+            authService.clearLocalSession();
+            clearAuth();
+            navigateTo('login');
+            if (!shown) {
+                shown = true;
+                toast.error(reason === 'device-limit'
+                    ? 'You were signed out because your account was signed in on another device.'
+                    : 'You were signed out. Please sign in again.', { duration: 8000 });
+            }
+        };
+        window.addEventListener(SIGNED_OUT_EVENT, onSignedOut);
+        return () => window.removeEventListener(SIGNED_OUT_EVENT, onSignedOut);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // ── Initialize DB and load data — runs ONCE on mount ──────────────────
     useEffect(() => {

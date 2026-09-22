@@ -32,6 +32,7 @@
     "realtimeTickets.ts",
     "entityAccess.ts",
     "fileAuth.ts",
+    "deviceSessions.ts",
     "dist",
     "node_modules",
     ".wrangler"

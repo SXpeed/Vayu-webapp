@@ -27,6 +27,10 @@ import {
   fileCookieToken, fileCookieValid, forgetFileToken, issueFileCookie,
 } from './fileAuth';
 import { SyncHub } from './realtime';
+import {
+  deviceLimit, enforceDeviceLimit, forgetAllDevices, forgetDevice, listDevices,
+  parseMaxDevices, registerDevice, revokedReason, touchDevice, type DeviceSummary,
+} from './deviceSessions';
 
 // Durable Object classes must be exported from the entry module.
 export { SyncHub };
@@ -44,6 +48,10 @@ interface PublicUser {
   isOnline?: boolean;
   lastSeen?: number;
   notificationsEnabled?: boolean;
+  maxDevices?: number;
+  /** Effective limit (null = unlimited); admin user list only. */
+  deviceLimit?: number | null;
+  devices?: DeviceSummary[];
 }
 
 interface ActivityLog {
@@ -682,6 +690,10 @@ async function handleAuthLogin(ctx: Ctx): Promise<Response> {
   await ctx.env.VAYU_KV.put(`auth:session:${token}`, JSON.stringify(session), {
     expirationTtl: SESSION_TTL_DAYS * 86_400,
   });
+  // Over the device limit: the device used longest ago is signed out. Its
+  // hub socket closes too (the others reconnect with fresh tickets).
+  const signedOut = await registerDevice(ctx.env.VAYU_KV, user, token, session.expiresAt, ctx.request.headers.get('User-Agent'));
+  if (signedOut > 0) revokeHubAsync(ctx, user.id);
   const body = { token, user: await withAccess(ctx, user) };
   if (!fileAuthEnabled(ctx)) return json(body);
   // Same-origin HttpOnly capability cookie so <img>/jsPDF loads (which cannot
@@ -697,6 +709,11 @@ async function handleAuthMe(ctx: Ctx): Promise<Response> {
   const raw = await ctx.env.VAYU_KV.get(`auth:user:${session.userId}`);
   if (!raw) return err('User not found', 404);
   const res = json(await withAccess(ctx, JSON.parse(raw)));
+  const meToken = bearerToken(ctx.request);
+  if (meToken) {
+    ctx.execCtx.waitUntil(touchDevice(ctx.env.VAYU_KV, session.userId, meToken, ctx.request.headers.get('User-Agent'))
+      .catch(e => console.error('touchDevice failed:', e)));
+  }
   // Re-issue only when the cookie is missing or its KV token expired — the
   // bearer session is always valid here, so it can't be the test.
   if (fileAuthEnabled(ctx) && !(await fileCookieValid(ctx))) {
@@ -743,7 +760,9 @@ async function handleAuthLogout(ctx: Ctx): Promise<Response> {
   const auth = ctx.request.headers.get('Authorization');
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (auth?.startsWith('Bearer ')) {
-    await ctx.env.VAYU_KV.delete(`auth:session:${auth.slice(7).trim()}`);
+    const logoutToken = auth.slice(7).trim();
+    await ctx.env.VAYU_KV.delete(`auth:session:${logoutToken}`);
+    if (session) await forgetDevice(ctx.env.VAYU_KV, session.userId, logoutToken);
   }
   // Drop the file capability token and revoke any live hub connection.
   if (session) {
@@ -780,8 +799,11 @@ async function handleAuthUsersList(ctx: Ctx): Promise<Response> {
   for (const key of list.keys) {
     const raw = await ctx.env.VAYU_KV.get(key.name);
     if (raw) {
-      const pub = stripPassword(JSON.parse(raw));
+      const stored: StoredUser = JSON.parse(raw);
+      const pub = stripPassword(stored);
       pub.notificationsEnabled = usersWithPush.has(pub.id);
+      pub.deviceLimit = deviceLimit(stored);
+      pub.devices = await listDevices(ctx.env.VAYU_KV, pub.id);
       users.push(pub);
     }
   }
@@ -814,10 +836,12 @@ async function handleAuthUsersCreate(ctx: Ctx): Promise<Response> {
   if (!session) return err('Unauthorized', 401);
   if (session.role !== 'admin') return err('Forbidden', 403);
   const addBody = await ctx.request.json();
-  const { name, email, password, role } = addBody as {
-    name?: string; email?: string; password?: string; role?: string;
+  const { name, email, password, role, maxDevices } = addBody as {
+    name?: string; email?: string; password?: string; role?: string; maxDevices?: unknown;
   };
   if (!name || !email || !password) return err('name, email and password are required');
+  const createLimit = parseMaxDevices(maxDevices);
+  if (!createLimit.ok) return err('Max devices must be a whole number from 1 to 10');
   if (password.length < 6) return err('Password must be at least 6 characters');
   const emailKey = `auth:email:${email.toLowerCase().trim()}`;
   if (await ctx.env.VAYU_KV.get(emailKey)) return err('A user with this email already exists', 409);
@@ -829,13 +853,14 @@ async function handleAuthUsersCreate(ctx: Ctx): Promise<Response> {
     hashedPassword: await hashPassword(password),
     role: roleId,
     createdAt: Date.now(),
+    ...(typeof createLimit.value === 'number' ? { maxDevices: createLimit.value } : {}),
   };
   await ctx.env.VAYU_KV.put(`auth:user:${id}`, JSON.stringify(user));
   await ctx.env.VAYU_KV.put(emailKey, id);
   const countRaw = await ctx.env.VAYU_KV.get('auth:count');
   await ctx.env.VAYU_KV.put('auth:count', String((countRaw ? Number.parseInt(countRaw, 10) : 0) + 1));
   await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'created', 'user', id, `Created user "${name}" (${email}) with role "${roles.find(r => r.id === roleId)?.name ?? roleId}"`);
-  return json(stripPassword(user), 201);
+  return json({ ...stripPassword(user), deviceLimit: deviceLimit(user), devices: [] }, 201);
 }
 
 async function handleAuthUsersDelete(ctx: Ctx): Promise<Response> {
@@ -852,7 +877,9 @@ async function handleAuthUsersDelete(ctx: Ctx): Promise<Response> {
   const countRaw = await ctx.env.VAYU_KV.get('auth:count');
   if (countRaw) await ctx.env.VAYU_KV.put('auth:count', String(Math.max(0, Number.parseInt(countRaw, 10) - 1)));
   await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'deleted', 'user', userId, `Deleted user "${user.name}" (${user.email})`);
-  // Their open hub connections close immediately.
+  // Every device they're signed in on is signed out, and open hub
+  // connections close immediately.
+  await forgetAllDevices(ctx.env.VAYU_KV, userId);
   revokeHubAsync(ctx, userId);
   // Full user (incl. password hash) so an admin undo fully restores the login.
   archiveDeletedAsync(ctx, session, 'user', userId, `User "${user.name}" (${user.email})`, user);
@@ -868,9 +895,11 @@ async function handleAuthUsersUpdate(ctx: Ctx): Promise<Response> {
   if (!raw) return err('User not found', 404);
   const existing: StoredUser = JSON.parse(raw);
   const editBody = await ctx.request.json();
-  const { name, email, role, password, storeId } = editBody as {
-    name?: string; email?: string; role?: string; password?: string; storeId?: string;
+  const { name, email, role, password, storeId, maxDevices } = editBody as {
+    name?: string; email?: string; role?: string; password?: string; storeId?: string; maxDevices?: unknown;
   };
+  const editLimit = parseMaxDevices(maxDevices);
+  if (!editLimit.ok) return err('Max devices must be a whole number from 1 to 10');
   // If email is changing, check for conflicts and update the email index
   const newEmail = email ? email.toLowerCase().trim() : existing.email;
   if (newEmail !== existing.email) {
@@ -896,9 +925,19 @@ async function handleAuthUsersUpdate(ctx: Ctx): Promise<Response> {
     storeId: typeof storeId === 'string' ? storeId : existing.storeId,
     hashedPassword: password ? await hashPassword(password) : existing.hashedPassword,
   };
+  if (editLimit.value === null) delete updated.maxDevices;
+  else if (editLimit.value !== undefined) updated.maxDevices = editLimit.value;
   await ctx.env.VAYU_KV.put(`auth:user:${userId}`, JSON.stringify(updated));
+  // A lower limit (or a role change away from admin) applies right away.
+  if (deviceLimit(updated) !== deviceLimit(existing)) {
+    const signedOut = await enforceDeviceLimit(ctx.env.VAYU_KV, updated);
+    if (signedOut > 0) revokeHubAsync(ctx, userId);
+  }
   await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'updated', 'user', userId, `Updated user "${updated.name}" (${updated.email})`);
-  return json(stripPassword(updated));
+  const pub = stripPassword(updated);
+  pub.deviceLimit = deviceLimit(updated);
+  pub.devices = await listDevices(ctx.env.VAYU_KV, userId);
+  return json(pub);
 }
 
 // ── Roles (admin only) ─────────────────────────────────────────────────────
@@ -3314,6 +3353,13 @@ export default {
       }
     } catch (e) {
       response = json({ error: (e as Error).message }, 500);
+    }
+    // A device signed out by the device limit learns why, so the app can
+    // say so instead of failing with a bare "Unauthorized".
+    if (response.status === 401) {
+      const token = bearerToken(request);
+      const reason = token ? await revokedReason(env.VAYU_KV, token).catch(() => null) : null;
+      if (reason) response = json({ error: 'Unauthorized', reason }, 401);
     }
     // 101 marks the WebSocket upgrade; everything else is an ordinary call.
     execCtx.waitUntil(Promise.resolve().then(() =>

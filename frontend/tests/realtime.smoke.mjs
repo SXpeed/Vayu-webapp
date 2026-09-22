@@ -190,6 +190,73 @@ try {
         assert.equal(team.find(u => u.email === 'smoke@test.local')?.isOnline, true, 'socket user');
     });
 
+    // ── Device limit ─────────────────────────────────────────────────────────
+    const loginAs = async (email, password, ua) => {
+        const res = await fetch(`${BASE}/api/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'User-Agent': ua },
+            body: JSON.stringify({ email, password }),
+        });
+        return (await res.json()).token;
+    };
+    const works = async t => (await api('/auth/me', { token: t })).status === 200;
+    let staffTokens = [];
+
+    await check('device limit: the 3rd login signs out the device used longest ago (default 2)', async () => {
+        // "old@test.local" already holds one session (from the presence check).
+        const t2 = await loginAs('old@test.local', 'old-pass-1', 'Mozilla/5.0 (Linux; Android 14) Chrome/130.0 Mobile Safari/537.36');
+        const t3 = await loginAs('old@test.local', 'old-pass-1', 'Mozilla/5.0 (Windows NT 10.0) Chrome/130.0 Safari/537.36');
+        assert.equal(await works(t2), true);
+        assert.equal(await works(t3), true);
+        const users = (await api('/auth/users', { token })).data;
+        const old = users.find(u => u.email === 'old@test.local');
+        assert.equal(old.deviceLimit, 2);
+        assert.equal(old.devices.length, 2);
+        assert.deepEqual(old.devices.map(d => d.label).sort(), ['Chrome on Android', 'Chrome on Windows']);
+        staffTokens = [t2, t3];
+    });
+
+    await check('a signed-out device gets 401 with reason "device-limit"', async () => {
+        // The first session of old@test.local was created in the presence check.
+        const users = (await api('/auth/users', { token })).data;
+        assert.equal(users.find(u => u.email === 'old@test.local').devices.length, 2);
+        const newest = await loginAs('old@test.local', 'old-pass-1', 'Mozilla/5.0 (iPhone) Safari/604.1');
+        const res = await api('/auth/me', { token: staffTokens[0] });
+        assert.equal(res.status, 401);
+        assert.equal(res.data.reason, 'device-limit');
+        assert.equal(res.data.error, 'Unauthorized', 'older app versions still recognise the 401');
+        assert.equal(await works(staffTokens[1]), true);
+        assert.equal(await works(newest), true);
+        staffTokens = [staffTokens[1], newest];
+    });
+
+    await check('lowering the limit signs out extra devices immediately; admins are unlimited', async () => {
+        const users = (await api('/auth/users', { token })).data;
+        const old = users.find(u => u.email === 'old@test.local');
+        const updated = await api(`/auth/users/${old.id}`, { method: 'PUT', token, body: { maxDevices: 1 } });
+        assert.equal(updated.status, 200, JSON.stringify(updated.data));
+        assert.equal(updated.data.maxDevices, 1);
+        assert.equal(updated.data.devices.length, 1);
+        const alive = [await works(staffTokens[0]), await works(staffTokens[1])];
+        assert.deepEqual(alive, [false, true], 'the less recently used device goes');
+        assert.equal((await api(`/auth/users/${old.id}`, { method: 'PUT', token, body: { maxDevices: 99 } })).status, 400);
+        const back = await api(`/auth/users/${old.id}`, { method: 'PUT', token, body: { maxDevices: null } });
+        assert.equal(back.data.maxDevices, undefined);
+        assert.equal(back.data.deviceLimit, 2);
+
+        const adminTokens = [];
+        for (let i = 0; i < 4; i++) adminTokens.push(await loginAs('smoke@test.local', 'smoke-pass', 'Firefox/131.0'));
+        for (const t of adminTokens) assert.equal(await works(t), true, 'admin logins are never limited');
+    });
+
+    await check('logging out frees the device slot', async () => {
+        const users = (await api('/auth/users', { token })).data;
+        const before = users.find(u => u.email === 'old@test.local').devices.length;
+        assert.equal((await api('/auth/logout', { method: 'POST', token: staffTokens[1] })).status, 200);
+        const after = (await api('/auth/users', { token })).data.find(u => u.email === 'old@test.local').devices.length;
+        assert.equal(after, before - 1);
+    });
+
     await check('logout revokes the socket (4403)', async () => {
         assert.equal((await api('/auth/logout', { method: 'POST', token })).status, 200);
         const code = await Promise.race([socket.closed, new Promise(r => setTimeout(() => r('timeout'), 5_000))]);
