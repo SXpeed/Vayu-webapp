@@ -1,53 +1,36 @@
-# Vertex AI Studio Frontend App with Node.js Backend
+# Vayu Design for Living
 
-This repository contains a frontend and a Node.js backend, designed to run together.
-The backend acts as a proxy, handling Google Cloud API calls.
+Mobile-first PWA for Vayu Design: artworks, collections, catalogs, invoices,
+inquiries, team messaging and attendance. Live at https://ateliersupport.com.
 
-This project is intended for demonstration and prototyping purposes only.
-It is not intended for use in a production environment.
+## Stack
 
-## Prerequisites
+- **Frontend:** React 19 + Vite + Tailwind v4 (`frontend/`)
+- **Backend:** one Cloudflare Worker (`frontend/worker.ts`) serving the API and
+  the built frontend, with D1 (data), KV (sessions), R2 (files) and a
+  `SyncHub` Durable Object for realtime.
 
-To run this application locally, you need:
-
-*   **[Google Cloud SDK / gcloud CLI](https://cloud.google.com/sdk/docs/install)**: Follow the instructions to install the SDK.
-
-*   **gcloud Initialization**:
-    *   Initialize the gcloud CLI:
-        ```bash
-        gcloud init
-        ```
-    *   Authenticate for Application Default Credentials (needed to call Google Cloud APIs):
-        ```bash
-        gcloud auth application-default login
-        ```
-
-*   **Node.js and npm**: Ensure you have Node.js and its package manager, `npm`, installed on your machine.
-
-## Project Structure
-
-The project is organized into two main directories:
-
-*   `frontend/`: Contains the Frontend application code.
-*   `backend/`: Contains the Node.js/Express server code to proxy Google Cloud API calls.
-
-## Backend Environment Variables
-
-The `backend/.env.local` file is automatically generated when you download this application.
-It contains essential Google Cloud environment variables pre-configured based on your project settings at the time of download.
-
-The variables set in `backend/.env.local` are:
-*   `API_BACKEND_PORT`: The port the backend API server listens on (e.g., `5000`).
-*   `API_PAYLOAD_MAX_SIZE`: The maximum size of the request payload accepted by the backend server (e.g., `5mb`).
-*   `GOOGLE_CLOUD_LOCATION`: The Google Cloud region associated with your project.
-*   `GOOGLE_CLOUD_PROJECT`: Your Google Cloud Project ID.
-
-**Note:** These variables are automatically populated during the download process.
-You can modify the values in `backend/.env.local` if you need to change them.
-
-## Installation and Running the App
-
-To install dependencies and run your Google Cloud Vertex AI Studio App locally, execute the following command:
+## Develop
 
 ```bash
-npm install && npm run dev
+npm install && npm install --prefix frontend
+npm run dev          # Vite dev server; /api proxies to the deployed Worker
+npm run dev-phone    # same, over HTTPS on the LAN (install the PWA on a phone)
+```
+
+Set `VITE_API_PROXY=http://127.0.0.1:8787` in `frontend/.env` to use a local
+`wrangler dev` Worker instead of production.
+
+Checks (from `frontend/`): `npm run typecheck`, `npm test`.
+
+## Deploy
+
+Pushing to `main` deploys production (GitHub Actions →
+`.github/workflows/deploy.yml`). Manual: `npm run deploy` from the repo root
+(uses the root `wrangler.jsonc`).
+
+## Docs
+
+- `docs/ARCHITECTURE.md`: sync and realtime design
+- `docs/DEPLOYMENT.md`: feature flags, rollout, rollback, measurement
+- `IMPROVEMENTS.txt`: open TODO list

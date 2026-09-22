@@ -17,30 +17,30 @@
   ],
   "screenshots": [
     {
-      "src": "/screenshots/home.png",
+      "src": "/screenshots/home.webp",
       "sizes": "1080x1920",
-      "type": "image/png",
+      "type": "image/webp",
       "form_factor": "narrow",
       "label": "Home dashboard with revenue, inventory and quick actions"
     },
     {
-      "src": "/screenshots/messaging.png",
+      "src": "/screenshots/messaging.webp",
       "sizes": "1080x1920",
-      "type": "image/png",
+      "type": "image/webp",
       "form_factor": "narrow",
       "label": "Team messaging with photos, tags and notifications"
     },
     {
-      "src": "/screenshots/inquiry.png",
+      "src": "/screenshots/inquiry.webp",
       "sizes": "1080x1920",
-      "type": "image/png",
+      "type": "image/webp",
       "form_factor": "narrow",
       "label": "Customer inquiries tracked from first contact to sale"
     },
     {
-      "src": "/screenshots/wide.png",
+      "src": "/screenshots/wide.webp",
       "sizes": "1920x1080",
-      "type": "image/png",
+      "type": "image/webp",
       "form_factor": "wide",
       "label": "Vayu Design — artworks, catalogs, invoices and client conversations in one place"
     }

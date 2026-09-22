@@ -9,7 +9,7 @@ import {
   rowToContact, rowToStore, rowToAttendance, runSetupOnce,
 } from './rows';
 import {
-  flagEnabled, rawRealtimeSecret, realtimeEnabled, requestMetrics, resolveRealtimeSecret,
+  rawRealtimeSecret, realtimeEnabled, requestMetrics, resolveRealtimeSecret,
   trackedEnv, workspaceId,
   type ChangeEvent, type Ctx, type Env, type SessionData,
 } from './workerEnv';

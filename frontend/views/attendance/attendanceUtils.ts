@@ -77,8 +77,6 @@ export const FLAG_META: Record<RecordFlag, { label: string; cls: string }> = {
     short: { label: 'Under 5 min', cls: 'text-[var(--neu-text-dim)]' },
 };
 
-export const isIssue = (f: RecordFlag) => f !== 'open';
-
 export const storeName = (stores: StoreConfig[], id: string): string =>
     stores.find(s => s.id === id)?.name || 'Unknown store';
 

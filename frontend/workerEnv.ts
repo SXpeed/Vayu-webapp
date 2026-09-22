@@ -71,10 +71,6 @@ export function addD1Usage(request: Request, rowsRead: number, rowsWritten: numb
   metrics.d1RowsWritten += rowsWritten;
 }
 
-export function addKvOp(request: Request, count = 1): void {
-  requestMetrics(request).kvOps += count;
-}
-
 /**
  * A per-request view of the bindings that counts KV operations and D1 rows as
  * handlers use them, so the analytics data point can include real usage

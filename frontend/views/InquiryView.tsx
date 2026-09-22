@@ -136,12 +136,6 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
     const closedCount = useMemo(() => inquiries.filter(i => i.status === 'Closed').length, [inquiries]);
     const sharedCount = useMemo(() => inquiries.filter(i => i.catalogShared).length, [inquiries]);
 
-    const getFilterTabLabel = () => {
-        if (filterTab === 'active') return 'Active';
-        if (filterTab === 'closed') return 'Closed';
-        return 'Catalog Shared';
-    };
-
     return (
         <PageRoot>
             <PageHeader

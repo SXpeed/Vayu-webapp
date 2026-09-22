@@ -47,10 +47,6 @@ function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
 
-export function getSessionToken(): string | null {
-  return getToken();
-}
-
 function broadcastSync(): void {
   try {
     const ch = new BroadcastChannel('vayu_cloud_sync');

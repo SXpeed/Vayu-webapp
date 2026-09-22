@@ -1,22 +1,13 @@
 {
   "name": "vayu-design-for-living",
   "scripts": {
-    "dev-frontend": "npm run dev --prefix frontend",
-    "dev-backend": "npm run dev --prefix backend",
+    "dev": "npm run dev --prefix frontend",
+    "dev-phone": "npm run dev:phone --prefix frontend",
     "build": "cd frontend && npm install && npm run build",
-    "dev": "concurrently \"npm run dev-frontend\" \"npm run dev-backend\"",
     "deploy": "npm run build && wrangler deploy",
-    "preview": "wrangler dev",
-    "dev-phone": "concurrently \"npm run dev:phone --prefix frontend\" \"npm run dev-backend\""
+    "preview": "wrangler dev"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.42.2",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "concurrently": "latest",
     "wrangler": "^4.110.0"
-  },
-  "dependencies": {
-    "@better-auth/infra": "^0.3.4"
   }
 }
