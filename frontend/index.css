@@ -44,6 +44,20 @@ body,
     padding: 0;
 }
 
+/* Pages that scroll as a normal document — the control centre and the
+   public site — opt out of the app-shell lock above with this class on
+   <html>. Set in the HTML itself, so it applies before any script runs.
+   The organization app (index.html) does not use it. */
+html.page-scroll,
+html.page-scroll body,
+html.page-scroll #root {
+    position: static;
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+    overscroll-behavior: auto;
+}
+
 .full-height {
     height: 100dvh;
 }
