@@ -37,6 +37,9 @@ export interface Env {
   // Central platform database: identity, provider admins, settings, audit.
   // Absent until the database is created; /api/v2 then answers 503.
   PLATFORM_DB?: D1Database;
+  // One Durable Object (with its own SQLite database) per organization,
+  // named by organization id. See frontend/platform/orgStore.ts.
+  ORG_STORE?: DurableObjectNamespace;
   // Better Auth signing/encryption secret (`wrangler secret put
   // BETTER_AUTH_SECRET`), at least 32 characters, different per environment.
   BETTER_AUTH_SECRET?: string;

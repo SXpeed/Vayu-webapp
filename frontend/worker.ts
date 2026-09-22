@@ -28,13 +28,14 @@ import {
 } from './fileAuth';
 import { SyncHub } from './realtime';
 import { handlePlatformRequest } from './platform/routes';
+import { OrgStore } from './platform/orgStore';
 import {
   deviceLimit, enforceDeviceLimit, forgetAllDevices, forgetDevice, listDevices,
   parseMaxDevices, registerDevice, revokedReason, signOutDevices, touchDevice, type DeviceSummary,
 } from './deviceSessions';
 
 // Durable Object classes must be exported from the entry module.
-export { SyncHub };
+export { SyncHub, OrgStore };
 
 type FormField = File | string | null;
 

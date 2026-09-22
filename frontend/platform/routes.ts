@@ -15,6 +15,8 @@
 //   POST            /api/v2/admin/orgs/:id/payments/razorpay/verify
 //   POST            /api/v2/admin/users                      create a sign-in account
 //   POST            /api/v2/webhooks/razorpay/:orgId         signed, per organization
+//   GET             /api/v2/me/orgs                          my organizations
+//   /api/v2/org/:orgId/*                                     that org's own data
 //
 // Every admin route goes through requireProviderAdmin(); hiding the panel is
 // not the boundary. Responses are never cacheable, and errors never carry
@@ -33,6 +35,7 @@ import {
 } from './orgs';
 import { connectRazorpay, describeRazorpay, disconnectRazorpay, receiveRazorpayWebhook, verifyRazorpay } from './payments';
 import { SecretsUnavailable } from './secrets';
+import { OrgAccessError, handleOrgRequest, listMyOrganizations, resolveOrgContext } from './orgApi';
 
 const NO_STORE = { 'Cache-Control': 'no-store', 'Content-Type': 'application/json' };
 
@@ -245,6 +248,29 @@ export async function handlePlatformRequest(request: Request, env: Env): Promise
       });
     }
     if (path.startsWith('/admin/')) return await handleAdmin(env, db, auth, request, url, path);
+
+    if (path === '/me/orgs' && request.method === 'GET') {
+      try {
+        return reply({ organizations: await listMyOrganizations(db, auth, request) });
+      } catch (e) {
+        if (e instanceof OrgAccessError) return fail(e.status, e.code, e.message);
+        throw e;
+      }
+    }
+
+    // An organization's own business data. resolveOrgContext checks the
+    // session, the membership and the organization's status before any
+    // database is opened; it never falls back to another organization.
+    const org = /^\/org\/([A-Za-z0-9-]{1,64})(\/.*)?$/.exec(path);
+    if (org) {
+      try {
+        const ctx = await resolveOrgContext(env, db, auth, request, org[1]);
+        return reply(await handleOrgRequest(ctx, request, org[2] ?? '', url));
+      } catch (e) {
+        if (e instanceof OrgAccessError) return fail(e.status, e.code, e.message);
+        throw e;
+      }
+    }
     return fail(404, 'not_found', 'Not found');
   } catch (e) {
     console.error('platform request failed', url.pathname, e);

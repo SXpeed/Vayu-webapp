@@ -41,9 +41,16 @@
     }
   ],
   "durable_objects": {
-    "bindings": [{ "name": "SYNC_HUB", "class_name": "SyncHub" }]
+    "bindings": [
+      { "name": "SYNC_HUB", "class_name": "SyncHub" },
+      // One object (with its own SQLite database) per organization.
+      { "name": "ORG_STORE", "class_name": "OrgStore" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SyncHub"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SyncHub"] },
+    { "tag": "v2", "new_sqlite_classes": ["OrgStore"] }
+  ],
   "analytics_engine_datasets": [{ "binding": "ANALYTICS" }],
   "vars": {
     "WORKSPACE_ID": "default",
