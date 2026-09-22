@@ -1,0 +1,161 @@
+# Pending work — ateliersupport SaaS
+
+Everything still to do, and everything waiting on a decision. Updated
+2026-09-23.
+
+**Done so far** (all local commits; see the per-area docs):
+
+| Built | Commit | Doc |
+|---|---|---|
+| Rename to ateliersupport | `8c87d41` | — |
+| Platform login + provider control panel | `d4b73a9` | `PLATFORM_AUTH.md` |
+| app.ateliersupport.com (live) + moved notice (off) | `9ae4325` | — |
+| Organizations, members, per-organization Razorpay | `6300ab5` | `ORGANIZATIONS.md` |
+| One database per organization | `0dcb803` | `ORG_DATABASES.md` |
+| Business tables + import of the current app | `846eee0` | `VAYU_MIGRATION.md` |
+| Plan engine, limits, branding from the panel | `2513a57`, `f7cbfe6` | `PLANS.md` |
+
+**Live in production:** only the rename, the cleanup and the new app address.
+Everything else is committed locally and dormant in production, because the
+platform database does not exist there yet.
+
+---
+
+## 1. Waiting on the owner
+
+| # | Needed | Blocks | Notes |
+|---|---|---|---|
+| 1.1 | **Email provider decision** (Resend recommended, or wait for Cloudflare's, or stay invite-only) | Public sign-up, invitations, password resets, approval notices | Free tier covers early use. Invite-only works meanwhile. |
+| 1.2 | **Go-ahead to create production/staging resources** (platform database, secrets) | Everything platform-related going live | See §2 |
+| 1.3 | **Marketing content**: business description, contact email and address, whether privacy policy and terms exist | Marketing site | No legal text, testimonials or security claims will be invented |
+| 1.4 | **Plan line-up**: names, prices, what each includes | Public pricing | Or say the word and a starter set is created as drafts to edit |
+| 1.5 | **Logo file** (or upload it in the panel once live) | Provider branding | Panel upload is built |
+| 1.6 | **Google OAuth client id and secret** | Google sign-in | Code is built and switched off |
+| 1.7 | **Razorpay keys per organization** | Organizations collecting customer payments | Panel screen is built |
+| 1.8 | **Confirmation staff have moved to app.ateliersupport.com** | Turning on the "we've moved" notice on the old address | One-line change, `MOVED_NOTICE` in `frontend/brand.ts` |
+
+## 2. Production enablement (needs approval, then one session)
+
+- [ ] Create D1 databases: `ateliersupport-platform-staging`, `…-production`
+- [ ] Add the `PLATFORM_DB` binding to the deploy config
+- [ ] Apply platform migrations (`0001`–`0004`)
+- [ ] Set secrets per environment: `BETTER_AUTH_SECRET` (generated, with the
+      owner), `PAYMENT_SECRETS_KEY`
+- [ ] Set vars: `AUTH_ORIGINS`, `ADMIN_HOST`
+- [ ] Create the first provider admin and set up 2FA
+- [ ] Point `admin.ateliersupport.com` at the Worker
+- [ ] Separate staging resources so testing never touches production data
+
+## 3. Pending implementation
+
+### 3.1 The app on the new foundation (biggest remaining piece)
+- [ ] Point the app's screens at `/api/v2/org/:id/*` instead of the shared database
+- [ ] Organization switcher for people who belong to more than one
+- [ ] Move the app's own sign-in onto platform login (keeping current sessions working during the change)
+- [ ] Offline storage keyed per person **and** organization, cleared on switch and sign-out
+- [ ] Run Vayu's real import immediately before this switch, so nothing written in between is missed
+
+### 3.2 Marketing website (Phase C)
+- [ ] Home, About, What it does, Features, How it works, Pricing, Get started, Contact, Login
+- [ ] Pricing fed from published public plans
+- [ ] Privacy policy and terms pages (placeholders until real text arrives)
+- [ ] Bot protection on the forms (Turnstile)
+
+### 3.3 Sign-up and approval flow (Phase C)
+- [ ] Create account → verify → business details → choose plan → submit
+- [ ] Application states: draft, pending review, needs information, approved, provisioning, payment required, active, rejected, suspended, provisioning failed, closed
+- [ ] Save and resume, check status, respond to questions, no duplicate submissions
+- [ ] Approval queue actions: approve, reject with reason, ask for information, change plan, approve with a documented billing exception
+- [ ] Approval creates the organization, its database, the owner membership and entitlements — safe to retry, never duplicating
+- [ ] Notify the owner when the workspace is ready
+
+### 3.4 Invitations and roles (Phase D)
+- [ ] Expiring single-use invitations tied to recipient, organization, role, store access and inviter
+- [ ] Decide and enforce whether a pending invitation holds a seat
+- [ ] Owners and admins manage their own team from inside the app
+- [ ] Custom roles where the plan allows
+- [ ] Store-level access per member
+
+### 3.5 Plan limits not yet enforced
+Seats and inventory items are enforced. Still to wire up (each is labelled
+"(not enforced yet)" in the panel):
+- [ ] Collections, catalogs, stores, customer records, private rooms
+- [ ] Storage (needs per-organization usage counters)
+- [ ] Per-month allowances: PDF generations, invoices, inquiries
+- [ ] Activity-history retention
+- [ ] Feature flags the app does not yet check (exports, bulk CSV import, custom roles, API access, branding)
+- [ ] Guest accounts (the feature itself does not exist)
+
+### 3.6 Billing (Phase F)
+- [ ] Razorpay subscriptions for what organizations pay the platform
+- [ ] Hosted checkout, signed webhooks, idempotent handling
+- [ ] Failed renewals → `past_due`, dunning, cancellation
+- [ ] Apply stored payment webhooks to business records (they are verified and stored, not yet applied)
+- [ ] Wire the app's payment links to each organization's own connected account
+
+### 3.7 Email (Phase F, blocked on §1.1)
+- [ ] Sending adapter with a retryable, idempotent outbox
+- [ ] Verification, password reset, invitations, approval and ready notices
+- [ ] DNS records (SPF/DKIM/DMARC) for the sending domain
+
+### 3.8 Support access (Phase E)
+- [ ] "Enter organization" sessions: re-authentication, a reason, short expiry, read-only by default
+- [ ] Persistent banner and an obvious exit
+- [ ] Audit entry, exit and every action, recording both the real admin and the organization
+- [ ] Elevated access as a separate, harder step; ownership, login and billing changes blocked
+- [ ] Publish the support-access policy to organization owners
+
+### 3.9 Organization branding (Phase E)
+- [ ] Per-organization name, logo and accent colour (provider always; owners when the plan allows)
+- [ ] Apply to the app, catalogs, invoices and PDFs
+- [ ] Same upload checks as the platform logo
+
+### 3.10 Realtime and notifications (Phase G)
+- [ ] Move the hub into each organization's own object
+- [ ] Per-organization push recipients and email recipients
+- [ ] Reconnect recovery, bounded fallback polling, multi-tab coordination
+- [ ] Measure before claiming any saving
+
+### 3.11 File security (Phase G)
+- [ ] Turn on `FILE_AUTH` in production (files are currently reachable by URL)
+- [ ] Per-organization file namespace and ownership records
+- [ ] Purge previously public cached copies (already-downloaded copies cannot be recalled)
+
+### 3.12 Demo data (Phase G)
+- [ ] Seed two demo organizations (a studio and a gallery) with different plans
+- [ ] Reserved example.com addresses, no usable secrets, clearly marked demo
+- [ ] Idempotent, environment-gated, with a reset that can only touch demo resources
+
+### 3.13 Backups and lifecycle (Phase H)
+- [ ] Per-organization export
+- [ ] Nightly independent backup to R2, separate from Cloudflare's own recovery
+- [ ] Tested restore procedure and a written retention policy
+- [ ] Closure and scheduled deletion; recovery from failed provisioning
+
+### 3.14 Security and correctness
+- [ ] Rate limits on expensive organization endpoints (auth endpoints are covered)
+- [ ] Dependency and secret scanning in CI (gitleaks, `npm audit`)
+- [ ] Review the old `/api` error handler, which returns internal messages
+- [ ] Split the old worker's KV user lists, which stop at 1,000 and break the team list
+- [ ] Concurrency review of the remaining inventory paths as they move over
+
+## 4. Verification still to do
+
+- [ ] Staging: the whole sign-up → approval → workspace flow
+- [ ] Production: smoke test after each deploy
+- [ ] Load tests with adjustable organization and user counts (nothing load-tested yet)
+- [ ] Cross-organization isolation re-checked on staging with real data volumes
+- [ ] Restore rehearsal from a backup
+
+Nothing in §4 has been done yet; only local automated tests (93 passing) and
+local runs of the real Worker.
+
+## 5. Decided, for the record
+
+- App lives at `app.ateliersupport.com`; the main domain becomes the marketing site.
+- Local email and password login stays on, switchable off from the panel later.
+- Google sign-in is built but off, and never links by email match alone.
+- Each organization gets its own database (Durable Object), not a shared table.
+- Each organization collects its customers' payments into its **own** Razorpay account.
+- Published plan versions are frozen; changes mean a new version.
+- Downgrades never delete data.
