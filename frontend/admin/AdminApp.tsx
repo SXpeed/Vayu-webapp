@@ -5,16 +5,12 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { createAuthClient } from 'better-auth/react';
-import { twoFactorClient } from 'better-auth/client/plugins';
+import { api, authClient, type ApiError } from './api';
+import { OrgsPanel } from './OrgsPanel';
 import { KeyRound, LogOut, ShieldCheck, History } from 'lucide-react';
+import { Pill } from '../components/ui';
 import { APP_NAME } from '../brand';
 import { Button, Card, Field, Input, SectionTitle, ToggleRow } from '../components/ui';
-
-const authClient = createAuthClient({
-    basePath: '/api/v2/auth',
-    plugins: [twoFactorClient()],
-});
 
 interface LoginMethods {
     emailPassword: { signIn: boolean; signUp: boolean };
@@ -40,22 +36,6 @@ interface AuditEntry {
     details: string | null;
 }
 
-interface ApiError { status: number; code?: string; message: string }
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-    const res = await fetch(`/api/v2${path}`, {
-        ...init,
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        const err: ApiError = { status: res.status, code: body.code, message: body.error || 'Request failed' };
-        throw err;
-    }
-    return body as T;
-}
-
 type Screen =
     | { kind: 'loading' }
     | { kind: 'signed-out' }
@@ -64,8 +44,15 @@ type Screen =
     | { kind: 'ready'; email: string; role: string }
     | { kind: 'unavailable'; message: string };
 
+type Tab = 'orgs' | 'settings' | 'audit';
+
 export const AdminApp: React.FC = () => {
     const [screen, setScreen] = useState<Screen>({ kind: 'loading' });
+    const [tab, setTab] = useState<Tab>('orgs');
+    // Sensitive actions may need a sign-in newer than 30 minutes. The panel
+    // asks here and the caller retries once.
+    const [reauthResolve, setReauthResolve] = useState<((ok: boolean) => void) | null>(null);
+    const reauth = useCallback(() => new Promise<boolean>(resolve => setReauthResolve(() => resolve)), []);
 
     const refresh = useCallback(async () => {
         try {
@@ -89,7 +76,7 @@ export const AdminApp: React.FC = () => {
 
     return (
         <div className="min-h-dvh px-4 py-8 lg:py-12">
-            <div className="w-full max-w-3xl mx-auto space-y-6">
+            <div className="w-full max-w-4xl mx-auto space-y-6">
                 <header className="flex items-center justify-between gap-3">
                     <div>
                         <h1 className="font-serif text-2xl text-gold-700 dark:text-gold-300">{APP_NAME}</h1>
@@ -112,8 +99,21 @@ export const AdminApp: React.FC = () => {
                         <p className="text-sm text-gray-700 dark:text-gray-300">
                             Signed in as <strong>{screen.email}</strong> ({screen.role})
                         </p>
-                        <LoginMethodsPanel email={screen.email} />
-                        <AuditPanel />
+                        <div className="flex flex-wrap gap-2">
+                            <Pill active={tab === 'orgs'} onClick={() => setTab('orgs')}>Organizations</Pill>
+                            <Pill active={tab === 'settings'} onClick={() => setTab('settings')}>Login methods</Pill>
+                            <Pill active={tab === 'audit'} onClick={() => setTab('audit')}>Audit</Pill>
+                        </div>
+                        {reauthResolve && (
+                            <SignIn
+                                email={screen.email}
+                                title="Confirm it's you"
+                                onDone={() => { reauthResolve(true); setReauthResolve(null); }}
+                            />
+                        )}
+                        {tab === 'orgs' && <OrgsPanel reauth={reauth} />}
+                        {tab === 'settings' && <LoginMethodsPanel email={screen.email} />}
+                        {tab === 'audit' && <AuditPanel />}
                     </>
                 )}
             </div>

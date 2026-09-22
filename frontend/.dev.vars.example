@@ -14,5 +14,9 @@ PLATFORM_ENV=development
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 
+# Encrypts organizations' own payment credentials (32 random bytes, base64):
+#   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+PAYMENT_SECRETS_KEY=
+
 # Local only: allow provider admins without 2FA. Never set this in staging/production.
 # ADMIN_REQUIRE_2FA=off

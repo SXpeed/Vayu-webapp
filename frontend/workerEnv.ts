@@ -57,6 +57,10 @@ export interface Env {
   PLATFORM_ENV?: string;
   // "off" lets provider admins work without 2FA. Only for local development.
   ADMIN_REQUIRE_2FA?: string;
+  // Encrypts organizations' own payment-provider credentials at rest
+  // (frontend/platform/secrets.ts): 32 random bytes, base64, a Worker secret.
+  // Without it, connecting a Razorpay account is refused.
+  PAYMENT_SECRETS_KEY?: string;
 }
 
 /** Per-request context, shared by the router and the route handlers. */

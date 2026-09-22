@@ -3,116 +3,33 @@
 //
 //   node --test frontend/tests/platformAuth.integration.test.mjs
 import assert from 'node:assert/strict';
-import { createHmac, pbkdf2Sync, randomBytes } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { pbkdf2Sync, randomBytes } from 'node:crypto';
 import { after, before, test } from 'node:test';
-import { getPlatformProxy } from 'wrangler';
 import { hashPassword } from 'better-auth/crypto';
-import { load } from './helpers/load.mjs';
+import { startPlatform, totp } from './helpers/platform.mjs';
 
-const frontend = fileURLToPath(new URL('..', import.meta.url));
 const ORIGIN = 'https://admin.test';
-
-let platform;
-let proxy;
-let persistDir;
-let db;
-let env;
-
 const PASSWORD = 'correct horse battery';
 
-before(async () => {
-    platform = await load('platform/routes.ts');
-    persistDir = mkdtempSync(join(tmpdir(), 'as-platform-'));
-    proxy = await getPlatformProxy({ configPath: join(frontend, 'wrangler.json'), persist: { path: persistDir } });
-    db = proxy.env.PLATFORM_DB;
-    env = {
-        PLATFORM_DB: db,
-        BETTER_AUTH_SECRET: randomBytes(32).toString('base64'),
-        AUTH_ORIGINS: `${ORIGIN},https://app.test`,
-    };
-    const statements = readFileSync(join(frontend, 'platform/migrations/0001_platform_auth.sql'), 'utf8')
-        .replace(/--.*$/gm, '')
-        .split(/;\s*(?=\n|$)/)
-        .map(s => s.trim())
-        .filter(Boolean);
-    // Triggers contain inner semicolons; re-join BEGIN…END blocks.
-    const merged = [];
-    for (const s of statements) {
-        const last = merged.at(-1);
-        if (last && /BEGIN/i.test(last) && !/END$/i.test(last)) merged[merged.length - 1] = `${last};\n${s}`;
-        else merged.push(s);
-    }
-    for (const statement of merged) await db.prepare(statement).run();
+let h;
+let platform;
+let db;
+let env;
+let browser;
 
-    await createUser('admin-1', 'admin@example.com', await hashPassword(PASSWORD));
+before(async () => {
+    h = await startPlatform();
+    ({ platform, db, env, browser } = h);
+    await h.createUser('admin-1', 'admin@example.com', await hashPassword(PASSWORD));
     await db.prepare("INSERT INTO provider_admins (user_id, role, status, created_at) VALUES ('admin-1', 'owner', 'active', ?)").bind(Date.now()).run();
-    await createUser('user-1', 'staff@example.com', await hashPassword(PASSWORD));
+    await h.createUser('user-1', 'staff@example.com', await hashPassword(PASSWORD));
     // A user migrated from the original app keeps its PBKDF2 "salt.hash" password.
     const salt = randomBytes(16);
     const legacy = `${salt.toString('base64')}.${pbkdf2Sync(PASSWORD, salt, 100_000, 32, 'sha256').toString('base64')}`;
-    await createUser('legacy-1', 'legacy@example.com', legacy);
+    await h.createUser('legacy-1', 'legacy@example.com', legacy);
 });
 
-after(async () => {
-    await proxy?.dispose();
-    if (persistDir) rmSync(persistDir, { recursive: true, force: true });
-});
-
-async function createUser(id, email, passwordHash) {
-    const now = new Date().toISOString();
-    await db.batch([
-        db.prepare('INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt, twoFactorEnabled) VALUES (?, ?, ?, 1, ?, ?, 0)').bind(id, id, email, now, now),
-        db.prepare("INSERT INTO account (id, accountId, providerId, userId, password, createdAt, updatedAt) VALUES (?, ?, 'credential', ?, ?, ?, ?)").bind(`acc-${id}`, id, id, passwordHash, now, now),
-    ]);
-}
-
-let nextIp = 10;
-
-/** Minimal cookie jar: one per simulated browser, each with its own IP so
- *  the per-IP sign-in rate limit applies per browser. */
-function browser(origin = ORIGIN, ip = `203.0.113.${nextIp++}`) {
-    const jar = new Map();
-    return {
-        async call(path, { method = 'GET', body, headers = {}, envOverride = {} } = {}) {
-            const h = new Headers(headers);
-            if (jar.size) h.set('Cookie', [...jar].map(([k, v]) => `${k}=${v}`).join('; '));
-            if (body !== undefined) h.set('Content-Type', 'application/json');
-            if (method !== 'GET' && !h.has('Origin')) h.set('Origin', origin);
-            h.set('cf-connecting-ip', ip);
-            const req = new Request(`${origin}/api/v2${path}`, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) });
-            const res = await platform.handlePlatformRequest(req, { ...env, ...envOverride });
-            for (const c of res.headers.getSetCookie?.() ?? []) {
-                const [pair] = c.split(';');
-                const i = pair.indexOf('=');
-                const name = pair.slice(0, i);
-                const value = pair.slice(i + 1);
-                if (value === '' || /max-age=0/i.test(c)) jar.delete(name); else jar.set(name, value);
-            }
-            const text = await res.text();
-            let json = null;
-            try { json = JSON.parse(text); } catch { /* not JSON */ }
-            return { status: res.status, body: json, headers: res.headers };
-        },
-        jar,
-    };
-}
-
-function totp(secretBase32, time = Date.now()) {
-    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-    let bits = '';
-    for (const ch of secretBase32.replace(/=+$/, '').toUpperCase()) bits += alphabet.indexOf(ch).toString(2).padStart(5, '0');
-    const key = Buffer.from(bits.match(/.{8}/g).map(b => parseInt(b, 2)));
-    const counter = Buffer.alloc(8);
-    counter.writeBigUInt64BE(BigInt(Math.floor(time / 30_000)));
-    const mac = createHmac('sha1', key).update(counter).digest();
-    const offset = mac[mac.length - 1] & 0xf;
-    const code = (mac.readUInt32BE(offset) & 0x7fffffff) % 1_000_000;
-    return String(code).padStart(6, '0');
-}
+after(async () => { await h?.stop(); });
 
 async function signIn(b, email, password = PASSWORD) {
     return b.call('/auth/sign-in/email', { method: 'POST', body: { email, password } });

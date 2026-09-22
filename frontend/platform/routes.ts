@@ -6,6 +6,15 @@
 //   GET  /api/v2/admin/settings/login-methods
 //   PUT  /api/v2/admin/settings/login-methods
 //   GET  /api/v2/admin/audit
+//   GET|POST        /api/v2/admin/orgs                       list / create (with owner)
+//   GET             /api/v2/admin/orgs/:id                   detail + members
+//   POST            /api/v2/admin/orgs/:id/status            suspend / reactivate
+//   POST            /api/v2/admin/orgs/:id/members           add an existing account
+//   PATCH           /api/v2/admin/orgs/:id/members/:mid      role / enable / disable
+//   GET|PUT|DELETE  /api/v2/admin/orgs/:id/payments/razorpay the org's own Razorpay
+//   POST            /api/v2/admin/orgs/:id/payments/razorpay/verify
+//   POST            /api/v2/admin/users                      create a sign-in account
+//   POST            /api/v2/webhooks/razorpay/:orgId         signed, per organization
 //
 // Every admin route goes through requireProviderAdmin(); hiding the panel is
 // not the boundary. Responses are never cacheable, and errors never carry
@@ -17,6 +26,13 @@ import {
   SettingsError, getEffectiveLoginMethods, getStoredLoginMethods, googleConfigured,
   parseLoginMethods, rememberLoginMethods, saveLoginMethodsStmt, validateLoginMethods,
 } from './settings';
+import { auditStmt } from './audit';
+import {
+  OrgError, addMember, createOrganization, createUserAccount, getOrganization,
+  listOrganizations, setOrganizationStatus, updateMember, type Actor,
+} from './orgs';
+import { connectRazorpay, describeRazorpay, disconnectRazorpay, receiveRazorpayWebhook, verifyRazorpay } from './payments';
+import { SecretsUnavailable } from './secrets';
 
 const NO_STORE = { 'Cache-Control': 'no-store', 'Content-Type': 'application/json' };
 
@@ -26,21 +42,6 @@ function reply(data: unknown, status = 200): Response {
 
 function fail(status: number, code: string, message: string): Response {
   return reply({ error: message, code }, status);
-}
-
-export function auditStmt(db: D1Database, entry: {
-  actorUserId: string | null; actorKind: 'provider_admin' | 'user' | 'system';
-  action: string; targetType?: string; targetId?: string; orgId?: string;
-  details?: unknown; ip?: string | null;
-}): D1PreparedStatement {
-  return db.prepare(
-    `INSERT INTO platform_audit (id, at, actor_user_id, actor_kind, action, target_type, target_id, org_id, details, ip)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).bind(
-    crypto.randomUUID(), Date.now(), entry.actorUserId, entry.actorKind, entry.action,
-    entry.targetType ?? null, entry.targetId ?? null, entry.orgId ?? null,
-    entry.details === undefined ? null : JSON.stringify(entry.details), entry.ip ?? null,
-  );
 }
 
 interface AdminContext {
@@ -142,6 +143,61 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
     return reply({ entries: results });
   }
 
+  const orgRoute = /^\/admin\/orgs(?:\/([A-Za-z0-9-]{1,64})(\/.*)?)?$/.exec(path);
+  if (orgRoute || path === '/admin/users') {
+    const actor: Actor = { userId: admin.userId, ip: request.headers.get('cf-connecting-ip') };
+    const fresh = Date.now() - admin.sessionCreatedAt <= FRESH_SESSION_MS;
+    const needFresh = () => fail(403, 'reauth_required', 'Sign in again to do this.');
+    const body = async () => {
+      const b = await request.json().catch(() => null);
+      return (b && typeof b === 'object' ? b : {}) as Record<string, unknown>;
+    };
+    try {
+      if (path === '/admin/users' && method === 'POST') {
+        return reply(await createUserAccount(db, await body(), actor), 201);
+      }
+      const orgId = orgRoute?.[1];
+      const rest = orgRoute?.[2] ?? '';
+      if (!orgId) {
+        if (method === 'GET') return reply({ organizations: await listOrganizations(db, url.searchParams) });
+        if (method === 'POST') return reply(await createOrganization(db, await body(), actor), 201);
+      } else if (rest === '' && method === 'GET') {
+        return reply(await getOrganization(db, orgId));
+      } else if (rest === '/status' && method === 'POST') {
+        if (!fresh) return needFresh();
+        return reply(await setOrganizationStatus(db, orgId, await body(), actor));
+      } else if (rest === '/members' && method === 'POST') {
+        return reply(await addMember(db, orgId, await body(), actor), 201);
+      } else if (rest.startsWith('/members/') && method === 'PATCH') {
+        const mid = rest.slice('/members/'.length);
+        if (!/^[A-Za-z0-9-]{1,64}$/.test(mid)) return fail(404, 'not_found', 'Not found');
+        return reply(await updateMember(db, orgId, mid, await body(), actor));
+      } else if (rest === '/payments/razorpay') {
+        const origin = resolveAuthOrigin(env, url);
+        const webhookUrl = `${origin}/api/v2/webhooks/razorpay/${orgId}`;
+        if (method === 'GET') {
+          await getOrganization(db, orgId);
+          return reply(await describeRazorpay(db, orgId, webhookUrl));
+        }
+        if (!fresh) return needFresh();
+        if (method === 'PUT') {
+          await connectRazorpay(env, db, orgId, await body(), actor);
+          return reply(await describeRazorpay(db, orgId, webhookUrl));
+        }
+        if (method === 'DELETE') {
+          await disconnectRazorpay(db, orgId, actor);
+          return reply(await describeRazorpay(db, orgId, webhookUrl));
+        }
+      } else if (rest === '/payments/razorpay/verify' && method === 'POST') {
+        return reply(await verifyRazorpay(env, db, orgId, actor));
+      }
+    } catch (e) {
+      if (e instanceof OrgError) return fail(e.status, e.code, e.message);
+      if (e instanceof SecretsUnavailable) return fail(503, 'secrets_unavailable', 'Payment credential storage is not configured.');
+      throw e;
+    }
+  }
+
   return fail(404, 'not_found', 'Not found');
 }
 
@@ -155,6 +211,21 @@ export async function handlePlatformRequest(request: Request, env: Env): Promise
   if (!db || !env.BETTER_AUTH_SECRET || env.BETTER_AUTH_SECRET.length < 32) {
     return fail(503, 'platform_unavailable', 'The platform is not configured in this environment.');
   }
+
+  // Payment-provider webhooks: authenticated by the organization's own
+  // signing secret, not by a session, so they skip the auth layer.
+  const hook = /^\/webhooks\/razorpay\/([A-Za-z0-9-]{1,64})$/.exec(path);
+  if (hook) {
+    if (request.method !== 'POST') return fail(405, 'method_not_allowed', 'Use POST');
+    try {
+      const out = await receiveRazorpayWebhook(env, db, hook[1], request);
+      return reply(out.body, out.status);
+    } catch (e) {
+      console.error('razorpay webhook failed', e);
+      return fail(500, 'internal', 'Something went wrong.');
+    }
+  }
+
   const origin = resolveAuthOrigin(env, url);
   if (!origin) return fail(403, 'unknown_origin', 'This address is not allowed to sign in.');
 
