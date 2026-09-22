@@ -1,0 +1,424 @@
+/* Control-centre skin — refined neumorphism.
+ *
+ * Same soft, extruded language as the app, tuned for a dense monitoring tool:
+ *   - one elevation scale: raised (cards), raised-sm (buttons, chips),
+ *     pressed (fields, the active nav item, the selected tab);
+ *   - tighter, crisper shadows than the app's 22px ones, which read as heavy
+ *     when there are many surfaces on screen;
+ *   - colour carries meaning (status pills), not decoration;
+ *   - motion uses transform and opacity only, so it stays smooth on phones,
+ *     and nothing that moves changes layout.
+ * Scoped to `.ac`, so the organization app is untouched.
+ */
+
+/* Everything sits in the same `components` layer as the base neu-* styles:
+   the `.ac` rules win over those by specificity, and Tailwind utilities
+   (hidden, lg:flex, padding, rounding) still win over both. */
+@layer components {
+
+  .ac {
+    --ac-bg: var(--neu-bg);
+    --ac-hi: var(--neu-bg-hi);
+    --ac-lo: var(--neu-bg-lo);
+    --ac-dark: rgba(163, 177, 198, 0.62);
+    --ac-light: rgba(255, 255, 255, 0.95);
+    --ac-edge: rgba(255, 255, 255, 0.55);
+
+    --ac-raise: 6px 6px 14px var(--ac-dark), -6px -6px 14px var(--ac-light), inset 0 1px 0 var(--ac-edge);
+    --ac-raise-sm: 3px 3px 7px var(--ac-dark), -3px -3px 7px var(--ac-light), inset 0 1px 0 var(--ac-edge);
+    --ac-raise-lg: 16px 16px 40px rgba(120, 134, 158, 0.45), -10px -10px 28px var(--ac-light);
+    --ac-press: inset 2.5px 2.5px 6px var(--ac-dark), inset -2.5px -2.5px 6px var(--ac-light);
+    --ac-press-soft: inset 1.5px 1.5px 4px var(--ac-dark), inset -1.5px -1.5px 4px var(--ac-light);
+
+    --ac-text: var(--neu-text);
+    --ac-muted: var(--neu-text-dim);
+    --ac-faint: #8790a2;
+    --ac-accent: #a17c14;
+    --ac-accent-soft: rgba(212, 175, 55, 0.16);
+    --ac-ring: rgba(212, 175, 55, 0.55);
+    --ac-hover: rgba(255, 255, 255, 0.45);
+    --ac-line: rgba(163, 177, 198, 0.32);
+    --ac-radius: 18px;
+    --ac-radius-sm: 12px;
+    --ac-ease: cubic-bezier(0.22, 0.8, 0.24, 1);
+
+    --ac-ok: #0e7a50;       --ac-ok-bg: rgba(16, 185, 129, 0.13);
+    --ac-warn: #975800;     --ac-warn-bg: rgba(245, 158, 11, 0.16);
+    --ac-bad: #b42318;      --ac-bad-bg: rgba(240, 68, 56, 0.12);
+    --ac-info: #1f55c9;     --ac-info-bg: rgba(59, 130, 246, 0.12);
+    --ac-neutral: #4a5466;  --ac-neutral-bg: rgba(90, 99, 118, 0.1);
+
+    background: var(--ac-bg);
+    color: var(--ac-text);
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html.dark .ac {
+    --ac-dark: rgba(0, 0, 0, 0.55);
+    --ac-light: rgba(255, 255, 255, 0.05);
+    --ac-edge: rgba(255, 255, 255, 0.04);
+    --ac-raise-lg: 18px 18px 44px rgba(0, 0, 0, 0.6), -8px -8px 24px rgba(255, 255, 255, 0.03);
+    --ac-faint: #7d8697;
+    --ac-accent: #e6c27a;
+    --ac-accent-soft: rgba(230, 194, 122, 0.12);
+    --ac-ring: rgba(230, 194, 122, 0.5);
+    --ac-hover: rgba(255, 255, 255, 0.035);
+    --ac-line: rgba(255, 255, 255, 0.06);
+
+    --ac-ok: #4ade80;       --ac-ok-bg: rgba(74, 222, 128, 0.1);
+    --ac-warn: #fbbf24;     --ac-warn-bg: rgba(251, 191, 36, 0.1);
+    --ac-bad: #f87171;      --ac-bad-bg: rgba(248, 113, 113, 0.1);
+    --ac-info: #93c5fd;     --ac-info-bg: rgba(147, 197, 253, 0.1);
+    --ac-neutral: #c3cad6;  --ac-neutral-bg: rgba(255, 255, 255, 0.06);
+  }
+
+  /* ── Surfaces ─────────────────────────────────────────────────────────── */
+
+  .ac .neu-card,
+  .ac .neu-card-interactive {
+    background: linear-gradient(150deg, var(--ac-hi), var(--ac-lo));
+    border-radius: var(--ac-radius);
+    box-shadow: var(--ac-raise);
+  }
+  /* Clickable cards lift on hover by moving, never by re-painting shadows. */
+  .ac .neu-card-interactive { transition: transform 0.2s var(--ac-ease); }
+  .ac .neu-card-interactive:hover { transform: translateY(-2px); box-shadow: var(--ac-raise); }
+  .ac .neu-card-interactive:active { transform: translateY(0) scale(0.995); }
+
+  /* ── Buttons ──────────────────────────────────────────────────────────── */
+
+  .ac .neu-button {
+    gap: 0.45rem;
+    height: 2.4rem;
+    padding: 0 1rem;
+    border-radius: var(--ac-radius-sm);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    color: var(--ac-text);
+    background: linear-gradient(150deg, var(--ac-hi), var(--ac-lo));
+    box-shadow: var(--ac-raise-sm);
+    transition: box-shadow 0.12s var(--ac-ease), transform 0.12s var(--ac-ease), color 0.15s var(--ac-ease);
+    white-space: nowrap;
+    touch-action: manipulation;
+  }
+  .ac .neu-button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--ac-raise-sm); color: var(--ac-accent); }
+  .ac .neu-button:active:not(:disabled) { transform: translateY(0) scale(0.985); box-shadow: var(--ac-press-soft); }
+  .ac .neu-button:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: var(--ac-press-soft); }
+
+  .ac .neu-button-primary {
+    color: #221902;
+    background: linear-gradient(150deg, #f0d68a, #d4af37);
+    box-shadow: 3px 3px 8px rgba(160, 128, 30, 0.35), -3px -3px 7px var(--ac-light), inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  }
+  .ac .neu-button-primary:hover:not(:disabled) { color: #221902; box-shadow: 3px 3px 8px rgba(160, 128, 30, 0.4), -3px -3px 7px var(--ac-light), inset 0 1px 0 rgba(255, 255, 255, 0.5); }
+  .ac .neu-button-primary:active:not(:disabled) { box-shadow: inset 2px 2px 5px rgba(120, 90, 10, 0.4), inset -2px -2px 5px rgba(255, 240, 190, 0.5); }
+
+  .ac .neu-button-danger, .ac .neu-button-danger:hover:not(:disabled) { color: var(--ac-bad); }
+
+  /* ── Fields ───────────────────────────────────────────────────────────── */
+
+  .ac .neu-field {
+    min-height: 2.5rem;
+    padding: 0.55rem 0.85rem;
+    border: 0;
+    border-radius: var(--ac-radius-sm);
+    background: linear-gradient(150deg, var(--ac-lo), var(--ac-hi));
+    box-shadow: var(--ac-press);
+    color: var(--ac-text);
+    font-size: 0.875rem;
+    transition: box-shadow 0.15s var(--ac-ease);
+  }
+  .ac .neu-field:hover:not(:focus) { box-shadow: var(--ac-press); }
+  .ac .neu-field:focus,
+  .ac .neu-field:focus-visible { outline: none; box-shadow: var(--ac-press), 0 0 0 2px var(--ac-ring); }
+  .ac .neu-field::placeholder { color: var(--ac-faint); }
+  .ac select.neu-field { padding-right: 2.2rem; }
+
+  .ac .neu-label {
+    margin-bottom: 0.4rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    text-transform: none;
+    color: var(--ac-muted);
+  }
+
+  .ac .neu-value { background: transparent; box-shadow: var(--ac-press-soft); }
+
+  /* ── Pills, segmented tabs, badges, toggles ───────────────────────────── */
+
+  /* The track is pressed in; the selected tab is raised out of it. */
+  .ac-segmented {
+    display: inline-flex; flex-wrap: wrap; gap: 0.25rem; padding: 0.3rem; max-width: 100%;
+    border-radius: 14px; background: linear-gradient(150deg, var(--ac-lo), var(--ac-hi)); box-shadow: var(--ac-press);
+  }
+  .ac .neu-pill {
+    height: 2rem;
+    padding: 0 0.85rem;
+    font-size: 0.8125rem;
+    letter-spacing: 0;
+    color: var(--ac-muted);
+    background: transparent;
+    box-shadow: none;
+    transition: color 0.15s var(--ac-ease), transform 0.12s var(--ac-ease);
+  }
+  .ac .neu-pill:hover { color: var(--ac-text); box-shadow: none; }
+  .ac .neu-pill-active,
+  .ac .neu-pill-active:hover {
+    color: var(--ac-accent);
+    font-weight: 600;
+    background: linear-gradient(150deg, var(--ac-hi), var(--ac-lo));
+    box-shadow: var(--ac-raise-sm);
+  }
+
+  .ac .neu-badge {
+    padding: 0.15rem 0.6rem;
+    font-size: 0.72rem;
+    letter-spacing: 0;
+    color: var(--ac-neutral);
+    background: transparent;
+    box-shadow: var(--ac-press-soft);
+  }
+
+  .ac .neu-accent { box-shadow: var(--ac-raise-sm); }
+
+  /* ── Status pills: tinted, pressed, with a dot — readable at a glance ─── */
+
+  .ac-tone {
+    display: inline-flex; align-items: center; gap: 0.4rem; white-space: nowrap;
+    padding: 0 0.6rem; height: 1.45rem; border-radius: 999px;
+    font-size: 0.72rem; font-weight: 600; letter-spacing: 0.01em;
+    box-shadow: var(--ac-press-soft);
+  }
+  .ac-tone::before { content: ''; width: 6px; height: 6px; border-radius: 999px; background: currentColor; flex-shrink: 0; }
+  .ac-tone[data-tone="ok"] { color: var(--ac-ok); background-color: var(--ac-ok-bg); }
+  .ac-tone[data-tone="warn"] { color: var(--ac-warn); background-color: var(--ac-warn-bg); }
+  .ac-tone[data-tone="bad"] { color: var(--ac-bad); background-color: var(--ac-bad-bg); }
+  .ac-tone[data-tone="info"] { color: var(--ac-info); background-color: var(--ac-info-bg); }
+  .ac-tone[data-tone="accent"] { color: var(--ac-accent); background-color: var(--ac-accent-soft); }
+  .ac-tone[data-tone="neutral"] { color: var(--ac-neutral); background-color: var(--ac-neutral-bg); }
+  .ac-tone[data-live="true"]::before { animation: ac-pulse 1.8s ease-in-out infinite; }
+
+  /* ── Navigation ───────────────────────────────────────────────────────── */
+
+  .ac-nav-item {
+    display: flex; align-items: center; gap: 0.75rem;
+    width: 100%; min-height: 2.6rem; padding: 0 0.8rem;
+    border-radius: var(--ac-radius-sm);
+    font-size: 0.875rem; color: var(--ac-muted);
+    transition: color 0.15s var(--ac-ease), transform 0.12s var(--ac-ease);
+  }
+  .ac-nav-item:hover { color: var(--ac-text); }
+  .ac-nav-item:active { transform: scale(0.985); }
+  .ac-nav-item[aria-current="page"] {
+    color: var(--ac-accent); font-weight: 600;
+    background: linear-gradient(150deg, var(--ac-lo), var(--ac-hi));
+    box-shadow: var(--ac-press);
+  }
+  .ac-nav-item svg { flex-shrink: 0; }
+
+  .ac-count {
+    min-width: 1.4rem; height: 1.4rem; padding: 0 0.4rem; border-radius: 999px;
+    font-size: 0.7rem; font-weight: 700; line-height: 1.4rem; text-align: center;
+    color: #221902; background: linear-gradient(150deg, #f0d68a, #d4af37);
+    box-shadow: 1px 1px 3px rgba(160, 128, 30, 0.35);
+  }
+
+  /* Phone tab bar: raised dock, the current tab pressed in. */
+  .ac-dock {
+    position: fixed; left: 0.75rem; right: 0.75rem; bottom: max(0.75rem, env(safe-area-inset-bottom));
+    z-index: 30; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.25rem; padding: 0.35rem;
+    border-radius: 20px; background: linear-gradient(150deg, var(--ac-hi), var(--ac-lo)); box-shadow: var(--ac-raise-lg);
+  }
+  .ac-dock-item {
+    position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.15rem;
+    min-height: 3.1rem; border-radius: 15px; font-size: 0.66rem; color: var(--ac-muted);
+    transition: color 0.15s var(--ac-ease), transform 0.12s var(--ac-ease);
+  }
+  .ac-dock-item:active { transform: scale(0.96); }
+  .ac-dock-item[aria-current="page"] { color: var(--ac-accent); font-weight: 600; background: linear-gradient(150deg, var(--ac-lo), var(--ac-hi)); box-shadow: var(--ac-press); }
+  .ac-dock-item .ac-count { position: absolute; top: 0.2rem; right: 18%; min-width: 1.1rem; height: 1.1rem; line-height: 1.1rem; font-size: 0.6rem; }
+
+  /* ── Lists and tables ─────────────────────────────────────────────────── */
+
+  .ac-muted { color: var(--ac-muted); }
+  .ac-faint { color: var(--ac-faint); }
+  .ac-divide > * + * { border-top: 1px solid var(--ac-line); }
+
+  .ac-row { border-radius: var(--ac-radius-sm); transition: background-color 0.12s var(--ac-ease); }
+  .ac-row:hover { background: var(--ac-hover); }
+
+  .ac-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.8125rem; }
+  .ac-table th {
+    text-align: left; font-weight: 600; font-size: 0.72rem; letter-spacing: 0.02em; color: var(--ac-muted);
+    padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--ac-line); white-space: nowrap;
+  }
+  .ac-table td { padding: 0.75rem 0.8rem; border-bottom: 1px solid var(--ac-line); vertical-align: middle; }
+  .ac-table tbody tr { transition: background-color 0.12s var(--ac-ease); }
+  .ac-table tbody tr:hover { background: var(--ac-hover); }
+  .ac-table tbody tr:last-child td { border-bottom: 0; }
+  .ac-table tbody tr[data-clickable] { cursor: pointer; }
+
+  .ac-kbd {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 1.4rem; height: 1.4rem; padding: 0 0.35rem; border-radius: 7px;
+    font-size: 0.68rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ac-muted);
+    background: linear-gradient(150deg, var(--ac-hi), var(--ac-lo)); box-shadow: 1.5px 1.5px 3px var(--ac-dark), -1.5px -1.5px 3px var(--ac-light);
+  }
+
+  /* ── Checkbox tiles (plan features) ───────────────────────────────────── */
+
+  .ac-check {
+    display: flex; align-items: flex-start; gap: 0.75rem;
+    padding: 0.75rem 0.85rem; border-radius: var(--ac-radius-sm);
+    background: linear-gradient(150deg, var(--ac-hi), var(--ac-lo));
+    box-shadow: var(--ac-raise-sm);
+    cursor: pointer; user-select: none;
+    transition: transform 0.12s var(--ac-ease), box-shadow 0.12s var(--ac-ease);
+  }
+  .ac-check:active { transform: scale(0.99); }
+  .ac-check.is-on { background: linear-gradient(150deg, var(--ac-lo), var(--ac-hi)); box-shadow: var(--ac-press); }
+  .ac-check.is-locked { cursor: default; }
+  .ac-check .box {
+    flex-shrink: 0; width: 1.2rem; height: 1.2rem; margin-top: 0.05rem; border-radius: 7px;
+    display: flex; align-items: center; justify-content: center; color: #221902;
+    box-shadow: var(--ac-press-soft);
+    transition: background-color 0.15s var(--ac-ease);
+  }
+  .ac-check.is-on .box { background: linear-gradient(150deg, #f0d68a, #d4af37); box-shadow: 1px 1px 3px rgba(160, 128, 30, 0.4); }
+  .ac-check:has(input:focus-visible) { outline: 2px solid var(--ac-ring); outline-offset: 2px; }
+
+  /* The version in force is ringed in gold. */
+  .ac .neu-card.ac-current { box-shadow: var(--ac-raise), 0 0 0 2px var(--ac-ring); }
+
+  /* Grids that never crop: columns shrink to the viewport before they overflow. */
+  .ac-grid-fit { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--ac-min, 16rem)), 1fr)); }
+
+  /* ── Overlays ─────────────────────────────────────────────────────────── */
+
+  .ac-scrim {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(30, 38, 54, 0.34);
+    animation: ac-fade 0.18s var(--ac-ease) both;
+  }
+  .ac-drawer {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 51;
+    width: min(100vw, var(--ac-drawer-width, 640px));
+    display: flex; flex-direction: column;
+    background: var(--ac-bg);
+    box-shadow: var(--ac-raise-lg);
+    animation: ac-slide-in 0.28s var(--ac-ease) both;
+    will-change: transform;
+  }
+  .ac-drawer > header, .ac-drawer > footer { background: linear-gradient(150deg, var(--ac-hi), var(--ac-lo)); }
+  .ac-drawer > header { box-shadow: 0 1px 0 var(--ac-line); }
+  .ac-drawer > footer { box-shadow: 0 -1px 0 var(--ac-line); padding-bottom: max(0.75rem, env(safe-area-inset-bottom)); }
+
+  .ac-dialog {
+    position: fixed; left: 50%; top: 16vh; z-index: 61;
+    width: min(calc(100vw - 2rem), var(--ac-dialog-width, 460px));
+    transform: translateX(-50%);
+    background: linear-gradient(150deg, var(--ac-hi), var(--ac-lo));
+    border-radius: 20px;
+    box-shadow: var(--ac-raise-lg);
+    animation: ac-pop 0.2s var(--ac-ease) both;
+  }
+  .ac-dialog-scrim { z-index: 60; }
+
+  /* On phones the drawer rises from the bottom, like a sheet. */
+  @media (max-width: 639px) {
+    .ac-drawer { top: auto; left: 0; height: 92dvh; width: 100vw; border-radius: 22px 22px 0 0; animation-name: ac-sheet-in; }
+    /* A short menu sheet takes only the height it needs. */
+    .ac-drawer.ac-drawer-fit { height: auto; max-height: 92dvh; }
+    .ac-drawer > header { border-radius: 22px 22px 0 0; }
+    .ac-dialog { top: auto; bottom: max(1rem, env(safe-area-inset-bottom)); }
+  }
+
+  /* ── Loading ──────────────────────────────────────────────────────────── */
+
+  .ac-skeleton {
+    border-radius: 10px;
+    background: linear-gradient(90deg, var(--ac-lo) 0%, var(--ac-hi) 50%, var(--ac-lo) 100%);
+    background-size: 200% 100%;
+    box-shadow: var(--ac-press-soft);
+    animation: ac-shimmer 1.4s linear infinite;
+  }
+
+  /* ── Motion ───────────────────────────────────────────────────────────── */
+
+  .ac-enter { animation: ac-fade-up 0.3s var(--ac-ease) both; }
+  .ac-enter-soft { animation: ac-fade 0.2s var(--ac-ease) both; }
+
+  .ac :focus-visible { outline: 2px solid var(--ac-ring); outline-offset: 2px; }
+  .ac .neu-field:focus-visible { outline: none; }
+
+  .ac ::-webkit-scrollbar { width: 10px; height: 10px; }
+  .ac ::-webkit-scrollbar-thumb { background: var(--ac-dark); border-radius: 999px; border: 3px solid transparent; background-clip: padding-box; }
+  .ac ::-webkit-scrollbar-track { background: transparent; }
+
+  /* Scrollbars appearing and disappearing shift the page sideways; reserving
+     the gutter keeps everything still. */
+  html:has(.ac) { scrollbar-gutter: stable; }
+
+  @keyframes ac-fade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes ac-fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes ac-slide-in { from { transform: translateX(32px); opacity: 0; } to { transform: none; opacity: 1; } }
+  @keyframes ac-sheet-in { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+  @keyframes ac-pop { from { opacity: 0; transform: translateX(-50%) translateY(8px) scale(0.98); } to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); } }
+  @keyframes ac-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+  @keyframes ac-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ac *, .ac *::before, .ac *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+  }
+
+  .ac-spin { animation: ac-rotate 0.8s linear infinite; }
+  @keyframes ac-rotate { to { transform: rotate(360deg); } }
+
+  /* The overlay host is an empty box; only the fixed layers inside it show. */
+  .ac-overlays { background: none; }
+
+  /* Toasts render outside `.ac`, and the library sets inline styles, hence
+     the !important. Same raised surface as the cards. */
+  .ac-toast {
+    background: var(--neu-bg) !important;
+    color: var(--neu-text) !important;
+    border-radius: 14px !important;
+    padding: 10px 14px !important;
+    font-size: 13px !important;
+    box-shadow: 8px 8px 20px rgba(140, 154, 178, 0.5), -6px -6px 16px rgba(255, 255, 255, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
+    max-width: min(420px, calc(100vw - 32px)) !important;
+  }
+  html.dark .ac-toast { box-shadow: 10px 10px 24px rgba(0, 0, 0, 0.55), -4px -4px 14px rgba(255, 255, 255, 0.03) !important; }
+
+  /* A usage bar: pressed track, raised fill. The fill scales rather than
+     resizing, so it animates without touching layout. */
+  .ac-meter {
+    display: block;
+    height: 6px;
+    border-radius: 999px;
+    box-shadow: var(--ac-press-soft);
+    overflow: hidden;
+  }
+  .ac-meter > span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    transform-origin: left center;
+    transition: transform 0.5s var(--ac-ease);
+    background: var(--ac-ok);
+  }
+  .ac-meter[data-tone="warn"] > span { background: var(--ac-warn); }
+  .ac-meter[data-tone="bad"] > span { background: var(--ac-bad); }
+
+}
+
+/* Outside the layer on purpose: the base .neu-inset is unlayered, so this
+   override has to be too. It only sets surface and shadow, never spacing,
+   so utilities on the same element are unaffected. */
+.ac .neu-inset {
+  background: linear-gradient(150deg, var(--ac-lo), var(--ac-hi));
+  box-shadow: var(--ac-press);
+}

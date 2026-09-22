@@ -90,11 +90,19 @@ const str = (v: unknown, field: string, max = 200, min = 1): string => {
 // ── Plans ─────────────────────────────────────────────────────────────────
 
 export async function listPlans(db: D1Database) {
+  // One query for the whole list, including what the current published
+  // version costs and allows, so the list never needs a request per plan.
   const { results } = await db.prepare(
-    `SELECT p.*, (SELECT COUNT(*) FROM plan_versions v WHERE v.plan_id = p.id) AS versions,
-            (SELECT v.version FROM plan_versions v WHERE v.plan_id = p.id AND v.status = 'published' ORDER BY v.version DESC LIMIT 1) AS published_version,
-            (SELECT COUNT(*) FROM subscriptions s JOIN plan_versions v ON v.id = s.plan_version_id WHERE v.plan_id = p.id) AS organizations
-     FROM plans p ORDER BY p.sort_order, p.name`,
+    `SELECT p.*,
+            (SELECT COUNT(*) FROM plan_versions v WHERE v.plan_id = p.id) AS versions,
+            (SELECT COUNT(*) FROM plan_versions v WHERE v.plan_id = p.id AND v.status = 'draft') AS drafts,
+            (SELECT COUNT(*) FROM subscriptions s JOIN plan_versions v ON v.id = s.plan_version_id WHERE v.plan_id = p.id) AS organizations,
+            cur.version AS published_version, cur.billing_type, cur.currency, cur.price_monthly, cur.price_annual,
+            cur.trial_days, cur.limits AS published_limits
+     FROM plans p
+     LEFT JOIN plan_versions cur ON cur.id = (
+       SELECT v.id FROM plan_versions v WHERE v.plan_id = p.id AND v.status = 'published' ORDER BY v.version DESC LIMIT 1)
+     ORDER BY p.sort_order, p.name`,
   ).all();
   return results;
 }
@@ -103,7 +111,8 @@ export async function getPlan(db: D1Database, planId: string) {
   const plan = await db.prepare('SELECT * FROM plans WHERE id = ?').bind(planId).first();
   if (!plan) throw new OrgError(404, 'plan_not_found', 'Plan not found.');
   const { results: versions } = await db.prepare(
-    'SELECT * FROM plan_versions WHERE plan_id = ? ORDER BY version DESC',
+    `SELECT v.*, (SELECT COUNT(*) FROM subscriptions s WHERE s.plan_version_id = v.id) AS organizations
+     FROM plan_versions v WHERE v.plan_id = ? ORDER BY v.version DESC`,
   ).bind(planId).all();
   return { ...plan, versions };
 }

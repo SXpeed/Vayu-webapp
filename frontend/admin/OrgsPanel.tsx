@@ -3,9 +3,11 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { ArrowLeft, Building2, CreditCard, Gauge, Plus, UserPlus, Users } from 'lucide-react';
-import { Badge, Button, Card, Field, Input, SectionTitle, Select } from '../components/ui';
-import { api, guarded as sharedGuarded, type ApiError, type Reauth } from './api';
+import { Building2, ChevronDown, CreditCard, Gauge, Layers, Plus, UserPlus, Users } from 'lucide-react';
+import { Button, Card, Field, Input, Select } from '../components/ui';
+import { Avatar, Detail, EmptyState, PageHeader, Section, Skeleton, SkeletonRows, StatusPill, useDialogs } from './kit';
+import { api, guarded as sharedGuarded, timeAgo, type ApiError, type Reauth } from './api';
+import { FEATURE_FIELDS, LIMIT_FIELDS, MODULE_FIELDS } from '../platform/planFields';
 
 interface OrgRow {
     id: string; slug: string; name: string; business_type: string; status: string; is_demo: number;
@@ -37,13 +39,10 @@ const guarded = <T,>(reauth: Reauth, fn: () => Promise<T>) => sharedGuarded(reau
 
 const json = (body: unknown) => ({ body: JSON.stringify(body) });
 
-export const OrgsPanel: React.FC<{ reauth: Reauth; focusId?: string }> = ({ reauth, focusId }) => {
-    const [openId, setOpenId] = useState<string | null>(focusId ?? null);
-    useEffect(() => { if (focusId) setOpenId(focusId); }, [focusId]);
-    return openId
-        ? <OrgDetailView orgId={openId} reauth={reauth} onBack={() => setOpenId(null)} />
-        : <OrgList onOpen={setOpenId} />;
-};
+export const OrgsPanel: React.FC<{ reauth: Reauth; routeId?: string; go: (section: string, id?: string) => void }> = ({ reauth, routeId, go }) =>
+    routeId
+        ? <OrgDetailView key={routeId} orgId={routeId} reauth={reauth} onBack={() => go('orgs')} />
+        : <OrgList onOpen={id => go('orgs', id)} />;
 
 /* ------------------------------ List ------------------------------- */
 
@@ -63,7 +62,6 @@ const OrgList: React.FC<{ onOpen: (id: string) => void }> = ({ onOpen }) => {
 
     return (
         <Card padding="lg">
-            <SectionTitle actions={<Building2 size={16} />}>Organizations</SectionTitle>
             <div className="flex flex-wrap gap-2 mb-4">
                 <Input className="flex-1 min-w-[12rem]" placeholder="Search by name or address name…" value={q} onChange={e => setQ(e.target.value)} />
                 <Button icon={<Plus size={16} />} onClick={() => setCreating(creating === 'org' ? null : 'org')}>New organization</Button>
@@ -71,20 +69,23 @@ const OrgList: React.FC<{ onOpen: (id: string) => void }> = ({ onOpen }) => {
             </div>
             {creating === 'user' && <NewAccountForm onDone={() => setCreating(null)} />}
             {creating === 'org' && <NewOrgForm onDone={(id) => { setCreating(null); if (id) onOpen(id); else load(); }} />}
-            {!orgs ? <p className="text-sm">Loading…</p> : orgs.length === 0 ? (
-                <p className="text-sm text-gray-600 dark:text-gray-400">No organizations yet.</p>
+            {!orgs ? <SkeletonRows rows={6} /> : orgs.length === 0 ? (
+                <EmptyState icon={<Building2 size={20} />} title={q ? 'No matches' : 'No organizations yet'} body={q ? undefined : 'Approve an application, or create one here.'} />
             ) : (
-                <ul className="divide-y divide-black/5 dark:divide-white/10">
+                <ul className="ac-divide -mx-2">
                     {orgs.map(o => (
                         <li key={o.id}>
-                            <button type="button" onClick={() => onOpen(o.id)} className="w-full text-left py-3 flex flex-wrap items-center gap-x-3 gap-y-1">
-                                <span className="font-medium text-gray-900 dark:text-gray-100">{o.name}</span>
-                                <span className="text-[12px] text-gray-600 dark:text-gray-400">{typeLabel(o.business_type)}</span>
-                                {o.status !== 'active' && <Badge>{o.status}</Badge>}
-                                {!!o.is_demo && <Badge>demo</Badge>}
-                                <span className="text-[12px] text-gray-600 dark:text-gray-400 ml-auto">
-                                    {o.owner_email ?? 'no owner'} · {o.active_members} member{o.active_members === 1 ? '' : 's'}
-                                    {' · '}Razorpay: {o.razorpay_status ?? 'not connected'}
+                            <button type="button" onClick={() => onOpen(o.id)}
+                                className="ac-row w-full text-left px-2 py-3 grid items-center gap-x-4 gap-y-1 grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,0.9fr)_auto]">
+                                <span className="min-w-0">
+                                    <span className="block text-sm font-medium truncate">{o.name}</span>
+                                    <span className="block text-[12px] ac-faint truncate">{typeLabel(o.business_type)} · {o.owner_email ?? 'no owner'}</span>
+                                </span>
+                                <span className="hidden md:block text-[13px] ac-muted">{o.active_members} member{o.active_members === 1 ? '' : 's'}</span>
+                                <span className="hidden md:block text-[12px] ac-faint truncate">Razorpay: {o.razorpay_status ?? 'not connected'}</span>
+                                <span className="flex flex-wrap justify-end gap-1.5">
+                                    <StatusPill status={o.status} />
+                                    {!!o.is_demo && <StatusPill tone="info">demo</StatusPill>}
                                 </span>
                             </button>
                         </li>
@@ -162,100 +163,6 @@ const NewOrgForm: React.FC<{ onDone: (id?: string) => void }> = ({ onDone }) => 
 
 /* ------------------------------ Detail ----------------------------- */
 
-const OrgDetailView: React.FC<{ orgId: string; reauth: Reauth; onBack: () => void }> = ({ orgId, reauth, onBack }) => {
-    const [org, setOrg] = useState<OrgDetail | null>(null);
-
-    const load = useCallback(async () => {
-        try { setOrg(await api<OrgDetail>(`/admin/orgs/${orgId}`)); } catch (e) { toast.error((e as ApiError).message); }
-    }, [orgId]);
-    useEffect(() => { load(); }, [load]);
-
-    if (!org) return <Card><p className="text-sm">Loading…</p></Card>;
-
-    const setStatus = async (status: 'active' | 'suspended') => {
-        const reason = window.prompt(status === 'suspended' ? 'Why is this organization being suspended?' : 'Reason for reactivating?');
-        if (!reason) return;
-        const next = await guarded(reauth, () => api<OrgDetail>(`/admin/orgs/${orgId}/status`, { method: 'POST', ...json({ status, reason }) }));
-        if (next) { setOrg(next); toast.success(status === 'suspended' ? 'Suspended' : 'Reactivated'); }
-    };
-
-    return (
-        <div className="space-y-6">
-            <Card padding="lg">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                        <button type="button" onClick={onBack} className="text-[12px] text-gray-600 dark:text-gray-400 flex items-center gap-1 mb-2">
-                            <ArrowLeft size={14} /> All organizations
-                        </button>
-                        <h2 className="font-serif text-xl text-gray-900 dark:text-gray-100">{org.name}</h2>
-                        <p className="text-[12px] text-gray-600 dark:text-gray-400">
-                            {typeLabel(org.business_type)} · {org.slug} · created {new Date(org.created_at).toLocaleDateString()}
-                            {org.is_demo ? ' · demo' : ''}
-                        </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <Badge>{org.status}</Badge>
-                        {org.status === 'active' && <Button variant="danger" onClick={() => setStatus('suspended')}>Suspend</Button>}
-                        {org.status === 'suspended' && <Button onClick={() => setStatus('active')}>Reactivate</Button>}
-                    </div>
-                </div>
-            </Card>
-            <SubscriptionCard orgId={org.id} reauth={reauth} />
-            <MembersCard org={org} onChange={setOrg} />
-            <RazorpayCard orgId={org.id} reauth={reauth} />
-        </div>
-    );
-};
-
-const MembersCard: React.FC<{ org: OrgDetail; onChange: (o: OrgDetail) => void }> = ({ org, onChange }) => {
-    const [email, setEmail] = useState('');
-    const [role, setRole] = useState('staff');
-
-    const patch = async (m: Member, change: Partial<Pick<Member, 'role' | 'status'>>) => {
-        try {
-            onChange(await api<OrgDetail>(`/admin/orgs/${org.id}/members/${m.id}`, { method: 'PATCH', ...json(change) }));
-        } catch (e) { toast.error((e as ApiError).message); }
-    };
-
-    const add = async (e: React.FormEvent) => {
-        e.preventDefault();
-        try {
-            onChange(await api<OrgDetail>(`/admin/orgs/${org.id}/members`, { method: 'POST', ...json({ email, role }) }));
-            setEmail('');
-            toast.success('Member added');
-        } catch (err) { toast.error((err as ApiError).message); }
-    };
-
-    return (
-        <Card padding="lg">
-            <SectionTitle actions={<Users size={16} />}>Members</SectionTitle>
-            <ul className="divide-y divide-black/5 dark:divide-white/10 mb-4">
-                {org.members.map(m => (
-                    <li key={m.id} className="py-2 flex flex-wrap items-center gap-2">
-                        <div className="min-w-0 flex-1">
-                            <p className="text-sm text-gray-900 dark:text-gray-100 truncate">{m.name}</p>
-                            <p className="text-[12px] text-gray-600 dark:text-gray-400 truncate">{m.email}</p>
-                        </div>
-                        <Select aria-label={`Role for ${m.email}`} className="w-32" value={m.role} onChange={e => patch(m, { role: e.target.value })}>
-                            {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-                        </Select>
-                        <Button onClick={() => patch(m, { status: m.status === 'active' ? 'disabled' : 'active' })}>
-                            {m.status === 'active' ? 'Disable' : 'Enable'}
-                        </Button>
-                    </li>
-                ))}
-            </ul>
-            <form onSubmit={add} className="flex flex-wrap gap-2">
-                <Input className="flex-1 min-w-[12rem]" type="email" required placeholder="Existing account email" value={email} onChange={e => setEmail(e.target.value)} />
-                <Select aria-label="Role" className="w-32" value={role} onChange={e => setRole(e.target.value)}>
-                    {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-                </Select>
-                <Button type="submit" icon={<UserPlus size={16} />}>Add member</Button>
-            </form>
-        </Card>
-    );
-};
-
 interface Entitlements {
     limits: {
         limits: Record<string, number | null>;
@@ -271,108 +178,356 @@ interface Entitlements {
 
 interface PlanOption { id: string; name: string; versionId: string; version: number; billingType: string }
 
-const SubscriptionCard: React.FC<{ orgId: string; reauth: Reauth }> = ({ orgId, reauth }) => {
-    const [info, setInfo] = useState<Entitlements | null>(null);
-    const [options, setOptions] = useState<PlanOption[]>([]);
-    const [choice, setChoice] = useState('');
+const BILLING_LABEL: Record<string, string> = { free: 'Free', trial: 'Trial', paid: 'Paid', manual: 'Manual billing', custom: 'Custom' };
+const fmtLimit = (n: number | null | undefined) => (n === null || n === undefined ? 'Unlimited' : n.toLocaleString());
 
-    const load = useCallback(async () => {
-        try {
-            setInfo(await api<Entitlements>(`/admin/orgs/${orgId}/subscription`));
-            const { plans } = await api<{ plans: { id: string; name: string }[] }>('/admin/plans');
-            const opts: PlanOption[] = [];
-            for (const p of plans) {
-                const detail = await api<{ name: string; versions: { id: string; version: number; status: string; billing_type: string }[] }>(`/admin/plans/${p.id}`);
-                for (const v of detail.versions.filter(v => v.status === 'published')) {
-                    opts.push({ id: p.id, name: detail.name, versionId: v.id, version: v.version, billingType: v.billing_type });
-                }
-            }
-            setOptions(opts);
-        } catch (e) { toast.error((e as ApiError).message); }
-    }, [orgId]);
-    useEffect(() => { load(); }, [load]);
+const OrgDetailView: React.FC<{ orgId: string; reauth: Reauth; onBack: () => void }> = ({ orgId, reauth, onBack }) => {
+    const dialogs = useDialogs();
+    const [org, setOrg] = useState<OrgDetail | null>(null);
+    const [sub, setSub] = useState<Entitlements | null>(null);
+    const [rz, setRz] = useState<Razorpay | null>(null);
+    const [failed, setFailed] = useState<string | null>(null);
 
-    if (!info) return <Card><p className="text-sm">Loading plan…</p></Card>;
+    const subPath = `/admin/orgs/${orgId}/subscription`;
+    const rzPath = `/admin/orgs/${orgId}/payments/razorpay`;
 
-    const act = async (path: string, body: Record<string, unknown>) => {
-        const next = await guarded(reauth, () => api<Entitlements>(`/admin/orgs/${orgId}${path}`, { method: 'POST', ...json(body) }));
-        if (next) { toast.success('Updated'); load(); }
+    // Everything arrives together, so the page appears once instead of
+    // growing card by card.
+    const loadAll = useCallback(async () => {
+        setFailed(null);
+        const [o, s, r] = await Promise.allSettled([
+            api<OrgDetail>(`/admin/orgs/${orgId}`), api<Entitlements>(subPath), api<Razorpay>(rzPath),
+        ]);
+        if (o.status === 'rejected') { setFailed((o.reason as ApiError).message); return; }
+        setOrg(o.value);
+        if (s.status === 'fulfilled') setSub(s.value); else toast.error((s.reason as ApiError).message);
+        if (r.status === 'fulfilled') setRz(r.value); else toast.error((r.reason as ApiError).message);
+    }, [orgId, subPath, rzPath]);
+    useEffect(() => { loadAll(); }, [loadAll]);
+
+    const reloadSub = useCallback(async () => {
+        try { setSub(await api<Entitlements>(subPath)); } catch (e) { toast.error((e as ApiError).message); }
+    }, [subPath]);
+    const reloadRz = useCallback(async () => {
+        try { setRz(await api<Razorpay>(rzPath)); } catch (e) { toast.error((e as ApiError).message); }
+    }, [rzPath]);
+
+    if (failed) {
+        return (
+            <div className="space-y-6">
+                <PageHeader back={{ label: 'All organizations', onClick: onBack }} title="Organization" />
+                <Section>
+                    <EmptyState icon={<Building2 size={20} />} title="Could not load this organization" body={failed}
+                        action={<Button onClick={loadAll}>Try again</Button>} />
+                </Section>
+            </div>
+        );
+    }
+
+    if (!org) {
+        return (
+            <div className="space-y-6" aria-busy="true">
+                {/* The real header and tile sizes, so nothing moves when the data lands. */}
+                <PageHeader
+                    back={{ label: 'All organizations', onClick: onBack }}
+                    title={<Skeleton className="inline-block align-middle h-7 w-64 max-w-full" />}
+                    description={<Skeleton className="inline-block align-middle h-3.5 w-80 max-w-full" />}
+                    actions={<Skeleton className="h-10 w-24 rounded-xl" />}
+                />
+                <div className={TILE_GRID}>
+                    {[0, 1, 2, 3].map(i => <Skeleton key={i} className={`${TILE_H} rounded-[18px]`} />)}
+                </div>
+                <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)] items-start">
+                    <div className="space-y-6"><Skeleton className="h-80 rounded-[18px]" /><Skeleton className="h-64 rounded-[18px]" /></div>
+                    <div className="space-y-6"><Skeleton className="h-72 rounded-[18px]" /><Skeleton className="h-48 rounded-[18px]" /></div>
+                </div>
+            </div>
+        );
+    }
+
+    const setStatus = async (status: 'active' | 'suspended') => {
+        const reason = await dialogs.prompt(status === 'suspended'
+            ? { title: `Suspend ${org.name}?`, body: 'Its people lose access straight away. Nothing is deleted, and you can reactivate it at any time.', label: 'Reason', multiline: true, minLength: 3, confirmLabel: 'Suspend', danger: true }
+            : { title: `Reactivate ${org.name}?`, body: 'Its people can use it again immediately.', label: 'Reason', minLength: 3, confirmLabel: 'Reactivate' });
+        if (!reason) return;
+        const next = await guarded(reauth, () => api<OrgDetail>(`/admin/orgs/${orgId}/status`, { method: 'POST', ...json({ status, reason }) }));
+        if (next) { setOrg(next); toast.success(status === 'suspended' ? 'Suspended' : 'Reactivated'); }
     };
 
-    const assign = (waive: boolean) => {
+    const seats = sub?.seats;
+    const seatShare = seats && seats.limit ? Math.min(1, seats.used / seats.limit) : 0;
+    const rzTone = !rz?.connected ? 'neutral' : rz.status === 'verified' ? 'ok' : rz.lastError ? 'bad' : 'warn';
+    const rzLabel = !rz ? '—' : !rz.connected ? 'Not connected' : `${rz.mode === 'live' ? 'Live' : 'Test'} · ${rz.status ?? 'saved'}`;
+
+    return (
+        <div className="space-y-6">
+            <PageHeader
+                back={{ label: 'All organizations', onClick: onBack }}
+                title={org.name}
+                meta={<><StatusPill status={org.status} />{!!org.is_demo && <StatusPill tone="info">demo</StatusPill>}</>}
+                description={`${typeLabel(org.business_type)} · since ${new Date(org.created_at).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}`}
+                actions={<>
+                    {org.status === 'active' && <Button variant="danger" onClick={() => setStatus('suspended')}>Suspend</Button>}
+                    {org.status === 'suspended' && <Button variant="primary" onClick={() => setStatus('active')}>Reactivate</Button>}
+                </>}
+            />
+
+            {/* At a glance: the four things worth checking first. */}
+            <div className={TILE_GRID}>
+                <Tile icon={<Layers size={15} />} label="Plan"
+                    value={sub?.plan ? `${sub.plan.name} v${sub.plan.version}` : 'Default limits'}
+                    foot={sub?.plan ? BILLING_LABEL[sub.plan.billingType] ?? sub.plan.billingType : 'No plan assigned'} />
+                <Tile icon={<Gauge size={15} />} label="Subscription"
+                    value={sub ? <StatusPill status={sub.subscription.status} /> : '—'}
+                    foot={sub?.subscription.paymentWaived ? 'Payment waived'
+                        : sub?.subscription.trialEndsAt ? `Trial ends ${new Date(sub.subscription.trialEndsAt).toLocaleDateString()}` : sub?.active ? 'Access on' : 'Access off'} />
+                <Tile icon={<Users size={15} />} label="Seats"
+                    value={seats ? <span className="tabular-nums">{seats.used}<span className="ac-faint text-base"> / {seats.limit ?? '∞'}</span></span> : '—'}
+                    foot={seats ? <span className={seats.overLimit ? 'text-[var(--ac-bad)]' : ''}>
+                        {seats.overLimit ? 'Over the limit' : seats.remaining === null ? 'No seat limit' : `${seats.remaining} left`}
+                    </span> : ''}
+                    meter={seats?.limit ? { share: seatShare, tone: seats.overLimit ? 'bad' : seatShare >= 0.85 ? 'warn' : 'ok' } : undefined} />
+                <Tile icon={<CreditCard size={15} />} label="Customer payments"
+                    value={<StatusPill tone={rzTone}>{rzLabel}</StatusPill>}
+                    foot={rz?.connected ? (rz.hasWebhookSecret ? 'Webhook secret set' : 'No webhook secret') : 'Razorpay not linked'} />
+            </div>
+
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)] items-start">
+                <div className="space-y-6 min-w-0">
+                    {sub ? <PlanCard orgId={orgId} info={sub} reauth={reauth} onChanged={reloadSub} />
+                        : <Section title="Plan and limits"><EmptyState title="Could not load the plan" action={<Button onClick={reloadSub}>Try again</Button>} /></Section>}
+                    <MembersCard org={org} onChange={next => { setOrg(next); reloadSub(); }} />
+                </div>
+                <div className="space-y-6 min-w-0">
+                    {rz ? <RazorpayCard path={rzPath} info={rz} reauth={reauth} onChange={setRz} onReload={reloadRz} />
+                        : <Section title="Customer payments"><EmptyState title="Could not load payments" action={<Button onClick={reloadRz}>Try again</Button>} /></Section>}
+                    <Section title="Details">
+                        <dl className="grid grid-cols-2 gap-x-5 gap-y-4">
+                            <Detail label="Business type">{typeLabel(org.business_type)}</Detail>
+                            <Detail label="Web address name"><span className="[overflow-wrap:anywhere]">{org.slug}</span></Detail>
+                            <Detail label="Country">{org.country}</Detail>
+                            <Detail label="Time zone">{org.timezone}</Detail>
+                            <Detail label="Created">{new Date(org.created_at).toLocaleString()}</Detail>
+                            <Detail label="Members">{org.members.filter(m => m.status === 'active').length} active of {org.members.length}</Detail>
+                            <div className="col-span-2">
+                                <Detail label="Organization id"><span className="font-mono text-[12px] select-all">{org.id}</span></Detail>
+                            </div>
+                        </dl>
+                    </Section>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const TILE_GRID = 'grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4';
+const TILE_H = 'h-[108px]';
+
+/** Fixed height and single lines, so every tile matches its placeholder exactly. */
+const Tile: React.FC<{
+    icon: React.ReactNode; label: string; value: React.ReactNode; foot?: React.ReactNode;
+    meter?: { share: number; tone: 'ok' | 'warn' | 'bad' };
+}> = ({ icon, label, value, foot, meter }) => (
+    <div className={`neu-card relative ${TILE_H} px-4 pt-3.5 min-w-0 overflow-hidden`}>
+        <p className="flex items-center gap-1.5 text-[12px] ac-muted truncate"><span className="ac-faint shrink-0">{icon}</span>{label}</p>
+        <div className="mt-1.5 text-lg font-semibold truncate leading-7">{value}</div>
+        <div className="mt-0.5 text-[12px] leading-[18px] ac-faint truncate">{foot || ' '}</div>
+        {meter && (
+            <span className="ac-meter absolute left-4 right-4 bottom-3" data-tone={meter.tone}>
+                <span style={{ transform: `scaleX(${meter.share})` }} />
+            </span>
+        )}
+    </div>
+);
+
+const MembersCard: React.FC<{ org: OrgDetail; onChange: (o: OrgDetail) => void }> = ({ org, onChange }) => {
+    const dialogs = useDialogs();
+    const [email, setEmail] = useState('');
+    const [role, setRole] = useState('staff');
+    const [busyId, setBusyId] = useState<string | null>(null);
+
+    const patch = async (m: Member, change: Partial<Pick<Member, 'role' | 'status'>>) => {
+        setBusyId(m.id);
+        try {
+            onChange(await api<OrgDetail>(`/admin/orgs/${org.id}/members/${m.id}`, { method: 'PATCH', ...json(change) }));
+        } catch (e) { toast.error((e as ApiError).message); } finally { setBusyId(null); }
+    };
+
+    const toggle = async (m: Member) => {
+        if (m.status === 'active' && !(await dialogs.confirm({
+            title: `Disable ${m.name}?`, body: 'They lose access to this organization straight away. Their account and everything they made stay.',
+            confirmLabel: 'Disable', danger: true,
+        }))) return;
+        patch(m, { status: m.status === 'active' ? 'disabled' : 'active' });
+    };
+
+    const add = async (e: React.FormEvent) => {
+        e.preventDefault();
+        try {
+            onChange(await api<OrgDetail>(`/admin/orgs/${org.id}/members`, { method: 'POST', ...json({ email, role }) }));
+            setEmail('');
+            toast.success('Member added');
+        } catch (err) { toast.error((err as ApiError).message); }
+    };
+
+    return (
+        <Section title="Members" description="People with access to this organization. Adding someone needs an existing account."
+            actions={<StatusPill tone="neutral">{org.members.length}</StatusPill>}>
+            {org.members.length === 0 ? (
+                <EmptyState icon={<Users size={20} />} title="No members yet" />
+            ) : (
+                <ul className="ac-divide -mx-2 mb-4">
+                    {org.members.map(m => (
+                        <li key={m.id} className="px-2 py-2.5 grid items-center gap-x-3 gap-y-2 grid-cols-[auto_minmax(0,1fr)] sm:grid-cols-[auto_minmax(0,1fr)_auto]">
+                            <Avatar name={m.name} />
+                            <div className="min-w-0">
+                                <p className="text-sm font-medium truncate flex items-center gap-2">
+                                    <span className="truncate">{m.name}</span>
+                                    {m.status !== 'active' && <StatusPill status={m.status} />}
+                                </p>
+                                <p className="text-[12px] ac-faint truncate">{m.email}</p>
+                            </div>
+                            <div className="col-span-2 sm:col-span-1 flex items-center gap-2 justify-end">
+                                <Select aria-label={`Role for ${m.email}`} className="!w-auto min-w-[8.5rem]" value={m.role}
+                                    disabled={busyId === m.id} onChange={e => patch(m, { role: e.target.value })}>
+                                    {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                                </Select>
+                                <Button disabled={busyId === m.id} onClick={() => toggle(m)} className="min-w-[5.5rem] justify-center">
+                                    {m.status === 'active' ? 'Disable' : 'Enable'}
+                                </Button>
+                            </div>
+                        </li>
+                    ))}
+                </ul>
+            )}
+            <form onSubmit={add} className="flex flex-wrap gap-2 rounded-2xl neu-inset p-3">
+                <Input className="flex-1 min-w-[12rem]" type="email" required placeholder="Existing account email" value={email} onChange={e => setEmail(e.target.value)} />
+                <Select aria-label="Role" className="!w-auto min-w-[8.5rem]" value={role} onChange={e => setRole(e.target.value)}>
+                    {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                </Select>
+                <Button type="submit" icon={<UserPlus size={16} />}>Add member</Button>
+            </form>
+        </Section>
+    );
+};
+
+const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; onChanged: () => void }> = ({ orgId, info, reauth, onChanged }) => {
+    const dialogs = useDialogs();
+    const [options, setOptions] = useState<PlanOption[] | null>(null);
+    const [choice, setChoice] = useState('');
+    const [busy, setBusy] = useState(false);
+
+    // The version list is only needed for changing plan, so it loads after the page shows.
+    useEffect(() => {
+        let live = true;
+        (async () => {
+            try {
+                const { plans } = await api<{ plans: { id: string; name: string }[] }>('/admin/plans');
+                const details = await Promise.all(plans.map(p =>
+                    api<{ name: string; versions: { id: string; version: number; status: string; billing_type: string }[] }>(`/admin/plans/${p.id}`)
+                        .then(d => ({ p, d }))));
+                const opts: PlanOption[] = [];
+                for (const { p, d } of details) {
+                    for (const v of d.versions.filter(v => v.status === 'published')) {
+                        opts.push({ id: p.id, name: d.name, versionId: v.id, version: v.version, billingType: v.billing_type });
+                    }
+                }
+                if (live) setOptions(opts);
+            } catch (e) { if (live) { setOptions([]); toast.error((e as ApiError).message); } }
+        })();
+        return () => { live = false; };
+    }, []);
+
+    const act = async (path: string, body: Record<string, unknown>) => {
+        setBusy(true);
+        const next = await guarded(reauth, () => api<Entitlements>(`/admin/orgs/${orgId}${path}`, { method: 'POST', ...json(body) }));
+        setBusy(false);
+        if (next) { toast.success('Updated'); onChanged(); }
+    };
+
+    const assign = async (waive: boolean) => {
         if (!choice) { toast.error('Choose a plan version first'); return; }
-        const reason = waive ? window.prompt('Why is payment being waived?') : 'Plan assigned from the control panel';
+        const reason = waive
+            ? await dialogs.prompt({ title: 'Waive payment?', body: 'The organization is activated without paying. The reason is recorded.', label: 'Reason', multiline: true, minLength: 3, confirmLabel: 'Assign and waive' })
+            : (await dialogs.confirm({ title: 'Assign this plan version?', body: 'Its limits apply straight away. Nothing already stored is removed if it is smaller.', confirmLabel: 'Assign' })) ? 'Plan assigned from the control centre' : null;
         if (!reason) return;
         act('/subscription', { planVersionId: choice, waivePayment: waive, reason });
     };
 
-    const extend = () => {
-        const days = window.prompt('Extend the trial by how many days?', '14');
+    const extend = async () => {
+        const days = await dialogs.prompt({ title: 'Extend the trial', label: 'Extra days', defaultValue: '14', inputType: 'number', minLength: 1, confirmLabel: 'Next' });
         if (!days) return;
-        const reason = window.prompt('Reason?');
+        const reason = await dialogs.prompt({ title: 'Why extend it?', label: 'Reason', minLength: 3, confirmLabel: `Extend by ${days} days` });
         if (!reason) return;
         act('/subscription/extend-trial', { days: Number(days), reason });
     };
 
-    const override = () => {
-        const value = window.prompt('New member limit for this organization only (blank = unlimited)');
+    const override = async () => {
+        const value = await dialogs.prompt({ title: 'Seat limit for this organization only', body: 'Overrides the plan for this organization. Leave empty for unlimited.', label: 'Employee seats', inputType: 'number', minLength: 0, confirmLabel: 'Next' });
         if (value === null) return;
-        const reason = window.prompt('Reason (recorded in the audit log)');
+        const reason = await dialogs.prompt({ title: 'Why the exception?', label: 'Reason (recorded in the audit log)', minLength: 3, confirmLabel: 'Save override' });
         if (!reason) return;
         act('/entitlements', { key: 'maxMembers', value: value.trim() === '' ? null : Number(value), reason });
     };
 
+    const limits = info.limits.limits;
+    const overridden = new Set(Object.keys(info.overrides));
+    const included = [
+        ...MODULE_FIELDS.filter(f => info.limits.modules[f.key]),
+        ...FEATURE_FIELDS.filter(f => info.limits.features[f.key]),
+    ];
+
     return (
-        <Card padding="lg">
-            <SectionTitle actions={<Gauge size={16} />}>Plan and limits</SectionTitle>
-            <div className="neu-inset rounded-xl p-3 text-[13px] space-y-1 text-gray-800 dark:text-gray-200">
-                <p>Plan: <strong>{info.plan ? `${info.plan.name} v${info.plan.version} (${info.plan.billingType})` : 'none — default limits'}</strong></p>
-                <p>Status: <strong>{info.subscription.status}</strong>
-                    {info.subscription.paymentWaived ? ' · payment waived' : ''}
-                    {info.subscription.trialEndsAt ? ` · trial ends ${new Date(info.subscription.trialEndsAt).toLocaleDateString()}` : ''}</p>
-                <p>Members: {info.seats.used} of {info.seats.limit ?? 'unlimited'}
-                    {info.seats.overLimit && <span className="text-amber-700 dark:text-amber-400"> · over the limit: existing members keep working, new ones are blocked until someone is disabled</span>}</p>
-                <p className="text-[12px] text-gray-600 dark:text-gray-400">
-                    Products {info.limits.limits.maxItems ?? '∞'} · stores {info.limits.limits.maxStores ?? '∞'}
-                    {' · '}storage {info.limits.limits.storageMb ?? '∞'} MB · PDFs/month {info.limits.limits.pdfGenerationsPerMonth ?? '∞'}
-                    {Object.keys(info.overrides).length > 0 && ` · overrides: ${Object.keys(info.overrides).join(', ')}`}
+        <Section title="Plan and limits"
+            description={info.plan ? `${info.plan.name} v${info.plan.version} · ${BILLING_LABEL[info.plan.billingType] ?? info.plan.billingType}` : 'No plan assigned; the default limits apply.'}
+            actions={<Gauge size={16} className="ac-faint" />}>
+            {info.seats.overLimit && (
+                <p className="mb-4 rounded-xl px-3 py-2 text-[13px] bg-[var(--ac-warn-bg)] text-[var(--ac-warn)]">
+                    Over the seat limit. Existing members keep working; new ones are blocked until someone is disabled.
                 </p>
-                <p className="text-[12px] text-gray-600 dark:text-gray-400">
-                    Included: {[...Object.entries(info.limits.modules), ...Object.entries(info.limits.features)]
-                        .filter(([, on]) => on).map(([k]) => k).join(', ') || 'nothing'}
-                </p>
+            )}
+            <dl className="ac-grid-fit !gap-x-5 !gap-y-4" style={{ ['--ac-min' as string]: '8.5rem' }}>
+                {LIMIT_FIELDS.filter(f => f.key in limits).map(f => (
+                    <Detail key={f.key} label={f.label}>
+                        <span className="tabular-nums">{fmtLimit(limits[f.key])}</span>
+                        {overridden.has(f.key) && <span className="ml-1.5 align-middle"><StatusPill tone="warn">override</StatusPill></span>}
+                    </Detail>
+                ))}
+            </dl>
+
+            <p className="mt-5 mb-2 text-[12px] ac-muted">Included</p>
+            <div className="flex flex-wrap gap-1.5">
+                {included.length === 0 ? <span className="text-[13px] ac-faint">Nothing</span>
+                    : included.map(f => <span key={f.key} className="ac-tone" data-tone="neutral">{f.label}</span>)}
             </div>
-            <div className="mt-4 flex flex-wrap gap-2 items-end">
-                <Field label="Change plan" htmlFor="sub-plan" className="flex-1 min-w-[14rem]">
-                    <Select id="sub-plan" value={choice} onChange={e => setChoice(e.target.value)}>
-                        <option value="">Choose a published version…</option>
-                        {options.map(o => <option key={o.versionId} value={o.versionId}>{o.name} v{o.version} ({o.billingType})</option>)}
-                    </Select>
-                </Field>
-                <Button variant="primary" onClick={() => assign(false)}>Assign</Button>
-                <Button onClick={() => assign(true)}>Assign &amp; waive payment</Button>
-                <Button onClick={extend}>Extend trial</Button>
-                <Button onClick={override}>Override member limit</Button>
+
+            <div className="mt-6 rounded-2xl neu-inset p-3.5 space-y-3">
+                <div className="flex flex-wrap gap-2 items-end">
+                    <Field label="Change plan" htmlFor="sub-plan" className="flex-1 min-w-[min(100%,15rem)]">
+                        <Select id="sub-plan" value={choice} onChange={e => setChoice(e.target.value)} disabled={!options}>
+                            <option value="">{options ? 'Choose a published version…' : 'Loading versions…'}</option>
+                            {(options ?? []).map(o => <option key={o.versionId} value={o.versionId}>{o.name} v{o.version} ({BILLING_LABEL[o.billingType] ?? o.billingType})</option>)}
+                        </Select>
+                    </Field>
+                    <Button variant="primary" onClick={() => assign(false)} disabled={busy || !choice}>Assign</Button>
+                    <Button onClick={() => assign(true)} disabled={busy || !choice}>Assign &amp; waive payment</Button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                    <Button onClick={extend} disabled={busy}>Extend trial</Button>
+                    <Button onClick={override} disabled={busy}>Override seat limit</Button>
+                </div>
             </div>
-        </Card>
+        </Section>
     );
 };
 
-const RazorpayCard: React.FC<{ orgId: string; reauth: Reauth }> = ({ orgId, reauth }) => {
-    const [info, setInfo] = useState<Razorpay | null>(null);
+const RazorpayCard: React.FC<{ path: string; info: Razorpay; reauth: Reauth; onChange: (r: Razorpay) => void; onReload: () => void }> = ({ path, info, reauth, onChange, onReload }) => {
+    const dialogs = useDialogs();
     const [editing, setEditing] = useState(false);
     const [keyId, setKeyId] = useState('');
     const [keySecret, setKeySecret] = useState('');
     const [webhookSecret, setWebhookSecret] = useState('');
     const [busy, setBusy] = useState(false);
-
-    const path = `/admin/orgs/${orgId}/payments/razorpay`;
-    const load = useCallback(async () => {
-        try { setInfo(await api<Razorpay>(path)); } catch (e) { toast.error((e as ApiError).message); }
-    }, [path]);
-    useEffect(() => { load(); }, [load]);
-
-    if (!info) return <Card><p className="text-sm">Loading payments…</p></Card>;
 
     const save = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -380,11 +535,11 @@ const RazorpayCard: React.FC<{ orgId: string; reauth: Reauth }> = ({ orgId, reau
         const next = await guarded(reauth, () => api<Razorpay>(path, { method: 'PUT', ...json({ keyId, keySecret, webhookSecret }) }));
         setBusy(false);
         if (next) {
-            setInfo(next);
+            onChange(next);
             setEditing(false);
             setKeySecret('');
             setWebhookSecret('');
-            toast.success('Razorpay keys saved. Click Verify to test them.');
+            toast.success('Razorpay keys saved. Verify them next.');
         }
     };
 
@@ -394,45 +549,49 @@ const RazorpayCard: React.FC<{ orgId: string; reauth: Reauth }> = ({ orgId, reau
         setBusy(false);
         if (r) {
             if (r.status === 'verified') toast.success('Razorpay accepted the keys'); else toast.error(r.error ?? 'Verification failed');
-            load();
+            onReload();
         }
     };
 
     const disconnect = async () => {
-        if (!window.confirm('Disconnect this Razorpay account? Payment links and webhooks for this organization will stop working.')) return;
+        if (!(await dialogs.confirm({ title: 'Disconnect Razorpay?', body: 'Payment links and payment notifications for this organization stop working until it is connected again.', confirmLabel: 'Disconnect', danger: true }))) return;
         const next = await guarded(reauth, () => api<Razorpay>(path, { method: 'DELETE' }));
-        if (next) { setInfo(next); toast.success('Disconnected'); }
+        if (next) { onChange(next); toast.success('Disconnected'); }
     };
 
     return (
-        <Card padding="lg">
-            <SectionTitle actions={<CreditCard size={16} />}>Razorpay (the organization's own account)</SectionTitle>
-            <p className="text-[12px] mb-3 text-gray-600 dark:text-gray-400">
-                Payments this organization collects from its customers go to this account, never to the platform's.
-                Secrets are stored encrypted and never shown again.
-            </p>
-
+        <Section title="Customer payments"
+            description="Payments this organization collects go to its own Razorpay account, never the platform's. Secrets are stored encrypted and never shown again."
+            actions={<CreditCard size={16} className="ac-faint" />}>
             {info.connected ? (
-                <div className="neu-inset rounded-xl p-3 text-[13px] space-y-1 text-gray-800 dark:text-gray-200">
-                    <p>Key: <span className="font-mono">{info.keyIdHint}</span> · {info.mode === 'live' ? 'Live mode' : 'Test mode'}</p>
-                    <p>Status: <strong>{info.status}</strong>
-                        {info.lastVerifiedAt ? ` · last verified ${new Date(info.lastVerifiedAt).toLocaleString()}` : ''}</p>
-                    {info.lastError && <p className="text-red-600 dark:text-red-400">{info.lastError}</p>}
-                    <p>Webhook secret: {info.hasWebhookSecret ? 'set' : 'not set (payment updates will not arrive)'}</p>
-                </div>
+                <dl className="grid grid-cols-2 gap-x-5 gap-y-4">
+                    <Detail label="Key"><span className="font-mono text-[12px]">{info.keyIdHint}</span></Detail>
+                    <Detail label="Mode">{info.mode === 'live' ? 'Live' : 'Test'}</Detail>
+                    <Detail label="Status"><StatusPill tone={info.status === 'verified' ? 'ok' : info.lastError ? 'bad' : 'warn'}>{info.status ?? 'saved'}</StatusPill></Detail>
+                    <Detail label="Last verified">{info.lastVerifiedAt ? timeAgo(info.lastVerifiedAt) : 'Never'}</Detail>
+                    <div className="col-span-2">
+                        <Detail label="Webhook secret">{info.hasWebhookSecret ? 'Set' : <span className="text-[var(--ac-warn)]">Not set: payment updates will not arrive</span>}</Detail>
+                    </div>
+                    {info.lastError && <p className="col-span-2 text-[13px] text-[var(--ac-bad)] break-words">{info.lastError}</p>}
+                </dl>
             ) : (
-                <p className="text-sm text-gray-700 dark:text-gray-300">No Razorpay account connected.</p>
+                <EmptyState compact icon={<CreditCard size={20} />} title="No Razorpay account linked" body="Link one when this organization wants to take payments from its customers." />
             )}
 
-            <div className="mt-3 text-[12px] space-y-1 text-gray-600 dark:text-gray-400">
-                <p>Webhook URL for this organization (Razorpay → Settings → Webhooks):</p>
-                <p className="font-mono break-all select-all text-gray-800 dark:text-gray-200">{info.webhookUrl}</p>
-                <p>Events: payment_link.paid, payment_link.cancelled, payment_link.expired. Use the same secret as below.</p>
-            </div>
+            <details className="mt-4 group">
+                <summary className="cursor-pointer text-[12px] ac-muted select-none list-none flex items-center gap-1">
+                    <ChevronDown size={14} className="transition-transform group-open:rotate-180" /> Webhook set-up
+                </summary>
+                <div className="mt-2 text-[12px] space-y-1.5 ac-muted">
+                    <p>Razorpay → Settings → Webhooks, this address:</p>
+                    <p className="font-mono break-all select-all rounded-lg neu-inset px-2.5 py-2 text-[var(--ac-text)]">{info.webhookUrl}</p>
+                    <p>Events: payment_link.paid, payment_link.cancelled, payment_link.expired. Use the same secret as the webhook secret here.</p>
+                </div>
+            </details>
 
             {editing ? (
-                <form onSubmit={save} className="mt-4 grid gap-3">
-                    <Field label="Key ID" htmlFor="rz-id" hint="Razorpay → Settings → API Keys. rzp_test_… for testing, rzp_live_… for real payments.">
+                <form onSubmit={save} className="mt-4 grid gap-3 rounded-2xl neu-inset p-3.5">
+                    <Field label="Key ID" htmlFor="rz-id" hint="rzp_test_… for testing, rzp_live_… for real payments.">
                         <Input id="rz-id" required value={keyId} onChange={e => setKeyId(e.target.value)} autoComplete="off" />
                     </Field>
                     <Field label="Key secret" htmlFor="rz-secret">
@@ -441,18 +600,18 @@ const RazorpayCard: React.FC<{ orgId: string; reauth: Reauth }> = ({ orgId, reau
                     <Field label="Webhook secret" htmlFor="rz-wh" hint={info.hasWebhookSecret ? 'Leave blank to keep the current one.' : 'The secret you type when creating the webhook in Razorpay.'}>
                         <Input id="rz-wh" type="password" value={webhookSecret} onChange={e => setWebhookSecret(e.target.value)} autoComplete="off" />
                     </Field>
-                    <div className="flex gap-2">
-                        <Button type="submit" variant="primary" disabled={busy}>Save keys</Button>
-                        <Button onClick={() => setEditing(false)}>Cancel</Button>
+                    <div className="flex flex-wrap gap-2">
+                        <Button type="submit" variant="primary" disabled={busy}>{busy ? 'Saving…' : 'Save keys'}</Button>
+                        <Button type="button" onClick={() => setEditing(false)}>Cancel</Button>
                     </div>
                 </form>
             ) : (
                 <div className="mt-4 flex flex-wrap gap-2">
-                    <Button variant="primary" onClick={() => setEditing(true)}>{info.connected ? 'Replace keys' : 'Connect Razorpay'}</Button>
-                    {info.connected && <Button onClick={verify} disabled={busy}>Verify keys</Button>}
+                    <Button variant={info.connected ? 'default' : 'primary'} onClick={() => setEditing(true)}>{info.connected ? 'Replace keys' : 'Connect Razorpay'}</Button>
+                    {info.connected && <Button onClick={verify} disabled={busy}>{busy ? 'Checking…' : 'Verify keys'}</Button>}
                     {info.connected && <Button variant="danger" onClick={disconnect}>Disconnect</Button>}
                 </div>
             )}
-        </Card>
+        </Section>
     );
 };

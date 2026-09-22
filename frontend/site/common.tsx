@@ -107,7 +107,7 @@ const FEATURE_LABELS: Record<string, string> = {
 export function planBullets(p: PublicPlan): string[] {
     const out: string[] = [];
     for (const [key, one, many] of LIMIT_LABELS) {
-        const v = p.highlights.limits?.[key];
+        const v: number | null | undefined = p.highlights.limits?.[key];
         if (v === undefined) continue;
         out.push(v === null ? `Unlimited ${many}` : `${v.toLocaleString('en-IN')} ${v === 1 ? one : many}`);
     }

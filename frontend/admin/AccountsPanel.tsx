@@ -1,14 +1,18 @@
-// Every account that can sign in, across all organizations.
+// Everyone who can sign in, across all organizations.
+//
+//   #/accounts        the directory, searchable
+//   #/accounts/:id    the directory with one person open alongside
 //
 // Shows who someone is, which organizations they belong to and where they are
 // signed in — never a password or a session token. Disabling an account ends
-// its sessions at once and stops new sign-ins by any method.
+// its sessions at once and blocks new sign-ins by any method.
 
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { ArrowLeft, KeyRound, LogOut, UserX, Users } from 'lucide-react';
-import { Badge, Button, Card, Input, SectionTitle } from '../components/ui';
+import { KeyRound, LogOut, Monitor, Search, ShieldCheck, Smartphone, UserCheck, UserX, Users } from 'lucide-react';
+import { Input } from '../components/ui';
 import { api, guarded, postJson, timeAgo, type ApiError, type Reauth } from './api';
+import { Avatar, Detail, Drawer, EmptyState, PageHeader, Section, SkeletonRows, StatusPill, useDialogs } from './kit';
 
 interface AccountRow {
     id: string; name: string; email: string; email_verified: number; two_factor: number | null; created_at: string;
@@ -23,68 +27,62 @@ interface AccountDetail {
     providerAdmin: { role: string; status: string } | null;
 }
 
-export const AccountsPanel: React.FC<{ reauth: Reauth; onOpenOrg?: (orgId: string) => void }> = ({ reauth, onOpenOrg }) => {
-    const [openId, setOpenId] = useState<string | null>(null);
-    return openId
-        ? <AccountView id={openId} reauth={reauth} onBack={() => setOpenId(null)} onOpenOrg={onOpenOrg} />
-        : <AccountList onOpen={setOpenId} />;
-};
+function device(ua: string | null): { label: string; phone: boolean } {
+    if (!ua) return { label: 'Unknown device', phone: false };
+    const phone = /iphone|android|mobile/i.test(ua);
+    const os = /windows/i.test(ua) ? 'Windows' : /mac os/i.test(ua) ? 'Mac' : /iphone|ipad/i.test(ua) ? 'iPhone / iPad' : /android/i.test(ua) ? 'Android' : /linux/i.test(ua) ? 'Linux' : 'Device';
+    const browser = /edg\//i.test(ua) ? 'Edge' : /chrome\//i.test(ua) ? 'Chrome' : /safari\//i.test(ua) ? 'Safari' : /firefox\//i.test(ua) ? 'Firefox' : 'Browser';
+    return { label: `${browser} on ${os}`, phone };
+}
 
-const AccountList: React.FC<{ onOpen: (id: string) => void }> = ({ onOpen }) => {
+export const AccountsPanel: React.FC<{ reauth: Reauth; routeId?: string; go: (section: string, id?: string) => void }> = ({ reauth, routeId, go }) => {
     const [q, setQ] = useState('');
     const [rows, setRows] = useState<AccountRow[] | null>(null);
 
-    useEffect(() => {
-        const t = setTimeout(() => {
-            api<{ accounts: AccountRow[] }>(`/admin/accounts${q ? `?q=${encodeURIComponent(q)}` : ''}`)
-                .then(r => setRows(r.accounts)).catch(e => toast.error((e as ApiError).message));
-        }, 250);
-        return () => clearTimeout(t);
-    }, [q]);
+    const load = useCallback(async (term: string) => {
+        try { setRows((await api<{ accounts: AccountRow[] }>(`/admin/accounts${term ? `?q=${encodeURIComponent(term)}` : ''}`)).accounts); }
+        catch (e) { toast.error((e as ApiError).message); }
+    }, []);
+    // Debounced; the current rows stay until new ones arrive, so nothing flashes.
+    useEffect(() => { const t = setTimeout(() => load(q.trim()), q ? 250 : 0); return () => clearTimeout(t); }, [q, load]);
 
     return (
-        <Card padding="lg">
-            <SectionTitle actions={<Users size={16} />}>Accounts</SectionTitle>
-            <Input className="mb-4" placeholder="Search by name or email…" value={q} onChange={e => setQ(e.target.value)} />
-            {!rows ? <p className="text-sm">Loading…</p> : rows.length === 0 ? (
-                <p className="text-sm text-gray-600 dark:text-gray-400">No accounts match.</p>
-            ) : (
-                <div className="overflow-x-auto">
-                    <table className="w-full text-[13px]">
-                        <thead>
-                            <tr className="text-left text-[11px] uppercase tracking-[0.1em] text-gray-600 dark:text-gray-400">
-                                <th className="py-2 pr-3 font-medium">Account</th>
-                                <th className="py-2 pr-3 font-medium">Organizations</th>
-                                <th className="py-2 pr-3 font-medium">Signed in</th>
-                                <th className="py-2 pr-3 font-medium">Last seen</th>
-                                <th className="py-2 font-medium">State</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-black/5 dark:divide-white/10">
-                            {rows.map(r => (
-                                <tr key={r.id} className="cursor-pointer hover:bg-black/[0.02] dark:hover:bg-white/[0.03]" onClick={() => onOpen(r.id)}>
-                                    <td className="py-2.5 pr-3">
-                                        <span className="block font-medium text-gray-900 dark:text-gray-100">{r.name}</span>
-                                        <span className="block text-gray-600 dark:text-gray-400">{r.email}</span>
-                                    </td>
-                                    <td className="py-2.5 pr-3">{r.organizations}</td>
-                                    <td className="py-2.5 pr-3">{r.active_sessions} device{r.active_sessions === 1 ? '' : 's'}</td>
-                                    <td className="py-2.5 pr-3 text-gray-600 dark:text-gray-400">{timeAgo(r.last_seen)}</td>
-                                    <td className="py-2.5">
-                                        <span className="flex flex-wrap gap-1">
-                                            {r.status === 'disabled' && <Badge>disabled</Badge>}
-                                            {r.provider_role && <Badge>provider {r.provider_role}</Badge>}
-                                            {!r.email_verified && <Badge>unverified</Badge>}
-                                            {r.two_factor ? <Badge>2FA</Badge> : null}
-                                        </span>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
+        <div className="space-y-6">
+            <PageHeader title="Accounts" description="Everyone who can sign in: the organizations they belong to and where they are signed in." />
+            <Section>
+                <div className="relative mb-4 md:max-w-sm">
+                    <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 ac-faint pointer-events-none" />
+                    <Input className="!pl-9" placeholder="Search by name or email…" value={q} onChange={e => setQ(e.target.value)} />
                 </div>
-            )}
-        </Card>
+                {!rows ? <SkeletonRows rows={7} /> : rows.length === 0 ? (
+                    <EmptyState icon={<Users size={20} />} title="No accounts match" />
+                ) : (
+                    <ul className="ac-divide -mx-2">
+                        {rows.map(r => (
+                            <li key={r.id}>
+                                <button type="button" onClick={() => go('accounts', r.id)}
+                                    className="ac-row w-full text-left px-2 py-2.5 grid items-center gap-x-4 gap-y-1 grid-cols-[auto_minmax(0,1fr)_auto] md:grid-cols-[auto_minmax(0,1.6fr)_minmax(0,0.7fr)_minmax(0,0.7fr)_minmax(0,0.8fr)_auto]">
+                                    <Avatar name={r.name} />
+                                    <span className="min-w-0">
+                                        <span className="block text-sm font-medium truncate">{r.name}</span>
+                                        <span className="block text-[12px] ac-faint truncate">{r.email}</span>
+                                    </span>
+                                    <span className="hidden md:block text-[13px] ac-muted">{r.organizations} org{r.organizations === 1 ? '' : 's'}</span>
+                                    <span className="hidden md:block text-[13px] ac-muted">{r.active_sessions} device{r.active_sessions === 1 ? '' : 's'}</span>
+                                    <span className="hidden md:block text-[12px] ac-faint">{r.last_seen ? `seen ${timeAgo(r.last_seen)}` : 'never signed in'}</span>
+                                    <span className="flex flex-wrap justify-end gap-1.5">
+                                        {r.status === 'disabled' && <StatusPill status="disabled" />}
+                                        {r.provider_role && <StatusPill tone="accent">{r.provider_role}</StatusPill>}
+                                        {!r.email_verified && <StatusPill tone="neutral">unverified</StatusPill>}
+                                    </span>
+                                </button>
+                            </li>
+                        ))}
+                    </ul>
+                )}
+            </Section>
+            <AccountDrawer id={routeId} reauth={reauth} onClose={() => go('accounts')} onOpenOrg={id => go('orgs', id)} onChanged={() => load(q.trim())} />
+        </div>
     );
 };
 
@@ -93,99 +91,116 @@ function tempPassword(): string {
     return btoa(String.fromCodePoint(...bytes)).replace(/[+/=]/g, '').slice(0, 14);
 }
 
-const AccountView: React.FC<{ id: string; reauth: Reauth; onBack: () => void; onOpenOrg?: (orgId: string) => void }> = ({ id, reauth, onBack, onOpenOrg }) => {
+const AccountDrawer: React.FC<{ id?: string; reauth: Reauth; onClose: () => void; onOpenOrg: (id: string) => void; onChanged: () => void }> = ({ id, reauth, onClose, onOpenOrg, onChanged }) => {
+    const dialogs = useDialogs();
     const [d, setD] = useState<AccountDetail | null>(null);
     const [newPassword, setNewPassword] = useState<string | null>(null);
 
     const load = useCallback(async () => {
+        if (!id) return;
         try { setD(await api<AccountDetail>(`/admin/accounts/${id}`)); } catch (e) { toast.error((e as ApiError).message); }
     }, [id]);
-    useEffect(() => { load(); }, [load]);
-
-    if (!d) return <Card><p className="text-sm">Loading account…</p></Card>;
-    const disabled = d.user.status === 'disabled';
+    useEffect(() => { setD(null); setNewPassword(null); load(); }, [load]);
 
     const run = async (path: string, body: Record<string, unknown>, done: string) => {
         const res = await guarded(reauth, () => api(`/admin/accounts/${id}/${path}`, postJson(body)), m => toast.error(m));
-        if (res !== undefined) { toast.success(done); await load(); }
+        if (res !== undefined) { toast.success(done); await load(); onChanged(); }
         return res !== undefined;
     };
 
-    const toggleDisabled = async () => {
-        if (disabled) { await run('status', { status: 'active' }, 'Account enabled'); return; }
-        const reason = window.prompt('Why is this account being disabled? It is signed out everywhere immediately.');
-        if (reason) await run('status', { status: 'disabled', reason }, 'Account disabled and signed out');
-    };
+    const disabled = d?.user.status === 'disabled';
 
+    const signOutAll = async () => {
+        if (await dialogs.confirm({ title: 'Sign out everywhere?', body: `${d?.user.name} is signed out on every device and must sign in again.`, confirmLabel: 'Sign out everywhere' })) {
+            await run('revoke-sessions', {}, 'Signed out everywhere');
+        }
+    };
     const reset = async () => {
-        if (!window.confirm('Set a new temporary password? The person is signed out everywhere and must use the new one.')) return;
+        if (!(await dialogs.confirm({ title: 'Reset the password?', body: 'A new temporary password is created and shown once. They are signed out everywhere and must use it.', confirmLabel: 'Reset password' }))) return;
         const pw = tempPassword();
         if (await run('reset-password', { temporaryPassword: pw }, 'Password reset')) setNewPassword(pw);
     };
+    const toggle = async () => {
+        if (disabled) {
+            if (await dialogs.confirm({ title: 'Enable this account?', body: 'They will be able to sign in again.', confirmLabel: 'Enable' })) await run('status', { status: 'active' }, 'Account enabled');
+            return;
+        }
+        const reason = await dialogs.prompt({ title: 'Disable this account?', body: 'They are signed out everywhere immediately and cannot sign in by any method until enabled again.', label: 'Reason', multiline: true, minLength: 3, confirmLabel: 'Disable', danger: true });
+        if (reason) await run('status', { status: 'disabled', reason }, 'Account disabled');
+    };
 
     return (
-        <div className="space-y-6">
-            <Card padding="lg">
-                <button type="button" onClick={onBack} className="text-[12px] text-gray-600 dark:text-gray-400 flex items-center gap-1 mb-2">
-                    <ArrowLeft size={14} /> All accounts
-                </button>
-                <div className="flex flex-wrap items-center gap-3">
-                    <h2 className="font-serif text-xl text-gray-900 dark:text-gray-100">{d.user.name}</h2>
-                    {disabled && <Badge>disabled</Badge>}
-                    {d.providerAdmin?.status === 'active' && <Badge>provider {d.providerAdmin.role}</Badge>}
-                </div>
-                <p className="text-[12px] text-gray-600 dark:text-gray-400 mt-1">
-                    {d.user.email} · {d.user.email_verified ? 'email verified' : 'email not verified'} · {d.user.two_factor ? '2FA on' : '2FA off'}
-                    {' · '}signs in with {d.loginMethods.map(m => (m === 'credential' ? 'password' : m)).join(', ') || 'nothing yet'}
-                    {' · '}joined {timeAgo(d.user.created_at)}
-                </p>
-                {disabled && d.user.status_reason && <p className="text-[12px] mt-2 text-amber-700 dark:text-amber-400">Disabled: {d.user.status_reason}</p>}
-                <div className="mt-4 flex flex-wrap gap-2">
-                    <Button icon={<LogOut size={16} />} onClick={() => run('revoke-sessions', {}, 'Signed out everywhere')}>Sign out everywhere</Button>
-                    <Button icon={<KeyRound size={16} />} onClick={reset}>Reset password</Button>
-                    <Button variant={disabled ? 'primary' : 'danger'} icon={<UserX size={16} />} onClick={toggleDisabled}>
-                        {disabled ? 'Enable account' : 'Disable account'}
-                    </Button>
-                </div>
-                {newPassword && (
-                    <div className="mt-4 neu-inset rounded-xl p-3 text-[13px]">
-                        New temporary password — pass it on privately; it is not shown again:
-                        <span className="block font-mono text-base mt-1 select-all">{newPassword}</span>
-                    </div>
-                )}
-            </Card>
+        <Drawer open={!!id} onClose={onClose} width={640}
+            title={d?.user.name ?? 'Account'}
+            meta={d && <>{disabled && <StatusPill status="disabled" />}{d.providerAdmin?.status === 'active' && <StatusPill tone="accent">provider {d.providerAdmin.role}</StatusPill>}</>}
+            subtitle={d?.user.email}
+            footer={d ? (
+                <>
+                    <button type="button" className="neu-button" onClick={signOutAll}><LogOut size={15} /> Sign out everywhere</button>
+                    <button type="button" className="neu-button" onClick={reset}><KeyRound size={15} /> Reset password</button>
+                    <button type="button" className={`neu-button ${disabled ? 'neu-button-primary' : 'neu-button-danger'}`} onClick={toggle}>
+                        {disabled ? <><UserCheck size={15} /> Enable</> : <><UserX size={15} /> Disable</>}
+                    </button>
+                </>
+            ) : undefined}>
+            {!d ? <SkeletonRows rows={6} /> : (
+                <>
+                    {newPassword && (
+                        <div className="neu-inset rounded-[14px] p-4 ac-enter-soft">
+                            <p className="text-[13px] ac-muted">New temporary password — pass it on privately. It is not shown again.</p>
+                            <p className="mt-2 font-mono text-lg tracking-wide select-all break-all">{newPassword}</p>
+                        </div>
+                    )}
+                    {disabled && d.user.status_reason && (
+                        <div className="neu-inset rounded-[14px] p-3.5 text-[13px] text-[var(--ac-bad)]">Disabled: {d.user.status_reason}</div>
+                    )}
 
-            <Card padding="lg">
-                <SectionTitle>Organizations</SectionTitle>
-                {d.memberships.length === 0 ? <p className="text-sm text-gray-600 dark:text-gray-400">Not a member of any organization.</p> : (
-                    <ul className="divide-y divide-black/5 dark:divide-white/10">
-                        {d.memberships.map(m => (
-                            <li key={m.id} className="py-2 flex flex-wrap items-center gap-2 text-sm">
-                                <button type="button" className="font-medium text-gray-900 dark:text-gray-100 hover:underline" onClick={() => onOpenOrg?.(m.org_id)}>{m.org_name}</button>
-                                <Badge>{m.role}</Badge>
-                                {m.status !== 'active' && <Badge>{m.status}</Badge>}
-                                {m.org_status !== 'active' && <Badge>org {m.org_status}</Badge>}
-                            </li>
-                        ))}
-                    </ul>
-                )}
-            </Card>
+                    <Section title="Account">
+                        <dl className="ac-grid-fit !gap-x-5 !gap-y-4" style={{ ['--ac-min' as string]: '10rem' }}>
+                            <Detail label="Email">{d.user.email_verified ? <StatusPill tone="ok">verified</StatusPill> : <StatusPill tone="neutral">not verified</StatusPill>}</Detail>
+                            <Detail label="Two-factor">{d.user.two_factor ? <span className="inline-flex items-center gap-1 text-[var(--ac-ok)]"><ShieldCheck size={14} /> On</span> : 'Off'}</Detail>
+                            <Detail label="Signs in with">{d.loginMethods.map(m => (m === 'credential' ? 'password' : m)).join(', ') || 'Nothing yet'}</Detail>
+                            <Detail label="Joined">{timeAgo(d.user.created_at)}</Detail>
+                        </dl>
+                    </Section>
 
-            <Card padding="lg">
-                <SectionTitle>Signed-in devices</SectionTitle>
-                {d.sessions.length === 0 ? <p className="text-sm text-gray-600 dark:text-gray-400">Not signed in anywhere.</p> : (
-                    <ul className="divide-y divide-black/5 dark:divide-white/10">
-                        {d.sessions.map((s, i) => (
-                            <li key={i} className="py-2 text-[13px] text-gray-800 dark:text-gray-200">
-                                <span className="block truncate">{s.user_agent ?? 'Unknown device'}</span>
-                                <span className="block text-[12px] text-gray-600 dark:text-gray-400">
-                                    {s.ip ?? 'unknown address'} · active {timeAgo(s.last_active)} · since {timeAgo(s.created_at)}
-                                </span>
-                            </li>
-                        ))}
-                    </ul>
-                )}
-            </Card>
-        </div>
+                    <Section title="Organizations">
+                        {d.memberships.length === 0 ? <p className="text-sm ac-muted">Not a member of any organization.</p> : (
+                            <ul className="ac-divide -mx-2">
+                                {d.memberships.map(m => (
+                                    <li key={m.id}>
+                                        <button type="button" onClick={() => onOpenOrg(m.org_id)} className="ac-row w-full text-left px-2 py-2.5 flex flex-wrap items-center gap-2">
+                                            <span className="flex-1 min-w-0 text-sm font-medium truncate">{m.org_name}</span>
+                                            <StatusPill tone="neutral">{m.role}</StatusPill>
+                                            {m.status !== 'active' && <StatusPill status={m.status} />}
+                                            {m.org_status !== 'active' && <StatusPill status={m.org_status} />}
+                                        </button>
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                    </Section>
+
+                    <Section title="Signed-in devices" description={`${d.sessions.length} active`}>
+                        {d.sessions.length === 0 ? <p className="text-sm ac-muted">Not signed in anywhere.</p> : (
+                            <ul className="space-y-3">
+                                {d.sessions.map((s, i) => {
+                                    const dv = device(s.user_agent);
+                                    return (
+                                        <li key={i} className="flex items-center gap-3">
+                                            <span className="w-9 h-9 rounded-[12px] neu-inset flex items-center justify-center ac-muted shrink-0">{dv.phone ? <Smartphone size={16} /> : <Monitor size={16} />}</span>
+                                            <span className="min-w-0 flex-1">
+                                                <span className="block text-sm truncate">{dv.label}</span>
+                                                <span className="block text-[12px] ac-faint truncate">{[s.ip || null, `active ${timeAgo(s.last_active)}`, `since ${timeAgo(s.created_at)}`].filter(Boolean).join(' · ')}</span>
+                                            </span>
+                                        </li>
+                                    );
+                                })}
+                            </ul>
+                        )}
+                    </Section>
+                </>
+            )}
+        </Drawer>
     );
 };

@@ -52,6 +52,9 @@ export async function overview(db: D1Database) {
      FROM platform_audit a LEFT JOIN "user" u ON u.id = a.actor_user_id
      ORDER BY a.at DESC LIMIT 8`,
   ).all();
+  const failedSetups = await db.prepare(
+    "SELECT COUNT(*) AS n FROM applications WHERE review_status = 'approved' AND provisioning_status = 'failed'",
+  ).first<{ n: number }>();
   const trialsEnding = await db.prepare(
     "SELECT COUNT(*) AS n FROM subscriptions WHERE status = 'trialing' AND trial_ends_at BETWEEN ? AND ?",
   ).bind(Date.now(), Date.now() + 7 * 86_400_000).first<{ n: number }>();
@@ -59,6 +62,8 @@ export async function overview(db: D1Database) {
     organizations: orgs, applications, subscriptions, notifications: outbox,
     totals, planMix, recentApplications, recentAudit,
     trialsEndingThisWeek: trialsEnding?.n ?? 0,
+    failedSetups: failedSetups?.n ?? 0,
+    generatedAt: Date.now(),
   };
 }
 

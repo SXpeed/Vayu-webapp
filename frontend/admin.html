@@ -8,6 +8,8 @@
     <meta name="theme-color" content="#e9edf4">
     <title>ateliersupport · Control panel</title>
     <link rel="icon" type="image/png" href="/icon.png">
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="./assets/fonts/Inter-var.woff2">
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="./assets/fonts/PlayfairDisplay-var.woff2">
     <script>
         // Same theme preference key as the app, so the panel matches it.
         try {
@@ -18,6 +20,8 @@
 
 <body class="bg-[var(--neu-bg)]">
     <div id="root"></div>
+    <!-- Drawers, dialogs and the command palette render here, inside the panel's styles. -->
+    <div id="ac-overlays" class="ac ac-overlays"></div>
     <script type="module" src="/admin/main.tsx"></script>
 </body>
 
