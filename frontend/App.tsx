@@ -134,8 +134,8 @@ const App: React.FC = () => {
         teamMembers,
         events, setEvents,
         contacts, setContacts,
-        loadData, loadTeamMembers, migrateLocalToD1,
-    } = useEntityData(authUser, authUserRef);
+        loadData, syncAll, loadTeamMembers, migrateLocalToD1,
+    } = useEntityData(authUser, authUserRef, currentView);
 
     // ── Handlers ──────────────────────────────────────────────────────────
     const handlers = useHandlers({
@@ -165,10 +165,10 @@ const App: React.FC = () => {
                     pushService.syncSubscription();
 
                     const migrated = await migrateLocalToD1();
-                    await loadData(true);
+                    await syncAll();
                     await loadTeamMembers();
                     if (migrated) {
-                        await loadData(true);
+                        await syncAll();
                     }
                     backfillThumbnailsQuietly();
                     prefetchViews();
@@ -213,9 +213,9 @@ const App: React.FC = () => {
         pushService.syncSubscription();
         const migrated = await migrateLocalToD1();
         await loadTeamMembers();
-        await loadData(true);
+        await syncAll();
         if (migrated) {
-            await loadData(true);
+            await syncAll();
         }
         prefetchViews();
         backfillThumbnailsQuietly();

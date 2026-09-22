@@ -1,35 +1,37 @@
 import { getOrCreateVapidKeys, sendWebPush, type StoredPushSubscription } from './webpush';
 import {
-  ADMIN_PERMISSIONS, ADMIN_ROLE_ID, BUILT_IN_ROLES, STAFF_DEFAULT_PERMISSIONS, STAFF_ROLE_ID,
-  atLeast, normalizePermissions, type AccessLevel, type Permissions, type RoleDef, type SectionId,
+  ADMIN_ROLE_ID, STAFF_ROLE_ID, atLeast, normalizePermissions,
+  type AccessLevel, type Permissions, type RoleDef, type SectionId,
 } from './permissions';
+import {
+  CORS, json, err, normalizeRoute, rowToConversation, rowToMessage, rowToArtwork,
+  rowToCollection, rowToCatalog, rowToInquiry, rowToInquiryMessage, rowToEvent,
+  rowToContact, rowToStore, rowToAttendance, runSetupOnce,
+} from './rows';
+import {
+  flagEnabled, rawRealtimeSecret, realtimeEnabled, requestMetrics, resolveRealtimeSecret,
+  trackedEnv, workspaceId,
+  type ChangeEvent, type Ctx, type Env, type SessionData,
+} from './workerEnv';
+import {
+  bearerToken, getSession, getRoles, permissionsFor, saveRoles, SESSION_TTL_DAYS,
+  type StoredUser,
+} from './workerRoles';
+import {
+  ackStatus, changeLogStmt, changeLogStmts, ensureChangeLogTable, handleSync, queueHubNotify,
+  statusUpgradeStmts,
+} from './deltaSync';
+import { signTicket, TICKET_TTL_MS } from './realtimeTickets';
+import {
+  fileAccessAllowed, fileAuthEnabled, fileCacheHeaders, fileCookieClearHeaders,
+  fileCookieToken, fileCookieValid, forgetFileToken, issueFileCookie,
+} from './fileAuth';
+import { SyncHub } from './realtime';
 
-interface Env {
-  VAYU_KV: KVNamespace;
-  VAYU_R2: R2Bucket;
-  VAYU_DB: D1Database;
-  // Razorpay credentials — set via `wrangler secret put <NAME>`.
-  RAZORPAY_KEY_ID?: string;
-  RAZORPAY_KEY_SECRET?: string;
-  RAZORPAY_WEBHOOK_SECRET?: string;
-  // Calendarific (Indian public holidays & festivals) — set via `wrangler secret put`.
-  CALENDARIFIC_API_KEY?: string;
-}
+// Durable Object classes must be exported from the entry module.
+export { SyncHub };
 
 type FormField = File | string | null;
-
-interface StoredUser {
-  id: string;
-  name: string;
-  storeId?: string;
-  email: string;
-  phone?: string;
-  address?: string;
-  hashedPassword: string;
-  /** Role id: 'admin', 'user' (Staff) or a custom role's id. */
-  role: string;
-  createdAt: number;
-}
 
 interface PublicUser {
   id: string;
@@ -42,15 +44,6 @@ interface PublicUser {
   isOnline?: boolean;
   lastSeen?: number;
   notificationsEnabled?: boolean;
-}
-
-interface SessionData {
-  userId: string;
-  email: string;
-  name: string;
-  /** Refreshed from the user record on every request (see getSession). */
-  role: string;
-  expiresAt: number;
 }
 
 interface ActivityLog {
@@ -66,7 +59,7 @@ interface ActivityLog {
 
 // ── Presence helpers ──────────────────────────────────────────────────────
 // Presence is stored in KV with a short TTL. Keys: presence:<userId>
-const PRESENCE_TTL_SECONDS = 45; // Heartbeat every 30s; TTL 45s gives grace
+const PRESENCE_TTL_SECONDS = 7 * 60; // Five-minute heartbeat with two minutes of grace
 
 async function setPresence(kv: KVNamespace, userId: string): Promise<void> {
   await kv.put(`presence:${userId}`, JSON.stringify({ lastSeen: Date.now() }), {
@@ -101,25 +94,6 @@ async function logActivity(db: D1Database, userId: string, userName: string, act
   } catch (e) {
     console.error('Failed to log activity:', e);
   }
-}
-
-const CORS: HeadersInit = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-};
-
-const SESSION_TTL_DAYS = 30;
-
-function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { 'Content-Type': 'application/json', ...CORS },
-  });
-}
-
-function err(message: string, status = 400): Response {
-  return json({ error: message }, status);
 }
 
 // ── Crypto helpers ─────────────────────────────────────────────────────────
@@ -164,89 +138,11 @@ function generateToken(): string {
     .join('');
 }
 
-// ── Session helpers ────────────────────────────────────────────────────────
-
-function bearerToken(request: Request): string | null {
-  const auth = request.headers.get('Authorization');
-  return auth?.startsWith('Bearer ') ? auth.slice(7).trim() : null;
-}
-
-const sessionMemo = new WeakMap<Request, Promise<SessionData | null>>();
-
-/**
- * The caller's session, or null. Memoised per request, so the access check
- * in the router and the handler share one lookup. The role is re-read from
- * the user record every time: a session used to keep the role it had at
- * login, so a demoted admin kept admin rights until the session expired. A
- * deleted user's sessions stop working at once for the same reason.
- */
-function getSession(request: Request, kv: KVNamespace): Promise<SessionData | null> {
-  let pending = sessionMemo.get(request);
-  if (!pending) {
-    pending = loadSession(request, kv);
-    sessionMemo.set(request, pending);
-  }
-  return pending;
-}
-
-async function loadSession(request: Request, kv: KVNamespace): Promise<SessionData | null> {
-  const token = bearerToken(request);
-  if (!token) return null;
-  const raw = await kv.get(`auth:session:${token}`);
-  if (!raw) return null;
-  const session: SessionData = JSON.parse(raw);
-  if (session.expiresAt < Date.now()) {
-    await kv.delete(`auth:session:${token}`);
-    return null;
-  }
-  const userRaw = await kv.get(`auth:user:${session.userId}`);
-  if (!userRaw) return null;
-  session.role = (JSON.parse(userRaw) as StoredUser).role;
-  return session;
-}
-
 // ── Roles & access ──────────────────────────────────────────────────────────
-// Custom roles live in KV under one key. "admin" always has everything and is
-// never stored; "user" (Staff) is built in but its permissions are editable.
-
-const ROLES_KEY = 'auth:roles';
-const ROLES_CACHE_MS = 15_000;
-let rolesCache: { at: number; roles: RoleDef[] } | null = null;
-
-async function getRoles(kv: KVNamespace): Promise<RoleDef[]> {
-  if (rolesCache && Date.now() - rolesCache.at < ROLES_CACHE_MS) return rolesCache.roles;
-  const raw = await kv.get(ROLES_KEY);
-  const stored: RoleDef[] = raw ? JSON.parse(raw) : [];
-  const staff = stored.find(r => r.id === STAFF_ROLE_ID);
-  const roles: RoleDef[] = [
-    { ...BUILT_IN_ROLES[0], permissions: ADMIN_PERMISSIONS },
-    {
-      ...BUILT_IN_ROLES[1],
-      name: staff?.name || BUILT_IN_ROLES[1].name,
-      permissions: staff ? normalizePermissions(staff.permissions) : STAFF_DEFAULT_PERMISSIONS,
-    },
-    ...stored
-      .filter(r => r.id !== ADMIN_ROLE_ID && r.id !== STAFF_ROLE_ID)
-      .map(r => ({ id: r.id, name: r.name, permissions: normalizePermissions(r.permissions) })),
-  ];
-  rolesCache = { at: Date.now(), roles };
-  return roles;
-}
-
-async function saveRoles(kv: KVNamespace, roles: RoleDef[]): Promise<void> {
-  const toStore = roles
-    .filter(r => r.id !== ADMIN_ROLE_ID)
-    .map(r => ({ id: r.id, name: r.name, permissions: r.permissions }));
-  await kv.put(ROLES_KEY, JSON.stringify(toStore));
-  rolesCache = null;
-}
+// Sessions and role storage live in ./workerRoles; this section keeps the
+// route-level access decisions.
 
 /** A role that no longer exists grants nothing. */
-function permissionsFor(roles: RoleDef[], roleId: string): Permissions {
-  if (roleId === ADMIN_ROLE_ID) return ADMIN_PERMISSIONS;
-  return roles.find(r => r.id === roleId)?.permissions ?? normalizePermissions({});
-}
-
 async function sessionCan(ctx: Ctx, session: SessionData, section: SectionId, level: AccessLevel): Promise<boolean> {
   if (session.role === ADMIN_ROLE_ID) return true;
   return atLeast(permissionsFor(await getRoles(ctx.env.VAYU_KV), session.role)[section], level);
@@ -322,84 +218,7 @@ function stripPassword(user: StoredUser): PublicUser {
   return pub as PublicUser;
 }
 
-// ── D1 row mappers ──────────────────────────────────────────────────────────
-
-function rowToConversation(row: Record<string, unknown>): any {
-  return {
-    id: row.id as string,
-    participantIds: JSON.parse(row.participant_ids as string),
-    participantNames: JSON.parse(row.participant_names as string),
-    lastMessage: row.last_message as string,
-    lastMessageTime: row.last_message_time as number,
-    unreadCount: row.unread_count as number,
-    title: row.title || undefined,
-    reason: row.reason || undefined,
-    note: row.note || undefined,
-    isGroup: !!row.is_group,
-    groupName: row.group_name || undefined,
-    isPinned: !!row.is_pinned,
-    isArchived: !!row.is_archived,
-  };
-}
-
-function rowToMessage(row: Record<string, unknown>): any {
-  return {
-    id: row.id as string,
-    conversationId: row.conversation_id as string,
-    senderId: row.sender_id as string,
-    senderName: row.sender_name as string,
-    text: row.text as string,
-    tags: JSON.parse(row.tags as string),
-    timestamp: row.timestamp as number,
-    status: row.status as string,
-    replyTo: row.reply_to ? JSON.parse(row.reply_to as string) : undefined,
-    attachment: row.attachment ? JSON.parse(row.attachment as string) : undefined,
-  };
-}
-
-function rowToArtwork(row: Record<string, unknown>): any {
-  return {
-    id: row.id as string,
-    customId: row.custom_id as string,
-    title: row.title as string,
-    description: row.description as string,
-    dimensions: row.dimensions as string,
-    medium: row.medium as string,
-    status: row.status as string,
-    location: row.location as string,
-    price: row.price as number,
-    imageUrls: JSON.parse(row.image_urls as string),
-    createdAt: row.created_at as number,
-    artist: (row.artist as string) || undefined,
-    artworkYear: (row.artwork_year as string) || undefined,
-    descriptionTitle: (row.description_title as string) || undefined,
-    plusGst: !!row.plus_gst,
-  };
-}
-
-function rowToCollection(row: Record<string, unknown>): any {
-  return {
-    id: row.id as string,
-    name: row.name as string,
-    description: row.description as string,
-    artworkIds: JSON.parse(row.artwork_ids as string),
-    coverImageUrl: (row.cover_image_url as string) || undefined,
-    createdAt: row.created_at as number,
-  };
-}
-
-function rowToCatalog(row: Record<string, unknown>): any {
-  return {
-    id: row.id as string,
-    name: row.name as string,
-    description: row.description as string,
-    artworkIds: JSON.parse(row.artwork_ids as string),
-    coverImageUrl: row.cover_image_url as string,
-    pdfUrl: (row.pdf_url as string) || undefined,
-    source: (row.source as string) || undefined,
-    createdAt: row.created_at as number,
-  };
-}
+// ── Row mappers moved to ./rows (shared with the delta-sync endpoint) ──────
 
 // The catalogs table predates pdf_url/source — add them lazily (once per
 // isolate) so no manual D1 migration is required.
@@ -415,13 +234,6 @@ function rowToCatalog(row: Record<string, unknown>): any {
  * how GET /catalogs and /events stopped answering. Now each request does its
  * own (idempotent) setup until one finishes.
  */
-const setupDone = new Set<string>();
-async function runSetupOnce(key: string, setup: () => Promise<unknown>): Promise<void> {
-  if (setupDone.has(key)) return;
-  await setup();
-  setupDone.add(key);
-}
-
 function ensureCatalogsColumns(db: D1Database): Promise<void> {
   return runSetupOnce('catalogsColumns', () => (async () => {
     try { await db.prepare('ALTER TABLE catalogs ADD COLUMN pdf_url TEXT').run(); } catch { /* already exists */ }
@@ -429,40 +241,7 @@ function ensureCatalogsColumns(db: D1Database): Promise<void> {
   })());
 }
 
-function rowToInquiry(row: Record<string, unknown>): any {
-  return {
-    id: row.id as string,
-    inquiryNumber: row.inquiry_number as string,
-    customerName: row.customer_name as string,
-    customerPhone: row.customer_phone as string,
-    customerEmail: row.customer_email as string,
-    customerAddress: (row.customer_address as string) || undefined,
-    artworkIds: JSON.parse(row.artwork_ids as string),
-    notes: row.notes as string,
-    source: row.source as string,
-    status: row.status as string,
-    catalogShared: !!row.catalog_shared,
-    date: row.date as number,
-    createdBy: (row.created_by as string) || undefined,
-    createdByName: (row.created_by_name as string) || undefined,
-    imageUrls: row.image_urls ? JSON.parse(row.image_urls as string) : [],
-  };
-}
 
-function rowToInquiryMessage(row: Record<string, unknown>): any {
-  return {
-    id: row.id as string,
-    inquiryId: row.inquiry_id as string,
-    senderId: row.sender_id as string,
-    senderName: row.sender_name as string,
-    text: row.text as string,
-    tags: JSON.parse(row.tags as string),
-    timestamp: row.timestamp as number,
-    status: row.status as string,
-    replyTo: row.reply_to ? JSON.parse(row.reply_to as string) : undefined,
-    attachment: row.attachment ? JSON.parse(row.attachment as string) : undefined,
-  };
-}
 
 // ── Web Push notifications ─────────────────────────────────────────────────
 // Subscriptions live in KV under `push:sub:<userId>:<endpointHash>`.
@@ -828,6 +607,11 @@ async function handlePaymentWebhook(ctx: Ctx): Promise<Response> {
     const amount = updated.amount;
     const name = updated.customerName || 'customer';
     const descriptionSuffix = record?.description ? ` — ${record.description}` : '';
+    // Payment links live in KV, which cannot share a D1 transaction with the
+    // change log — so the webhook sends a signal-only hub event instead, and
+    // clients refetch /payments/links. A lost signal only delays the next
+    // scheduled refresh; the KV record is already committed.
+    queueHubNotify(ctx, [{ entity: 'payments', id: plink.id, op: 'put' }]);
     ctx.execCtx.waitUntil(Promise.all([
       sendPushToAllExcept(ctx.env, '', {
         title: 'Payment received ✓',
@@ -845,14 +629,6 @@ async function handlePaymentWebhook(ctx: Ctx): Promise<Response> {
 
 // ── Route infrastructure ───────────────────────────────────────────────────
 
-interface Ctx {
-  request: Request;
-  env: Env;
-  url: URL;
-  path: string;
-  method: string;
-  execCtx: ExecutionContext;
-}
 
 type RouteHandler = (ctx: Ctx) => Promise<Response>;
 
@@ -906,7 +682,13 @@ async function handleAuthLogin(ctx: Ctx): Promise<Response> {
   await ctx.env.VAYU_KV.put(`auth:session:${token}`, JSON.stringify(session), {
     expirationTtl: SESSION_TTL_DAYS * 86_400,
   });
-  return json({ token, user: await withAccess(ctx, user) });
+  const body = { token, user: await withAccess(ctx, user) };
+  if (!fileAuthEnabled(ctx)) return json(body);
+  // Same-origin HttpOnly capability cookie so <img>/jsPDF loads (which cannot
+  // send headers) still authenticate. Unrelated to the bearer token.
+  const res = json(body);
+  res.headers.append('Set-Cookie', await issueFileCookie(ctx, user.id));
+  return res;
 }
 
 async function handleAuthMe(ctx: Ctx): Promise<Response> {
@@ -914,7 +696,13 @@ async function handleAuthMe(ctx: Ctx): Promise<Response> {
   if (!session) return err('Unauthorized', 401);
   const raw = await ctx.env.VAYU_KV.get(`auth:user:${session.userId}`);
   if (!raw) return err('User not found', 404);
-  return json(await withAccess(ctx, JSON.parse(raw)));
+  const res = json(await withAccess(ctx, JSON.parse(raw)));
+  // Re-issue only when the cookie is missing or its KV token expired — the
+  // bearer session is always valid here, so it can't be the test.
+  if (fileAuthEnabled(ctx) && !(await fileCookieValid(ctx))) {
+    res.headers.append('Set-Cookie', await issueFileCookie(ctx, session.userId));
+  }
+  return res;
 }
 
 /** Trimmed, length-capped string field; undefined when the value isn't a string. */
@@ -953,10 +741,26 @@ async function handleAuthMeUpdate(ctx: Ctx): Promise<Response> {
 
 async function handleAuthLogout(ctx: Ctx): Promise<Response> {
   const auth = ctx.request.headers.get('Authorization');
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (auth?.startsWith('Bearer ')) {
     await ctx.env.VAYU_KV.delete(`auth:session:${auth.slice(7).trim()}`);
   }
-  return json({ success: true });
+  // Drop the file capability token and revoke any live hub connection.
+  if (session) {
+    const fileToken = fileCookieToken(ctx);
+    if (fileToken) {
+      forgetFileToken(fileToken);
+      await ctx.env.VAYU_KV.delete(`auth:filetoken:${fileToken}`);
+    }
+    revokeHubAsync(ctx, session.userId);
+  }
+  const res = json({ success: true });
+  if (fileAuthEnabled(ctx)) {
+    for (const [name, value] of Object.entries(fileCookieClearHeaders())) {
+      res.headers.append(name, value);
+    }
+  }
+  return res;
 }
 
 async function handleAuthUsersList(ctx: Ctx): Promise<Response> {
@@ -989,7 +793,9 @@ async function handleAuthTeam(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
   const list = await ctx.env.VAYU_KV.list({ prefix: 'auth:user:' });
-  const presenceMap = await getPresenceMap(ctx.env.VAYU_KV);
+  // Connection-based presence from the hub when realtime is on; the KV
+  // heartbeat map remains the fallback (and the path for old clients).
+  const presenceMap = await hubPresence(ctx).catch(() => null) ?? await getPresenceMap(ctx.env.VAYU_KV);
   const users: PublicUser[] = [];
   for (const key of list.keys) {
     const raw = await ctx.env.VAYU_KV.get(key.name);
@@ -1048,6 +854,8 @@ async function handleAuthUsersDelete(ctx: Ctx): Promise<Response> {
   const countRaw = await ctx.env.VAYU_KV.get('auth:count');
   if (countRaw) await ctx.env.VAYU_KV.put('auth:count', String(Math.max(0, Number.parseInt(countRaw, 10) - 1)));
   await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'deleted', 'user', userId, `Deleted user "${user.name}" (${user.email})`);
+  // Their open hub connections close immediately.
+  revokeHubAsync(ctx, userId);
   // Full user (incl. password hash) so an admin undo fully restores the login.
   archiveDeletedAsync(ctx, session, 'user', userId, `User "${user.name}" (${user.email})`, user);
   return json({ success: true });
@@ -1183,7 +991,7 @@ async function handleRolesDelete(ctx: Ctx): Promise<Response> {
 async function handleAuthPresence(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
-  const presenceMap = await getPresenceMap(ctx.env.VAYU_KV);
+  const presenceMap = await hubPresence(ctx).catch(() => null) ?? await getPresenceMap(ctx.env.VAYU_KV);
   return json(presenceMap);
 }
 
@@ -1266,6 +1074,11 @@ async function handleUpload(ctx: Ctx): Promise<Response> {
 async function handleFileGet(ctx: Ctx): Promise<Response> {
   const key = decodeURIComponent(ctx.path.slice('/files/'.length));
   if (!key) return err('File not found', 404);
+  // FILE_AUTH=on: an unguessable R2 key is not authorization — require the
+  // file capability cookie (img/PDF flows) or a bearer session (fetch flows).
+  if (fileAuthEnabled(ctx) && !(await fileAccessAllowed(ctx))) {
+    return err('Unauthorized', 401);
+  }
   let obj = await ctx.env.VAYU_R2.get(key);
   // Thumbnail requested but none exists (older uploads): serve the original.
   if (!obj && key.endsWith('__thumb')) {
@@ -1274,7 +1087,14 @@ async function handleFileGet(ctx: Ctx): Promise<Response> {
   if (!obj) return err('File not found', 404);
   const headers = new Headers();
   obj.writeHttpMetadata(headers);
-  headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+  if (fileAuthEnabled(ctx)) {
+    // Private: this browser may reuse it, no shared cache may. Repeat views
+    // then cost no Worker request, no R2 read and no CPU.
+    headers.set('Cache-Control', fileCacheHeaders());
+  } else {
+    // Legacy behaviour while the flag is off (rollback path).
+    headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+  }
   headers.set('Access-Control-Allow-Origin', '*');
   return new Response(obj.body, { status: 200, headers });
 }
@@ -1355,27 +1175,34 @@ async function handleConversationsCreate(ctx: Ctx): Promise<Response> {
   if (!Array.isArray(conv.participantIds) || (!conv.participantIds.includes(session.userId) && session.role !== ADMIN_ROLE_ID)) {
     return err('You can only start chats you are part of', 403);
   }
-  await ctx.env.VAYU_DB.prepare(
-    `INSERT OR REPLACE INTO conversations
-     (id, participant_ids, participant_names, last_message, last_message_time,
-      unread_count, title, reason, note, is_group, group_name, is_pinned, is_archived, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
-    conv.id,
-    JSON.stringify(conv.participantIds),
-    JSON.stringify(conv.participantNames || []),
-    conv.lastMessage || '',
-    conv.lastMessageTime || Date.now(),
-    conv.unreadCount || 0,
-    conv.title || null,
-    conv.reason || null,
-    conv.note || null,
-    conv.isGroup ? 1 : 0,
-    conv.groupName || null,
-    conv.isPinned ? 1 : 0,
-    conv.isArchived ? 1 : 0,
-    Date.now()
-  ).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  // Conversation write + change-log row commit atomically.
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      `INSERT OR REPLACE INTO conversations
+       (id, participant_ids, participant_names, last_message, last_message_time,
+        unread_count, title, reason, note, is_group, group_name, is_pinned, is_archived, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      conv.id,
+      JSON.stringify(conv.participantIds),
+      JSON.stringify(conv.participantNames || []),
+      conv.lastMessage || '',
+      conv.lastMessageTime || Date.now(),
+      conv.unreadCount || 0,
+      conv.title || null,
+      conv.reason || null,
+      conv.note || null,
+      conv.isGroup ? 1 : 0,
+      conv.groupName || null,
+      conv.isPinned ? 1 : 0,
+      conv.isArchived ? 1 : 0,
+      Date.now()
+    ),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'conversation', conv.id, 'put',
+      { scope: conv.participantIds, actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'conversation', id: conv.id, op: 'put', conversationId: conv.id }]);
   return json(conv, 201);
 }
 
@@ -1385,27 +1212,33 @@ async function handleConversationsUpdate(ctx: Ctx): Promise<Response> {
   const convId = ctx.path.slice('/conversations/'.length);
   const body = await ctx.request.json();
   const conv = body as any;
-  await ctx.env.VAYU_DB.prepare(
-    `UPDATE conversations SET
-       participant_ids = ?, participant_names = ?, last_message = ?,
-       last_message_time = ?, unread_count = ?, title = ?, reason = ?,
-       note = ?, is_group = ?, group_name = ?, is_pinned = ?, is_archived = ?
-     WHERE id = ?`
-  ).bind(
-    JSON.stringify(conv.participantIds),
-    JSON.stringify(conv.participantNames || []),
-    conv.lastMessage || '',
-    conv.lastMessageTime || Date.now(),
-    conv.unreadCount || 0,
-    conv.title || null,
-    conv.reason || null,
-    conv.note || null,
-    conv.isGroup ? 1 : 0,
-    conv.groupName || null,
-    conv.isPinned ? 1 : 0,
-    conv.isArchived ? 1 : 0,
-    convId
-  ).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      `UPDATE conversations SET
+         participant_ids = ?, participant_names = ?, last_message = ?,
+         last_message_time = ?, unread_count = ?, title = ?, reason = ?,
+         note = ?, is_group = ?, group_name = ?, is_pinned = ?, is_archived = ?
+       WHERE id = ?`
+    ).bind(
+      JSON.stringify(conv.participantIds),
+      JSON.stringify(conv.participantNames || []),
+      conv.lastMessage || '',
+      conv.lastMessageTime || Date.now(),
+      conv.unreadCount || 0,
+      conv.title || null,
+      conv.reason || null,
+      conv.note || null,
+      conv.isGroup ? 1 : 0,
+      conv.groupName || null,
+      conv.isPinned ? 1 : 0,
+      conv.isArchived ? 1 : 0,
+      convId
+    ),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'conversation', convId, 'put',
+      { scope: conv.participantIds, actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'conversation', id: convId, op: 'put', conversationId: convId }]);
   return json(conv);
 }
 
@@ -1414,9 +1247,27 @@ async function handleConversationsDelete(ctx: Ctx): Promise<Response> {
   if (!session) return err('Unauthorized', 401);
   const convId = ctx.path.slice('/conversations/'.length);
   const conv = await ctx.env.VAYU_DB.prepare('SELECT * FROM conversations WHERE id = ?').bind(convId).first();
-  const msgCount = await ctx.env.VAYU_DB.prepare('SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ?').bind(convId).first<{ n: number }>();
-  await ctx.env.VAYU_DB.prepare('DELETE FROM messages WHERE conversation_id = ?').bind(convId).run();
-  await ctx.env.VAYU_DB.prepare('DELETE FROM conversations WHERE id = ?').bind(convId).run();
+  const msgRows = (await ctx.env.VAYU_DB.prepare(
+    'SELECT id FROM messages WHERE conversation_id = ?'
+  ).bind(convId).all<{ id: string }>()).results ?? [];
+  const msgCount = { n: msgRows.length };
+  const messageIds = msgRows.map(r => r.id);
+  let participants: string[] = [];
+  try { participants = conv ? JSON.parse((conv as Record<string, unknown>).participant_ids as string) : []; } catch { /* malformed row */ }
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  // Conversation delete, its messages, and every tombstone commit atomically.
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare('DELETE FROM messages WHERE conversation_id = ?').bind(convId),
+    ctx.env.VAYU_DB.prepare('DELETE FROM conversations WHERE id = ?').bind(convId),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'conversation', convId, 'delete',
+      { scope: participants, actorId: session.userId }),
+    ...changeLogStmts(ctx.env.VAYU_DB, ctx.env, 'message', messageIds, 'delete',
+      { scope: participants, actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [
+    { entity: 'conversation', id: convId, op: 'delete', conversationId: convId },
+    ...messageIds.map(id => ({ entity: 'message', id, op: 'delete' as const, conversationId: convId })),
+  ]);
   if (conv) {
     const raw = conv as Record<string, unknown>;
     const label = String(raw.group_name || raw.title || 'conversation');
@@ -1491,31 +1342,42 @@ async function handleMessagesCreate(ctx: Ctx): Promise<Response> {
   const alreadyExists = await ctx.env.VAYU_DB.prepare(
     'SELECT 1 FROM messages WHERE id = ?'
   ).bind(msg.id).first();
-  await ctx.env.VAYU_DB.prepare(
-    `INSERT OR REPLACE INTO messages
-     (id, conversation_id, sender_id, sender_name, text, tags, timestamp,
-      status, reply_to, attachment, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
-    msg.id,
-    msg.conversationId,
-    msg.senderId,
-    msg.senderName || '',
-    msg.text || '',
-    JSON.stringify(msg.tags || []),
-    msg.timestamp || Date.now(),
-    msg.status || 'sent',
-    msg.replyTo ? JSON.stringify(msg.replyTo) : null,
-    msg.attachment ? JSON.stringify(msg.attachment) : null,
-    Date.now()
-  ).run();
-
   // Update conversation's last message info
   const attachmentPreview = msg.attachment?.type === 'image' ? '📷 Photo' : `📎 ${msg.attachment?.name}`;
   const lastMsgPreview = msg.attachment ? attachmentPreview : msg.text;
-  await ctx.env.VAYU_DB.prepare(
-    `UPDATE conversations SET last_message = ?, last_message_time = ? WHERE id = ?`
-  ).bind(lastMsgPreview, msg.timestamp || Date.now(), msg.conversationId).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  // Message insert, conversation bump and both change-log rows commit atomically.
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      `INSERT OR REPLACE INTO messages
+       (id, conversation_id, sender_id, sender_name, text, tags, timestamp,
+        status, reply_to, attachment, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      msg.id,
+      msg.conversationId,
+      msg.senderId,
+      msg.senderName || '',
+      msg.text || '',
+      JSON.stringify(msg.tags || []),
+      msg.timestamp || Date.now(),
+      msg.status || 'sent',
+      msg.replyTo ? JSON.stringify(msg.replyTo) : null,
+      msg.attachment ? JSON.stringify(msg.attachment) : null,
+      Date.now()
+    ),
+    ctx.env.VAYU_DB.prepare(
+      `UPDATE conversations SET last_message = ?, last_message_time = ? WHERE id = ?`
+    ).bind(lastMsgPreview, msg.timestamp || Date.now(), msg.conversationId),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'message', msg.id, 'put',
+      { scope: members, actorId: session.userId }),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'conversation', msg.conversationId, 'put',
+      { scope: members, actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [
+    { entity: 'message', id: msg.id, op: 'put', conversationId: msg.conversationId },
+    { entity: 'conversation', id: msg.conversationId, op: 'put', conversationId: msg.conversationId },
+  ]);
 
   if (!alreadyExists) {
     ctx.execCtx.waitUntil(notifyConversationMessage(ctx.env, msg, session));
@@ -1531,9 +1393,7 @@ async function handleMessageStatusUpdate(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json();
   const { status } = body as { status?: string };
   if (!status) return err('status is required');
-  await ctx.env.VAYU_DB.prepare(
-    'UPDATE messages SET status = ? WHERE id = ?'
-  ).bind(status, msgId).run();
+  await applyMessageStatus(ctx, session, [msgId], status);
   return json({ success: true });
 }
 
@@ -1543,12 +1403,43 @@ async function handleMessageStatusBatch(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json();
   const { messageIds, status } = body as { messageIds?: string[]; status?: string };
   if (!messageIds || !status) return err('messageIds and status are required');
-  for (const id of messageIds) {
-    await ctx.env.VAYU_DB.prepare(
-      'UPDATE messages SET status = ? WHERE id = ?'
-    ).bind(status, id).run();
-  }
+  await applyMessageStatus(ctx, session, messageIds, status);
   return json({ success: true });
+}
+
+/**
+ * Forward-only status upgrades for chat messages, with the change-log row in
+ * the same atomic batch. Idempotent: re-sending an ack changes nothing and
+ * announces nothing, so status flows can't loop.
+ */
+async function applyMessageStatus(ctx: Ctx, session: SessionData, messageIds: string[], status: string): Promise<void> {
+  const to = ackStatus(status);
+  const ids = uniqueIds(messageIds);
+  if (!to || ids.length === 0) return;
+  const db = ctx.env.VAYU_DB;
+  await ensureChangeLogTable(db);
+  // Receipts come from conversation participants; admins may act on any.
+  const memberId = session.role === ADMIN_ROLE_ID ? undefined : session.userId;
+  const results = await db.batch(ids.flatMap(id =>
+    statusUpgradeStmts(db, ctx.env, 'messages', id, to, { actorId: session.userId, memberId })));
+  // Only rows that actually changed get a change-log entry and a hub signal.
+  const events: ChangeEvent[] = [];
+  for (let i = 0; i < ids.length; i++) {
+    for (const row of (results[i * 2].results ?? []) as { id: string; conversation_id: string }[]) {
+      events.push({ entity: 'message', id: row.id, op: 'put', conversationId: row.conversation_id });
+    }
+  }
+  queueHubNotify(ctx, events);
+}
+
+/** Receipt batches are bounded so one request's D1 batch stays small. */
+const MAX_STATUS_IDS = 100;
+
+/** String ids only, deduplicated and capped. */
+function uniqueIds(ids: unknown): string[] {
+  if (!Array.isArray(ids)) return [];
+  const valid = ids.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 128);
+  return [...new Set(valid)].slice(0, MAX_STATUS_IDS);
 }
 
 // ── Schema migrations ───────────────────────────────────────────────────────
@@ -1756,9 +1647,13 @@ async function handleDeletedItemsRestore(ctx: Ctx): Promise<Response> {
     if (cols.length === 0 || !payload.id) return err('Archived snapshot is incomplete');
     const existing = await ctx.env.VAYU_DB.prepare(`SELECT id FROM ${table} WHERE id = ?`).bind(String(payload.id)).first();
     if (existing) return err('An item with this id already exists — restore aborted', 409);
-    await ctx.env.VAYU_DB.prepare(
-      `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`
-    ).bind(...cols.map(c => (payload![c] === undefined ? null : payload![c]) as string | number | null)).run();
+    await ctx.env.VAYU_DB.batch([
+      ctx.env.VAYU_DB.prepare(
+        `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`
+      ).bind(...cols.map(c => (payload![c] === undefined ? null : payload![c]) as string | number | null)),
+      changeLogStmt(ctx.env.VAYU_DB, ctx.env, entity, String(payload.id), 'put', { actorId: session.userId }),
+    ]);
+    queueHubNotify(ctx, [{ entity, id: String(payload.id), op: 'put' }]);
   }
 
   await ctx.env.VAYU_DB.prepare('DELETE FROM deleted_items WHERE id = ?').bind(id).run();
@@ -1841,12 +1736,17 @@ async function handleArtworksCreate(ctx: Ctx): Promise<Response> {
   const alreadyExists = await ctx.env.VAYU_DB.prepare(
     'SELECT 1 FROM artworks WHERE id = ?'
   ).bind(art.id).first();
-  await ctx.env.VAYU_DB.prepare(
-    `INSERT OR REPLACE INTO artworks
-     (id, custom_id, title, artist, artwork_year, description_title, description,
-      dimensions, medium, status, location, price, plus_gst, image_urls, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(art.id, ...artworkValues(art), art.createdAt || Date.now()).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      `INSERT OR REPLACE INTO artworks
+       (id, custom_id, title, artist, artwork_year, description_title, description,
+        dimensions, medium, status, location, price, plus_gst, image_urls, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(art.id, ...artworkValues(art), art.createdAt || Date.now()),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'artwork', art.id, 'put', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'artwork', id: art.id, op: 'put' }]);
   if (!alreadyExists) {
     logEntityChange(ctx, session, 'created', 'artwork', art.id, `Added artwork ${artworkLabel(art)}`);
   }
@@ -1860,13 +1760,18 @@ async function handleArtworksUpdate(ctx: Ctx): Promise<Response> {
   const art = body as any;
   const artId = ctx.path.slice('/artworks/'.length);
   await ensureColumns(ctx.env.VAYU_DB, 'artworks');
-  await ctx.env.VAYU_DB.prepare(
-    `UPDATE artworks SET
-       custom_id = ?, title = ?, artist = ?, artwork_year = ?, description_title = ?,
-       description = ?, dimensions = ?, medium = ?, status = ?, location = ?,
-       price = ?, plus_gst = ?, image_urls = ?
-     WHERE id = ?`
-  ).bind(...artworkValues(art), artId).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      `UPDATE artworks SET
+         custom_id = ?, title = ?, artist = ?, artwork_year = ?, description_title = ?,
+         description = ?, dimensions = ?, medium = ?, status = ?, location = ?,
+         price = ?, plus_gst = ?, image_urls = ?
+       WHERE id = ?`
+    ).bind(...artworkValues(art), artId),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'artwork', artId, 'put', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'artwork', id: artId, op: 'put' }]);
   logEntityChange(ctx, session, 'updated', 'artwork', artId, `Updated artwork ${artworkLabel({ ...art, id: artId })}`);
   return json(art);
 }
@@ -1882,7 +1787,12 @@ async function handleArtworksDelete(ctx: Ctx): Promise<Response> {
     'SELECT * FROM artworks WHERE id = ?'
   ).bind(artId).first();
 
-  await ctx.env.VAYU_DB.prepare('DELETE FROM artworks WHERE id = ?').bind(artId).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare('DELETE FROM artworks WHERE id = ?').bind(artId),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'artwork', artId, 'delete', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'artwork', id: artId, op: 'delete' }]);
   if (result) {
     archiveDeletedAsync(ctx, session, 'artwork', artId,
       `Artwork ${artworkLabel({ title: (result as any).title, customId: (result as any).custom_id, id: artId })}`,
@@ -1915,18 +1825,23 @@ async function handleCollectionsCreate(ctx: Ctx): Promise<Response> {
   const alreadyExists = await ctx.env.VAYU_DB.prepare(
     'SELECT 1 FROM collections WHERE id = ?'
   ).bind(col.id).first();
-  await ctx.env.VAYU_DB.prepare(
-    `INSERT OR REPLACE INTO collections
-     (id, name, description, artwork_ids, cover_image_url, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).bind(
-    col.id,
-    col.name || '',
-    col.description || '',
-    JSON.stringify(col.artworkIds || []),
-    col.coverImageUrl || '',
-    col.createdAt || Date.now()
-  ).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      `INSERT OR REPLACE INTO collections
+       (id, name, description, artwork_ids, cover_image_url, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(
+      col.id,
+      col.name || '',
+      col.description || '',
+      JSON.stringify(col.artworkIds || []),
+      col.coverImageUrl || '',
+      col.createdAt || Date.now()
+    ),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'collection', col.id, 'put', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'collection', id: col.id, op: 'put' }]);
   if (!alreadyExists) {
     logEntityChange(ctx, session, 'created', 'collection', col.id, `Created collection "${col.name || col.id}"`);
   }
@@ -1940,17 +1855,22 @@ async function handleCollectionsUpdate(ctx: Ctx): Promise<Response> {
   const col = body as any;
   const colId = ctx.path.slice('/collections/'.length);
   await ensureColumns(ctx.env.VAYU_DB, 'collections');
-  await ctx.env.VAYU_DB.prepare(
-    `UPDATE collections SET
-       name = ?, description = ?, artwork_ids = ?, cover_image_url = ?
-     WHERE id = ?`
-  ).bind(
-    col.name || '',
-    col.description || '',
-    JSON.stringify(col.artworkIds || []),
-    col.coverImageUrl || '',
-    colId
-  ).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      `UPDATE collections SET
+         name = ?, description = ?, artwork_ids = ?, cover_image_url = ?
+       WHERE id = ?`
+    ).bind(
+      col.name || '',
+      col.description || '',
+      JSON.stringify(col.artworkIds || []),
+      col.coverImageUrl || '',
+      colId
+    ),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'collection', colId, 'put', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'collection', id: colId, op: 'put' }]);
   logEntityChange(ctx, session, 'updated', 'collection', colId, `Updated collection "${col.name || colId}"`);
   return json(col);
 }
@@ -1962,7 +1882,12 @@ async function handleCollectionsDelete(ctx: Ctx): Promise<Response> {
   const result = await ctx.env.VAYU_DB.prepare(
     'SELECT * FROM collections WHERE id = ?'
   ).bind(colId).first();
-  await ctx.env.VAYU_DB.prepare('DELETE FROM collections WHERE id = ?').bind(colId).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare('DELETE FROM collections WHERE id = ?').bind(colId),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'collection', colId, 'delete', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'collection', id: colId, op: 'delete' }]);
   if (result) {
     archiveDeletedAsync(ctx, session, 'collection', colId, `Collection "${(result as any).name || colId}"`, result);
     logEntityChange(ctx, session, 'deleted', 'collection', colId, `Deleted collection "${(result as any).name || colId}"`);
@@ -1993,20 +1918,25 @@ async function handleCatalogsCreate(ctx: Ctx): Promise<Response> {
   const alreadyExists = await ctx.env.VAYU_DB.prepare(
     'SELECT 1 FROM catalogs WHERE id = ?'
   ).bind(cat.id).first();
-  await ctx.env.VAYU_DB.prepare(
-    `INSERT OR REPLACE INTO catalogs
-     (id, name, description, artwork_ids, cover_image_url, pdf_url, source, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
-    cat.id,
-    cat.name || '',
-    cat.description || '',
-    JSON.stringify(cat.artworkIds || []),
-    cat.coverImageUrl || '',
-    cat.pdfUrl || null,
-    cat.source || 'generated',
-    cat.createdAt || Date.now()
-  ).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      `INSERT OR REPLACE INTO catalogs
+       (id, name, description, artwork_ids, cover_image_url, pdf_url, source, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      cat.id,
+      cat.name || '',
+      cat.description || '',
+      JSON.stringify(cat.artworkIds || []),
+      cat.coverImageUrl || '',
+      cat.pdfUrl || null,
+      cat.source || 'generated',
+      cat.createdAt || Date.now()
+    ),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'catalog', cat.id, 'put', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'catalog', id: cat.id, op: 'put' }]);
   if (!alreadyExists) {
     logEntityChange(ctx, session, 'created', 'catalog', cat.id, `Created catalog "${cat.name || cat.id}"`);
   }
@@ -2020,19 +1950,24 @@ async function handleCatalogsUpdate(ctx: Ctx): Promise<Response> {
   const cat = body as any;
   const catId = ctx.path.slice('/catalogs/'.length);
   await ensureCatalogsColumns(ctx.env.VAYU_DB);
-  await ctx.env.VAYU_DB.prepare(
-    `UPDATE catalogs SET
-       name = ?, description = ?, artwork_ids = ?, cover_image_url = ?, pdf_url = ?, source = ?
-     WHERE id = ?`
-  ).bind(
-    cat.name || '',
-    cat.description || '',
-    JSON.stringify(cat.artworkIds || []),
-    cat.coverImageUrl || '',
-    cat.pdfUrl || null,
-    cat.source || 'generated',
-    catId
-  ).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      `UPDATE catalogs SET
+         name = ?, description = ?, artwork_ids = ?, cover_image_url = ?, pdf_url = ?, source = ?
+       WHERE id = ?`
+    ).bind(
+      cat.name || '',
+      cat.description || '',
+      JSON.stringify(cat.artworkIds || []),
+      cat.coverImageUrl || '',
+      cat.pdfUrl || null,
+      cat.source || 'generated',
+      catId
+    ),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'catalog', catId, 'put', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'catalog', id: catId, op: 'put' }]);
   logEntityChange(ctx, session, 'updated', 'catalog', catId, `Updated catalog "${cat.name || catId}"`);
   return json(cat);
 }
@@ -2047,7 +1982,12 @@ async function handleCatalogsDelete(ctx: Ctx): Promise<Response> {
     'SELECT * FROM catalogs WHERE id = ?'
   ).bind(catId).first();
 
-  await ctx.env.VAYU_DB.prepare('DELETE FROM catalogs WHERE id = ?').bind(catId).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare('DELETE FROM catalogs WHERE id = ?').bind(catId),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'catalog', catId, 'delete', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'catalog', id: catId, op: 'delete' }]);
   if (result) {
     archiveDeletedAsync(ctx, session, 'catalog', catId, `Catalog "${(result as any).name || catId}"`, result);
     logEntityChange(ctx, session, 'deleted', 'catalog', catId, `Deleted catalog "${(result as any).name || catId}"`);
@@ -2087,29 +2027,34 @@ async function handleInquiriesCreate(ctx: Ctx): Promise<Response> {
   // The creator comes from the session, never from the request body.
   const createdBy = existing ? existing.created_by || '' : session.userId;
   const createdByName = existing ? existing.created_by_name || '' : session.name;
-  await ctx.env.VAYU_DB.prepare(
-    `INSERT OR REPLACE INTO inquiries
-     (id, inquiry_number, customer_name, customer_phone, customer_email, customer_address,
-      artwork_ids, notes, source, status, catalog_shared, date,
-      created_by, created_by_name, image_urls)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
-    inq.id,
-    inq.inquiryNumber || '',
-    inq.customerName || '',
-    inq.customerPhone || '',
-    inq.customerEmail || '',
-    inq.customerAddress || '',
-    JSON.stringify(inq.artworkIds || []),
-    inq.notes || '',
-    inq.source || 'Other',
-    inq.status || 'New',
-    inq.catalogShared ? 1 : 0,
-    inq.date || Date.now(),
-    createdBy,
-    createdByName,
-    JSON.stringify(inq.imageUrls || [])
-  ).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      `INSERT OR REPLACE INTO inquiries
+       (id, inquiry_number, customer_name, customer_phone, customer_email, customer_address,
+        artwork_ids, notes, source, status, catalog_shared, date,
+        created_by, created_by_name, image_urls)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      inq.id,
+      inq.inquiryNumber || '',
+      inq.customerName || '',
+      inq.customerPhone || '',
+      inq.customerEmail || '',
+      inq.customerAddress || '',
+      JSON.stringify(inq.artworkIds || []),
+      inq.notes || '',
+      inq.source || 'Other',
+      inq.status || 'New',
+      inq.catalogShared ? 1 : 0,
+      inq.date || Date.now(),
+      createdBy,
+      createdByName,
+      JSON.stringify(inq.imageUrls || [])
+    ),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'inquiry', inq.id, 'put', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'inquiry', id: inq.id, op: 'put' }]);
 
   if (!existing) {
     ctx.execCtx.waitUntil(notifyNewInquiry(ctx.env, inq, session));
@@ -2127,26 +2072,31 @@ async function handleInquiriesUpdate(ctx: Ctx): Promise<Response> {
   const inqId = ctx.path.slice('/inquiries/'.length);
   await ensureColumns(ctx.env.VAYU_DB, 'inquiries');
   // created_by is deliberately not updatable.
-  await ctx.env.VAYU_DB.prepare(
-    `UPDATE inquiries SET
-       inquiry_number = ?, customer_name = ?, customer_phone = ?,
-       customer_email = ?, customer_address = ?, artwork_ids = ?, notes = ?, source = ?,
-       status = ?, catalog_shared = ?, image_urls = ?
-     WHERE id = ?`
-  ).bind(
-    inq.inquiryNumber || '',
-    inq.customerName || '',
-    inq.customerPhone || '',
-    inq.customerEmail || '',
-    inq.customerAddress || '',
-    JSON.stringify(inq.artworkIds || []),
-    inq.notes || '',
-    inq.source || 'Other',
-    inq.status || 'New',
-    inq.catalogShared ? 1 : 0,
-    JSON.stringify(inq.imageUrls || []),
-    inqId
-  ).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      `UPDATE inquiries SET
+         inquiry_number = ?, customer_name = ?, customer_phone = ?,
+         customer_email = ?, customer_address = ?, artwork_ids = ?, notes = ?, source = ?,
+         status = ?, catalog_shared = ?, image_urls = ?
+       WHERE id = ?`
+    ).bind(
+      inq.inquiryNumber || '',
+      inq.customerName || '',
+      inq.customerPhone || '',
+      inq.customerEmail || '',
+      inq.customerAddress || '',
+      JSON.stringify(inq.artworkIds || []),
+      inq.notes || '',
+      inq.source || 'Other',
+      inq.status || 'New',
+      inq.catalogShared ? 1 : 0,
+      JSON.stringify(inq.imageUrls || []),
+      inqId
+    ),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'inquiry', inqId, 'put', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'inquiry', id: inqId, op: 'put' }]);
   logEntityChange(ctx, session, 'updated', 'inquiry', inqId, `Updated inquiry ${inquiryLabel({ ...inq, id: inqId })}`);
   return json(inq);
 }
@@ -2159,8 +2109,21 @@ async function handleInquiriesDelete(ctx: Ctx): Promise<Response> {
     'SELECT * FROM inquiries WHERE id = ?'
   ).bind(inqId).first();
   // Also delete associated inquiry messages and uploaded photos
-  await ctx.env.VAYU_DB.prepare('DELETE FROM inquiry_messages WHERE inquiry_id = ?').bind(inqId).run();
-  await ctx.env.VAYU_DB.prepare('DELETE FROM inquiries WHERE id = ?').bind(inqId).run();
+  const inquiryMessageIds = (await ctx.env.VAYU_DB.prepare(
+    'SELECT id FROM inquiry_messages WHERE inquiry_id = ?'
+  ).bind(inqId).all<{ id: string }>()).results?.map(r => r.id) ?? [];
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare('DELETE FROM inquiry_messages WHERE inquiry_id = ?').bind(inqId),
+    ctx.env.VAYU_DB.prepare('DELETE FROM inquiries WHERE id = ?').bind(inqId),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'inquiry', inqId, 'delete', { actorId: session.userId }),
+    ...changeLogStmts(ctx.env.VAYU_DB, ctx.env, 'inquiry_message', inquiryMessageIds, 'delete',
+      { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [
+    { entity: 'inquiry', id: inqId, op: 'delete' },
+    ...inquiryMessageIds.map(id => ({ entity: 'inquiry_message', id, op: 'delete' as const })),
+  ]);
   if (result) {
     const inq = rowToInquiry(result);
     archiveDeletedAsync(ctx, session, 'inquiry', inqId, `Inquiry ${inquiryLabel(inq)}`, result);
@@ -2199,24 +2162,29 @@ async function handleInquiryMessagesCreate(ctx: Ctx): Promise<Response> {
   const alreadyExists = await ctx.env.VAYU_DB.prepare(
     'SELECT 1 FROM inquiry_messages WHERE id = ?'
   ).bind(msg.id).first();
-  await ctx.env.VAYU_DB.prepare(
-    `INSERT OR REPLACE INTO inquiry_messages
-     (id, inquiry_id, sender_id, sender_name, text, tags, timestamp,
-      status, reply_to, attachment, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
-    msg.id,
-    msg.inquiryId,
-    msg.senderId,
-    msg.senderName || '',
-    msg.text || '',
-    JSON.stringify(msg.tags || []),
-    msg.timestamp || Date.now(),
-    msg.status || 'sent',
-    msg.replyTo ? JSON.stringify(msg.replyTo) : null,
-    msg.attachment ? JSON.stringify(msg.attachment) : null,
-    Date.now()
-  ).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      `INSERT OR REPLACE INTO inquiry_messages
+       (id, inquiry_id, sender_id, sender_name, text, tags, timestamp,
+        status, reply_to, attachment, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      msg.id,
+      msg.inquiryId,
+      msg.senderId,
+      msg.senderName || '',
+      msg.text || '',
+      JSON.stringify(msg.tags || []),
+      msg.timestamp || Date.now(),
+      msg.status || 'sent',
+      msg.replyTo ? JSON.stringify(msg.replyTo) : null,
+      msg.attachment ? JSON.stringify(msg.attachment) : null,
+      Date.now()
+    ),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'inquiry_message', msg.id, 'put', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'inquiry_message', id: msg.id, op: 'put' }]);
 
   if (!alreadyExists) {
     ctx.execCtx.waitUntil(notifyInquiryMessage(ctx.env, msg, session));
@@ -2232,9 +2200,7 @@ async function handleInquiryMessageStatusUpdate(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json();
   const { status } = body as { status?: string };
   if (!status) return err('status is required');
-  await ctx.env.VAYU_DB.prepare(
-    'UPDATE inquiry_messages SET status = ? WHERE id = ?'
-  ).bind(status, msgId).run();
+  await applyInquiryMessageStatus(ctx, session, [msgId], status);
   return json({ success: true });
 }
 
@@ -2244,12 +2210,21 @@ async function handleInquiryMessageStatusBatch(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json();
   const { messageIds, status } = body as { messageIds?: string[]; status?: string };
   if (!messageIds || !status) return err('messageIds and status are required');
-  for (const id of messageIds) {
-    await ctx.env.VAYU_DB.prepare(
-      'UPDATE inquiry_messages SET status = ? WHERE id = ?'
-    ).bind(status, id).run();
-  }
+  await applyInquiryMessageStatus(ctx, session, messageIds, status);
   return json({ success: true });
+}
+
+/** Forward-only inquiry-message status upgrades; same contract as chat acks. */
+async function applyInquiryMessageStatus(ctx: Ctx, session: SessionData, messageIds: string[], status: string): Promise<void> {
+  const to = ackStatus(status);
+  const ids = uniqueIds(messageIds);
+  if (!to || ids.length === 0) return;
+  const db = ctx.env.VAYU_DB;
+  await ensureChangeLogTable(db);
+  const results = await db.batch(ids.flatMap(id =>
+    statusUpgradeStmts(db, ctx.env, 'inquiry_messages', id, to, { actorId: session.userId })));
+  const changed = ids.filter((_, i) => (results[i * 2].results?.length ?? 0) > 0);
+  queueHubNotify(ctx, changed.map(id => ({ entity: 'inquiry_message', id, op: 'put' as const })));
 }
 
 // ── Public holidays route handler ───────────────────────────────────────────
@@ -2288,22 +2263,6 @@ async function handleHolidaysGet(ctx: Ctx): Promise<Response> {
 
 // ── Calendar event route handlers ───────────────────────────────────────────
 
-function rowToEvent(row: Record<string, unknown>): any {
-  let todos: any[] = [];
-  try { todos = row.todos ? JSON.parse(row.todos as string) : []; } catch { todos = []; }
-  return {
-    id: row.id as string,
-    title: (row.title as string) || '',
-    date: row.event_date as number,
-    endDate: (row.end_date as number) || undefined,
-    notes: row.notes || undefined,
-    color: (row.color as string) || undefined,
-    todos,
-    createdAt: row.created_at as number,
-    createdBy: row.created_by || undefined,
-    createdByName: row.created_by_name || undefined,
-  };
-}
 
 // The events table is created lazily (once per isolate) so no manual D1
 // migration is required before first use. Column ALTERs handle tables created
@@ -2357,22 +2316,27 @@ async function handleEventsCreate(ctx: Ctx): Promise<Response> {
   ).bind(ev.id).first<{ created_by: string | null; created_by_name: string | null }>();
   const createdBy = existing ? existing.created_by || '' : session.userId;
   const createdByName = existing ? existing.created_by_name || '' : session.name;
-  await ctx.env.VAYU_DB.prepare(
-    `INSERT OR REPLACE INTO events
-     (id, title, event_date, end_date, todos, notes, color, created_at, created_by, created_by_name)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
-    ev.id,
-    String(ev.title).trim(),
-    ev.date,
-    ev.endDate ?? null,
-    JSON.stringify(ev.todos || []),
-    ev.notes || '',
-    ev.color || null,
-    ev.createdAt || Date.now(),
-    createdBy,
-    createdByName
-  ).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      `INSERT OR REPLACE INTO events
+       (id, title, event_date, end_date, todos, notes, color, created_at, created_by, created_by_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      ev.id,
+      String(ev.title).trim(),
+      ev.date,
+      ev.endDate ?? null,
+      JSON.stringify(ev.todos || []),
+      ev.notes || '',
+      ev.color || null,
+      ev.createdAt || Date.now(),
+      createdBy,
+      createdByName
+    ),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'event', ev.id, 'put', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'event', id: ev.id, op: 'put' }]);
   if (!existing) {
     logEntityChange(ctx, session, 'created', 'event', ev.id, `Added event "${String(ev.title).trim()}"`);
   }
@@ -2387,19 +2351,24 @@ async function handleEventsUpdate(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json() as any;
   if (!body.date) return err('date is required');
   await ensureEventsTable(ctx.env.VAYU_DB);
-  await ctx.env.VAYU_DB.prepare(
-    `UPDATE events SET
-       title = ?, event_date = ?, end_date = ?, notes = ?, todos = ?, color = ?
-     WHERE id = ?`
-  ).bind(
-    String(body.title || '').trim(),
-    body.date,
-    body.endDate ?? null,
-    body.notes || '',
-    JSON.stringify(body.todos || []),
-    body.color || null,
-    evId
-  ).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      `UPDATE events SET
+         title = ?, event_date = ?, end_date = ?, notes = ?, todos = ?, color = ?
+       WHERE id = ?`
+    ).bind(
+      String(body.title || '').trim(),
+      body.date,
+      body.endDate ?? null,
+      body.notes || '',
+      JSON.stringify(body.todos || []),
+      body.color || null,
+      evId
+    ),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'event', evId, 'put', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'event', id: evId, op: 'put' }]);
   logEntityChange(ctx, session, 'updated', 'event', evId, `Updated event "${String(body.title || '').trim()}"`);
   return json(body);
 }
@@ -2413,7 +2382,12 @@ async function handleEventsDelete(ctx: Ctx): Promise<Response> {
   const result = await ctx.env.VAYU_DB.prepare(
     'SELECT * FROM events WHERE id = ?'
   ).bind(evId).first();
-  await ctx.env.VAYU_DB.prepare('DELETE FROM events WHERE id = ?').bind(evId).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare('DELETE FROM events WHERE id = ?').bind(evId),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'event', evId, 'delete', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'event', id: evId, op: 'delete' }]);
   if (result) {
     const ev = rowToEvent(result);
     archiveDeletedAsync(ctx, session, 'event', evId, `Event "${ev.title}"`, result);
@@ -2426,19 +2400,6 @@ async function handleEventsDelete(ctx: Ctx): Promise<Response> {
 // Manual + imported contacts. Contacts derived from inquiries are computed
 // client-side and never stored here.
 
-function rowToContact(row: Record<string, unknown>): any {
-  return {
-    id: row.id as string,
-    name: (row.name as string) || '',
-    phone: (row.phone as string) || '',
-    email: row.email || undefined,
-    notes: row.notes || undefined,
-    source: (row.source as string) || 'manual',
-    createdAt: row.created_at as number,
-    createdBy: row.created_by || undefined,
-    createdByName: row.created_by_name || undefined,
-  };
-}
 
 // The contacts table is created lazily (once per isolate) so no manual D1
 // migration is required before first use.
@@ -2477,21 +2438,26 @@ async function handleContactsCreate(ctx: Ctx): Promise<Response> {
   if (!c.id) return err('id is required');
   if (!c.name || !String(c.name).trim()) return err('name is required');
   await ensureContactsTable(ctx.env.VAYU_DB);
-  await ctx.env.VAYU_DB.prepare(
-    `INSERT OR REPLACE INTO contacts
-     (id, name, phone, email, notes, source, created_at, created_by, created_by_name)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
-    c.id,
-    String(c.name).trim(),
-    c.phone || '',
-    c.email || '',
-    c.notes || '',
-    c.source || 'manual',
-    c.createdAt || Date.now(),
-    session.userId,
-    session.name
-  ).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      `INSERT OR REPLACE INTO contacts
+       (id, name, phone, email, notes, source, created_at, created_by, created_by_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      c.id,
+      String(c.name).trim(),
+      c.phone || '',
+      c.email || '',
+      c.notes || '',
+      c.source || 'manual',
+      c.createdAt || Date.now(),
+      session.userId,
+      session.name
+    ),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'contact', c.id, 'put', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'contact', id: c.id, op: 'put' }]);
   logEntityChange(ctx, session, 'created', 'contact', c.id, `Added contact "${String(c.name).trim()}"`);
   return json({ ...c, createdBy: session.userId, createdByName: session.name }, 201);
 }
@@ -2504,6 +2470,7 @@ async function handleContactsImport(ctx: Ctx): Promise<Response> {
   if (list.length === 0) return err('contacts array is required');
   if (list.length > 500) return err('Too many contacts (max 500 per import)');
   await ensureContactsTable(ctx.env.VAYU_DB);
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
   const stmts = list.map((c: any) => ctx.env.VAYU_DB.prepare(
     `INSERT OR REPLACE INTO contacts
      (id, name, phone, email, notes, source, created_at, created_by, created_by_name)
@@ -2519,7 +2486,13 @@ async function handleContactsImport(ctx: Ctx): Promise<Response> {
     session.userId,
     session.name
   ));
-  await ctx.env.VAYU_DB.batch(stmts);
+  // Import rows and their change-log entries commit in one atomic batch.
+  await ctx.env.VAYU_DB.batch([
+    ...stmts,
+    ...changeLogStmts(ctx.env.VAYU_DB, ctx.env, 'contact', list.map((c: any) => String(c.id)), 'put',
+      { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, list.map((c: any) => ({ entity: 'contact', id: String(c.id), op: 'put' as const })));
   logEntityChange(ctx, session, 'created', 'contact', 'import', `Imported ${stmts.length} contact(s)`);
   return json({ imported: stmts.length }, 201);
 }
@@ -2533,7 +2506,12 @@ async function handleContactsDelete(ctx: Ctx): Promise<Response> {
   const result = await ctx.env.VAYU_DB.prepare(
     'SELECT * FROM contacts WHERE id = ?'
   ).bind(contactId).first();
-  await ctx.env.VAYU_DB.prepare('DELETE FROM contacts WHERE id = ?').bind(contactId).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare('DELETE FROM contacts WHERE id = ?').bind(contactId),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'contact', contactId, 'delete', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'contact', id: contactId, op: 'delete' }]);
   if (result) {
     const c = rowToContact(result);
     archiveDeletedAsync(ctx, session, 'contact', contactId, `Contact "${c.name}"`, result);
@@ -2550,15 +2528,20 @@ async function handleContactsUpdate(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json() as any;
   if (!body.name || !String(body.name).trim()) return err('name is required');
   await ensureContactsTable(ctx.env.VAYU_DB);
-  await ctx.env.VAYU_DB.prepare(
-    'UPDATE contacts SET name = ?, phone = ?, email = ?, notes = ? WHERE id = ?'
-  ).bind(
-    String(body.name).trim(),
-    body.phone || '',
-    body.email || '',
-    body.notes || '',
-    contactId
-  ).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      'UPDATE contacts SET name = ?, phone = ?, email = ?, notes = ? WHERE id = ?'
+    ).bind(
+      String(body.name).trim(),
+      body.phone || '',
+      body.email || '',
+      body.notes || '',
+      contactId
+    ),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'contact', contactId, 'put', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'contact', id: contactId, op: 'put' }]);
   const updated = await ctx.env.VAYU_DB.prepare('SELECT * FROM contacts WHERE id = ?').bind(contactId).first();
   logEntityChange(ctx, session, 'updated', 'contact', contactId, `Updated contact "${String(body.name).trim()}"`);
   return json(updated ? rowToContact(updated) : { id: contactId });
@@ -2572,38 +2555,7 @@ async function handleContactsUpdate(ctx: Ctx): Promise<Response> {
 
 const MAX_GPS_ACCURACY = 100; // meters — reject fixes worse than this
 
-function rowToStore(row: Record<string, unknown>): any {
-  return {
-    id: row.id as string,
-    name: (row.name as string) || '',
-    latitude: row.latitude as number,
-    longitude: row.longitude as number,
-    gpsRadius: row.gps_radius as number,
-    wifiRequired: !!(row.wifi_required),
-    wifiSsid: (row.wifi_ssid as string) || '',
-    createdAt: row.created_at as number,
-  };
-}
 
-function rowToAttendance(row: Record<string, unknown>): any {
-  return {
-    id: row.id as string,
-    employeeId: row.employee_id as string,
-    employeeName: (row.employee_name as string) || '',
-    storeId: row.store_id as string,
-    checkInAt: row.check_in_at as number | null,
-    checkInLat: row.check_in_lat as number | null,
-    checkInLng: row.check_in_lng as number | null,
-    checkInAccuracy: row.check_in_accuracy as number | null,
-    checkOutAt: row.check_out_at as number | null,
-    checkOutLat: row.check_out_lat as number | null,
-    checkOutLng: row.check_out_lng as number | null,
-    checkOutAccuracy: row.check_out_accuracy as number | null,
-    connectionType: (row.connection_type as string) || 'unknown',
-    status: row.status as string,
-    createdAt: row.created_at as number,
-  };
-}
 
 /** Great-circle distance between two points, in meters. */
 function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -2744,9 +2696,14 @@ async function handleStoresCreate(ctx: Ctx): Promise<Response> {
   if ('error' in parsed) return parsed.error;
   const { data } = parsed;
   const id = `store_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
-  await ctx.env.VAYU_DB.prepare(
-    'INSERT INTO stores (id, name, latitude, longitude, gps_radius, wifi_required, wifi_ssid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  ).bind(id, data.name, data.latitude, data.longitude, data.gpsRadius, data.wifiRequired, data.wifiSsid, Date.now()).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      'INSERT INTO stores (id, name, latitude, longitude, gps_radius, wifi_required, wifi_ssid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).bind(id, data.name, data.latitude, data.longitude, data.gpsRadius, data.wifiRequired, data.wifiSsid, Date.now()),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'store', id, 'put', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'store', id, op: 'put' }]);
   logEntityChange(ctx, session, 'created', 'store', id, `Created store "${data.name}"`);
   return json(rowToStore({ id, ...data, created_at: Date.now() }), 201);
 }
@@ -2764,6 +2721,11 @@ async function handleStoresUpdate(ctx: Ctx): Promise<Response> {
     'UPDATE stores SET name = ?, latitude = ?, longitude = ?, gps_radius = ?, wifi_required = ?, wifi_ssid = ? WHERE id = ?'
   ).bind(data.name, data.latitude, data.longitude, data.gpsRadius, data.wifiRequired, data.wifiSsid, storeId).run();
   if (!result.meta.changes) return err('Store not found', 404);
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'store', storeId, 'put', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'store', id: storeId, op: 'put' }]);
   logEntityChange(ctx, session, 'updated', 'store', storeId, `Updated store "${data.name}"`);
   return json(rowToStore({ id: storeId, ...data, created_at: Date.now() }));
 }
@@ -2776,6 +2738,11 @@ async function handleStoresDelete(ctx: Ctx): Promise<Response> {
   await ensureStoresTable(ctx.env.VAYU_DB);
   const result = await ctx.env.VAYU_DB.prepare('DELETE FROM stores WHERE id = ?').bind(storeId).run();
   if (!result.meta.changes) return err('Store not found', 404);
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'store', storeId, 'delete', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'store', id: storeId, op: 'delete' }]);
   logEntityChange(ctx, session, 'deleted', 'store', storeId, 'Deleted a store');
   return json({ success: true });
 }
@@ -2822,15 +2789,23 @@ async function handleAttendanceCheckIn(ctx: Ctx): Promise<Response> {
     check_out_at: null, check_out_lat: null, check_out_lng: null, check_out_accuracy: null,
     connection_type: String(body.connectionType || 'unknown'), status: 'checked-in', created_at: serverNow,
   };
-  await ctx.env.VAYU_DB.prepare(
-    `INSERT INTO attendance
-     (id, employee_id, employee_name, store_id, check_in_at, check_in_lat, check_in_lng, check_in_accuracy, check_out_at, check_out_lat, check_out_lng, check_out_accuracy, connection_type, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, 'checked-in', ?)`
-  ).bind(
-    id, session.userId, session.name, store.id,
-    serverNow, body.lat, body.lng, body.accuracy,
-    String(body.connectionType || 'unknown'), serverNow
-  ).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      `INSERT INTO attendance
+       (id, employee_id, employee_name, store_id, check_in_at, check_in_lat, check_in_lng, check_in_accuracy, check_out_at, check_out_lat, check_out_lng, check_out_accuracy, connection_type, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, 'checked-in', ?)`
+    ).bind(
+      id, session.userId, session.name, store.id,
+      serverNow, body.lat, body.lng, body.accuracy,
+      String(body.connectionType || 'unknown'), serverNow
+    ),
+    // Scoped to the employee: only they (and attendance managers) see the row
+    // through sync — see the attendance rule in deltaSync.
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'attendance', id, 'put',
+      { scope: [session.userId], actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'attendance', id, op: 'put' }]);
   logEntityChange(ctx, session, 'created', 'attendance', id, `Checked in at "${store.name}"`);
   return json({ record: rowToAttendance(record), message: 'Check-in successful' }, 201);
 }
@@ -2858,11 +2833,17 @@ async function handleAttendanceCheckOut(ctx: Ctx): Promise<Response> {
     check_out_at: serverNow, check_out_lat: body.lat as number, check_out_lng: body.lng as number, check_out_accuracy: body.accuracy as number,
     connection_type: String(body.connectionType || 'unknown'), status: 'checked-out',
   };
-  await ctx.env.VAYU_DB.prepare(
-    `UPDATE attendance SET
-       check_out_at = ?, check_out_lat = ?, check_out_lng = ?, check_out_accuracy = ?, connection_type = ?, status = 'checked-out'
-     WHERE id = ?`
-  ).bind(serverNow, body.lat, body.lng, body.accuracy, String(body.connectionType || 'unknown'), open.id as string).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      `UPDATE attendance SET
+         check_out_at = ?, check_out_lat = ?, check_out_lng = ?, check_out_accuracy = ?, connection_type = ?, status = 'checked-out'
+       WHERE id = ?`
+    ).bind(serverNow, body.lat, body.lng, body.accuracy, String(body.connectionType || 'unknown'), open.id as string),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'attendance', open.id as string, 'put',
+      { scope: [session.userId], actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'attendance', id: open.id as string, op: 'put' }]);
   logEntityChange(ctx, session, 'updated', 'attendance', open.id as string, `Checked out from "${store.name}"`);
   return json({ record: rowToAttendance(record), message: 'Check-out successful' });
 }
@@ -2920,9 +2901,15 @@ async function handleAttendanceRecordClose(ctx: Ctx): Promise<Response> {
   const checkInAt = rec.check_in_at as number;
   if (!Number.isFinite(checkOutAt) || checkOutAt <= checkInAt) return err('Check-out time must be after the check-in time', 400);
   if (checkOutAt > Date.now()) return err('Check-out time cannot be in the future', 400);
-  await ctx.env.VAYU_DB.prepare(
-    "UPDATE attendance SET check_out_at = ?, check_out_lat = NULL, check_out_lng = NULL, check_out_accuracy = NULL, status = 'checked-out' WHERE id = ?"
-  ).bind(checkOutAt, recordId).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      "UPDATE attendance SET check_out_at = ?, check_out_lat = NULL, check_out_lng = NULL, check_out_accuracy = NULL, status = 'checked-out' WHERE id = ?"
+    ).bind(checkOutAt, recordId),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'attendance', recordId, 'put',
+      { scope: [rec.employee_id as string], actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'attendance', id: recordId, op: 'put' }]);
   logEntityChange(ctx, session, 'updated', 'attendance', recordId,
     `Closed ${(rec.employee_name as string) || 'an employee'}'s open check-in (check-out set by admin)`);
   return json(rowToAttendance({ ...rec, check_out_at: checkOutAt, check_out_lat: null, check_out_lng: null, check_out_accuracy: null, status: 'checked-out' }));
@@ -2971,21 +2958,26 @@ async function handleInvoicesSave(ctx: Ctx): Promise<Response> {
   await ensureInvoicesTable(ctx.env.VAYU_DB);
   const existing = await ctx.env.VAYU_DB.prepare('SELECT created_by, created_by_name FROM invoices WHERE id = ?')
     .bind(invoiceId).first<{ created_by: string | null; created_by_name: string | null }>();
-  await ctx.env.VAYU_DB.prepare(
-    `INSERT OR REPLACE INTO invoices
-     (id, invoice_number, customer_name, status, date, data, created_by, created_by_name, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
-    invoiceId,
-    inv.invoiceNumber,
-    String(inv.customerName || ''),
-    String(inv.status || 'Draft'),
-    Number(inv.date) || Date.now(),
-    JSON.stringify(inv),
-    existing ? existing.created_by : session.userId,
-    existing ? existing.created_by_name : session.name,
-    Date.now(),
-  ).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      `INSERT OR REPLACE INTO invoices
+       (id, invoice_number, customer_name, status, date, data, created_by, created_by_name, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      invoiceId,
+      inv.invoiceNumber,
+      String(inv.customerName || ''),
+      String(inv.status || 'Draft'),
+      Number(inv.date) || Date.now(),
+      JSON.stringify(inv),
+      existing ? existing.created_by : session.userId,
+      existing ? existing.created_by_name : session.name,
+      Date.now(),
+    ),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'invoice', invoiceId, 'put', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'invoice', id: invoiceId, op: 'put' }]);
   logEntityChange(ctx, session, existing ? 'updated' : 'created', 'invoice', invoiceId,
     `${existing ? 'Updated' : 'Created'} proforma ${inv.invoiceNumber} (${String(inv.customerName || '')})`);
   return json(inv, existing ? 200 : 201);
@@ -2997,7 +2989,12 @@ async function handleInvoicesDelete(ctx: Ctx): Promise<Response> {
   const invoiceId = decodeURIComponent(ctx.path.slice('/invoices/'.length));
   await ensureInvoicesTable(ctx.env.VAYU_DB);
   const row = await ctx.env.VAYU_DB.prepare('SELECT * FROM invoices WHERE id = ?').bind(invoiceId).first();
-  await ctx.env.VAYU_DB.prepare('DELETE FROM invoices WHERE id = ?').bind(invoiceId).run();
+  await ensureChangeLogTable(ctx.env.VAYU_DB);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare('DELETE FROM invoices WHERE id = ?').bind(invoiceId),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'invoice', invoiceId, 'delete', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'invoice', id: invoiceId, op: 'delete' }]);
   if (row) {
     archiveDeletedAsync(ctx, session, 'invoice', invoiceId, `Proforma ${row.invoice_number as string}`, row);
     logEntityChange(ctx, session, 'deleted', 'invoice', invoiceId, `Deleted proforma ${row.invoice_number as string}`);
@@ -3130,6 +3127,11 @@ const routes: Route[] = [
   { method: 'POST', match: isExact('/payments/link'), handler: handlePaymentLinkCreate },
   { method: 'GET', match: isExact('/payments/links'), handler: handlePaymentLinksList },
   { method: 'POST', match: isExact('/payments/webhook'), handler: handlePaymentWebhook },
+
+  // Delta sync + realtime hub
+  { method: 'GET', match: isExact('/sync'), handler: handleSync },
+  { method: 'POST', match: isExact('/realtime/ticket'), handler: handleRealtimeTicket },
+  { method: 'GET', match: isExact('/realtime/ws'), handler: handleRealtimeWs },
 ];
 
 // ── App Settings ──────────────────────────────────────────────────────────
@@ -3155,27 +3157,152 @@ async function handleSettingsUpdate(ctx: Ctx) {
 
 // ── Main handler ───────────────────────────────────────────────────────────
 
+// ── Realtime hub plumbing ───────────────────────────────────────────────
+
+function hubStub(env: Env): DurableObjectStub | null {
+  if (!env.SYNC_HUB) return null;
+  return env.SYNC_HUB.get(env.SYNC_HUB.idFromName(workspaceId(env)));
+}
+
+/** Ask the hub to close every connection of a user (logout, removal). */
+function revokeHubAsync(ctx: Ctx, userId: string): void {
+  const stub = hubStub(ctx.env);
+  if (!stub || !realtimeEnabled(ctx.env)) return;
+  ctx.execCtx.waitUntil(stub.fetch('https://hub.internal/revoke', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-hub-key': rawRealtimeSecret(ctx.env) },
+    body: JSON.stringify({ userId }),
+  }).catch(() => undefined));
+}
+
+/** Connection-based presence from the hub, or null when unavailable. */
+async function hubPresence(ctx: Ctx): Promise<Record<string, { isOnline: boolean; lastSeen: number }> | null> {
+  const stub = hubStub(ctx.env);
+  if (!stub || !realtimeEnabled(ctx.env)) return null;
+  const res = await stub.fetch('https://hub.internal/presence', {
+    headers: { 'x-hub-key': rawRealtimeSecret(ctx.env) },
+  });
+  if (!res.ok) return null;
+  const body = await res.json<{ presence?: Record<string, { isOnline: boolean; lastSeen: number }> }>();
+  return body.presence ?? null;
+}
+
+/** POST /realtime/ticket — a short-lived single-use connection ticket. */
+async function handleRealtimeTicket(ctx: Ctx): Promise<Response> {
+  if (!realtimeEnabled(ctx.env)) return err('Not found', 404);
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const now = Date.now();
+  const ticket = await signTicket({
+    jti: crypto.randomUUID(),
+    uid: session.userId,
+    wid: workspaceId(ctx.env),
+    role: session.role,
+    name: session.name,
+    iat: now,
+    exp: now + TICKET_TTL_MS,
+  }, await resolveRealtimeSecret(ctx.env));
+  return json({ ticket, ttlMs: TICKET_TTL_MS });
+}
+
+/**
+ * GET /realtime/ws?ticket=... — upgrade into the workspace hub after Origin
+ * validation. Browsers cannot set an Authorization header on a WebSocket
+ * handshake, which is why the credential is the single-use ticket (never the
+ * bearer token).
+ */
+async function handleRealtimeWs(ctx: Ctx): Promise<Response> {
+  if (!realtimeEnabled(ctx.env)) return err('Not found', 404);
+  if (ctx.request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+    return err('WebSocket upgrade required', 426);
+  }
+  // Origin check: same host, or an explicitly configured allowed origin.
+  const origin = ctx.request.headers.get('Origin');
+  if (!origin) return err('Origin required', 403);
+  const allowed = new Set<string>([ctx.url.origin]);
+  for (const extra of (ctx.env.REALTIME_ALLOWED_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)) {
+    allowed.add(extra);
+  }
+  if (!allowed.has(origin)) return err('Origin not allowed', 403);
+  const ticket = ctx.url.searchParams.get('ticket') ?? '';
+  if (!ticket) return err('ticket is required', 401);
+  const stub = hubStub(ctx.env)!;
+  return stub.fetch(`https://hub.internal/connect?ticket=${encodeURIComponent(ticket)}`, {
+    headers: {
+      'Upgrade': 'websocket',
+      'x-hub-key': rawRealtimeSecret(ctx.env),
+      'Origin': origin,
+    },
+  });
+}
+
+// ── Analytics Engine instrumentation ────────────────────────────────────
+// One data point per request, written inside the request (no extra browser
+// telemetry call). Records the normalized route — never tokens, cookies,
+// bodies, emails or query strings. Wall-clock duration, which is deliberately
+// different from Worker CPU time. Telemetry failure never fails the request.
+
+function writeAnalytics(
+  env: Env, execCtx: ExecutionContext, request: Request, route: string,
+  status: number, durationMs: number, isWebSocket: boolean,
+): void {
+  if (!env.ANALYTICS) return;
+  try {
+    const metrics = requestMetrics(request);
+    env.ANALYTICS.writeDataPoint({
+      blobs: [route, request.method, workspaceId(env), isWebSocket ? 'ws' : 'http'],
+      doubles: [
+        status,
+        durationMs,
+        metrics.d1RowsRead,
+        metrics.d1RowsWritten,
+        metrics.kvOps,
+      ],
+    });
+  } catch {
+    /* telemetry must never break the request */
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env, execCtx: ExecutionContext): Promise<Response> {
+    const startedAt = Date.now();
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS });
     }
 
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api/, '');
-    const ctx: Ctx = { request, env, url, path, method: request.method, execCtx };
+    // Per-request bindings view that counts KV ops and D1 rows as handlers
+    // use them; everything downstream keeps using ctx.env unchanged.
+    const tracked = trackedEnv(request, env);
+    const ctx: Ctx = { request, env: tracked, url, path, method: request.method, execCtx };
 
+    let response = json({ error: 'Internal error' }, 500);
+    let route = 'unmatched';
     try {
-      for (const route of routes) {
-        if (route.method === ctx.method && route.match(path)) {
+      let matched = false;
+      for (const r of routes) {
+        if (r.method === ctx.method && r.match(path)) {
+          route = normalizeRoute(path);
+          matched = true;
           const denied = await checkAccess(ctx);
-          if (denied) return denied;
-          return await route.handler(ctx);
+          if (denied) { response = denied; break; }
+          response = await r.handler(ctx);
+          break;
         }
       }
-      return json({ error: 'Not found' }, 404);
+      if (!matched) {
+        route = normalizeRoute(path);
+        response = json({ error: 'Not found' }, 404);
+      }
     } catch (e) {
-      return json({ error: (e as Error).message }, 500);
+      response = json({ error: (e as Error).message }, 500);
     }
+    // 101 marks the WebSocket upgrade; everything else is an ordinary call.
+    execCtx.waitUntil(Promise.resolve().then(() =>
+      writeAnalytics(env, execCtx, request, route, response.status, Date.now() - startedAt, response.status === 101),
+    ));
+    return response;
   },
 };

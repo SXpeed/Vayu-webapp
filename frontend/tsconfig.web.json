@@ -21,5 +21,19 @@
     "views",
     "assets"
   ],
-  "exclude": ["worker.ts", "webpush.ts", "dist", "node_modules", ".wrangler"]
+  "exclude": [
+    "worker.ts",
+    "webpush.ts",
+    "workerEnv.ts",
+    "workerRoles.ts",
+    "rows.ts",
+    "deltaSync.ts",
+    "realtime.ts",
+    "realtimeTickets.ts",
+    "entityAccess.ts",
+    "fileAuth.ts",
+    "dist",
+    "node_modules",
+    ".wrangler"
+  ]
 }

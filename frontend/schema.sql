@@ -239,3 +239,20 @@ CREATE TABLE IF NOT EXISTS attendance (
 
 CREATE INDEX IF NOT EXISTS idx_attendance_employee ON attendance(employee_id);
 CREATE INDEX IF NOT EXISTS idx_attendance_in ON attendance(check_in_at DESC);
+-- Delta-sync change log. Every D1 mutation appends its row(s) here in the same
+-- batch as the write; /api/sync serves pages of it. The Worker also creates
+-- this idempotently at runtime (deltaSync.ts ensureChangeLogTable). Rows older
+-- than 30 days are pruned; the newest row is always kept.
+CREATE TABLE IF NOT EXISTS change_log (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  workspace_id TEXT NOT NULL DEFAULT 'default',
+  entity TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  op TEXT NOT NULL,                -- put | delete
+  changed_at INTEGER NOT NULL,
+  actor_id TEXT NOT NULL DEFAULT '',
+  scope TEXT                       -- JSON array of entitled user IDs, or NULL = team-wide
+);
+
+CREATE INDEX IF NOT EXISTS idx_change_log_ws_seq ON change_log(workspace_id, seq);
+CREATE INDEX IF NOT EXISTS idx_change_log_ws_changed ON change_log(workspace_id, changed_at);

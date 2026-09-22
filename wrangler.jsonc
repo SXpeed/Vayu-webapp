@@ -2,6 +2,12 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "vayu-webapp",
   "workers_dev": true,
+  "routes": [
+    { "pattern": "ateliersupport.com", "custom_domain": true },
+    // www should 301 to the apex via a Cloudflare Redirect Rule, so logins,
+    // the installed PWA and push subscriptions stay on one origin.
+    { "pattern": "www.ateliersupport.com", "custom_domain": true }
+  ],
   "compatibility_date": "2026-06-24",
   "compatibility_flags": ["nodejs_compat"],
   "main": "frontend/worker.ts",
@@ -30,5 +36,16 @@
       "database_name": "vayu-messaging-db",
       "database_id": "33da1221-1883-4220-a193-b4bb40c82d59"
     }
-  ]
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "SYNC_HUB", "class_name": "SyncHub" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SyncHub"] }],
+  "analytics_engine_datasets": [{ "binding": "ANALYTICS" }],
+  "vars": {
+    "WORKSPACE_ID": "default",
+    "DELTA_SYNC_ENABLED": "off",
+    "REALTIME_ENABLED": "off",
+    "FILE_AUTH": "off"
+  }
 }

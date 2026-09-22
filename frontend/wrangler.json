@@ -27,5 +27,16 @@
       "database_name": "vayu-messaging-db",
       "database_id": "33da1221-1883-4220-a193-b4bb40c82d59"
     }
-  ]
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "SYNC_HUB", "class_name": "SyncHub" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SyncHub"] }],
+  "analytics_engine_datasets": [{ "binding": "ANALYTICS" }],
+  "vars": {
+    "WORKSPACE_ID": "default",
+    "DELTA_SYNC_ENABLED": "off",
+    "REALTIME_ENABLED": "off",
+    "FILE_AUTH": "off"
+  }
 }

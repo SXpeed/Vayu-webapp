@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import { PaymentLink } from '../types';
 import { paymentService } from '../services/paymentService';
+import { createRefreshScheduler } from '../services/refreshScheduler';
+import { realtimeService } from '../services/realtimeService';
 import { IndianRupee, Copy, Check, RefreshCw, Link as LinkIcon, MessageCircle } from 'lucide-react';
 import {
     PageRoot, PageHeader, PageBody, Card, SectionTitle, Field, Input,
@@ -58,18 +60,41 @@ export const PaymentsView: React.FC = () => {
             setLinks(await paymentService.getPaymentLinks());
         } catch (e) {
             if (!silent) toast.error((e as Error).message || 'Could not load payment links');
+            if (silent) throw e;
         } finally {
             if (!silent) setIsLoadingLinks(false);
         }
     }, []);
 
-    // Load on mount and keep the list fresh (a paid webhook can land any time).
+    // Load on mount and refresh occasionally while visible. Razorpay webhooks
+    // are the source of truth; a 15-second loop needlessly multiplied Worker
+    // invocations on every open Payments screen.
     useEffect(() => {
-        loadLinks();
-        const interval = setInterval(() => {
-            if (document.visibilityState === 'visible') loadLinks(true);
-        }, 15000);
-        return () => clearInterval(interval);
+        const scheduler = createRefreshScheduler({
+            run: async () => {
+                try { await loadLinks(true); }
+                finally { setIsLoadingLinks(false); }
+            },
+            // A paid webhook is pushed over the realtime socket; polling is
+            // then only a safety net.
+            intervalMs: () => (realtimeService.connected ? 10 * 60_000 : 60_000),
+            enabled: () => document.visibilityState === 'visible' && navigator.onLine,
+        });
+        const refresh = () => { void scheduler.request(); };
+        document.addEventListener('visibilitychange', refresh);
+        window.addEventListener('online', refresh);
+        const unsubscribe = realtimeService.subscribe(event => {
+            if (event.type === 'invalidate' && event.events.some(e => e.entity === 'payments')
+                && document.visibilityState === 'visible') {
+                void loadLinks(true).catch(() => { /* the scheduler retries */ });
+            }
+        });
+        return () => {
+            unsubscribe();
+            scheduler.stop();
+            document.removeEventListener('visibilitychange', refresh);
+            window.removeEventListener('online', refresh);
+        };
     }, [loadLinks]);
 
     const handleCreate = async () => {

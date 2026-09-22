@@ -137,7 +137,11 @@ globalThis.addEventListener('push', (event) => {
     renotify: !!payload.tag,
     data: payload.data || {},
   };
-  event.waitUntil(globalThis.registration.showNotification(title, options));
+  // A push means something changed server-side: open tabs catch up now
+  // instead of waiting for their next scheduled refresh.
+  event.waitUntil(
+    globalThis.registration.showNotification(title, options).then(() => broadcastSyncRequired())
+  );
 });
 
 globalThis.addEventListener('notificationclick', (event) => {

@@ -3,10 +3,12 @@ import { UserProfile } from '../types';
 import { authService, AuthUser } from '../services/authService';
 import { db } from '../services/db';
 import toast from 'react-hot-toast';
+import { createRefreshScheduler } from '../services/refreshScheduler';
+import { realtimeService } from '../services/realtimeService';
 
 /**
  * Manages auth state: authUser, userProfile, theme, and the
- * presence heartbeat effect (30s interval + beforeunload offline mark).
+ * visible-tab presence refresh (five-minute interval).
  */
 export function useAuth() {
     const [authUser, setAuthUser] = useState<AuthUser | null>(null);
@@ -92,28 +94,29 @@ export function useAuth() {
         navigateTo('login');
     }, [clearAuth]);
 
-    // Presence heartbeat: ping every 30 seconds + mark offline on unload
+    // Presence is informational, not business-critical. A five-minute visible-
+    // tab heartbeat avoids thousands of Worker invocations and KV writes per
+    // employee while still providing a useful approximate online indicator.
     useEffect(() => {
         if (!authUser) return;
-        let cancelled = false;
-
-        const beat = async () => {
-            if (cancelled) return;
-            try { await authService.heartbeat(); } catch { /* silent */ }
-        };
-        beat();
-        const interval = setInterval(beat, 30000);
-
-        const onUnload = () => { authService.setOffline(); };
-        window.addEventListener('beforeunload', onUnload);
+        const scheduler = createRefreshScheduler({
+            // A live realtime socket IS presence (the hub reports it); the KV
+            // heartbeat only feeds the fallback used when the hub is down.
+            run: async () => { if (!realtimeService.connected) await authService.heartbeat(); },
+            intervalMs: 5 * 60_000,
+            enabled: () => document.visibilityState === 'visible' && navigator.onLine,
+        });
+        const onVisibilityChange = () => { void scheduler.request(); };
+        document.addEventListener('visibilitychange', onVisibilityChange);
+        window.addEventListener('online', onVisibilityChange);
 
         return () => {
-            cancelled = true;
-            clearInterval(interval);
-            window.removeEventListener('beforeunload', onUnload);
-            authService.setOffline();
+            scheduler.stop();
+            document.removeEventListener('visibilitychange', onVisibilityChange);
+            window.removeEventListener('online', onVisibilityChange);
+            // Let TTL expire: closing one tab must not mark another tab offline.
         };
-    }, [authUser]);
+    }, [authUser?.id]);
 
     return {
         authUser,
