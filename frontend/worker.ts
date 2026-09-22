@@ -797,6 +797,36 @@ async function handleAuthDevicesSignOut(ctx: Ctx): Promise<Response> {
   return json({ signedOut });
 }
 
+/**
+ * POST /auth/users/:id/devices/signout { id? } — admin: sign out one of a
+ * person's devices, or (no id) all of them. On their own account an admin
+ * never signs out the device they're using.
+ */
+async function handleAuthUserDevicesSignOut(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  if (session.role !== ADMIN_ROLE_ID) return err('Forbidden', 403);
+  const userId = decodeURIComponent(ctx.path.slice('/auth/users/'.length, -'/devices/signout'.length));
+  const raw = await ctx.env.VAYU_KV.get(`auth:user:${userId}`);
+  if (!raw) return err('User not found', 404);
+  const user: StoredUser = JSON.parse(raw);
+  const body = await ctx.request.json().catch(() => ({})) as { id?: unknown };
+  let only: string | undefined;
+  if (body.id !== undefined) {
+    if (typeof body.id !== 'string' || !/^[0-9a-f]{24}$/.test(body.id)) return err('Invalid device id');
+    only = body.id;
+  }
+  const keep = userId === session.userId ? bearerToken(ctx.request) : null;
+  const signedOut = await signOutDevices(ctx.env.VAYU_KV, userId, keep, only, 'signed-out-by-admin');
+  if (only !== undefined && signedOut === 0) return err('That device is no longer signed in', 404);
+  if (signedOut > 0) revokeHubAsync(ctx, userId);
+  logEntityChange(ctx, session, 'updated', 'user', userId,
+    only === undefined
+      ? `Signed out all devices of "${user.name}" (${signedOut})`
+      : `Signed out a device of "${user.name}"`);
+  return json({ signedOut, devices: await listDevices(ctx.env.VAYU_KV, userId, keep) });
+}
+
 async function handleAuthLogout(ctx: Ctx): Promise<Response> {
   const auth = ctx.request.headers.get('Authorization');
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
@@ -844,7 +874,7 @@ async function handleAuthUsersList(ctx: Ctx): Promise<Response> {
       const pub = stripPassword(stored);
       pub.notificationsEnabled = usersWithPush.has(pub.id);
       pub.deviceLimit = deviceLimit(stored);
-      pub.devices = await listDevices(ctx.env.VAYU_KV, pub.id);
+      pub.devices = await listDevices(ctx.env.VAYU_KV, pub.id, pub.id === session.userId ? bearerToken(ctx.request) : null);
       users.push(pub);
     }
   }
@@ -3102,6 +3132,7 @@ const routes: Route[] = [
   { method: 'PUT', match: isPrefix('/auth/roles/'), handler: handleRolesUpdate },
   { method: 'DELETE', match: isPrefix('/auth/roles/'), handler: handleRolesDelete },
   { method: 'POST', match: isExact('/auth/users'), handler: handleAuthUsersCreate },
+  { method: 'POST', match: (p) => /^\/auth\/users\/[^/]+\/devices\/signout$/.test(p), handler: handleAuthUserDevicesSignOut },
   { method: 'DELETE', match: isPrefix('/auth/users/'), handler: handleAuthUsersDelete },
   { method: 'PUT', match: isPrefix('/auth/users/'), handler: handleAuthUsersUpdate },
   { method: 'GET', match: isExact('/auth/presence'), handler: handleAuthPresence },

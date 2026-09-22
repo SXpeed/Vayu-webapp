@@ -1,12 +1,71 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, UserPlus, Trash2, Eye, EyeOff, Edit2, Check, Bell, BellOff, Smartphone } from 'lucide-react';
+import { X, UserPlus, Trash2, Eye, EyeOff, Edit2, Check, Bell, BellOff, Smartphone, LogOut } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { Button } from './ui';
 import { authService, AuthUser } from '../services/authService';
 import { TypeDeleteDialog } from './TypeDeleteDialog';
 import { StoreConfig } from '../types';
 import { apiCall } from '../services/apiClient';
 import { ADMIN_ROLE_ID, BUILT_IN_ROLES, type RoleDef } from '../permissions';
-import { DeviceList, DEFAULT_MAX_DEVICES, deviceCountText } from './DeviceList';
+import { DeviceList, DEFAULT_MAX_DEVICES, deviceCountText, type DeviceInfo } from './DeviceList';
+
+/**
+ * A person's devices with admin sign-out: one device, or all of them (asks
+ * for a second tap). On your own account the device you're using is kept.
+ */
+const AdminDeviceControls: React.FC<{
+  user: AuthUser;
+  onDevicesChanged: (devices: NonNullable<AuthUser['devices']>) => void;
+}> = ({ user, onDevicesChanged }) => {
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [confirmAll, setConfirmAll] = useState(false);
+
+  useEffect(() => {
+    if (!confirmAll) return;
+    const timer = setTimeout(() => setConfirmAll(false), 5000);
+    return () => clearTimeout(timer);
+  }, [confirmAll]);
+
+  const run = async (deviceId: string | undefined, done: (count: number) => string) => {
+    setBusyId(deviceId ?? 'all');
+    try {
+      const result = await authService.signOutUserDevices(user.id, deviceId);
+      onDevicesChanged(result.devices);
+      toast.success(done(result.signedOut));
+    } catch (e) {
+      toast.error((e as Error).message || 'Could not sign out');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const signOutOne = (device: DeviceInfo) => {
+    if (device.id) void run(device.id, () => `Signed ${user.name} out of ${device.label}`);
+  };
+  const signOutAll = () => {
+    if (!confirmAll) { setConfirmAll(true); return; }
+    setConfirmAll(false);
+    void run(undefined, count => `Signed ${user.name} out of ${count === 1 ? '1 device' : `${count} devices`}`);
+  };
+
+  const devices = user.devices ?? [];
+  const removable = devices.filter(d => !d.current).length;
+  const removableText = removable === 1 ? '1 device' : `${removable} devices`;
+  let allLabel = devices.some(d => d.current) ? 'Sign out all other devices' : 'Sign out all devices';
+  if (busyId === 'all') allLabel = 'Signing out…';
+  else if (confirmAll) allLabel = `Tap again to sign out ${removableText}`;
+
+  return (
+    <div className="space-y-3">
+      <DeviceList devices={devices} emptyText="Not signed in anywhere." onSignOut={signOutOne} busyId={busyId} />
+      {removable > 0 && (
+        <Button type="button" variant="danger" block onClick={signOutAll} disabled={busyId !== null} icon={<LogOut size={13} />}>
+          {allLabel}
+        </Button>
+      )}
+    </div>
+  );
+};
 
 
 interface Props {
@@ -123,6 +182,10 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
     } finally {
       setRemovingId(null);
     }
+  };
+
+  const setDevicesFor = (userId: string, devices: NonNullable<AuthUser['devices']>) => {
+    setUsers(prev => prev.map(u => (u.id === userId ? { ...u, devices } : u)));
   };
 
   const startEdit = (u: AuthUser) => {
@@ -244,7 +307,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
                     {u.devices && (
                       <div>
                         <p className="neu-label">Signed in on {deviceCountText(u.devices.length, u.deviceLimit)}</p>
-                        <DeviceList devices={u.devices} emptyText="Not signed in anywhere." />
+                        <AdminDeviceControls user={u} onDevicesChanged={devices => setDevicesFor(u.id, devices)} />
                       </div>
                     )}
                     {stores.length > 0 && (
@@ -325,7 +388,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
                 )}
                 {editingId !== u.id && devicesOpenId === u.id && u.devices && (
                   <div className="neu-inset rounded-2xl p-3.5 mx-1 mb-2">
-                    <DeviceList devices={u.devices} emptyText="Not signed in anywhere." />
+                    <AdminDeviceControls user={u} onDevicesChanged={devices => setDevicesFor(u.id, devices)} />
                   </div>
                 )}
               </React.Fragment>

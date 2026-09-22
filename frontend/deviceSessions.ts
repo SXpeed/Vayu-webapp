@@ -244,6 +244,7 @@ export async function listDevices(kv: KVNamespace, userId: string, currentToken?
  */
 export async function signOutDevices(
   kv: KVNamespace, userId: string, keepToken: string | null, only?: string,
+  reason: 'signed-out-remotely' | 'signed-out-by-admin' = 'signed-out-remotely',
 ): Promise<number> {
   const entries = await loadIndex(kv, userId);
   const keep: DeviceEntry[] = [];
@@ -252,7 +253,7 @@ export async function signOutDevices(
     const matches = entry.token !== keepToken && (only === undefined || await deviceId(entry.token) === only);
     if (!matches) { keep.push(entry); continue; }
     await kv.delete(sessionKey(entry.token));
-    await kv.put(revokedKey(entry.token), 'signed-out-remotely', { expirationTtl: REVOKED_TTL_SECONDS });
+    await kv.put(revokedKey(entry.token), reason, { expirationTtl: REVOKED_TTL_SECONDS });
     removed++;
   }
   if (removed > 0) await saveIndex(kv, userId, keep);

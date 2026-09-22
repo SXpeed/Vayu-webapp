@@ -161,6 +161,7 @@ const App: React.FC = () => {
                 let message = 'You were signed out. Please sign in again.';
                 if (reason === 'device-limit') message = 'You were signed out because your account was signed in on another device.';
                 else if (reason === 'signed-out-remotely') message = 'This device was signed out from another device.';
+                else if (reason === 'signed-out-by-admin') message = 'An admin signed this device out. Please sign in again.';
                 toast.error(message, { duration: 8000 });
             }
         };

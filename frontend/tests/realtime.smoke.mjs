@@ -300,6 +300,41 @@ try {
         assert.equal(after, before - 1);
     });
 
+    await check('admin signs out one device, then all devices, of another person', async () => {
+        const ua = n => `Mozilla/5.0 (Linux; Android 14) Chrome/14${n}.0 Mobile Safari/537.36`;
+        const users = (await api('/auth/users', { token })).data;
+        const staff = users.find(u => u.email === 'old@test.local');
+        await api(`/auth/users/${staff.id}`, { method: 'PUT', token, body: { maxDevices: 5 } });
+        const s1 = await loginAs('old@test.local', 'old-pass-1', ua(1));
+        const s2 = await loginAs('old@test.local', 'old-pass-1', ua(2));
+
+        // Staff can't use the admin endpoint.
+        assert.equal((await api(`/auth/users/${staff.id}/devices/signout`, { method: 'POST', token: s1, body: {} })).status, 403);
+
+        const s1Id = (await api('/auth/devices', { token: s1 })).data.devices.find(d => d.current).id;
+        const one = await api(`/auth/users/${staff.id}/devices/signout`, { method: 'POST', token, body: { id: s1Id } });
+        assert.equal(one.status, 200, JSON.stringify(one.data));
+        assert.equal(one.data.signedOut, 1);
+        assert.ok(!one.data.devices.some(d => d.id === s1Id));
+        const gone = await api('/auth/me', { token: s1 });
+        assert.equal(gone.status, 401);
+        assert.equal(gone.data.reason, 'signed-out-by-admin');
+        assert.equal(await works(s2), true);
+
+        const all = await api(`/auth/users/${staff.id}/devices/signout`, { method: 'POST', token, body: {} });
+        assert.ok(all.data.signedOut >= 1);
+        assert.deepEqual(all.data.devices, []);
+        assert.equal(await works(s2), false);
+        await api(`/auth/users/${staff.id}`, { method: 'PUT', token, body: { maxDevices: null } });
+
+        // On their own account an admin keeps the device they're using.
+        const me = (await api('/auth/users', { token })).data.find(u => u.email === 'smoke@test.local');
+        const own = await api(`/auth/users/${me.id}/devices/signout`, { method: 'POST', token, body: {} });
+        assert.equal(await works(token), true);
+        assert.equal(own.data.devices.length, 1);
+        assert.equal(own.data.devices[0].current, true);
+    });
+
     await check('logout revokes the socket (4403)', async () => {
         assert.equal((await api('/auth/logout', { method: 'POST', token })).status, 200);
         const code = await Promise.race([socket.closed, new Promise(r => setTimeout(() => r('timeout'), 5_000))]);
