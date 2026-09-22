@@ -25,6 +25,7 @@ import { syncService } from './services/syncService';
 import { canOpenView, makeCan, permissionsOf } from './access';
 import { SIGNED_OUT_EVENT } from './services/apiClient';
 import { PageRoot, PageHeader, PageBody, EmptyState, Button } from './components/ui';
+import { APP_NAME } from './brand';
 
 /** Views a push-notification click may deep-link into. */
 const PUSH_VIEWS = ['messaging', 'inquiry', 'payments'] as const;
@@ -253,7 +254,7 @@ const App: React.FC = () => {
         return (
             <div className="h-full bg-black flex items-center justify-center">
                 <div className="animate-pulse flex flex-col items-center justify-center">
-                    <img src="/icon.png" alt="Vayu Logo" className="w-48 h-48 object-contain rounded-[20px]" />
+                    <img src="/icon.png" alt={`${APP_NAME} logo`} className="w-48 h-48 object-contain rounded-[20px]" />
                 </div>
             </div>
         );

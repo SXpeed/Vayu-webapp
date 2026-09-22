@@ -7,6 +7,7 @@ import { EVENT_COLORS, eventColor } from '../services/eventService';
 import { Clock, Receipt, TrendingUp, Palette, ArrowRight, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronDown, Edit2, BookOpen, ShieldCheck, User } from 'lucide-react';
 import { PageRoot, PageHeader, PageBody, GhostIconButton } from '../components/ui';
 import { useAppChrome } from '../components/Layout';
+import { APP_NAME } from '../brand';
 
 /** One dashboard metric — raised tile, gold glyph, serif figure. */
 const StatTile: React.FC<{ icon: React.ReactNode; label: string; children?: React.ReactNode }> = ({ icon, label, children }) => (
@@ -190,8 +191,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
             {/* The sidebar carries the brand on desktop, so the admin and profile
                 buttons here are phone-only — on lg+ they'd repeat the rail. */}
             <PageHeader
-                title="Vayu"
-                subtitle="Design for living"
+                title={APP_NAME}
                 actions={
                     <div className="flex items-center gap-2 lg:hidden">
                         {isAdmin && (

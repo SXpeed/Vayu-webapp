@@ -1,6 +1,6 @@
 {
-  "name": "Vayu Design for living",
-  "short_name": "Vayu Design",
+  "name": "ateliersupport",
+  "short_name": "ateliersupport",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -10,7 +10,7 @@
   "orientation": "portrait",
   "background_color": "#e9edf4",
   "theme_color": "#e9edf4",
-  "description": "A mobile-first application for Vayu Design to manage artworks, create catalogs, and automate billing.",
+  "description": "A mobile-first application to manage artworks, create catalogs, and automate billing.",
   "categories": [
     "business",
     "productivity"
@@ -42,7 +42,7 @@
       "sizes": "1920x1080",
       "type": "image/webp",
       "form_factor": "wide",
-      "label": "Vayu Design — artworks, catalogs, invoices and client conversations in one place"
+      "label": "ateliersupport — artworks, catalogs, invoices and client conversations in one place"
     }
   ],
   "icons": [

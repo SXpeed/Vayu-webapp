@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { authService, AuthUser } from '../services/authService';
+import { APP_NAME } from '../brand';
 
 interface LoginViewProps {
   onLogin: (user: AuthUser) => void;
@@ -65,7 +66,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
   if (screen === 'checking') {
     return (
       <div className="h-full flex items-center justify-center bg-[var(--neu-bg)]">
-        <div className="animate-pulse text-gold-500 font-serif text-xl">Vayu</div>
+        <div className="animate-pulse text-gold-500 font-serif text-xl">{APP_NAME}</div>
       </div>
     );
   }
@@ -79,8 +80,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
     <div className="h-full flex flex-col bg-[var(--neu-bg)] items-center justify-center p-6 transition-colors duration-500 animate-fade-in">
       <div className="w-full max-w-sm space-y-10">
         <div className="text-center space-y-1 animate-fade-in-up">
-          <h1 className="text-5xl font-serif text-gold-500 tracking-wide">Vayu</h1>
-          <h2 className="text-lg font-serif text-gold-400 tracking-widest uppercase">Design for living</h2>
+          <h1 className="text-5xl font-serif text-gold-500 tracking-wide">{APP_NAME}</h1>
         </div>
 
         <form
@@ -132,7 +132,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
               value={email}
               onChange={e => setEmail(e.target.value)}
               className="neu-field"
-              placeholder="you@vayu.com"
+              placeholder="you@example.com"
               autoComplete="email"
             />
           </div>

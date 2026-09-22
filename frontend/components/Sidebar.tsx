@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { ViewState } from '../types';
 import { CanFn, canOpenView } from '../access';
+import { APP_NAME } from '../brand';
 
 interface NavItem {
     id: ViewState;
@@ -155,7 +156,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className={`flex items-center ${collapsed ? 'justify-center mb-4' : 'gap-3 px-0.5 mb-5'}`}>
                 <button
                     onClick={() => onNavigate('home')}
-                    onMouseEnter={showTip('Vayu — Home')}
+                    onMouseEnter={showTip(`${APP_NAME} — Home`)}
                     onMouseLeave={hideTip}
                     aria-label="Go to home"
                     className="w-11 h-11 rounded-2xl neu-accent neu-btn flex items-center justify-center shrink-0 active-scale"
@@ -164,10 +165,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </button>
                 {!collapsed && (
                     <div className="min-w-0 flex-1">
-                        <p className="font-serif text-lg leading-tight text-gold-700 dark:text-gold-300 truncate">Vayu</p>
-                        <p className="text-[9px] uppercase tracking-[0.11em] text-gray-600 dark:text-gray-300 font-light whitespace-nowrap">
-                            Design for living
-                        </p>
+                        <p className="font-serif text-lg leading-tight text-gold-700 dark:text-gold-300 truncate">{APP_NAME}</p>
                     </div>
                 )}
             </div>

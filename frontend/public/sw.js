@@ -128,9 +128,9 @@ globalThis.addEventListener('push', (event) => {
   try {
     payload = event.data ? event.data.json() : {};
   } catch (e) {
-    payload = { title: 'Vayu Design', body: event.data ? event.data.text() : '' };
+    payload = { title: 'ateliersupport', body: event.data ? event.data.text() : '' };
   }
-  const title = payload.title || 'Vayu Design';
+  const title = payload.title || 'ateliersupport';
   const options = {
     body: payload.body || '',
     tag: payload.tag || undefined,

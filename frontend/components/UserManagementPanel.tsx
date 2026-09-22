@@ -419,7 +419,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
 
           <div>
             <label htmlFor="um-email" className="neu-label">Email</label>
-            <input id="um-email" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="jane@vayu.com" className="neu-field" />
+            <input id="um-email" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="jane@example.com" className="neu-field" />
           </div>
 
           <div>
