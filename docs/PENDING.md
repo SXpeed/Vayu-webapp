@@ -14,7 +14,7 @@ Everything still to do, and everything waiting on a decision. Updated
 | One database per organization | `0dcb803` | `ORG_DATABASES.md` |
 | Business tables + import of the current app | `846eee0` | `VAYU_MIGRATION.md` |
 | Plan engine, limits, branding from the panel | `2513a57`, `f7cbfe6` | `PLANS.md` |
-| Landing page, sign-up and application flow, redesigned control centre | this commit | `ONBOARDING.md` |
+| Landing page, sign-up and application flow, redesigned control centre | `9f4ce8c` | `ONBOARDING.md` |
 
 **Live in production:** only the rename, the cleanup and the new app address.
 Everything else is committed locally and dormant in production, because the
