@@ -44,8 +44,8 @@
   "analytics_engine_datasets": [{ "binding": "ANALYTICS" }],
   "vars": {
     "WORKSPACE_ID": "default",
-    "DELTA_SYNC_ENABLED": "off",
-    "REALTIME_ENABLED": "off",
+    "DELTA_SYNC_ENABLED": "on",
+    "REALTIME_ENABLED": "on",
     "FILE_AUTH": "off"
   }
 }

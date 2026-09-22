@@ -94,3 +94,20 @@ npm run test:smoke          # wrangler dev (local) + real hub: tickets, origin, 
 Not covered locally: hibernation eviction and wake-up (workerd doesn't evict
 on demand), real Analytics Engine writes, edge WebSocket timeouts, and
 behaviour at scale.
+
+## Rollout log
+
+**Baseline (before any flag), Worker requests per day** (Cloudflare GraphQL
+`workersInvocationsAdaptive`, script `vayu-webapp`, 0 errors on all days):
+
+| Date | Requests | Date | Requests |
+|---|---|---|---|
+| 2026-09-15 | 14,839 | 2026-09-19 | 6,229 |
+| 2026-09-16 | 19,555 | 2026-09-20 | 44,506 |
+| 2026-09-17 | 6,027 | 2026-09-21 | 75,636 |
+| 2026-09-18 | 15,704 | 2026-09-22 | 21,342 (partial day) |
+
+**2026-09-22:** `REALTIME_SECRET` set; `DELTA_SYNC_ENABLED=on` (version
+2be83dcf); `REALTIME_ENABLED=on` (version b87eb25f). `FILE_AUTH` still off.
+Compare against the table above from 2026-09-23 on (open tabs keep the old
+polling until they reload, so the first day is mixed).
