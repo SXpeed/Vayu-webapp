@@ -27,13 +27,17 @@ export default defineConfig(({ mode }) => {
       preview: {
         allowedHosts: true,
       },
-      // Two pages: the organization app (index.html) and the provider control
-      // panel (admin.html), so the panel's code never ships in the app bundle.
+      // Separate pages: the organization app (index.html), the provider control
+      // centre (admin.html) and the public website, so none ships the others' code.
       build: {
         rollupOptions: {
           input: {
             main: path.resolve(__dirname, 'index.html'),
             admin: path.resolve(__dirname, 'admin.html'),
+            // Public website: landing page, sign-up/application, legal.
+            welcome: path.resolve(__dirname, 'welcome.html'),
+            signup: path.resolve(__dirname, 'signup.html'),
+            legal: path.resolve(__dirname, 'legal.html'),
           },
         },
       },

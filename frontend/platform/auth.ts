@@ -9,6 +9,7 @@
 
 import { betterAuth } from 'better-auth';
 import { twoFactor } from 'better-auth/plugins';
+import { APIError } from 'better-auth/api';
 import { hashPassword, verifyPassword } from 'better-auth/crypto';
 import { APP_NAME } from '../brand';
 import type { Env } from '../workerEnv';
@@ -135,6 +136,21 @@ function buildAuth(env: Env, db: D1Database, origin: string, methods: LoginMetho
       cookiePrefix: 'as',
       ipAddress: { ipAddressHeaders: ['cf-connecting-ip'] },
       defaultCookieAttributes: { sameSite: 'lax', httpOnly: true, secure },
+    },
+    databaseHooks: {
+      session: {
+        create: {
+          // A disabled account cannot start a session by any sign-in method.
+          // (Disabling also revokes the sessions it already has.)
+          before: async (session) => {
+            const row = await db.prepare('SELECT status FROM platform_user_status WHERE user_id = ?')
+              .bind(session.userId).first<{ status: string }>();
+            if (row?.status === 'disabled') {
+              throw new APIError('FORBIDDEN', { message: 'This account has been disabled. Contact support.', code: 'ACCOUNT_DISABLED' });
+            }
+          },
+        },
+      },
     },
     plugins: [
       twoFactor({ issuer: APP_NAME }),

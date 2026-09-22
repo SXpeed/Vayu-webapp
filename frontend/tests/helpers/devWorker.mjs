@@ -113,7 +113,13 @@ export async function startDevWorker({ port = 8810, inspectorPort = 9240, adminE
         /** Stops the Worker; storage stays so it can still be inspected. */
         async stop() {
             if (child.exitCode === null) {
-                child.kill();
+                // On Windows, killing wrangler leaves its workerd child running,
+                // so end the whole process tree.
+                if (process.platform === 'win32') {
+                    try { execFileSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* already gone */ }
+                } else {
+                    child.kill();
+                }
                 await new Promise(r => setTimeout(r, 500));
             }
         },

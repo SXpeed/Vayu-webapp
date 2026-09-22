@@ -14,6 +14,7 @@ Everything still to do, and everything waiting on a decision. Updated
 | One database per organization | `0dcb803` | `ORG_DATABASES.md` |
 | Business tables + import of the current app | `846eee0` | `VAYU_MIGRATION.md` |
 | Plan engine, limits, branding from the panel | `2513a57`, `f7cbfe6` | `PLANS.md` |
+| Landing page, sign-up and application flow, redesigned control centre | this commit | `ONBOARDING.md` |
 
 **Live in production:** only the rename, the cleanup and the new app address.
 Everything else is committed locally and dormant in production, because the
@@ -38,7 +39,7 @@ platform database does not exist there yet.
 
 - [ ] Create D1 databases: `ateliersupport-platform-staging`, `…-production`
 - [ ] Add the `PLATFORM_DB` binding to the deploy config
-- [ ] Apply platform migrations (`0001`–`0004`)
+- [ ] Apply platform migrations (`0001`–`0005`)
 - [ ] Set secrets per environment: `BETTER_AUTH_SECRET` (generated, with the
       owner), `PAYMENT_SECRETS_KEY`
 - [ ] Set vars: `AUTH_ORIGINS`, `ADMIN_HOST`
@@ -55,19 +56,26 @@ platform database does not exist there yet.
 - [ ] Offline storage keyed per person **and** organization, cleared on switch and sign-out
 - [ ] Run Vayu's real import immediately before this switch, so nothing written in between is missed
 
-### 3.2 Marketing website (Phase C)
-- [ ] Home, About, What it does, Features, How it works, Pricing, Get started, Contact, Login
-- [ ] Pricing fed from published public plans
-- [ ] Privacy policy and terms pages (placeholders until real text arrives)
-- [ ] Bot protection on the forms (Turnstile)
+### 3.2 Marketing website (Phase C) — built, content pending
+- [x] Home, What it does, Features, How it works, Pricing, About, Contact, Login, Get started (`/welcome`)
+- [x] Pricing fed from published public plans
+- [x] Privacy policy and terms pages (`/legal`) — **placeholders until real text arrives** (§1.3)
+- [ ] Real About text, contact email and address (§1.3), in `frontend/site/content.ts`
+- [ ] Make the landing page the root of `ateliersupport.com` once staff have moved (§1.8)
+- [ ] Bot protection on sign-up and contact (Turnstile)
+- [ ] A contact form (today the Contact section shows the address and email only)
 
-### 3.3 Sign-up and approval flow (Phase C)
-- [ ] Create account → verify → business details → choose plan → submit
-- [ ] Application states: draft, pending review, needs information, approved, provisioning, payment required, active, rejected, suspended, provisioning failed, closed
-- [ ] Save and resume, check status, respond to questions, no duplicate submissions
-- [ ] Approval queue actions: approve, reject with reason, ask for information, change plan, approve with a documented billing exception
-- [ ] Approval creates the organization, its database, the owner membership and entitlements — safe to retry, never duplicating
-- [ ] Notify the owner when the workspace is ready
+### 3.3 Sign-up and approval flow (Phase C) — built
+- [x] Create account → business details → choose plan → review and submit (`/signup`)
+- [x] All the application states, with review, set-up and billing kept separate
+- [x] Save and resume, status page, answer questions and resubmit, no duplicate submissions
+- [x] Queue actions: approve, reject with reason, ask for information, change plan, approve with a billing exception
+- [x] Approval creates the organization, its database, owner membership and subscription — safe to retry, never duplicating; failed set-up is retryable
+- [x] Owner and provider notices queued (they wait for an email provider)
+- [ ] **Email verification** at sign-up (blocked on §1.1; the review screen warns meanwhile)
+- [ ] Optional logo upload during onboarding
+- [ ] Hosted checkout for paid plans after approval (§3.6)
+- [ ] An approved owner entering their workspace in the app (§3.1)
 
 ### 3.4 Invitations and roles (Phase D)
 - [ ] Expiring single-use invitations tied to recipient, organization, role, store access and inviter
@@ -94,9 +102,18 @@ Seats and inventory items are enforced. Still to wire up (each is labelled
 - [ ] Wire the app's payment links to each organization's own connected account
 
 ### 3.7 Email (Phase F, blocked on §1.1)
-- [ ] Sending adapter with a retryable, idempotent outbox
+- [x] Retryable, idempotent outbox (notices queue and wait; shown in the control centre)
+- [ ] Sending adapter that delivers the outbox
 - [ ] Verification, password reset, invitations, approval and ready notices
 - [ ] DNS records (SPF/DKIM/DMARC) for the sending domain
+
+### 3.7b Control centre — built
+- [x] Sidebar layout with Overview, Applications, Organizations, Accounts, Plans, Notifications, Branding, Login & security, System health, Audit log
+- [x] Accounts: search, memberships, signed-in devices, sign out everywhere, reset password, disable (blocks sign-in by any method)
+- [x] Provider administrators: owner-only changes, last-owner and self guards
+- [x] System health as yes/no only, never secret values
+- [ ] Organization data export, closure and scheduled deletion (§3.13)
+- [ ] Usage and cost visibility per organization (needs usage counters, §3.5)
 
 ### 3.8 Support access (Phase E)
 - [ ] "Enter organization" sessions: re-authentication, a reason, short expiry, read-only by default
@@ -147,8 +164,9 @@ Seats and inventory items are enforced. Still to wire up (each is labelled
 - [ ] Cross-organization isolation re-checked on staging with real data volumes
 - [ ] Restore rehearsal from a backup
 
-Nothing in §4 has been done yet; only local automated tests (93 passing) and
-local runs of the real Worker.
+Nothing in §4 has been done yet; only local automated tests (107 passing),
+local runs of the real Worker, and a scripted browser run of the full
+sign-up → approval journey.
 
 ## 5. Decided, for the record
 

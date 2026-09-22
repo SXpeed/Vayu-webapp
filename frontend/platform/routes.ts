@@ -31,6 +31,8 @@
 //   POST            /api/v2/webhooks/razorpay/:orgId         signed, per organization
 //   GET             /api/v2/me/orgs                          my organizations
 //   /api/v2/org/:orgId/*                                     that org's own data
+//   /api/v2/apply*                                           my business application (applyRoutes.ts)
+//   /api/v2/admin/{overview,applications,accounts,admins,notifications,health}  (centerRoutes.ts)
 //
 // Every admin route goes through requireProviderAdmin(); hiding the panel is
 // not the boundary. Responses are never cacheable, and errors never carry
@@ -59,15 +61,9 @@ import {
 import { SecretsUnavailable } from './secrets';
 import { OrgAccessError, handleOrgRequest, listMyOrganizations, resolveOrgContext } from './orgApi';
 
-const NO_STORE = { 'Cache-Control': 'no-store', 'Content-Type': 'application/json' };
-
-function reply(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), { status, headers: NO_STORE });
-}
-
-function fail(status: number, code: string, message: string): Response {
-  return reply({ error: message, code }, status);
-}
+import { fail, reply } from './http';
+import { handleCenterRoute } from './centerRoutes';
+import { handleApplyRoute } from './applyRoutes';
 
 interface AdminContext {
   userId: string;
@@ -113,6 +109,14 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
   if (path === '/admin/me' && method === 'GET') {
     return reply({ userId: admin.userId, email: admin.email, role: admin.role });
   }
+
+  const center = await handleCenterRoute(env, db, request, url, path, {
+    userId: admin.userId,
+    role: admin.role,
+    ip: request.headers.get('cf-connecting-ip'),
+    fresh: Date.now() - admin.sessionCreatedAt <= FRESH_SESSION_MS,
+  });
+  if (center) return center;
 
   if (path === '/admin/settings/login-methods' && method === 'GET') {
     const stored = await getStoredLoginMethods(db);
@@ -364,6 +368,9 @@ export async function handlePlatformRequest(request: Request, env: Env): Promise
       });
     }
     if (path.startsWith('/admin/')) return await handleAdmin(env, db, auth, request, url, path);
+
+    const apply = await handleApplyRoute(db, auth, request, path);
+    if (apply) return apply;
 
     if (path === '/me/orgs' && request.method === 'GET') {
       try {

@@ -5,9 +5,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { ArrowLeft, Building2, CreditCard, Gauge, Plus, UserPlus, Users } from 'lucide-react';
 import { Badge, Button, Card, Field, Input, SectionTitle, Select } from '../components/ui';
-import { api, type ApiError } from './api';
-
-type Reauth = () => Promise<boolean>;
+import { api, guarded as sharedGuarded, type ApiError, type Reauth } from './api';
 
 interface OrgRow {
     id: string; slug: string; name: string; business_type: string; status: string; is_demo: number;
@@ -35,23 +33,13 @@ const ROLES = ['owner', 'admin', 'manager', 'staff'];
 const typeLabel = (t: string) => BUSINESS_TYPES.find(([v]) => v === t)?.[1] ?? t;
 
 /** Runs a call; if the server wants a fresh sign-in, asks for it once and retries. */
-async function guarded<T>(reauth: Reauth, fn: () => Promise<T>): Promise<T | undefined> {
-    try {
-        return await fn();
-    } catch (e) {
-        const err = e as ApiError;
-        if (err.code === 'reauth_required' && await reauth()) {
-            try { return await fn(); } catch (e2) { toast.error((e2 as ApiError).message); return undefined; }
-        }
-        toast.error(err.message);
-        return undefined;
-    }
-}
+const guarded = <T,>(reauth: Reauth, fn: () => Promise<T>) => sharedGuarded(reauth, fn, (m) => toast.error(m));
 
 const json = (body: unknown) => ({ body: JSON.stringify(body) });
 
-export const OrgsPanel: React.FC<{ reauth: Reauth }> = ({ reauth }) => {
-    const [openId, setOpenId] = useState<string | null>(null);
+export const OrgsPanel: React.FC<{ reauth: Reauth; focusId?: string }> = ({ reauth, focusId }) => {
+    const [openId, setOpenId] = useState<string | null>(focusId ?? null);
+    useEffect(() => { if (focusId) setOpenId(focusId); }, [focusId]);
     return openId
         ? <OrgDetailView orgId={openId} reauth={reauth} onBack={() => setOpenId(null)} />
         : <OrgList onOpen={setOpenId} />;
