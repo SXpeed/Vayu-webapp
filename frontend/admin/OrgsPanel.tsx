@@ -269,7 +269,11 @@ const MembersCard: React.FC<{ org: OrgDetail; onChange: (o: OrgDetail) => void }
 };
 
 interface Entitlements {
-    limits: { maxMembers: number | null; maxStores: number | null; maxItems: number | null; storageMb: number | null };
+    limits: {
+        limits: Record<string, number | null>;
+        modules: Record<string, boolean>;
+        features: Record<string, boolean>;
+    };
     plan: { key: string; name: string; version: number; billingType: string } | null;
     subscription: { status: string; trialEndsAt: number | null; paymentWaived: boolean };
     overrides: Record<string, unknown>;
@@ -341,8 +345,13 @@ const SubscriptionCard: React.FC<{ orgId: string; reauth: Reauth }> = ({ orgId, 
                 <p>Members: {info.seats.used} of {info.seats.limit ?? 'unlimited'}
                     {info.seats.overLimit && <span className="text-amber-700 dark:text-amber-400"> · over the limit: existing members keep working, new ones are blocked until someone is disabled</span>}</p>
                 <p className="text-[12px] text-gray-600 dark:text-gray-400">
-                    Stores {info.limits.maxStores ?? '∞'} · items {info.limits.maxItems ?? '∞'} · storage {info.limits.storageMb ?? '∞'} MB
+                    Products {info.limits.limits.maxItems ?? '∞'} · stores {info.limits.limits.maxStores ?? '∞'}
+                    {' · '}storage {info.limits.limits.storageMb ?? '∞'} MB · PDFs/month {info.limits.limits.pdfGenerationsPerMonth ?? '∞'}
                     {Object.keys(info.overrides).length > 0 && ` · overrides: ${Object.keys(info.overrides).join(', ')}`}
+                </p>
+                <p className="text-[12px] text-gray-600 dark:text-gray-400">
+                    Included: {[...Object.entries(info.limits.modules), ...Object.entries(info.limits.features)]
+                        .filter(([, on]) => on).map(([k]) => k).join(', ') || 'nothing'}
                 </p>
             </div>
             <div className="mt-4 flex flex-wrap gap-2 items-end">
