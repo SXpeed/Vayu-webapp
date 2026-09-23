@@ -47,15 +47,17 @@ platform database does not exist there yet.
 - [ ] Point `admin.ateliersupport.com` at the Worker
 - [ ] Separate staging resources so testing never touches production data
 
-## 2b. Hosting split — committed, not deployed
+## 2b. Hosting split — live since 2026-09-23
 
 One Worker per address (`docs/HOSTING.md`): website, app, control centre, and
-the API (`vayu-webapp`, now on `api.ateliersupport.com`).
+the API (`vayu-webapp`, now on `api.ateliersupport.com`). Deployed by CI
+(`2dfd767`, `7b8dc3d`) after a dashboard Workers Route on the bare domain,
+which blocked the website Worker, was removed. All live checks passed.
 
-- [ ] Tell staff on `ateliersupport.com` to open the app there once while online
-      (uploads offline changes), then sign in and reinstall at `app.`
-- [ ] First switch-over: `npm run deploy:sites`, **then** `npm run deploy:api`,
-      then the checks in `docs/HOSTING.md`
+- [x] First switch-over: sites, then the API, then the checks in `docs/HOSTING.md`
+- [ ] Staff: sign in again and reinstall the home-screen app at `app.`
+- [ ] Sign in on `app.` and `admin.`, open a conversation (realtime through the
+      binding) and an uploaded image, as a final hands-on check
 - [ ] Point the Razorpay webhook at `api.ateliersupport.com` when it is set up
 - [ ] A few weeks after: stop passing the app's original `/api` on
       `ateliersupport.com` (`frontend/hosts/welcome/worker.ts`)
@@ -74,7 +76,7 @@ the API (`vayu-webapp`, now on `api.ateliersupport.com`).
 - [x] Pricing fed from published public plans
 - [x] Privacy policy and terms pages (`/legal`) — **placeholders until real text arrives** (§1.3)
 - [ ] Real About text, contact email and address (§1.3), in `frontend/site/content.ts`
-- [x] Make the landing page the root of `ateliersupport.com` (hosting split, §2b; not deployed yet)
+- [x] Make the landing page the root of `ateliersupport.com` (hosting split, §2b)
 - [ ] Bot protection on sign-up and contact (Turnstile)
 - [ ] A contact form (today the Contact section shows the address and email only)
 

@@ -75,7 +75,11 @@ API first by hand when a page needs a new endpoint.
 
 ## First switch-over (one time)
 
-Today `vayu-webapp` holds all four addresses and serves every page.
+Done on 2026-09-23; kept for reference. Before it, `vayu-webapp` held all four
+addresses and served every page. Gotcha met on the day: wrangler refuses to
+deploy a Worker with `workers_dev: false` onto an address that has a dashboard
+**Workers Route** for another Worker (custom domains move fine). Remove such
+routes in the zone's Workers Routes first.
 
 1. **Tell staff first.** Browser storage is per address, so anyone still using
    the app on `ateliersupport.com` will:
