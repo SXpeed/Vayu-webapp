@@ -28,6 +28,23 @@
     src: url('./assets/fonts/PlayfairDisplay-italic-var.woff2') format('woff2');
 }
 
+/* Only places you can type show a typing cursor. With the browser's caret
+   browsing on (F7 in Chrome and Edge), clicking any text otherwise leaves a
+   blinking cursor in headings and labels, as if they could be typed into.
+   In the base layer, so the fields' own caret colours (gold on focus) win. */
+@layer base {
+    :root {
+        caret-color: transparent;
+    }
+
+    input,
+    textarea,
+    select,
+    [contenteditable]:not([contenteditable="false"]) {
+        caret-color: auto;
+    }
+}
+
 html,
 body,
 #root {
