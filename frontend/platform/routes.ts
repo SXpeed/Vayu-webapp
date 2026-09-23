@@ -49,7 +49,7 @@ import {
   OrgError, addMember, createOrganization, createUserAccount, getOrganization,
   listOrganizations, setOrganizationStatus, updateMember, type Actor,
 } from './orgs';
-import { connectRazorpay, describeRazorpay, disconnectRazorpay, receiveRazorpayWebhook, verifyRazorpay } from './payments';
+import { connectRazorpay, describeRazorpay, disconnectRazorpay, receiveRazorpayWebhook, setAppPaymentsOrg, verifyRazorpay } from './payments';
 import { importLegacyWorkspace, listImports } from './legacyImport';
 import { PLAN_SCHEMA } from './planFields';
 import { getBranding, publicBranding, serveLogo, updateBranding, uploadLogo } from './branding';
@@ -276,6 +276,13 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
           await disconnectRazorpay(db, orgId, actor);
           return reply(await describeRazorpay(db, orgId, webhookUrl));
         }
+      } else if (rest === '/payments/razorpay/app' && (method === 'POST' || method === 'DELETE')) {
+        // Which account the app's payment links use: this organization's
+        // (POST) or, if it was this one, back to the shared account (DELETE).
+        if (!fresh) return needFresh();
+        await setAppPaymentsOrg(db, method === 'POST' ? orgId : null, actor);
+        const origin = env.API_ORIGIN || resolveAuthOrigin(env, url);
+        return reply(await describeRazorpay(db, orgId, `${origin}/api/v2/webhooks/razorpay/${orgId}`));
       } else if (rest === '/subscription' && method === 'GET') {
         const [entitlements, seats] = await Promise.all([resolveEntitlements(db, orgId), seatUsage(db, orgId)]);
         return reply({ ...entitlements, seats });
@@ -311,7 +318,13 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
 }
 
 /** Handles /api/v2/*. Returns null for any other path. */
-export async function handlePlatformRequest(request: Request, env: Env): Promise<Response | null> {
+/** What the Worker around the platform API hooks into. */
+export interface PlatformHooks {
+  /** A verified Razorpay event for an organization (the app applies its own payment links). */
+  onPaymentEvent?: (orgId: string, event: unknown) => Promise<void>;
+}
+
+export async function handlePlatformRequest(request: Request, env: Env, hooks: PlatformHooks = {}): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith('/api/v2/')) return null;
   const path = url.pathname.slice('/api/v2'.length);
@@ -328,6 +341,8 @@ export async function handlePlatformRequest(request: Request, env: Env): Promise
     if (request.method !== 'POST') return fail(405, 'method_not_allowed', 'Use POST');
     try {
       const out = await receiveRazorpayWebhook(env, db, hook[1], request);
+      // A failure here answers 500, so Razorpay retries and the retry applies it.
+      if (out.status === 200 && out.event !== undefined) await hooks.onPaymentEvent?.(hook[1], out.event);
       return reply(out.body, out.status);
     } catch (e) {
       console.error('razorpay webhook failed', e);

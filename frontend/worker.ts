@@ -38,6 +38,7 @@ import {
   looksLikeEmail, roomImageKeys, roomStatus, staffRoom,
 } from './viewingRooms';
 import { handlePlatformRequest } from './platform/routes';
+import { getAppPaymentsOrg, razorpayApiBase, verifiedRazorpayKeys } from './platform/payments';
 import { OrgStore } from './platform/orgStore';
 import {
   deviceLimit, enforceDeviceLimit, forgetAllDevices, forgetDevice, listDevices,
@@ -474,9 +475,12 @@ async function handlePushUnsubscribe(ctx: Ctx): Promise<Response> {
 
 // ── Razorpay payment links ──────────────────────────────────────────────────
 // Links are created via the Razorpay Payment Links API and tracked in KV
-// under `payment:link:<plinkId>`. Razorpay calls POST /payments/webhook when
-// a link is paid; we verify the HMAC signature, mark the record paid, and
-// push-notify the whole team.
+// under `payment:link:<plinkId>`. Which Razorpay account creates them is
+// chosen in the control centre (appRazorpayAccount): an organization's own
+// account, or the shared one. When a link is paid, that account's webhook
+// arrives (the shared account's at POST /payments/webhook, an organization's
+// at /api/v2/webhooks/razorpay/<orgId>); we verify its signature, mark the
+// record paid and push-notify the whole team (applyPaymentLinkEvent).
 
 interface StoredPaymentLink {
   id: string;
@@ -493,6 +497,29 @@ interface StoredPaymentLink {
   paidAt?: number;
   paymentId?: string;
   paymentMethod?: string;
+  /** The Razorpay account it was created in: an organization id, or 'shared'. */
+  account?: string;
+}
+
+/**
+ * The Razorpay account the app's payment links use. When the control centre
+ * points the app at an organization, only that organization's own verified
+ * keys are used, never anything else: a business's money must not land in
+ * another account. Otherwise the shared account (RAZORPAY_* secrets).
+ */
+async function appRazorpayAccount(env: Env): Promise<{ keyId: string; keySecret: string; account: string } | { error: string }> {
+  const orgId = env.PLATFORM_DB ? await getAppPaymentsOrg(env.PLATFORM_DB) : null;
+  if (orgId) {
+    const keys = await verifiedRazorpayKeys(env, env.PLATFORM_DB!, orgId);
+    if (!keys) {
+      return { error: "This business's own Razorpay account isn't ready: its keys need verifying in the control centre. No payment link was created." };
+    }
+    return { keyId: keys.keyId, keySecret: keys.keySecret, account: orgId };
+  }
+  if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) {
+    return { error: 'Razorpay is not configured. Ask your admin to set the RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET secrets.' };
+  }
+  return { keyId: env.RAZORPAY_KEY_ID, keySecret: env.RAZORPAY_KEY_SECRET, account: 'shared' };
 }
 
 function formatRupees(paise: number): string {
@@ -518,19 +545,17 @@ async function handlePaymentLinkCreate(ctx: Ctx): Promise<Response> {
   }
   if (!body.customerName?.trim()) return err('Customer name is required');
 
-  const { RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET } = ctx.env;
-  if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
-    return err('Razorpay is not configured. Ask your admin to set the RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET secrets.', 503);
-  }
+  const razorpay = await appRazorpayAccount(ctx.env);
+  if ('error' in razorpay) return err(razorpay.error, 503);
 
   const customer: Record<string, string> = { name: body.customerName.trim() };
   if (body.customerPhone?.trim()) customer.contact = body.customerPhone.trim();
   if (body.customerEmail?.trim()) customer.email = body.customerEmail.trim();
 
-  const res = await fetch('https://api.razorpay.com/v1/payment_links', {
+  const res = await fetch(`${razorpayApiBase(ctx.env)}/v1/payment_links`, {
     method: 'POST',
     headers: {
-      'Authorization': basicAuthHeader(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
+      'Authorization': basicAuthHeader(razorpay.keyId, razorpay.keySecret),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
@@ -565,6 +590,7 @@ async function handlePaymentLinkCreate(ctx: Ctx): Promise<Response> {
     createdAt: Date.now(),
     createdBy: session.userId,
     createdByName: session.name,
+    account: razorpay.account,
   };
   await ctx.env.VAYU_KV.put(`payment:link:${record.id}`, JSON.stringify(record));
   await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'created', 'payment link', record.id,
@@ -613,9 +639,19 @@ async function handlePaymentWebhook(ctx: Ctx): Promise<Response> {
     return err('Invalid signature', 401);
   }
 
-  const event = JSON.parse(rawBody);
+  await applyPaymentLinkEvent(ctx, JSON.parse(rawBody));
+  return json({ received: true });
+}
+
+/**
+ * Applies one verified Razorpay event to the app's payment link records:
+ * status, and for a payment the paid time, payment id and method, plus one
+ * push and activity entry. Idempotent (retries change nothing and notify
+ * once), so it can run for every delivery of an event.
+ */
+async function applyPaymentLinkEvent(ctx: Ctx, event: any): Promise<void> {
   const plink = event?.payload?.payment_link?.entity;
-  if (!plink?.id) return json({ received: true });
+  if (!plink?.id) return;
 
   const kvKey = `payment:link:${plink.id}`;
   const raw = await ctx.env.VAYU_KV.get(kvKey);
@@ -628,7 +664,7 @@ async function handlePaymentWebhook(ctx: Ctx): Promise<Response> {
     'payment_link.cancelled': 'cancelled',
   };
   const newStatus = statusByEvent[event.event];
-  if (!newStatus) return json({ received: true });
+  if (!newStatus) return;
 
   // Razorpay retries webhooks — don't re-notify a link we already marked paid.
   const alreadyPaid = record?.status === 'paid';
@@ -677,8 +713,6 @@ async function handlePaymentWebhook(ctx: Ctx): Promise<Response> {
         `Payment of ${formatRupees(amount)} received from "${name}"`),
     ]));
   }
-
-  return json({ received: true });
 }
 
 // ── Route infrastructure ───────────────────────────────────────────────────
@@ -3934,7 +3968,15 @@ export default {
     const startedAt = Date.now();
     // Platform (SaaS) API. Handled first so the legacy wildcard CORS below
     // never applies to cookie-authenticated routes.
-    const early = pageVisit(request) ?? await handlePlatformRequest(request, env);
+    const early = pageVisit(request) ?? await handlePlatformRequest(request, env, {
+      // The organization whose account the app's payment links use: its
+      // webhook updates those links, as the shared account's webhook does.
+      onPaymentEvent: async (orgId, event) => {
+        if (!env.PLATFORM_DB || orgId !== await getAppPaymentsOrg(env.PLATFORM_DB)) return;
+        const url = new URL(request.url);
+        await applyPaymentLinkEvent({ request, env, url, path: url.pathname, method: request.method, execCtx }, event);
+      },
+    });
     if (early) return early;
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS });

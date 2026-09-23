@@ -62,11 +62,72 @@ function gradientPng(w, h, [[r1, g1, b1], [r2, g2, b2]]) {
     return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', header), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 
+// System tools by their full path, never whatever comes first on PATH.
+const SYSTEM32 = join(process.env.SystemRoot || String.raw`C:\Windows`, 'System32');
+const TASKKILL = join(SYSTEM32, 'taskkill.exe');
+const POWERSHELL = join(SYSTEM32, 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+const LSOF = ['/usr/sbin/lsof', '/usr/bin/lsof'].find(p => existsSync(p));
+
+/** Ends a process and everything it started (on Windows a plain kill leaves wrangler's workerd running). */
+function killTree(pid, child) {
+    if (process.platform === 'win32') {
+        try { execFileSync(TASKKILL, ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* already gone */ }
+    } else if (child) {
+        child.kill();
+    } else {
+        try { process.kill(pid); } catch { /* already gone */ }
+    }
+}
+
+/** The process listening on a port, if any: { pid, command } (command is empty where it can't be read). */
+function portOwner(port) {
+    if (process.platform !== 'win32') {
+        if (!LSOF) return null;
+        try {
+            const pid = execFileSync(LSOF, ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' }).trim().split('\n')[0];
+            return pid ? { pid: Number(pid), command: '' } : null;
+        } catch { return null; }
+    }
+    const script = `$c = Get-NetTCPConnection -State Listen -LocalPort ${port} -ErrorAction SilentlyContinue | Select-Object -First 1; `
+        + `if ($c) { $p = Get-CimInstance Win32_Process -Filter "ProcessId=$($c.OwningProcess)"; "$($c.OwningProcess)|$($p.CommandLine)" }`;
+    try {
+        const out = execFileSync(POWERSHELL, ['-NoProfile', '-Command', script], { encoding: 'utf8' }).trim();
+        if (!out) return null;
+        const [pid, ...rest] = out.split('|');
+        return { pid: Number(pid), command: rest.join('|') };
+    } catch { return null; }
+}
+
+/**
+ * Both ports must be free. A server left running by an earlier local test
+ * copy of this project (for example when its window was closed) is stopped;
+ * anything else is left alone, and we say what is in the way.
+ */
+function clearPorts() {
+    // Compare paths with one kind of slash, whatever the platform wrote.
+    const norm = (p) => p.replaceAll('\\', '/').toLowerCase();
+    let ours = norm(frontend);
+    if (ours.endsWith('/')) ours = ours.slice(0, -1);
+    for (const port of [API_PORT, APP_PORT]) {
+        const owner = portOwner(port);
+        if (!owner) continue;
+        if (owner.command && norm(owner.command).includes(ours)) {
+            console.log(`Stopping a leftover local test server on port ${port}.`);
+            killTree(owner.pid);
+            continue;
+        }
+        const what = owner.command ? `:\n  ${owner.command.slice(0, 160)}` : '';
+        console.error(`Port ${port} is in use by another program${what}.\nClose it and try again.`);
+        process.exit(1);
+    }
+}
+
 if (process.argv.includes('--reset')) {
     rmSync(state, { recursive: true, force: true });
     console.log('Local test data wiped.');
 }
 mkdirSync(state, { recursive: true });
+clearPorts();
 
 const wrangler = (args, opts = {}) =>
     execFileSync(process.execPath, [wranglerBin, ...args], { cwd: frontend, stdio: 'pipe', encoding: 'utf8', ...opts });
@@ -109,14 +170,7 @@ const start = (name, args, env = {}) => {
 let stopping = false;
 function stop(code = 0) {
     stopping = true;
-    for (const child of children) {
-        // On Windows a plain kill leaves wrangler's workerd running; end the whole tree.
-        if (process.platform === 'win32') {
-            try { execFileSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* already gone */ }
-        } else {
-            child.kill();
-        }
-    }
+    for (const child of children) killTree(child.pid, child);
     process.exit(code);
 }
 process.on('SIGINT', () => stop());

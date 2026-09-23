@@ -39,9 +39,11 @@ async function row(db: D1Database, orgId: string): Promise<IntegrationRow | null
 /** What the control panel may see. Never includes a secret. */
 export async function describeRazorpay(db: D1Database, orgId: string, webhookUrl: string) {
   const r = await row(db, orgId);
-  if (!r) return { connected: false, webhookUrl };
+  const usedByApp = (await getAppPaymentsOrg(db)) === orgId;
+  if (!r) return { connected: false, webhookUrl, usedByApp };
   return {
     connected: true,
+    usedByApp,
     mode: r.mode,
     keyIdHint: maskKeyId(r.key_id),
     hasWebhookSecret: !!r.webhook_secret_enc,
@@ -105,6 +107,14 @@ export async function connectRazorpay(env: Env, db: D1Database, orgId: string, b
 }
 
 /**
+ * Where Razorpay's API lives. Tests point it at a local stand-in, but only in
+ * development: in production keys can never be sent anywhere but Razorpay.
+ */
+export function razorpayApiBase(env: Env): string {
+  return env.PLATFORM_ENV === 'development' && env.RAZORPAY_API_BASE ? env.RAZORPAY_API_BASE.replace(/\/$/, '') : 'https://api.razorpay.com';
+}
+
+/**
  * Checks the stored keys against Razorpay with one read-only call. Only this
  * organization's own keys are used.
  */
@@ -115,8 +125,9 @@ export async function verifyRazorpay(env: Env, db: D1Database, orgId: string, ac
   let status: 'verified' | 'failed' = 'failed';
   let error: string | null = null;
   try {
-    const res = await fetcher('https://api.razorpay.com/v1/payments?count=1', {
-      headers: { Authorization: `Basic ${btoa(`${r.key_id}:${secret}`)}` },
+    const credentials = btoa(`${r.key_id}:${secret}`);
+    const res = await fetcher(`${razorpayApiBase(env)}/v1/payments?count=1`, {
+      headers: { Authorization: `Basic ${credentials}` },
     });
     if (res.ok) status = 'verified';
     else if (res.status === 401) error = 'Razorpay rejected these keys (401). Check the key ID and secret.';
@@ -138,8 +149,67 @@ export async function disconnectRazorpay(db: D1Database, orgId: string, actor: A
   if (!r) throw new OrgError(404, 'not_connected', 'No Razorpay account is connected.');
   await db.batch([
     db.prepare('DELETE FROM org_payment_integrations WHERE org_id = ? AND provider = ?').bind(orgId, PROVIDER),
+    // The app stops using an account that is no longer connected.
+    db.prepare("DELETE FROM platform_settings WHERE key = ? AND json_extract(value, '$.orgId') = ?").bind(APP_PAYMENTS_KEY, orgId),
     auditStmt(db, { actorUserId: actor.userId, actorKind: 'provider_admin', action: 'payments.razorpay.disconnect', targetType: 'organization', targetId: orgId, orgId, details: { keyIdHint: maskKeyId(r.key_id) }, ip: actor.ip }),
   ]);
+}
+
+// ── The app's payment account ──────────────────────────────────────────────
+// The original app (one business, not organization-aware yet) creates payment
+// links. This setting says which organization's own Razorpay account it uses.
+// Unset: the shared account in the Worker's RAZORPAY_* secrets, as before.
+
+const APP_PAYMENTS_KEY = 'app_payments';
+
+export async function getAppPaymentsOrg(db: D1Database): Promise<string | null> {
+  const r = await db.prepare('SELECT value FROM platform_settings WHERE key = ?').bind(APP_PAYMENTS_KEY).first<{ value: string }>();
+  try {
+    const v = r ? JSON.parse(r.value) as { orgId?: unknown } : {};
+    return typeof v.orgId === 'string' && v.orgId ? v.orgId : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Point the app's payment links at this organization's account (null: back to the shared one). */
+export async function setAppPaymentsOrg(db: D1Database, orgId: string | null, actor: Actor): Promise<void> {
+  const previous = await getAppPaymentsOrg(db);
+  if (orgId) {
+    await orgExists(db, orgId);
+    const r = await row(db, orgId);
+    if (r?.status !== 'verified') {
+      throw new OrgError(409, 'razorpay_not_verified', "Connect this organization's Razorpay and verify its keys first.");
+    }
+  }
+  await db.batch([
+    orgId
+      ? db.prepare(
+          `INSERT INTO platform_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
+        ).bind(APP_PAYMENTS_KEY, JSON.stringify({ orgId }), Date.now(), actor.userId)
+      : db.prepare('DELETE FROM platform_settings WHERE key = ?').bind(APP_PAYMENTS_KEY),
+    auditStmt(db, {
+      actorUserId: actor.userId, actorKind: 'provider_admin', action: 'payments.app_account.set',
+      targetType: 'organization', targetId: orgId ?? previous ?? 'shared', orgId: orgId ?? previous ?? undefined,
+      details: { from: previous ?? 'shared', to: orgId ?? 'shared' }, ip: actor.ip,
+    }),
+  ]);
+}
+
+/**
+ * Keys to take payments with: only a connected account whose keys Razorpay
+ * has accepted (status verified). Never falls back to another account, so a
+ * business's money cannot land in someone else's.
+ */
+export async function verifiedRazorpayKeys(env: Env, db: D1Database, orgId: string): Promise<{ keyId: string; keySecret: string; mode: 'test' | 'live' } | null> {
+  const r = await row(db, orgId);
+  if (r?.status !== 'verified') return null;
+  try {
+    return { keyId: r.key_id, keySecret: await decryptSecret(env, ctx(orgId, 'key_secret'), r.key_secret_enc), mode: r.mode };
+  } catch {
+    return null;
+  }
 }
 
 /** Decrypted credentials for server-side use only (creating payment links). */
@@ -174,7 +244,7 @@ const MAX_WEBHOOK_BYTES = 256 * 1024;
  * 200 for a duplicate (so Razorpay stops retrying) and never says whether an
  * organization exists: every failure before the signature check is 401.
  */
-export async function receiveRazorpayWebhook(env: Env, db: D1Database, orgId: string, request: Request): Promise<{ status: number; body: unknown }> {
+export async function receiveRazorpayWebhook(env: Env, db: D1Database, orgId: string, request: Request): Promise<{ status: number; body: unknown; event?: unknown }> {
   const unauthorized = { status: 401, body: { error: 'Invalid signature' } };
   const signature = request.headers.get('x-razorpay-signature') ?? '';
   const eventId = request.headers.get('x-razorpay-event-id') ?? '';
@@ -188,13 +258,16 @@ export async function receiveRazorpayWebhook(env: Env, db: D1Database, orgId: st
   try { secret = await decryptSecret(env, ctx(orgId, 'webhook_secret'), r.webhook_secret_enc); } catch { return unauthorized; }
   if (!timingSafeEqual(await signRazorpayBody(secret, raw), signature.toLowerCase())) return unauthorized;
 
-  let eventType: string | null = null;
-  try { eventType = String((JSON.parse(raw) as { event?: unknown }).event ?? '') || null; } catch { return { status: 400, body: { error: 'Invalid JSON' } }; }
+  let event: unknown;
+  try { event = JSON.parse(raw); } catch { return { status: 400, body: { error: 'Invalid JSON' } }; }
+  const eventType = String((event as { event?: unknown })?.event ?? '') || null;
 
   const result = await db.prepare(
     `INSERT INTO payment_webhook_events (org_id, provider, event_id, event_type, received_at, payload)
      VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
   ).bind(orgId, PROVIDER, eventId, eventType, Date.now(), raw).run();
   const duplicate = (result.meta?.changes ?? 0) === 0;
-  return { status: 200, body: { ok: true, duplicate } };
+  // Handed back even for a duplicate: applying it is idempotent, and a retry
+  // must be able to finish work a failed first attempt left undone.
+  return { status: 200, body: { ok: true, duplicate }, event };
 }

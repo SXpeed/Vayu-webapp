@@ -19,7 +19,7 @@ const runWrangler = (args, opts = {}) =>
  * Applies the platform migrations to a fresh local database, creates one
  * provider admin, and starts the Worker.
  */
-export async function startDevWorker({ port = 8810, inspectorPort = 9240, adminEmail = 'admin@example.com', adminPassword = 'provider-admin-password', seedLegacy } = {}) {
+export async function startDevWorker({ port = 8810, inspectorPort = 9240, adminEmail = 'admin@example.com', adminPassword = 'provider-admin-password', seedLegacy, vars = {} } = {}) {
     const persistDir = mkdtempSync(join(tmpdir(), 'as-dev-'));
     const origin = `http://127.0.0.1:${port}`;
 
@@ -47,6 +47,7 @@ export async function startDevWorker({ port = 8810, inspectorPort = 9240, adminE
         '--var', `AUTH_ORIGINS:${origin}`, '--var', 'PLATFORM_ENV:development', '--var', 'ADMIN_REQUIRE_2FA:off',
         '--var', `PAYMENT_SECRETS_KEY:${randomBytes(32).toString('base64')}`,
         '--var', `BETTER_AUTH_SECRET:${randomBytes(32).toString('base64')}`,
+        ...Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}:${v}`]),
     ], { cwd: frontend, stdio: ['ignore', 'pipe', 'pipe'] });
 
     let log = '';

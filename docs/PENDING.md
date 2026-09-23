@@ -140,7 +140,8 @@ Seats and inventory items are enforced. Still to wire up (each is labelled
 - [ ] Hosted checkout, signed webhooks, idempotent handling
 - [ ] Failed renewals → `past_due`, dunning, cancellation
 - [ ] Apply stored payment webhooks to business records (they are verified and stored, not yet applied)
-- [ ] Wire the app's payment links to each organization's own connected account
+- [x] Wire the app's payment links to an organization's own connected account (control centre: "Use for the app's payment links"; its webhook marks links paid)
+- [ ] Mark the linked invoice paid too, per organization (with §3.1)
 
 ### 3.7 Email (Phase F, blocked on §1.1)
 - [x] Retryable, idempotent outbox (notices queue and wait; shown in the control centre)

@@ -61,6 +61,9 @@ export interface Env {
   // admin.ateliersupport.com). When set, admin APIs answer only there. This
   // is defense in depth; the provider_admins check is the real boundary.
   ADMIN_HOST?: string;
+  // Tests only, honoured only with PLATFORM_ENV=development: a local
+  // stand-in for https://api.razorpay.com (platform/payments.ts).
+  RAZORPAY_API_BASE?: string;
   // The API's own address (https://api.ateliersupport.com), for addresses
   // given to outside callers such as the Razorpay webhook. Unset, those use
   // the address the request came in on.

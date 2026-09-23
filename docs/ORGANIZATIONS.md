@@ -62,6 +62,29 @@ How the credentials are protected:
 - Connecting, replacing or disconnecting needs a sign-in newer than 30 minutes
   and is written to the audit log (without secrets).
 
+### Using an organization's account for the app's payment links
+
+The app (`/api/payments/link`) is not organization-aware yet, so the control
+centre says which account it uses: on an organization's Razorpay card, **Use
+for the app's payment links** (only once its keys are verified; one
+organization at a time; needs a recent sign-in; audited). Then:
+
+- New payment links are created with **only that organization's own keys**.
+  If they stop being usable (replaced and not yet verified, or rejected), the
+  app refuses to create links with a clear message: it never falls back to
+  the shared account, so a business's money cannot land somewhere else.
+- That organization's webhook (`/api/v2/webhooks/razorpay/<orgId>`) marks the
+  app's payment links paid and notifies staff, exactly as the shared
+  account's webhook (`/api/payments/webhook`) does. Other organizations'
+  events never touch them.
+- Each link records the account it was made in (`account`: the organization
+  id, or `shared`). Links already sent keep working where they were made.
+- **Stop using for the app**, or disconnecting that account, puts new links
+  back on the shared account (`RAZORPAY_*` secrets).
+
+Tests: `tests/appPayments.integration.test.mjs` (a real Worker and a local
+stand-in for Razorpay's API, which is only honoured in development).
+
 ### Webhooks
 
 Each organization has its own URL: `/api/v2/webhooks/razorpay/<organization id>`.
@@ -74,14 +97,10 @@ reveal which organizations exist.
 
 ## Known limitations (next steps)
 
-- **The app still uses the old payment path.** `/api/payments/link` continues to
-  use the Worker's own `RAZORPAY_*` secrets. Switching it to the organization's
-  connected account happens when the app itself becomes organization-aware.
-  Until then, connecting an account here stores and verifies it but does not yet
-  change how the app creates payment links.
-- **Stored webhook events are not applied to business data yet.** They are
-  verified and recorded; updating invoices and payment links happens once each
-  organization has its own database.
+- **One app, one account at a time.** Until the app is organization-aware, all
+  of its payment links use the one account chosen above.
+- **Webhook events update payment links, not invoices yet.** Marking the linked
+  invoice paid comes once each organization has its own database (§3.1).
 - **Members must already have an account.** The panel can create one with a
   temporary password you pass on yourself; expiring email invitations come with
   the plan engine (Phase D).
