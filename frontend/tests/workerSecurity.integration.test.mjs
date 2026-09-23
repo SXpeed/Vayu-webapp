@@ -148,3 +148,44 @@ test('a thumbnail must be an image', async () => {
     const thumb = await fetch(`${worker.origin}${res.body.thumbUrl}`);
     assert.equal(thumb.headers.get('content-type'), 'image/png');
 });
+
+/* ── Who may change files ──────────────────────────────────────────────── */
+
+test('files can only be removed by their uploader, an admin or an inventory editor', async () => {
+    // A role that can look at the inventory but not change it.
+    const role = await api(admin.token, '/auth/roles', { method: 'POST', body: { name: 'Viewer', permissions: { inventory: 'view', messages: 'edit' } } });
+    assert.ok(role.status === 200 || role.status === 201, role.text);
+    const made = await api(admin.token, '/auth/users', { method: 'POST', body: { name: 'Vera', email: 'vera@example.com', password: PASSWORD, role: role.body.id } });
+    assert.ok(made.status === 200 || made.status === 201, made.text);
+    const vera = await login('vera@example.com', PASSWORD);
+
+    const alicesFile = await upload(alice.token, PNG, 'a.png', 'image/png');
+    const verasFile = await upload(vera.token, PNG, 'v.png', 'image/png');
+
+    // A view-only role cannot remove someone else's photo, or re-thumbnail it.
+    assert.equal((await api(vera.token, `/files/${encodeURIComponent(alicesFile)}`, { method: 'DELETE' })).status, 403);
+    const form = new FormData();
+    form.append('key', alicesFile);
+    form.append('thumb', new File([PNG], 't.png', { type: 'image/png' }));
+    assert.equal((await api(vera.token, '/files-thumbs', { method: 'POST', form })).status, 403);
+    // …but can remove their own.
+    assert.equal((await api(vera.token, `/files/${encodeURIComponent(verasFile)}`, { method: 'DELETE' })).status, 200);
+    // An inventory editor may remove a colleague's artwork photo.
+    assert.equal((await api(bob.token, `/files/${encodeURIComponent(alicesFile)}`, { method: 'DELETE' })).status, 200);
+
+    // Nothing outside uploads/ (the platform logo, say) can be removed this way, even by an admin.
+    assert.equal((await api(admin.token, `/files/${encodeURIComponent('platform/branding/logo.png')}`, { method: 'DELETE' })).status, 403);
+    assert.equal((await api(admin.token, `/files/${encodeURIComponent('uploads/../platform/x')}`, { method: 'DELETE' })).status, 403);
+});
+
+test('the list of files is limited to your own unless you are an admin', async () => {
+    const mine = await upload(mallory.token, PNG, 'm.png', 'image/png');
+    const theirs = await upload(alice.token, PNG, 'x.png', 'image/png');
+    const forMallory = await api(mallory.token, '/files-missing-thumbs');
+    assert.equal(forMallory.status, 200);
+    assert.ok(forMallory.body.missing.includes(mine));
+    assert.ok(!forMallory.body.missing.includes(theirs));
+    assert.ok(forMallory.body.missing.every(k => k.startsWith(`uploads/${mallory.id}/`)));
+    const forAdmin = await api(admin.token, '/files-missing-thumbs');
+    assert.ok(forAdmin.body.missing.includes(mine) && forAdmin.body.missing.includes(theirs));
+});

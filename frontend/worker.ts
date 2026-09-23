@@ -1225,16 +1225,38 @@ async function handleFileGet(ctx: Ctx): Promise<Response> {
   return new Response(obj.body, { status: 200, headers });
 }
 
-// Backfill support: originals uploaded before thumbnails existed.
+// ── Who may change a stored file ─────────────────────────────────────────────
+// Uploads live under uploads/<uploaderId>/. Nothing else in the bucket (the
+// platform logo, for one) can be removed or overwritten through these routes.
+
+const UPLOADS_PREFIX = 'uploads/';
+
+const isUploadKey = (key: string) => key.startsWith(UPLOADS_PREFIX) && !key.includes('..');
+const ownsUpload = (session: SessionData, key: string) => key.startsWith(`${UPLOADS_PREFIX}${session.userId}/`);
+
+/**
+ * Removing an upload: its uploader, an admin, or anyone who may edit the
+ * inventory (artwork photos are shared work: removing one from an artwork
+ * someone else photographed is part of editing it).
+ */
+async function mayRemoveUpload(ctx: Ctx, session: SessionData, key: string): Promise<boolean> {
+  if (!isUploadKey(key)) return false;
+  if (session.role === ADMIN_ROLE_ID || ownsUpload(session, key)) return true;
+  return sessionCan(ctx, session, 'inventory', 'edit');
+}
+
+// Backfill support: originals uploaded before thumbnails existed. Each person
+// sees (and backfills) only their own uploads; an admin sees all of them.
 async function handleFilesMissingThumbs(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
+  const prefix = session.role === ADMIN_ROLE_ID ? UPLOADS_PREFIX : `${UPLOADS_PREFIX}${session.userId}/`;
 
   const originals: string[] = [];
   const thumbs = new Set<string>();
   let cursor: string | undefined;
   do {
-    const res = await ctx.env.VAYU_R2.list({ prefix: 'uploads/', cursor, limit: 1000 });
+    const res = await ctx.env.VAYU_R2.list({ prefix, cursor, limit: 1000 });
     for (const obj of res.objects) {
       if (obj.key.endsWith('__thumb')) thumbs.add(obj.key);
       else originals.push(obj.key);
@@ -1255,6 +1277,10 @@ async function handleThumbBackfillUpload(ctx: Ctx): Promise<Response> {
   if (!key || typeof key !== 'string' || !thumb || typeof thumb === 'string') {
     return err('key and thumb are required');
   }
+  // Only the uploader (or an admin) may replace a file's thumbnail.
+  if (!isUploadKey(key) || (session.role !== ADMIN_ROLE_ID && !ownsUpload(session, key))) {
+    return err('You can only add thumbnails to your own files', 403);
+  }
   // Only attach thumbnails to files that actually exist, and only images.
   const original = await ctx.env.VAYU_R2.head(key);
   if (!original) return err('File not found', 404);
@@ -1271,6 +1297,7 @@ async function handleFileDelete(ctx: Ctx): Promise<Response> {
   if (!session) return err('Unauthorized', 401);
   const key = decodeURIComponent(ctx.path.slice('/files/'.length));
   if (!key) return err('File not found', 404);
+  if (!(await mayRemoveUpload(ctx, session, key))) return err("You can't remove this file", 403);
   const obj = await ctx.env.VAYU_R2.head(key);
   if (!obj) return err('File not found', 404);
   // Delete the thumbnail variant too (no-op when none exists).
