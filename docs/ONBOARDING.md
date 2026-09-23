@@ -19,9 +19,9 @@ text have been invented.
 Pricing on the landing page comes from the plans you publish in the control
 centre and mark as public — nothing else about plans or organizations is exposed.
 
-`/welcome` is not yet the root of `ateliersupport.com`: staff still use the main
-domain for the app. Once everyone has moved to `app.ateliersupport.com`, the main
-domain's root switches to the landing page (see `docs/PENDING.md`).
+The landing page is the root of `ateliersupport.com`, which has its own Worker
+(`docs/HOSTING.md`); `/welcome` redirects there. In the Vite dev server it is
+still at `/welcome`.
 
 ## The applicant's journey
 

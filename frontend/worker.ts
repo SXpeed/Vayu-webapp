@@ -28,6 +28,7 @@ import {
 } from './fileAuth';
 import { SyncHub } from './realtime';
 import { SNIFF_BYTES, delivery, downloadName, isRasterImage, safeExtension, storedContentType } from './fileTypes';
+import { APP_ORIGIN } from './brand';
 import { handlePlatformRequest } from './platform/routes';
 import { OrgStore } from './platform/orgStore';
 import {
@@ -3118,7 +3119,8 @@ async function handleAttendanceRecords(ctx: Ctx): Promise<Response> {
   if (params.get('from') && Number.isFinite(from)) { where.push('check_in_at >= ?'); binds.push(from); }
   if (params.get('to') && Number.isFinite(to)) { where.push('check_in_at < ?'); binds.push(to); }
   const limit = canManage ? 1000 : 300;
-  const sql = `SELECT * FROM attendance${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY check_in_at DESC LIMIT ${limit}`;
+  const filter = where.length ? ' WHERE ' + where.join(' AND ') : '';
+  const sql = `SELECT * FROM attendance${filter} ORDER BY check_in_at DESC LIMIT ${limit}`;
   const results = await ctx.env.VAYU_DB.prepare(sql).bind(...binds).all();
   return json((results.results || []).map(rowToAttendance));
 }
@@ -3501,6 +3503,18 @@ async function handleRealtimeWs(ctx: Ctx): Promise<Response> {
   });
 }
 
+/**
+ * This Worker is the API only; the pages are other Workers (docs/HOSTING.md).
+ * A browser opening a page on one of its own addresses (api., or the old
+ * workers.dev address of the app) is sent to the app.
+ */
+function pageVisit(request: Request): Response | null {
+  if (request.headers.get('Sec-Fetch-Mode') !== 'navigate') return null;
+  const page = new URL(request.url);
+  if (/^\/api(\/|$)/.test(page.pathname)) return null;
+  return Response.redirect(APP_ORIGIN + page.pathname + page.search, 302);
+}
+
 // ── Analytics Engine instrumentation ────────────────────────────────────
 // One data point per request, written inside the request (no extra browser
 // telemetry call). Records the normalized route — never tokens, cookies,
@@ -3534,8 +3548,8 @@ export default {
     const startedAt = Date.now();
     // Platform (SaaS) API. Handled first so the legacy wildcard CORS below
     // never applies to cookie-authenticated routes.
-    const platform = await handlePlatformRequest(request, env);
-    if (platform) return platform;
+    const early = pageVisit(request) ?? await handlePlatformRequest(request, env);
+    if (early) return early;
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS });
     }

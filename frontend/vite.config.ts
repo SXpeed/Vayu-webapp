@@ -4,6 +4,23 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 
+const PAGES: Record<string, string> = {
+    main: 'index.html',
+    admin: 'admin.html',
+    // Public website: landing page, sign-up/application, legal.
+    welcome: 'welcome.html',
+    signup: 'signup.html',
+    legal: 'legal.html',
+};
+/** Which pages each Worker serves (frontend/hosts/<site>). */
+const SITES: Record<string, string[]> = {
+    app: ['main'],
+    admin: ['admin'],
+    welcome: ['welcome', 'signup', 'legal'],
+};
+const pick = (names: string[]) =>
+    Object.fromEntries(names.map(n => [n, path.resolve(__dirname, PAGES[n])]));
+
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, process.cwd(), '');
     // HTTPS dev mode (VITE_HTTPS=1, see `npm run dev:phone`): serves the dev
@@ -30,16 +47,12 @@ export default defineConfig(({ mode }) => {
       },
       // Separate pages: the organization app (index.html), the provider control
       // centre (admin.html) and the public website, so none ships the others' code.
+      // Each is also its own Worker on its own address: scripts/build-sites.mjs
+      // sets SITE and builds each one into dist/<site> on its own.
       build: {
+        ...(SITES[process.env.SITE ?? ''] ? { outDir: `dist/${process.env.SITE}`, emptyOutDir: true } : {}),
         rollupOptions: {
-          input: {
-            main: path.resolve(__dirname, 'index.html'),
-            admin: path.resolve(__dirname, 'admin.html'),
-            // Public website: landing page, sign-up/application, legal.
-            welcome: path.resolve(__dirname, 'welcome.html'),
-            signup: path.resolve(__dirname, 'signup.html'),
-            legal: path.resolve(__dirname, 'legal.html'),
-          },
+          input: pick(SITES[process.env.SITE ?? ''] ?? Object.keys(PAGES)),
         },
       },
       // The catalog PDF generator runs in a module worker that code-splits

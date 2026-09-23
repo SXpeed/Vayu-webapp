@@ -1,0 +1,27 @@
+// app.ateliersupport.com — the organization app. Deploy from the repo root:
+//   npm run deploy:app   (after npm run build)
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "ateliersupport-app",
+  "main": "worker.ts",
+  "compatibility_date": "2026-06-24",
+  // Reached on its own address only.
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "app.ateliersupport.com", "custom_domain": true }],
+  "assets": {
+    "directory": "../../dist/app",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // Everything else is served straight from the app's files.
+    "run_worker_first": [
+      "/api/*",
+      "/admin", "/admin/*", "/admin.html",
+      "/welcome", "/welcome.html", "/signup", "/signup.html", "/legal", "/legal.html"
+    ]
+  },
+  // The API Worker. Keeps its original name: the organization databases
+  // (Durable Objects) and secrets belong to it.
+  "services": [{ "binding": "API", "service": "vayu-webapp" }],
+  "observability": { "enabled": true }
+}

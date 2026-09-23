@@ -61,6 +61,10 @@ export interface Env {
   // admin.ateliersupport.com). When set, admin APIs answer only there. This
   // is defense in depth; the provider_admins check is the real boundary.
   ADMIN_HOST?: string;
+  // The API's own address (https://api.ateliersupport.com), for addresses
+  // given to outside callers such as the Razorpay webhook. Unset, those use
+  // the address the request came in on.
+  API_ORIGIN?: string;
   // "development" relaxes nothing security-relevant except letting a single
   // AUTH_ORIGINS entry stand in for the dev proxy's rewritten Host header.
   PLATFORM_ENV?: string;

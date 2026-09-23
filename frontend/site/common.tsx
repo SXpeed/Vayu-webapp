@@ -7,6 +7,12 @@ import { useBranding } from '../useBranding';
 import type { Copy } from './content';
 import { content } from './content';
 
+/**
+ * The landing page. It is the root of ateliersupport.com; the dev server
+ * serves every page from one folder, where the root is the app, so there it
+ * stays at /welcome.
+ */
+export const HOME_URL = import.meta.env.DEV ? '/welcome' : '/';
 export const SIGNUP_URL = '/signup';
 export const SIGNIN_URL = '/signup?mode=signin';
 
@@ -74,7 +80,7 @@ export const SiteHeader: React.FC<{ minimal?: boolean; active?: string | null }>
             <span ref={sentinel} aria-hidden className="absolute top-0 left-0 h-px w-px" />
             <header className="mk-header sticky top-0 z-30" data-scrolled={scrolled || open ? 'true' : 'false'}>
                 <div className="max-w-6xl mx-auto px-5 h-16 flex items-center gap-6">
-                    <a href="/welcome" className="flex items-center gap-2.5 shrink-0 rounded-lg">
+                    <a href={HOME_URL} className="flex items-center gap-2.5 shrink-0 rounded-lg">
                         {b.logoUrl
                             ? <img src={b.logoUrl} alt="" width={32} height={32} className="w-8 h-8 rounded-lg object-contain" />
                             : <span className="w-8 h-8 rounded-lg neu-accent flex items-center justify-center font-serif">{b.appName.slice(0, 1).toUpperCase()}</span>}
@@ -83,7 +89,7 @@ export const SiteHeader: React.FC<{ minimal?: boolean; active?: string | null }>
                     {!minimal && (
                         <nav aria-label="Sections" className="hidden lg:flex items-center gap-6 text-sm text-gray-700 dark:text-gray-300">
                             {NAV.map(n => (
-                                <a key={n.id} href={`/welcome#${n.id}`} aria-current={active === n.id ? 'location' : undefined}
+                                <a key={n.id} href={`${HOME_URL}#${n.id}`} aria-current={active === n.id ? 'location' : undefined}
                                     className="mk-navlink hover:text-gold-700 dark:hover:text-gold-300">{n.label}</a>
                             ))}
                         </nav>
@@ -108,7 +114,7 @@ export const SiteHeader: React.FC<{ minimal?: boolean; active?: string | null }>
                             <ul className="space-y-1">
                                 {NAV.map(n => (
                                     <li key={n.id}>
-                                        <a href={`/welcome#${n.id}`} onClick={() => setOpen(false)} tabIndex={open ? undefined : -1}
+                                        <a href={`${HOME_URL}#${n.id}`} onClick={() => setOpen(false)} tabIndex={open ? undefined : -1}
                                             aria-current={active === n.id ? 'location' : undefined}
                                             className={`block rounded-xl px-4 py-3 text-[15px] ${active === n.id ? 'neu-inset text-gold-700 dark:text-gold-300' : 'text-gray-800 dark:text-gray-200'}`}>
                                             {n.label}
@@ -135,8 +141,8 @@ export const SiteFooter: React.FC = () => {
                     <p className="text-[12px] mt-1">{content.footer.note}</p>
                 </div>
                 <nav className="md:ml-auto flex flex-wrap gap-5">
-                    <a href="/welcome#pricing" className="hover:text-gold-700">Pricing</a>
-                    <a href="/welcome#contact" className="hover:text-gold-700">Contact</a>
+                    <a href={`${HOME_URL}#pricing`} className="hover:text-gold-700">Pricing</a>
+                    <a href={`${HOME_URL}#contact`} className="hover:text-gold-700">Contact</a>
                     <a href="/legal#privacy" className="hover:text-gold-700">Privacy policy</a>
                     <a href="/legal#terms" className="hover:text-gold-700">Terms</a>
                     <a href={SIGNIN_URL} className="hover:text-gold-700">Log in</a>
@@ -184,7 +190,8 @@ export function planBullets(p: PublicPlan): string[] {
     for (const [key, one, many] of LIMIT_LABELS) {
         const v: number | null | undefined = p.highlights.limits?.[key];
         if (v === undefined) continue;
-        out.push(v === null ? `Unlimited ${many}` : `${v.toLocaleString('en-IN')} ${v === 1 ? one : many}`);
+        if (v === null) out.push(`Unlimited ${many}`);
+        else out.push(`${v.toLocaleString('en-IN')} ${v === 1 ? one : many}`);
     }
     for (const [key, on] of [...Object.entries(p.highlights.modules ?? {}), ...Object.entries(p.highlights.features ?? {})]) {
         if (on && FEATURE_LABELS[key]) out.push(FEATURE_LABELS[key]);

@@ -261,7 +261,7 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
         if (!/^[A-Za-z0-9-]{1,64}$/.test(mid)) return fail(404, 'not_found', 'Not found');
         return reply(await updateMember(db, orgId, mid, await body(), actor));
       } else if (rest === '/payments/razorpay') {
-        const origin = resolveAuthOrigin(env, url);
+        const origin = env.API_ORIGIN || resolveAuthOrigin(env, url);
         const webhookUrl = `${origin}/api/v2/webhooks/razorpay/${orgId}`;
         if (method === 'GET') {
           await getOrganization(db, orgId);

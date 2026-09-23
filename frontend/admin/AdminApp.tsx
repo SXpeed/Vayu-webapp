@@ -19,7 +19,7 @@ import { ApplicationsPanel } from './ApplicationsPanel';
 import { AccountsPanel } from './AccountsPanel';
 import { ProfilePanel } from './ProfilePanel';
 import { AdminsPanel, HealthPanel, NotificationsPanel } from './SystemPanels';
-import { DialogProvider, EmptyState, PageHeader, Section, Segmented, SkeletonRows, StatusPill, useHashRoute } from './kit';
+import { DialogProvider, EmptyState, PageHeader, Section, Segmented, SkeletonRows, StatusPill, useHashRoute, type Tone } from './kit';
 import { CommandPalette, Dock, MoreSheet, PhoneHeader, Sidebar, useSmoothScroll, type NavGroup, type NavItem, type Tab } from './Shell';
 import { useBranding } from '../useBranding';
 import { Button, Field, Input, ToggleRow } from '../components/ui';
@@ -324,7 +324,7 @@ const SignIn: React.FC<{ onDone: () => void; email?: string; title?: string; com
     };
 
     const google = async () => {
-        const { error } = await authClient.signIn.social({ provider: 'google', callbackURL: '/admin' });
+        const { error } = await authClient.signIn.social({ provider: 'google', callbackURL: location.pathname });
         if (error) toast.error(error.message || 'Google sign-in failed');
     };
 
@@ -436,6 +436,12 @@ const SetupTwoFactor: React.FC<{ onDone: () => void }> = ({ onDone }) => {
 
 /* --------------------------- Login methods --------------------------- */
 
+/** How Google sign-in stands: needs setting up, switched off, or in use. */
+function googleStatus(configured: boolean, inUse: boolean): { tone: Tone; label: string } {
+    if (!configured) return { tone: 'warn', label: 'Not configured' };
+    return inUse ? { tone: 'ok', label: 'In use' } : { tone: 'neutral', label: 'Off' };
+}
+
 const LoginMethodsPanel: React.FC<{ reauth: Reauth }> = ({ reauth }) => {
     const [info, setInfo] = useState<MethodsInfo | null>(null);
     const [draft, setDraft] = useState<LoginMethods | null>(null);
@@ -459,6 +465,7 @@ const LoginMethodsPanel: React.FC<{ reauth: Reauth }> = ({ reauth }) => {
         setDraft(d => d && ({ ...d, [group]: { ...d[group], [field]: !d[group][field] } }));
 
     const dirty = JSON.stringify(draft) !== JSON.stringify(info.stored);
+    const google = googleStatus(info.googleConfigured, info.effective.google.signIn);
 
     const save = async () => {
         setSaving(true);
@@ -469,7 +476,7 @@ const LoginMethodsPanel: React.FC<{ reauth: Reauth }> = ({ reauth }) => {
     };
 
     const linkGoogle = async () => {
-        const { error } = await authClient.linkSocial({ provider: 'google', callbackURL: '/admin' });
+        const { error } = await authClient.linkSocial({ provider: 'google', callbackURL: location.pathname });
         if (error) toast.error(error.message || 'Could not link Google');
     };
 
@@ -499,9 +506,7 @@ const LoginMethodsPanel: React.FC<{ reauth: Reauth }> = ({ reauth }) => {
                             checked={draft.emailPassword.signUp} onChange={() => flip('emailPassword', 'signUp')} />
                     </>)}
                 {group('Google',
-                    <StatusPill tone={info.googleConfigured ? (info.effective.google.signIn ? 'ok' : 'neutral') : 'warn'}>
-                        {info.googleConfigured ? (info.effective.google.signIn ? 'In use' : 'Off') : 'Not configured'}
-                    </StatusPill>,
+                    <StatusPill tone={google.tone}>{google.label}</StatusPill>,
                     <>
                         <ToggleRow title="Sign-in"
                             description={info.googleConfigured ? 'Existing accounts only, once they have linked Google.' : 'Needs GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET first.'}
@@ -578,9 +583,11 @@ const AuditPanel: React.FC = () => {
                     <Input className="!pl-9" placeholder="Search actions, people, details…" value={q} onChange={e => setQ(e.target.value)} />
                 </div>
             </div>
-            {!entries ? <SkeletonRows rows={8} /> : shown.length === 0 ? (
+            {!entries && <SkeletonRows rows={8} />}
+            {entries && shown.length === 0 && (
                 <EmptyState icon={<History size={20} />} title="Nothing matches" body="Try another area or search." />
-            ) : (
+            )}
+            {shown.length > 0 && (
                 <ul className="ac-divide">
                     {shown.map(e => (
                         <li key={e.id}>

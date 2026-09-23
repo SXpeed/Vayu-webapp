@@ -38,9 +38,13 @@ jobs:
       - name: Build frontend
         run: npm run build --prefix frontend
 
+      # Four Workers (docs/HOSTING.md). The sites go first: a deploy removes
+      # any address its config no longer lists, so the API must not let go of
+      # an address before the site that now owns it has taken it over.
       - name: Deploy to Cloudflare Workers
         id: deploy
-        run: npx wrangler deploy > deploy_output.txt 2>&1
+        run: |
+          { npm run deploy:sites && npm run deploy:api; } > deploy_output.txt 2>&1
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

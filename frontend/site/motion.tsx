@@ -134,7 +134,7 @@ export function useActiveId(ids: string[], line = 0.4): string | null {
 
 /* ───────────────────────────── Smooth scroll ─────────────────────────── */
 
-/** Same-page hash links: "#pricing" or "/welcome#pricing" while on /welcome. */
+/** Same-page hash links: "#pricing" or "/#pricing" while on the landing page. */
 function samePageHash(a: HTMLAnchorElement): string | null {
     if (!a.hash || a.target && a.target !== '_self' || a.hasAttribute('download')) return null;
     const url = new URL(a.href, location.href);

@@ -4,7 +4,12 @@
     "dev": "npm run dev --prefix frontend",
     "dev-phone": "npm run dev:phone --prefix frontend",
     "build": "cd frontend && npm install && npm run build",
-    "deploy": "npm run build && wrangler deploy",
+    "deploy": "npm run build && npm run deploy:sites && npm run deploy:api",
+    "deploy:sites": "npm run deploy:app && npm run deploy:admin && npm run deploy:welcome",
+    "deploy:api": "wrangler deploy",
+    "deploy:app": "wrangler deploy -c frontend/hosts/app/wrangler.jsonc",
+    "deploy:admin": "wrangler deploy -c frontend/hosts/admin/wrangler.jsonc",
+    "deploy:welcome": "wrangler deploy -c frontend/hosts/welcome/wrangler.jsonc",
     "preview": "wrangler dev"
   },
   "devDependencies": {

@@ -1,0 +1,21 @@
+// admin.ateliersupport.com — the provider control centre. Deploy from the
+// repo root: npm run deploy:admin   (after npm run build)
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "ateliersupport-admin",
+  "main": "worker.ts",
+  "compatibility_date": "2026-06-24",
+  // Reached on its own address only.
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "admin.ateliersupport.com", "custom_domain": true }],
+  "assets": {
+    "directory": "../../dist/admin",
+    "binding": "ASSETS",
+    // The panel navigates with #addresses, so every page is index.html.
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/admin", "/admin/*", "/admin.html"]
+  },
+  "services": [{ "binding": "API", "service": "vayu-webapp" }],
+  "observability": { "enabled": true }
+}

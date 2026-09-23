@@ -1,0 +1,27 @@
+// ateliersupport.com and www — the public website. Deploy from the repo
+// root: npm run deploy:welcome   (after npm run build)
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "ateliersupport-welcome",
+  "main": "worker.ts",
+  "compatibility_date": "2026-06-24",
+  // Reached on its own addresses only.
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "ateliersupport.com", "custom_domain": true },
+    // Redirected to the bare address by the Worker.
+    { "pattern": "www.ateliersupport.com", "custom_domain": true }
+  ],
+  "assets": {
+    "directory": "../../dist/welcome",
+    "binding": "ASSETS",
+    // A missing page is a 404 the Worker sees, so it can send old app
+    // addresses on to app.ateliersupport.com.
+    "not_found_handling": "none",
+    // www redirect, /api and old app addresses are all decided in the Worker.
+    "run_worker_first": ["/*"]
+  },
+  "services": [{ "binding": "API", "service": "vayu-webapp" }],
+  "observability": { "enabled": true }
+}

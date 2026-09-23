@@ -33,7 +33,7 @@ platform database does not exist there yet.
 | 1.5 | **Logo file** (or upload it in the panel once live) | Provider branding | Panel upload is built |
 | 1.6 | **Google OAuth client id and secret** | Google sign-in | Code is built and switched off |
 | 1.7 | **Razorpay keys per organization** | Organizations collecting customer payments | Panel screen is built |
-| 1.8 | **Confirmation staff have moved to app.ateliersupport.com** | Turning on the "we've moved" notice on the old address | One-line change, `MOVED_NOTICE` in `frontend/brand.ts` |
+| 1.8 | ~~Confirmation staff have moved to app.ateliersupport.com~~ | — | Superseded: the owner chose to switch `ateliersupport.com` to the website straight away (hosting split, §2b) |
 
 ## 2. Production enablement (needs approval, then one session)
 
@@ -46,6 +46,19 @@ platform database does not exist there yet.
 - [ ] Create the first provider admin and set up 2FA
 - [ ] Point `admin.ateliersupport.com` at the Worker
 - [ ] Separate staging resources so testing never touches production data
+
+## 2b. Hosting split — committed, not deployed
+
+One Worker per address (`docs/HOSTING.md`): website, app, control centre, and
+the API (`vayu-webapp`, now on `api.ateliersupport.com`).
+
+- [ ] Tell staff on `ateliersupport.com` to open the app there once while online
+      (uploads offline changes), then sign in and reinstall at `app.`
+- [ ] First switch-over: `npm run deploy:sites`, **then** `npm run deploy:api`,
+      then the checks in `docs/HOSTING.md`
+- [ ] Point the Razorpay webhook at `api.ateliersupport.com` when it is set up
+- [ ] A few weeks after: stop passing the app's original `/api` on
+      `ateliersupport.com` (`frontend/hosts/welcome/worker.ts`)
 
 ## 3. Pending implementation
 
@@ -61,7 +74,7 @@ platform database does not exist there yet.
 - [x] Pricing fed from published public plans
 - [x] Privacy policy and terms pages (`/legal`) — **placeholders until real text arrives** (§1.3)
 - [ ] Real About text, contact email and address (§1.3), in `frontend/site/content.ts`
-- [ ] Make the landing page the root of `ateliersupport.com` once staff have moved (§1.8)
+- [x] Make the landing page the root of `ateliersupport.com` (hosting split, §2b; not deployed yet)
 - [ ] Bot protection on sign-up and contact (Turnstile)
 - [ ] A contact form (today the Contact section shows the address and email only)
 

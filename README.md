@@ -1,14 +1,18 @@
 # Vayu Design for Living
 
 Mobile-first PWA for Vayu Design: artworks, collections, catalogs, invoices,
-inquiries, team messaging and attendance. Live at https://ateliersupport.com (moving to https://app.ateliersupport.com).
+inquiries, team messaging and attendance. The app is at https://app.ateliersupport.com, the
+website at https://ateliersupport.com, the control centre at https://admin.ateliersupport.com.
 
 ## Stack
 
 - **Frontend:** React 19 + Vite + Tailwind v4 (`frontend/`)
-- **Backend:** one Cloudflare Worker (`frontend/worker.ts`) serving the API and
-  the built frontend, with D1 (data), KV (sessions), R2 (files) and a
-  `SyncHub` Durable Object for realtime.
+- **Backend:** the API Worker (`frontend/worker.ts`, `api.ateliersupport.com`)
+  with D1 (data), KV (sessions), R2 (files) and Durable Objects for realtime
+  and per-organization databases.
+- **Hosting:** one Worker per address (website, app, control centre, API);
+  the three sites reach the API at `/api` over a service binding. See
+  `docs/HOSTING.md`.
 
 ## Develop
 
@@ -27,10 +31,12 @@ Checks (from `frontend/`): `npm run typecheck`, `npm test`.
 
 Pushing to `main` deploys production (GitHub Actions →
 `.github/workflows/deploy.yml`). Manual: `npm run deploy` from the repo root
-(uses the root `wrangler.jsonc`).
+builds the three sites, deploys them, then the API. The order matters; see
+`docs/HOSTING.md`.
 
 ## Docs
 
+- `docs/HOSTING.md`: which Worker serves which address, deploy order, the one-time switch-over
 - `docs/ARCHITECTURE.md`: sync and realtime design
 - `docs/DEPLOYMENT.md`: feature flags, rollout, rollback, measurement
 - `docs/PLATFORM_AUTH.md`: platform login (Better Auth), provider control panel, enabling Google

@@ -12,7 +12,7 @@ import toast from 'react-hot-toast';
 import { createAuthClient } from 'better-auth/react';
 import { ArrowLeft, ArrowRight, CheckCircle2, Clock, LogOut, MessageSquare, XCircle } from 'lucide-react';
 import { Button, Card, Field, Input, Select, Textarea } from '../components/ui';
-import { PlanCard, SiteHeader, usePublicPlans, type PublicPlan } from './common';
+import { HOME_URL, PlanCard, SiteHeader, usePublicPlans, type PublicPlan } from './common';
 
 const authClient = createAuthClient({ basePath: '/api/v2/auth' });
 
@@ -83,7 +83,8 @@ export const Signup: React.FC = () => {
         const s = res.application.status;
         if (s === 'draft') {
             const missing = REQUIRED.some(k => !String(res.application![k] ?? '').trim());
-            setStep(missing ? 'business' : res.application.requestedPlanKey ? 'review' : 'plan');
+            if (missing) setStep('business');
+            else setStep(res.application.requestedPlanKey ? 'review' : 'plan');
         } else {
             setStep('status');
         }
@@ -119,7 +120,7 @@ export const Signup: React.FC = () => {
         } finally { setBusy(false); }
     };
 
-    const signOut = async () => { await authClient.signOut(); location.href = '/welcome'; };
+    const signOut = async () => { await authClient.signOut(); location.href = HOME_URL; };
 
     const set = (k: keyof Application) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
         setDraft(d => ({ ...d, [k]: e.target.value }));
@@ -240,6 +241,7 @@ const AccountStep: React.FC<{ initialMode: 'signup' | 'signin'; onDone: () => vo
 
     useEffect(() => { api<typeof methods>('/public/login-methods').then(setMethods).catch(() => setMethods(null)); }, []);
     const signUpOpen = methods?.emailPassword.signUp !== false;
+    const submitLabel = mode === 'signup' ? 'Create account' : 'Sign in';
 
     const submit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -258,7 +260,7 @@ const AccountStep: React.FC<{ initialMode: 'signup' | 'signin'; onDone: () => vo
                 <h1 className="font-serif text-2xl text-gray-900 dark:text-gray-100">Sign-up is by invitation for now</h1>
                 <p className="mt-2 text-gray-700 dark:text-gray-300">We are onboarding businesses personally at the moment. Get in touch and we will set you up.</p>
                 <div className="mt-5 flex gap-2">
-                    <a href="/welcome#contact" className="neu-button neu-button-primary">Contact us</a>
+                    <a href={`${HOME_URL}#contact`} className="neu-button neu-button-primary">Contact us</a>
                     <Button onClick={() => setMode('signin')}>I already have an account</Button>
                 </div>
             </Card>
@@ -287,7 +289,7 @@ const AccountStep: React.FC<{ initialMode: 'signup' | 'signin'; onDone: () => vo
                     </label>
                 )}
                 <Button type="submit" variant="primary" block disabled={busy}>
-                    {busy ? 'One moment…' : mode === 'signup' ? 'Create account' : 'Sign in'}
+                    {busy ? 'One moment…' : submitLabel}
                 </Button>
             </form>
             <p className="mt-5 text-[13px] text-center text-gray-600 dark:text-gray-400">
@@ -316,9 +318,11 @@ const PlanStep: React.FC<{ plans: PublicPlan[] | null; value: string; cycle: 'mo
                     <button type="button" onClick={() => setCycle('annual')} className={`neu-pill ${cycle === 'annual' ? 'neu-pill-active' : ''}`}>Yearly</button>
                 </div>
             </div>
-            {plans === null ? <p className="mt-6 text-sm">Loading plans…</p> : plans.length === 0 ? (
+            {plans === null && <p className="mt-6 text-sm">Loading plans…</p>}
+            {plans?.length === 0 && (
                 <p className="mt-6 text-sm text-gray-700 dark:text-gray-300">No plans are open yet. Save your details and we will be in touch.</p>
-            ) : (
+            )}
+            {plans && plans.length > 0 && (
                 <div className="mt-6 grid gap-4 sm:grid-cols-2">
                     {plans.map(p => <PlanCard key={p.key} plan={p} cycle={cycle} selected={selected === p.key} onChoose={() => setSelected(p.key)} />)}
                 </div>
