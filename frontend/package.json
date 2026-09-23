@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:local": "node scripts/dev-local.mjs",
     "build": "node scripts/build-sites.mjs",
     "preview": "vite preview",
         "typecheck": "tsc -p tsconfig.web.json --noEmit && tsc -p tsconfig.json --noEmit",

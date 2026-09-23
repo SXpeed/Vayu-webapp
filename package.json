@@ -2,6 +2,7 @@
   "name": "vayu-design-for-living",
   "scripts": {
     "dev": "npm run dev --prefix frontend",
+    "dev:local": "npm run dev:local --prefix frontend",
     "dev-phone": "npm run dev:phone --prefix frontend",
     "build": "cd frontend && npm install && npm run build",
     "deploy": "npm run build && npm run deploy:sites && npm run deploy:api",

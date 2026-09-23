@@ -25,6 +25,19 @@ npm run dev-phone    # same, over HTTPS on the LAN (install the PWA on a phone)
 Set `VITE_API_PROXY=http://127.0.0.1:8787` in `frontend/.env` to use a local
 `wrangler dev` Worker instead of production.
 
+### Local test copy
+
+```bash
+npm run dev:local             # a private copy of the app with its own database
+npm run dev:local -- --reset  # wipe it and start fresh
+```
+
+Opens on http://localhost:5173 (control centre: `/admin.html`) with test
+logins `admin@test.local` / `localtest-admin` and `staff@test.local` /
+`localtest-staff`, plus three sample artworks. The data lives in
+`frontend/.wrangler/local-test` (git-ignored) and never reaches the live site.
+Plain `npm run dev` still talks to the live site.
+
 Checks (from `frontend/`): `npm run typecheck`, `npm test`.
 
 ## Deploy
