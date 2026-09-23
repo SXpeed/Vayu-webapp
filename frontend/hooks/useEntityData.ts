@@ -13,6 +13,7 @@ import { authService, AuthUser } from '../services/authService';
 import { makeCan, permissionsOf } from '../access';
 import { createRefreshScheduler } from '../services/refreshScheduler';
 import { authHeaders, parseApiResponse } from '../services/apiClient';
+import { apiBase } from '../services/workspace';
 import { createDeltaSync, memoryCursor, type SyncPage } from '../services/deltaSyncClient';
 import { byAsc, byDesc, conversationOrder, groupByEntity, mergeChanges, type SyncChange } from '../services/syncMerge';
 import { realtimeService } from '../services/realtimeService';
@@ -57,7 +58,7 @@ async function fetchSyncPage(cursor: number | null): Promise<SyncPage | null> {
     const query = cursor === null ? '' : `?cursor=${cursor}`;
     let res: Response;
     try {
-        res = await fetch(`/api/sync${query}`, { headers: authHeaders(), signal: AbortSignal.timeout(20_000) });
+        res = await fetch(`${apiBase()}/sync${query}`, { headers: authHeaders(), signal: AbortSignal.timeout(20_000) });
     } catch {
         throw new Error('Cannot reach the server. Check your connection and try again.');
     }

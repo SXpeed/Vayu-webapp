@@ -4,6 +4,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Check, Copy, Eye, Image as ImageIcon, KeyRound, Lock, MessageCircle, Pencil, Plus, Power, Share2, Trash2, X } from 'lucide-react';
+import { currentWorkspace } from '../services/workspace';
 import { Artwork } from '../types';
 import { apiCall } from '../services/apiClient';
 import { getThumbUrl } from '../services/storageService';
@@ -22,9 +23,19 @@ interface StaffRoom {
 
 const EXPIRY_CHOICES = [7, 14, 30, 90];
 
-/** The client's address for a room. The dev server has no /room/:token route, so it uses room.html?t=. */
+/**
+ * The client's address for a room: /room/<token>, or /room/<workspace>/<token>
+ * for a room in a workspace. The dev server has no /room/ route, so it uses
+ * room.html?t= (and &w=).
+ */
 export function roomLink(token: string): string {
-    return import.meta.env.DEV ? `${location.origin}/room.html?t=${token}` : `${location.origin}/room/${token}`;
+    const workspace = currentWorkspace();
+    if (import.meta.env.DEV) {
+        const params = new URLSearchParams({ t: token });
+        if (workspace) params.set('w', workspace.id);
+        return `${location.origin}/room.html?${params}`;
+    }
+    return workspace ? `${location.origin}/room/${workspace.id}/${token}` : `${location.origin}/room/${token}`;
 }
 
 /** A copy of the set with this id added or removed. */

@@ -90,12 +90,13 @@ deletes. Tests: `tests/privateRooms.integration.test.mjs`.
 
 ## 3. Pending implementation
 
-### 3.1 The app on the new foundation (biggest remaining piece)
-- [ ] Point the app's screens at `/api/v2/org/:id/*` instead of the shared database
-- [ ] Organization switcher for people who belong to more than one
-- [ ] Move the app's own sign-in onto platform login (keeping current sessions working during the change)
-- [ ] Offline storage keyed per person **and** organization, cleared on switch and sign-out
-- [ ] Run Vayu's real import immediately before this switch, so nothing written in between is missed
+### 3.1 The app on the new foundation — built (`docs/APP_ORGANIZATIONS.md`)
+- [x] The app works per organization (`/api/o/<id>/*`): each has its own database, files and settings; Vayu's organization works on the original data, which is not moved
+- [x] Workspace chooser for people in more than one (Profile → Workspace → Switch)
+- [x] Sign-in with the platform account (email or Google), falling back to the original sign-in so nobody is locked out during the move
+- [x] Offline copy kept per workspace, removed on sign-out
+- [x] Vayu's people come in with their own passwords and ids (control centre → App data)
+- [ ] Owner: apply migrations 0006–0007, deploy, then connect Vayu in the control centre
 
 ### 3.2 Marketing website (Phase C) — built, content pending
 - [x] Home, What it does, Features, How it works, Pricing, About, Contact, Login, Get started (`/welcome`)
@@ -116,12 +117,12 @@ deletes. Tests: `tests/privateRooms.integration.test.mjs`.
 - [x] **Email verification** at sign-up: an application can only be sent from a confirmed address (`docs/EMAIL.md`)
 - [ ] Optional logo upload during onboarding
 - [ ] Hosted checkout for paid plans after approval (§3.6)
-- [ ] An approved owner entering their workspace in the app (§3.1)
+- [x] An approved owner entering their workspace in the app (§3.1)
 
 ### 3.4 Invitations and roles (Phase D)
-- [ ] Expiring single-use invitations tied to recipient, organization, role, store access and inviter
-- [ ] Decide and enforce whether a pending invitation holds a seat
-- [ ] Owners and admins manage their own team from inside the app
+- [x] Expiring single-use invitations tied to recipient, organization, role and inviter (Team → Invite someone)
+- [x] A pending invitation doesn't hold a seat; the limit is checked on acceptance
+- [x] Owners and admins manage their own team from inside the app
 - [ ] Custom roles where the plan allows
 - [ ] Store-level access per member
 
@@ -147,7 +148,7 @@ Seats and inventory items are enforced. Still to wire up (each is labelled
 - [x] Retryable, idempotent outbox (notices queue and wait; shown in the control centre)
 - [x] Sending through Cloudflare Email Service, right after the change and retried by a 10-minute cron (`docs/EMAIL.md`)
 - [x] Verification, password reset, approval and ready notices
-- [ ] Invitations (with §3.4)
+- [x] Invitations (with §3.4)
 - [ ] Onboard `ateliersupport.com` in Email Service (adds SPF/DKIM) and add DMARC — owner, in the dashboard
 
 ### 3.7b Control centre — built

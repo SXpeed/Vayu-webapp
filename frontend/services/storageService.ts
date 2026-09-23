@@ -1,6 +1,5 @@
-import { parseApiResponse } from './apiClient';
-
-const TOKEN_KEY = 'vayu_token';
+import { parseApiResponse, tokenHeader } from './apiClient';
+import { apiBase, currentWorkspace, fileKeyOf } from './workspace';
 
 export interface UploadResult {
     key: string;
@@ -17,7 +16,7 @@ const THUMB_JPEG_QUALITY = 0.78;
 /** Grid/list-sized variant of an uploaded file URL. The worker serves the
  *  original when no thumbnail exists (older uploads), so this is always safe. */
 export function getThumbUrl(url: string): string {
-    return url.startsWith('/api/files/') && !url.endsWith('__thumb') ? `${url}__thumb` : url;
+    return fileKeyOf(url) !== null && !url.endsWith('__thumb') ? `${url}__thumb` : url;
 }
 
 function loadImage(file: File): Promise<HTMLImageElement> {
@@ -72,7 +71,6 @@ async function makeThumbnail(file: File): Promise<File | null> {
 
 const storageService = {
     async upload(file: File): Promise<UploadResult> {
-        const token = localStorage.getItem(TOKEN_KEY);
         const formData = new FormData();
         formData.append('file', file);
 
@@ -80,19 +78,18 @@ const storageService = {
         if (thumb) formData.append('thumb', thumb);
 
         // No Content-Type header here — the browser sets the multipart boundary.
-        const res = await fetch('/api/upload', {
+        const res = await fetch(`${apiBase()}/upload`, {
             method: 'POST',
-            headers: token ? { Authorization: `Bearer ${token}` } : {},
+            headers: tokenHeader(),
             body: formData,
         });
         return parseApiResponse<UploadResult>(res);
     },
 
     async delete(key: string): Promise<void> {
-        const token = localStorage.getItem(TOKEN_KEY);
-        const res = await fetch(`/api/files/${encodeURIComponent(key)}`, {
+        const res = await fetch(`${apiBase()}/files/${encodeURIComponent(key)}`, {
             method: 'DELETE',
-            headers: token ? { Authorization: `Bearer ${token}` } : {},
+            headers: tokenHeader(),
         });
         await parseApiResponse<{ success?: boolean }>(res);
     },
@@ -103,19 +100,18 @@ const storageService = {
      * server reports nothing missing, a local flag skips future checks.
      */
     async backfillThumbnails(): Promise<number> {
-        const DONE_FLAG = 'vayu_thumbs_backfilled_v1';
+        const workspace = currentWorkspace();
+        const DONE_FLAG = workspace ? `vayu_thumbs_backfilled_v1@${workspace.id}` : 'vayu_thumbs_backfilled_v1';
         if (localStorage.getItem(DONE_FLAG)) return 0;
 
-        const token = localStorage.getItem(TOKEN_KEY);
-        const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-
-        const listRes = await fetch('/api/files-missing-thumbs', { headers: authHeaders });
+        const authHeaders = tokenHeader();
+        const listRes = await fetch(`${apiBase()}/files-missing-thumbs`, { headers: authHeaders });
         const { missing } = await parseApiResponse<{ missing: string[] }>(listRes);
 
         let generated = 0;
         for (const key of missing) {
             try {
-                const fileRes = await fetch(`/api/files/${key}`);
+                const fileRes = await fetch(`${apiBase()}/files/${key}`);
                 if (!fileRes.ok) continue;
                 const blob = await fileRes.blob();
                 const name = key.split('/').pop() || 'file';
@@ -125,7 +121,7 @@ const storageService = {
                 const formData = new FormData();
                 formData.append('key', key);
                 formData.append('thumb', thumb);
-                const uploadRes = await fetch('/api/files-thumbs', {
+                const uploadRes = await fetch(`${apiBase()}/files-thumbs`, {
                     method: 'POST',
                     headers: authHeaders,
                     body: formData,

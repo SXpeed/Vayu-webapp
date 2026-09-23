@@ -38,7 +38,7 @@ import {
 const CHANGE_LOG_SETUP_KEY = 'changeLogTable';
 
 export function ensureChangeLogTable(db: D1Database): Promise<void> {
-  return runSetupOnce(CHANGE_LOG_SETUP_KEY, () => db.prepare(`
+  return runSetupOnce(db, CHANGE_LOG_SETUP_KEY, () => db.prepare(`
       CREATE TABLE IF NOT EXISTS change_log (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
         workspace_id TEXT NOT NULL DEFAULT 'default',

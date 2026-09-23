@@ -144,6 +144,9 @@ if (!existsSync(marker)) {
         { cwd: frontend, stdio: 'pipe', env: { ...process.env, ADMIN_PASSWORD: ACCOUNTS.admin.password } });
 }
 
+// Platform database changes added since this copy was made (applied ones are skipped).
+wrangler(['d1', 'migrations', 'apply', 'PLATFORM_DB', '--local', '-c', 'wrangler.json', '--persist-to', state]);
+
 // Secrets for this local copy only, kept so sign-ins survive a restart.
 const secretsFile = join(state, 'secrets.json');
 if (!existsSync(secretsFile)) {
@@ -227,6 +230,38 @@ Try again, or start fresh with: npm run dev:local -- --reset`);
   }
 }
 
+// ── Workspaces, the first time (after the original app's logins exist) ──
+// "Vayu (local)" works on the original app's data, with its people brought
+// in (same passwords); "Second Studio" has its own empty storage. The admin
+// owns both, so the workspace chooser shows.
+const workspacesMarker = join(state, 'workspaces-set-up');
+if (!existsSync(workspacesMarker)) {
+  try {
+    const jar = new Map();
+    const platform = async (path, body) => {
+        const res = await fetch(`${API}/v2${path}`, {
+            method: body ? 'POST' : 'GET',
+            headers: { 'Content-Type': 'application/json', Origin: `http://localhost:${APP_PORT}`, Cookie: [...jar].map(([k, v]) => `${k}=${v}`).join('; ') },
+            body: body && JSON.stringify(body),
+        });
+        for (const c of res.headers.getSetCookie?.() ?? []) { const [pair] = c.split(';'); const i = pair.indexOf('='); jar.set(pair.slice(0, i), pair.slice(i + 1)); }
+        const json = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(`${path}: ${res.status} ${JSON.stringify(json)}`);
+        return json;
+    };
+    await platform('/auth/sign-in/email', { email: ACCOUNTS.admin.email, password: ACCOUNTS.admin.password });
+    const vayu = await platform('/admin/orgs', { name: 'Vayu (local)', businessType: 'gallery', ownerEmail: ACCOUNTS.admin.email });
+    await platform(`/admin/orgs/${vayu.id}/app-storage`, { storage: 'original', confirm: vayu.slug });
+    await platform(`/admin/orgs/${vayu.id}/import-original-people`, { dryRun: false });
+    await platform('/admin/orgs', { name: 'Second Studio', businessType: 'studio', ownerEmail: ACCOUNTS.admin.email });
+    writeFileSync(workspacesMarker, new Date().toISOString());
+  } catch (e) {
+    console.error(`Setting up the test workspaces failed: ${e.message}
+Try again, or start fresh with: npm run dev:local -- --reset`);
+    stop(1);
+  }
+}
+
 start('App', [join(frontend, 'node_modules', 'vite', 'bin', 'vite.js'), '--port', String(APP_PORT), '--strictPort'],
     { VITE_API_PROXY: `http://127.0.0.1:${API_PORT}` });
 await waitFor(`http://localhost:${APP_PORT}/`, 'The app');
@@ -237,8 +272,10 @@ console.log(`
     App             http://localhost:${APP_PORT}
     Control centre  http://localhost:${APP_PORT}/admin.html
 
-    Admin   ${ACCOUNTS.admin.email} / ${ACCOUNTS.admin.password}   (app and control centre)
-    Staff   ${ACCOUNTS.staff.email} / ${ACCOUNTS.staff.password}
+    Admin   ${ACCOUNTS.admin.email} / ${ACCOUNTS.admin.password}   (app and control centre; owns both workspaces)
+    Staff   ${ACCOUNTS.staff.email} / ${ACCOUNTS.staff.password}   (Vayu (local) only)
+
+    Workspaces: "Vayu (local)" uses the original app's data; "Second Studio" has its own.
 
   Ctrl+C to stop. Start fresh with: npm run dev:local -- --reset
 `);

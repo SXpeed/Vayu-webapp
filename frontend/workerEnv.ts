@@ -87,6 +87,30 @@ export interface Env {
   // "off" stops all email even with the binding (a kill switch; the local
   // test config starts with it off so tests opt in).
   EMAIL_SENDING?: string;
+
+  // ── The app per organization (frontend/orgApp.ts) ───────────────────────
+  // One Durable Object per organization holding its app database
+  // (frontend/orgStorage.ts, OrgAppDb).
+  ORG_APP_DB?: DurableObjectNamespace;
+  // Set on requests under /api/o/<id>/: the organization being worked in.
+  ORG_ID?: string;
+  // Where this organization's files are served from ('/api/files/' for the
+  // original app's data, '/api/o/<id>/files/' for an organization's own).
+  FILES_BASE?: string;
+  // 'own' when this organization has its own storage, 'original' for the
+  // one that owns the original app's data (orgApp.ts).
+  ORG_STORAGE?: 'own' | 'original';
+}
+
+/** The address a stored file is served at, for this request's organization. */
+export function fileUrl(env: Env, key: string): string {
+  return `${env.FILES_BASE ?? '/api/files/'}${key}`;
+}
+
+/** The storage key in a file address, in either form; null if it isn't one. */
+export function fileKeyFromUrl(url: string): string | null {
+  const match = /^\/api\/(?:o\/[A-Za-z0-9-]+\/)?files\/(.+)$/.exec(url);
+  return match ? decodeURIComponent(match[1]) : null;
 }
 
 /** Per-request context, shared by the router and the route handlers. */
@@ -97,6 +121,15 @@ export interface Ctx {
   path: string;
   method: string;
   execCtx: ExecutionContext;
+}
+
+/**
+ * Names the database a D1-shaped object reads and writes: an organization's
+ * own database carries its key (orgAppDb.ts); the original app's is 'original'.
+ */
+export const DB_KEY = Symbol.for('ateliersupport.databaseKey');
+export function databaseKey(db: D1Database): string {
+  return (db as unknown as Record<symbol, string | undefined>)[DB_KEY] ?? 'original';
 }
 
 // ── Per-request metrics (Analytics Engine) ─────────────────────────────────
@@ -167,6 +200,8 @@ export function trackedEnv(request: Request, env: Env): Env {
     getWithMetadata: (...args: Parameters<KVNamespace['getWithMetadata']>) => { metrics.kvOps += 1; return env.VAYU_KV.getWithMetadata(...args); },
   } as KVNamespace;
   const db = {
+    // Which database this is, so per-database setup is remembered per database.
+    [DB_KEY]: databaseKey(env.VAYU_DB),
     prepare: (query: string) => wrapStatement(env.VAYU_DB.prepare(query)),
     batch: <T = unknown>(statements: D1PreparedStatement[]) => {
       const unwrapped = statements.map(stmt => originals.get(stmt) ?? stmt);
@@ -175,7 +210,7 @@ export function trackedEnv(request: Request, env: Env): Env {
         return result as D1Result<T>[];
       });
     },
-  } as D1Database;
+  } as unknown as D1Database;
   return { ...env, VAYU_KV: kv, VAYU_DB: db };
 }
 
@@ -186,6 +221,8 @@ export interface SessionData {
   /** Refreshed from the user record on every request (see getSession). */
   role: string;
   expiresAt: number;
+  /** Inside an organization: the platform account behind this app user. */
+  platformUserId?: string;
 }
 
 /** One committed change, as announced to the hub and to clients. */

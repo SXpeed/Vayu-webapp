@@ -8,6 +8,7 @@ import { Button, Card, Field, Input, Select } from '../components/ui';
 import { Avatar, Detail, EmptyState, PageHeader, STAT_TILE_H, Section, Skeleton, SkeletonRows, StatTile, StatusPill, useDialogs } from './kit';
 import { api, guarded as sharedGuarded, timeAgo, type ApiError, type Reauth } from './api';
 import { FEATURE_FIELDS, LIMIT_FIELDS, MODULE_FIELDS } from '../platform/planFields';
+import { AppDataCard } from './AppDataCard';
 
 interface OrgRow {
     id: string; slug: string; name: string; business_type: string; status: string; is_demo: number;
@@ -19,6 +20,8 @@ interface Member { id: string; user_id: string; role: string; status: string; em
 interface OrgDetail {
     id: string; slug: string; name: string; business_type: string; status: string; country: string | null;
     timezone: string | null; is_demo: number; created_at: number; members: Member[];
+    /** Which data it works on in the app (platform/originalApp.ts). */
+    app_storage?: 'own' | 'original';
 }
 
 interface Razorpay {
@@ -232,8 +235,8 @@ const OrgDetailView: React.FC<{ orgId: string; reauth: Reauth; onBack: () => voi
                 {/* The real header and tile sizes, so nothing moves when the data lands. */}
                 <PageHeader
                     back={{ label: 'All organizations', onClick: onBack }}
-                    title={<Skeleton className="inline-block align-middle h-5 w-64 max-w-full" />}
-                    description={<Skeleton className="inline-block align-middle h-3 w-56 max-w-full" />}
+                    title={<Skeleton inline className="inline-block align-middle h-5 w-64 max-w-full" />}
+                    description={<Skeleton inline className="inline-block align-middle h-3 w-56 max-w-full" />}
                     actions={<Skeleton className="h-10 w-24 rounded-xl" />}
                 />
                 <div className={TILE_GRID}>
@@ -299,6 +302,7 @@ const OrgDetailView: React.FC<{ orgId: string; reauth: Reauth; onBack: () => voi
                     {sub ? <PlanCard orgId={orgId} info={sub} reauth={reauth} onChanged={reloadSub} />
                         : <Section title="Plan and limits"><EmptyState title="Could not load the plan" action={<Button onClick={reloadSub}>Try again</Button>} /></Section>}
                     <MembersCard org={org} onChange={next => { setOrg(next); reloadSub(); }} />
+                    <AppDataCard org={org} reauth={reauth} onChanged={loadAll} />
                 </div>
                 <div className="space-y-6 min-w-0">
                     {rz ? <RazorpayCard path={rzPath} info={rz} reauth={reauth} onChange={setRz} onReload={reloadRz} />

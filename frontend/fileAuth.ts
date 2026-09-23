@@ -68,16 +68,19 @@ export async function issueFileCookie(ctx: Ctx, userId: string): Promise<string>
 const fileTokenMemo = new Map<string, { at: number; userId: string | null }>();
 
 export function forgetFileToken(token: string): void {
-  fileTokenMemo.delete(token);
+  for (const key of fileTokenMemo.keys()) if (key.endsWith(`|${token}`)) fileTokenMemo.delete(key);
 }
 
 async function fileTokenUser(ctx: Ctx, token: string): Promise<string | null> {
-  const cached = fileTokenMemo.get(token);
+  // Tokens belong to one organization's storage: remember them per organization,
+  // so a token valid for one never opens another's files.
+  const memoKey = `${ctx.env.ORG_ID ?? ''}|${token}`;
+  const cached = fileTokenMemo.get(memoKey);
   if (cached && Date.now() - cached.at < 60_000) return cached.userId;
   const raw = await ctx.env.VAYU_KV.get(`auth:filetoken:${token}`);
   const userId = raw ? (JSON.parse(raw) as { userId?: string }).userId ?? null : null;
   if (fileTokenMemo.size > 500) fileTokenMemo.clear();
-  fileTokenMemo.set(token, { at: Date.now(), userId });
+  fileTokenMemo.set(memoKey, { at: Date.now(), userId });
   return userId;
 }
 

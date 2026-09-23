@@ -34,7 +34,8 @@ export async function startDevWorker({ port = 8810, inspectorPort = 9240, adminE
     // database files.
     if (seedLegacy?.sql) execSql('VAYU_DB', seedLegacy.sql);
     for (const [key, value] of seedLegacy?.kv ?? []) {
-        runWrangler(['kv', 'key', 'put', key, JSON.stringify(value), '--binding', 'VAYU_KV', '--local', '-c', 'wrangler.json', '--persist-to', persistDir], { stdio: 'pipe' });
+        const text = typeof value === 'string' ? value : JSON.stringify(value);
+        runWrangler(['kv', 'key', 'put', key, text, '--binding', 'VAYU_KV', '--local', '-c', 'wrangler.json', '--persist-to', persistDir], { stdio: 'pipe' });
     }
 
     runWrangler(['d1', 'migrations', 'apply', 'PLATFORM_DB', '--local', '-c', 'wrangler.json', '--persist-to', persistDir], { stdio: 'pipe' });
@@ -80,7 +81,8 @@ export async function startDevWorker({ port = 8810, inspectorPort = 9240, adminE
                 if (jar.size) h.set('Cookie', [...jar].map(([k, v]) => `${k}=${v}`).join('; '));
                 if (body !== undefined) h.set('Content-Type', 'application/json');
                 if (method !== 'GET' && !h.has('Origin')) h.set('Origin', origin);
-                const res = await fetch(`${origin}/api/v2${path}`, {
+                // '/api/…' is used as is (the app's routes); anything else is under /api/v2.
+                const res = await fetch(path.startsWith('/api/') ? `${origin}${path}` : `${origin}/api/v2${path}`, {
                     method, headers: h, body: body === undefined ? undefined : JSON.stringify(body), redirect: 'manual',
                 });
                 for (const c of res.headers.getSetCookie?.() ?? []) {

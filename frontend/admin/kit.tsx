@@ -163,8 +163,11 @@ export const StatusPill: React.FC<{ status?: string; tone?: Tone; children?: Rea
 
 /* ───────────────────────────── Loading ───────────────────────────────── */
 
-export const Skeleton: React.FC<{ className?: string; style?: React.CSSProperties }> = ({ className = '', style }) => (
-    <div className={`ac-skeleton ${className}`} style={style} aria-hidden />
+/** A loading placeholder. `inline` for one inside text (a heading or paragraph), where a block isn't allowed. */
+export const Skeleton: React.FC<{ className?: string; style?: React.CSSProperties; inline?: boolean }> = ({ className = '', style, inline = false }) => (
+    inline
+        ? <span className={`ac-skeleton ${className}`} style={style} aria-hidden />
+        : <div className={`ac-skeleton ${className}`} style={style} aria-hidden />
 );
 
 /** Rows shaped like a list, so the real list replaces it without a jump. */

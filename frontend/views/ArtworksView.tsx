@@ -5,6 +5,7 @@ import { PageRoot, PageHeader, PageBody, PrimaryIconButton, EmptyState } from '.
 import { Artwork } from '../types';
 import toast from 'react-hot-toast';
 import storageService, { getThumbUrl } from '../services/storageService';
+import { fileKeyOf } from '../services/workspace';
 import { IfCan } from '../components/Layout';
 
 
@@ -184,8 +185,8 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
     const handleRemoveImage = async (indexToRemove: number) => {
         const urlToRemove = formData.imageUrls[indexToRemove];
         // Only attempt R2 deletion for R2-hosted files (not legacy data URLs)
-        if (urlToRemove?.startsWith('/api/files/')) {
-            const key = decodeURIComponent(urlToRemove.slice('/api/files/'.length));
+        const key = urlToRemove ? fileKeyOf(urlToRemove) : null;
+        if (key) {
             try {
                 await storageService.delete(key);
             } catch (error) {

@@ -37,7 +37,8 @@ still at `/welcome`.
    a rejection. When you ask for information, they update and send again.
 
 A new account opens nothing: it has no organization until one is approved and
-set up. Applicants only ever see their own application — it is found from their
+set up. Once it is, the owner signs in to the app with the same account and
+invites their team from there (`docs/APP_ORGANIZATIONS.md`). Applicants only ever see their own application — it is found from their
 session, never from an id in the request.
 
 ## Reviewing (control centre → Applications)

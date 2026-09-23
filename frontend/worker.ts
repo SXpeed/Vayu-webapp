@@ -9,14 +9,17 @@ import {
   rowToContact, rowToStore, rowToAttendance, runSetupOnce,
 } from './rows';
 import {
-  rawRealtimeSecret, realtimeEnabled, requestMetrics, resolveRealtimeSecret,
+  fileKeyFromUrl, fileUrl, rawRealtimeSecret, realtimeEnabled, requestMetrics, resolveRealtimeSecret,
   trackedEnv, workspaceId,
   type ChangeEvent, type Ctx, type Env, type SessionData,
 } from './workerEnv';
 import {
-  bearerToken, getSession, getRoles, permissionsFor, saveRoles, SESSION_TTL_DAYS,
+  bearerToken, getSession, getRoles, permissionsFor, primeSession, saveRoles, SESSION_TTL_DAYS,
   type StoredUser,
 } from './workerRoles';
+import { ORG_PATH, openOrgRequest, orgMemberRecords, orgStorageEnv } from './orgApp';
+import { orgAccountRoutes } from './orgTeam';
+import { OrgAppDb } from './orgAppDb';
 import {
   ackStatus, changeLogStmt, changeLogStmts, ensureChangeLogTable, handleSync, queueHubNotify,
   statusUpgradeStmts,
@@ -48,7 +51,7 @@ import {
 } from './deviceSessions';
 
 // Durable Object classes must be exported from the entry module.
-export { SyncHub, OrgStore };
+export { SyncHub, OrgStore, OrgAppDb };
 
 type FormField = File | string | null;
 
@@ -292,7 +295,7 @@ function stripPassword(user: StoredUser): PublicUser {
  * own (idempotent) setup until one finishes.
  */
 function ensureCatalogsColumns(db: D1Database): Promise<void> {
-  return runSetupOnce('catalogsColumns', () => (async () => {
+  return runSetupOnce(db, 'catalogsColumns', () => (async () => {
     try { await db.prepare('ALTER TABLE catalogs ADD COLUMN pdf_url TEXT').run(); } catch { /* already exists */ }
     try { await db.prepare(`ALTER TABLE catalogs ADD COLUMN source TEXT NOT NULL DEFAULT 'generated'`).run(); } catch { /* already exists */ }
   })());
@@ -510,6 +513,13 @@ interface StoredPaymentLink {
  * another account. Otherwise the shared account (RAZORPAY_* secrets).
  */
 async function appRazorpayAccount(env: Env): Promise<{ keyId: string; keySecret: string; account: string } | { error: string }> {
+  // An organization with its own storage takes payments into its own
+  // Razorpay account only: never the shared one, never another business's.
+  if (env.ORG_STORAGE === 'own' && env.ORG_ID && env.PLATFORM_DB) {
+    const own = await verifiedRazorpayKeys(env, env.PLATFORM_DB, env.ORG_ID);
+    if (!own) return { error: "This business's Razorpay account isn't connected yet. Ask us to connect it; no payment link was created." };
+    return { keyId: own.keyId, keySecret: own.keySecret, account: env.ORG_ID };
+  }
   const orgId = env.PLATFORM_DB ? await getAppPaymentsOrg(env.PLATFORM_DB) : null;
   if (orgId) {
     const keys = await verifiedRazorpayKeys(env, env.PLATFORM_DB!, orgId);
@@ -944,12 +954,27 @@ async function handleAuthLogout(ctx: Ctx): Promise<Response> {
   return res;
 }
 
+/**
+ * The people in this workspace: every stored user of the original app, or,
+ * inside an organization, its active members (orgApp.ts).
+ */
+async function userRecords(ctx: Ctx): Promise<StoredUser[]> {
+  if (ctx.env.ORG_ID) return orgMemberRecords(ctx.env);
+  const list = await ctx.env.VAYU_KV.list({ prefix: 'auth:user:' });
+  const users: StoredUser[] = [];
+  for (const key of list.keys) {
+    const raw = await ctx.env.VAYU_KV.get(key.name);
+    if (raw) users.push(JSON.parse(raw) as StoredUser);
+  }
+  return users;
+}
+
 async function handleAuthUsersList(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
   if (session.role !== 'admin') return err('Forbidden', 403);
 
-  const list = await ctx.env.VAYU_KV.list({ prefix: 'auth:user:' });
+  const records = await userRecords(ctx);
   const pushSubs = await ctx.env.VAYU_KV.list({ prefix: 'push:sub:' });
   const usersWithPush = new Set<string>();
   for (const key of pushSubs.keys) {
@@ -958,16 +983,12 @@ async function handleAuthUsersList(ctx: Ctx): Promise<Response> {
   }
 
   const users: PublicUser[] = [];
-  for (const key of list.keys) {
-    const raw = await ctx.env.VAYU_KV.get(key.name);
-    if (raw) {
-      const stored: StoredUser = JSON.parse(raw);
-      const pub = stripPassword(stored);
-      pub.notificationsEnabled = usersWithPush.has(pub.id);
-      pub.deviceLimit = deviceLimit(stored);
-      pub.devices = await listDevices(ctx.env.VAYU_KV, pub.id, pub.id === session.userId ? bearerToken(ctx.request) : null);
-      users.push(pub);
-    }
+  for (const stored of records) {
+    const pub = stripPassword(stored);
+    pub.notificationsEnabled = usersWithPush.has(pub.id);
+    pub.deviceLimit = deviceLimit(stored);
+    pub.devices = await listDevices(ctx.env.VAYU_KV, pub.id, pub.id === session.userId ? bearerToken(ctx.request) : null);
+    users.push(pub);
   }
   users.sort((a, b) => a.createdAt - b.createdAt);
   return json(users);
@@ -976,18 +997,15 @@ async function handleAuthUsersList(ctx: Ctx): Promise<Response> {
 async function handleAuthTeam(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
-  const list = await ctx.env.VAYU_KV.list({ prefix: 'auth:user:' });
+  const records = await userRecords(ctx);
   const presenceMap = await combinedPresence(ctx);
   const users: PublicUser[] = [];
-  for (const key of list.keys) {
-    const raw = await ctx.env.VAYU_KV.get(key.name);
-    if (raw) {
-      const pub = stripPassword(JSON.parse(raw));
-      const presence = presenceMap[pub.id];
-      pub.isOnline = !!presence?.isOnline;
-      pub.lastSeen = presence?.lastSeen;
-      users.push(pub);
-    }
+  for (const stored of records) {
+    const pub = stripPassword(stored);
+    const presence = presenceMap[pub.id];
+    pub.isOnline = !!presence?.isOnline;
+    pub.lastSeen = presence?.lastSeen;
+    users.push(pub);
   }
   users.sort((a, b) => a.createdAt - b.createdAt);
   return json(users);
@@ -1174,12 +1192,7 @@ async function handleRolesDelete(ctx: Ctx): Promise<Response> {
   if (!role) return err('Role not found', 404);
   if (role.builtIn) return err('Built-in roles can’t be deleted', 400);
   // Refuse while anyone still has it: they'd silently lose all access.
-  const list = await ctx.env.VAYU_KV.list({ prefix: 'auth:user:' });
-  let members = 0;
-  for (const key of list.keys) {
-    const raw = await ctx.env.VAYU_KV.get(key.name);
-    if (raw && (JSON.parse(raw) as StoredUser).role === roleId) members += 1;
-  }
+  const members = (await userRecords(ctx)).filter(u => u.role === roleId).length;
   if (members > 0) {
     return err(`${members} ${members === 1 ? 'person has' : 'people have'} this role. Move them to another role first.`, 409);
   }
@@ -1280,7 +1293,7 @@ async function handleUpload(ctx: Ctx): Promise<Response> {
     }
   }
 
-  return json({ key, url: `/api/files/${key}`, thumbUrl: `/api/files/${key}__thumb` });
+  return json({ key, url: fileUrl(ctx.env, key), thumbUrl: fileUrl(ctx.env, `${key}__thumb`) });
 }
 
 async function handleFileGet(ctx: Ctx): Promise<Response> {
@@ -1805,7 +1818,7 @@ type MigratedTable = keyof typeof COLUMN_MIGRATIONS;
  * on that isolate hung.
  */
 function ensureColumns(db: D1Database, table: MigratedTable): Promise<void> {
-  return runSetupOnce(`columns:${table}`, () => addMissingColumns(db, table));
+  return runSetupOnce(db, `columns:${table}`, () => addMissingColumns(db, table));
 }
 
 async function addMissingColumns(db: D1Database, table: MigratedTable): Promise<void> {
@@ -1822,14 +1835,14 @@ async function addMissingColumns(db: D1Database, table: MigratedTable): Promise<
   }
 }
 
-/** Deletes uploaded files (and their thumbnails) behind /api/files/ URLs. */
+/** Deletes uploaded files (and their thumbnails) behind file URLs. */
 async function deleteUploadedFiles(r2: R2Bucket, urls: string[]): Promise<void> {
+  // The bucket is this organization's own view (orgStorage.ts), so a URL
+  // naming another organization can only ever reach this one's files.
   const keys = urls
-    .filter(url => url.startsWith('/api/files/'))
-    .flatMap((url) => {
-      const key = decodeURIComponent(url.slice('/api/files/'.length));
-      return [key, `${key}__thumb`];
-    });
+    .map(fileKeyFromUrl)
+    .filter((key): key is string => key !== null)
+    .flatMap(key => [key, `${key}__thumb`]);
   if (keys.length === 0) return;
   try {
     await r2.delete(keys);
@@ -1848,7 +1861,7 @@ function logEntityChange(ctx: Ctx, session: SessionData, action: string, entity:
 // can audit what was removed, by whom and when (Admin → Deleted).
 
 function ensureDeletedItemsTable(db: D1Database): Promise<void> {
-  return runSetupOnce('deletedItemsTable', () => db.prepare(`
+  return runSetupOnce(db, 'deletedItemsTable', () => db.prepare(`
       CREATE TABLE IF NOT EXISTS deleted_items (
         id TEXT PRIMARY KEY,
         entity TEXT NOT NULL,
@@ -2596,7 +2609,7 @@ async function handleHolidaysGet(ctx: Ctx): Promise<Response> {
 // migration is required before first use. Column ALTERs handle tables created
 // before end_date/todos existed.
 function ensureEventsTable(db: D1Database): Promise<void> {
-  return runSetupOnce('eventsTable', () => db.prepare(`
+  return runSetupOnce(db, 'eventsTable', () => db.prepare(`
       CREATE TABLE IF NOT EXISTS events (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL DEFAULT '',
@@ -2732,7 +2745,7 @@ async function handleEventsDelete(ctx: Ctx): Promise<Response> {
 // The contacts table is created lazily (once per isolate) so no manual D1
 // migration is required before first use.
 function ensureContactsTable(db: D1Database): Promise<void> {
-  return runSetupOnce('contactsTable', () => db.prepare(`
+  return runSetupOnce(db, 'contactsTable', () => db.prepare(`
       CREATE TABLE IF NOT EXISTS contacts (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL DEFAULT '',
@@ -2897,7 +2910,7 @@ function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number)
 }
 
 function ensureStoresTable(db: D1Database): Promise<void> {
-  return runSetupOnce('storesTable', () => db.prepare(`
+  return runSetupOnce(db, 'storesTable', () => db.prepare(`
       CREATE TABLE IF NOT EXISTS stores (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL DEFAULT '',
@@ -2912,7 +2925,7 @@ function ensureStoresTable(db: D1Database): Promise<void> {
 }
 
 function ensureAttendanceTable(db: D1Database): Promise<void> {
-  return runSetupOnce('attendanceTable', () => db.prepare(`
+  return runSetupOnce(db, 'attendanceTable', () => db.prepare(`
       CREATE TABLE IF NOT EXISTS attendance (
         id TEXT PRIMARY KEY,
         employee_id TEXT NOT NULL,
@@ -3250,7 +3263,7 @@ async function handleAttendanceRecordClose(ctx: Ctx): Promise<Response> {
 // the app), with a few columns alongside for ordering and the archive.
 
 function ensureInvoicesTable(db: D1Database): Promise<void> {
-  return runSetupOnce('invoicesTable', () => db.prepare(`
+  return runSetupOnce(db, 'invoicesTable', () => db.prepare(`
       CREATE TABLE IF NOT EXISTS invoices (
         id TEXT PRIMARY KEY,
         invoice_number TEXT NOT NULL DEFAULT '',
@@ -3338,7 +3351,7 @@ async function handleInvoicesDelete(ctx: Ctx): Promise<Response> {
 // under /viewing/:token need no account and check the room themselves.
 
 function ensureViewingRoomsTable(db: D1Database): Promise<void> {
-  return runSetupOnce('viewingRoomsTable', async () => {
+  return runSetupOnce(db, 'viewingRoomsTable', async () => {
     await db.prepare(VIEWING_ROOMS_TABLE_SQL).run();
     await db.prepare('CREATE INDEX IF NOT EXISTS idx_viewing_rooms_created ON viewing_rooms(created_at DESC)').run();
   });
@@ -3557,7 +3570,7 @@ async function handleViewingOpen(ctx: Ctx): Promise<Response> {
       showPrices,
       expiresAt: Number(row.expires_at),
     },
-    artworks: artworks.map(art => clientArtwork(art, token, pass, showPrices)),
+    artworks: artworks.map(art => clientArtwork(art, token, pass, showPrices, ctx.env.ORG_ID ? `/api/o/${ctx.env.ORG_ID}` : '/api')),
     pass,
     passExpiresAt: expiresAt,
   });
@@ -3804,6 +3817,18 @@ const routes: Route[] = [
   { method: 'GET', match: isExact('/realtime/ws'), handler: handleRealtimeWs },
 ];
 
+// Inside an organization: sign-in is the platform account's and the team is
+// its memberships, so these replace the original account routes there.
+const orgAppRoutes: Route[] = [
+  ...orgAccountRoutes({
+    publicUser: stripPassword,
+    logChange: logEntityChange,
+    closeConnections: revokeHubAsync,
+    updateMe: handleAuthMeUpdate,
+  }),
+  ...routes,
+];
+
 // ── App Settings ──────────────────────────────────────────────────────────
 
 async function handleSettingsGet(ctx: Ctx) {
@@ -3965,6 +3990,29 @@ function writeAnalytics(
   }
 }
 
+/**
+ * For /api/o/<id>/…: the request as the app's routes expect it (/api/…), that
+ * organization's storage, and the member's session. Other requests pass
+ * through unchanged.
+ */
+async function organizationScope(request: Request, env: Env): Promise<Response | { request: Request; env: Env; orgUser: string | null }> {
+  const orgMatch = ORG_PATH.exec(new URL(request.url).pathname);
+  if (!orgMatch) return { request, env, orgUser: null };
+  let opened: Awaited<ReturnType<typeof openOrgRequest>>;
+  try {
+    opened = await openOrgRequest(request, env, orgMatch[1], orgMatch[2] ?? '/');
+  } catch (e) {
+    console.error('Opening an organization failed:', e);
+    return json({ error: 'Something went wrong. Please try again.' }, 500);
+  }
+  if (opened instanceof Response) return opened;
+  const inner = new URL(request.url);
+  inner.pathname = `/api${orgMatch[2] ?? '/'}`;
+  const scoped = new Request(inner, request);
+  primeSession(scoped, opened.session);
+  return { request: scoped, env: opened.env, orgUser: opened.session ? `${opened.orgId}:${opened.session.userId}` : null };
+}
+
 export default {
   async fetch(request: Request, env: Env, execCtx: ExecutionContext): Promise<Response> {
     const startedAt = Date.now();
@@ -3974,16 +4022,36 @@ export default {
       waitUntil: work => execCtx.waitUntil(work),
       // The organization whose account the app's payment links use: its
       // webhook updates those links, as the shared account's webhook does.
+      // Razorpay events for an organization's own account. A payment link
+      // lives where it was made: in the organization's own workspace, or, for
+      // the organization chosen for the original app's links, in the original
+      // storage. Unknown links (made on Razorpay's dashboard) are recorded in
+      // the workspace the account belongs to.
       onPaymentEvent: async (orgId, event) => {
-        if (!env.PLATFORM_DB || orgId !== await getAppPaymentsOrg(env.PLATFORM_DB)) return;
+        if (!env.PLATFORM_DB) return;
         const url = new URL(request.url);
-        await applyPaymentLinkEvent({ request, env, url, path: url.pathname, method: request.method, execCtx }, event);
+        const at = (target: Env): Ctx => ({ request, env: target, url, path: url.pathname, method: request.method, execCtx });
+        const org = await env.PLATFORM_DB.prepare('SELECT id, app_storage FROM organizations WHERE id = ?')
+          .bind(orgId).first<{ id: string; app_storage: 'own' | 'original' }>();
+        const own = org?.app_storage === 'own' ? orgStorageEnv(env, org) : null;
+        const forOriginalApp = orgId === await getAppPaymentsOrg(env.PLATFORM_DB);
+        if (!own && !forOriginalApp) return;
+        const linkId = (event as { payload?: { payment_link?: { entity?: { id?: string } } } })?.payload?.payment_link?.entity?.id;
+        const inOwn = own && linkId ? (await own.VAYU_KV.get(`payment:link:${linkId}`)) !== null : false;
+        await applyPaymentLinkEvent(at(own && (inOwn || !forOriginalApp) ? own : env), event);
       },
     });
     if (early) return early;
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS });
     }
+
+    // An organization's app: /api/o/<id>/<path> runs the same routes on that
+    // organization's storage, signed in with a platform account (orgApp.ts).
+    const scope = await organizationScope(request, env);
+    if (scope instanceof Response) return scope;
+    ({ request, env } = scope);
+    const orgUser = scope.orgUser;
 
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api/, '');
@@ -3996,12 +4064,13 @@ export default {
     let route = 'unmatched';
     try {
       let matched = false;
-      for (const r of routes) {
+      // Inside an organization, its account and team routes come first (orgTeam.ts).
+      for (const r of (env.ORG_ID ? orgAppRoutes : routes)) {
         if (r.method === ctx.method && r.match(path)) {
           route = normalizeRoute(path);
           matched = true;
           // Floods and enumeration from one device: far above normal use.
-          const device = bearerToken(request);
+          const device = bearerToken(request) ?? orgUser;
           if (device && !(await underLimit(env.API_LIMITER, `device:${device.slice(0, 32)}`))) {
             response = tooMany('Too many requests. Slow down and try again in a minute.');
             break;

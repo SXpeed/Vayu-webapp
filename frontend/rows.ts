@@ -1,6 +1,7 @@
 // Response helpers and D1 row mappers shared by worker.ts and the delta-sync
 // endpoint (frontend/deltaSync.ts). Extracted so both can import them without
 // a circular import between the two modules.
+import { databaseKey } from './workerEnv';
 
 export const CORS: HeadersInit = {
   'Access-Control-Allow-Origin': '*',
@@ -245,8 +246,11 @@ export function normalizeRoute(path: string): string {
  * own (idempotent) setup until one finishes.
  */
 const setupDone = new Set<string>();
-export async function runSetupOnce(key: string, setup: () => Promise<unknown>): Promise<void> {
-  if (setupDone.has(key)) return;
+export async function runSetupOnce(db: D1Database, key: string, setup: () => Promise<unknown>): Promise<void> {
+  // Per database: one isolate serves many organizations, each with its own.
+  const done = `${databaseKey(db)}|${key}`;
+  if (setupDone.has(done)) return;
   await setup();
-  setupDone.add(key);
+  setupDone.add(done);
 }
+

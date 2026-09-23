@@ -12,6 +12,7 @@
  * reconnect catch-up recover it.
  */
 import { authHeaders } from './apiClient';
+import { apiBase } from './workspace';
 
 export interface ChangeEvent {
     entity: string;
@@ -148,7 +149,7 @@ class RealtimeService {
         if (ticket === 'unauthorized') return; // session gone; sign-in restarts us
         if (ticket === null) { this.scheduleReconnect(gen); return; }
 
-        const url = `${location.origin.replace(/^http/, 'ws')}/api/realtime/ws?ticket=${encodeURIComponent(ticket)}`;
+        const url = `${location.origin.replace(/^http/, 'ws')}${apiBase()}/realtime/ws?ticket=${encodeURIComponent(ticket)}`;
         let socket: WebSocket;
         try {
             socket = new WebSocket(url);
@@ -165,7 +166,7 @@ class RealtimeService {
     /** A fresh single-use ticket; every connect and re-auth needs its own. */
     private async fetchTicket(): Promise<string | 'disabled' | 'unauthorized' | null> {
         try {
-            const res = await fetch('/api/realtime/ticket', {
+            const res = await fetch(`${apiBase()}/realtime/ticket`, {
                 method: 'POST',
                 headers: authHeaders(),
                 signal: AbortSignal.timeout(15_000),

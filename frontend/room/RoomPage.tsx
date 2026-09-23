@@ -13,10 +13,23 @@ interface RoomArtwork {
 }
 interface Opened { room: RoomInfo; artworks: RoomArtwork[]; pass: string; passExpiresAt: number }
 
-/** The secret from /room/<token> (or ?t= on the dev server's /room.html). */
+/**
+ * The secret from /room/<token>, or /room/<workspace>/<token> for a room in a
+ * workspace (on the dev server: /room.html?t=…&w=…).
+ */
+function roomFromUrl(): { token: string; workspace: string | null } {
+    const match = /^\/room\/(?:([A-Za-z0-9-]{1,64})\/)?([A-Za-z0-9_-]{43})\/?$/.exec(location.pathname);
+    if (match) return { token: match[2], workspace: match[1] ?? null };
+    const params = new URLSearchParams(location.search);
+    const workspace = params.get('w');
+    return { token: params.get('t') ?? '', workspace: workspace && /^[A-Za-z0-9-]{1,64}$/.test(workspace) ? workspace : null };
+}
+
+const ROOM = roomFromUrl();
+const API = ROOM.workspace ? `/api/o/${ROOM.workspace}` : '/api';
+
 function tokenFromUrl(): string {
-    const fromPath = location.pathname.match(/^\/room\/([A-Za-z0-9_-]{43})\/?$/)?.[1];
-    return fromPath ?? new URLSearchParams(location.search).get('t') ?? '';
+    return ROOM.token;
 }
 
 const passKey = (token: string) => `viewing-pass:${token}`;
@@ -34,7 +47,7 @@ function heldPass(token: string): string | null {
 
 async function post<T>(path: string, body: unknown): Promise<{ ok: true; data: T } | { ok: false; status: number; message: string }> {
     try {
-        const res = await fetch(`/api/viewing/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const res = await fetch(`${API}/viewing/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const data = await res.json().catch(() => ({}));
         if (res.ok) return { ok: true, data: data as T };
         return { ok: false, status: res.status, message: (data as { error?: string }).error || 'Something went wrong. Please try again.' };

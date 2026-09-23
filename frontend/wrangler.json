@@ -37,12 +37,14 @@
   "durable_objects": {
     "bindings": [
       { "name": "SYNC_HUB", "class_name": "SyncHub" },
-      { "name": "ORG_STORE", "class_name": "OrgStore" }
+      { "name": "ORG_STORE", "class_name": "OrgStore" },
+      { "name": "ORG_APP_DB", "class_name": "OrgAppDb" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["SyncHub"] },
-    { "tag": "v2", "new_sqlite_classes": ["OrgStore"] }
+    { "tag": "v2", "new_sqlite_classes": ["OrgStore"] },
+    { "tag": "v3", "new_sqlite_classes": ["OrgAppDb"] }
   ],
   "analytics_engine_datasets": [{ "binding": "ANALYTICS" }],
   "send_email": [{ "name": "EMAIL" }],

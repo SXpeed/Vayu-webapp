@@ -4,6 +4,7 @@ import { UserProfile } from '../types';
 import { Moon, Sun, LogOut, Check, Bell, BellOff, Pencil, X } from 'lucide-react';
 import { pushService } from '../services/pushService';
 import { MyDevicesCard } from '../components/MyDevicesCard';
+import { PasswordCard, WorkspaceCard } from '../components/AccountCards';
 import {
     PageRoot, PageHeader, PageBody, Card, SectionTitle, Field, Input, Textarea,
     ReadOnlyValue, ToggleRow, Button, Divider,
@@ -149,6 +150,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ profile, onUpdateProfi
                     />
                 </Card>
 
+                <WorkspaceCard />
+                <PasswordCard />
                 <MyDevicesCard />
 
                 {/* Logout */}

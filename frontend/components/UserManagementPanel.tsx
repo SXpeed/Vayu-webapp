@@ -8,6 +8,8 @@ import { StoreConfig } from '../types';
 import { apiCall } from '../services/apiClient';
 import { ADMIN_ROLE_ID, BUILT_IN_ROLES, type RoleDef } from '../permissions';
 import { DeviceList, DEFAULT_MAX_DEVICES, deviceCountText, type DeviceInfo } from './DeviceList';
+import { InvitePanel } from './InvitePanel';
+import { isPlatformSession } from '../services/workspace';
 
 /**
  * A person's devices with admin sign-out: one device, or all of them (asks
@@ -84,8 +86,62 @@ const RoleSelect: React.FC<{ value: string; roles: RoleDef[]; onChange: (v: stri
   </select>
 );
 
+/** Email and password: editable with the original sign-in; the person's own inside a workspace. */
+const AccountFields: React.FC<{
+  platform: boolean; user: AuthUser; email: string; onEmail: (v: string) => void; password: string; onPassword: (v: string) => void;
+}> = ({ platform, user, email, onEmail, password, onPassword }) => {
+  if (platform) return <p className="text-[11px] text-[var(--neu-text-dim)]">{user.email} · they manage their own email and password.</p>;
+  return (
+    <>
+      <div>
+        <label htmlFor={`um-edit-email-${user.id}`} className="neu-label">Email</label>
+        <input id={`um-edit-email-${user.id}`} type="email" value={email} onChange={e => onEmail(e.target.value)} className="neu-field" />
+      </div>
+      <div>
+        <label htmlFor={`um-edit-pw-${user.id}`} className="neu-label">New password</label>
+        <input id={`um-edit-pw-${user.id}`} type="password" autoComplete="new-password" value={password} onChange={e => onPassword(e.target.value)} placeholder="Leave blank to keep" className="neu-field" />
+      </div>
+    </>
+  );
+};
+
+/** Device limit and signed-in devices, for the original sign-in only. */
+const DeviceSettings: React.FC<{
+  user: AuthUser; role: string; maxDevices: string; onMaxDevices: (v: string) => void;
+  onDevicesChanged: (devices: NonNullable<AuthUser['devices']>) => void;
+}> = ({ user, role, maxDevices, onMaxDevices, onDevicesChanged }) => (
+  <>
+    {role === ADMIN_ROLE_ID ? (
+      <p className="text-[11px] text-[var(--neu-text-dim)]">Admins can sign in on any number of devices.</p>
+    ) : (
+      <div>
+        <label htmlFor={`um-edit-devices-${user.id}`} className="neu-label">Max devices signed in</label>
+        <select id={`um-edit-devices-${user.id}`} value={maxDevices} onChange={e => onMaxDevices(e.target.value)} className="neu-field">
+          <option value="">Default ({DEFAULT_MAX_DEVICES})</option>
+          {Array.from({ length: 10 }, (_, i) => i + 1).map(n => (
+            <option key={n} value={String(n)}>{n} {n === 1 ? 'device' : 'devices'}</option>
+          ))}
+        </select>
+        <p className="text-[11px] text-[var(--neu-text-dim)] mt-1.5 leading-relaxed">
+          Signing in on one more device signs out the one used longest ago.
+        </p>
+      </div>
+    )}
+    {user.devices && (
+      <div>
+        <p className="neu-label">Signed in on {deviceCountText(user.devices.length, user.deviceLimit)}</p>
+        <AdminDeviceControls user={user} onDevicesChanged={onDevicesChanged} />
+      </div>
+    )}
+  </>
+);
+
 /** Team members and the add-user form — the Admin sheet's Users tab. */
 const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
+  // Inside a workspace, people have their own platform accounts: they join by
+  // invitation and manage their own email, password and devices.
+  const platform = isPlatformSession();
+  const deleteLabel = platform ? 'Remove from the team' : 'Delete user';
   const [users, setUsers] = useState<AuthUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -224,12 +280,14 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
     try {
       const data: { name?: string; email?: string; role?: string; password?: string; storeId?: string; maxDevices?: number | null } = {
         name: editName.trim(),
-        email: editEmail.trim(),
         role: editRole,
         storeId: editStoreId,
       };
-      if (editRole !== ADMIN_ROLE_ID) data.maxDevices = editMaxDevices ? Number(editMaxDevices) : null;
-      if (editPassword) data.password = editPassword;
+      if (!platform) {
+        data.email = editEmail.trim();
+        if (editRole !== ADMIN_ROLE_ID) data.maxDevices = editMaxDevices ? Number(editMaxDevices) : null;
+        if (editPassword) data.password = editPassword;
+      }
       const updated = await authService.updateUser(id, data);
       setUsers(prev => prev.map(u => u.id === id ? updated : u));
       cancelEdit();
@@ -271,44 +329,14 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
                       <label htmlFor={`um-edit-name-${u.id}`} className="neu-label">Name</label>
                       <input id={`um-edit-name-${u.id}`} type="text" value={editName} onChange={e => setEditName(e.target.value)} className="neu-field" />
                     </div>
-                    <div>
-                      <label htmlFor={`um-edit-email-${u.id}`} className="neu-label">Email</label>
-                      <input id={`um-edit-email-${u.id}`} type="email" value={editEmail} onChange={e => setEditEmail(e.target.value)} className="neu-field" />
-                    </div>
-                    <div>
-                      <label htmlFor={`um-edit-pw-${u.id}`} className="neu-label">New password</label>
-                      <input id={`um-edit-pw-${u.id}`} type="password" autoComplete="new-password" value={editPassword} onChange={e => setEditPassword(e.target.value)} placeholder="Leave blank to keep" className="neu-field" />
-                    </div>
+                    <AccountFields platform={platform} user={u} email={editEmail} onEmail={setEditEmail} password={editPassword} onPassword={setEditPassword} />
                     <div>
                       <label htmlFor={`um-edit-role-${u.id}`} className="neu-label">Role</label>
                       <RoleSelect id={`um-edit-role-${u.id}`} value={editRole} roles={roles} onChange={setEditRole} />
                     </div>
-                    {editRole !== ADMIN_ROLE_ID ? (
-                      <div>
-                        <label htmlFor={`um-edit-devices-${u.id}`} className="neu-label">Max devices signed in</label>
-                        <select
-                          id={`um-edit-devices-${u.id}`}
-                          value={editMaxDevices}
-                          onChange={e => setEditMaxDevices(e.target.value)}
-                          className="neu-field"
-                        >
-                          <option value="">Default ({DEFAULT_MAX_DEVICES})</option>
-                          {Array.from({ length: 10 }, (_, i) => i + 1).map(n => (
-                            <option key={n} value={String(n)}>{n} {n === 1 ? 'device' : 'devices'}</option>
-                          ))}
-                        </select>
-                        <p className="text-[11px] text-[var(--neu-text-dim)] mt-1.5 leading-relaxed">
-                          Signing in on one more device signs out the one used longest ago.
-                        </p>
-                      </div>
-                    ) : (
-                      <p className="text-[11px] text-[var(--neu-text-dim)]">Admins can sign in on any number of devices.</p>
-                    )}
-                    {u.devices && (
-                      <div>
-                        <p className="neu-label">Signed in on {deviceCountText(u.devices.length, u.deviceLimit)}</p>
-                        <AdminDeviceControls user={u} onDevicesChanged={devices => setDevicesFor(u.id, devices)} />
-                      </div>
+                    {!platform && (
+                      <DeviceSettings user={u} role={editRole} maxDevices={editMaxDevices} onMaxDevices={setEditMaxDevices}
+                        onDevicesChanged={devices => setDevicesFor(u.id, devices)} />
                     )}
                     {stores.length > 0 && (
                       <div>
@@ -336,7 +364,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
                     </div>
                     {u.id !== currentUserId && (
                       <Button type="button" variant="danger" block onClick={() => setDeleteTarget(u)} disabled={removingId === u.id} icon={<Trash2 size={13} />}>
-                        Delete user
+                        {deleteLabel}
                       </Button>
                     )}
                   </div>
@@ -356,7 +384,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
                         )}
                       </p>
                       <p className="text-[11px] text-[var(--neu-text-dim)] truncate">{u.email}</p>
-                      {u.devices && (
+                      {!platform && u.devices && (
                         <button
                           type="button"
                           onClick={() => setDevicesOpenId(id => (id === u.id ? null : u.id))}
@@ -397,7 +425,8 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
         )}
       </section>
 
-      {/* Add user */}
+      {/* Add user (the original sign-in) or invite (a workspace) */}
+      {platform ? <InvitePanel roles={roles} RoleSelect={RoleSelect} /> : (
       <section className="lg:sticky lg:top-0">
         <h3 className="neu-label px-1">Add user</h3>
         <form onSubmit={handleAdd} className="neu-card p-4 space-y-4">
@@ -455,12 +484,13 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
           </Button>
         </form>
       </section>
+      )}
 
       <TypeDeleteDialog
         isOpen={!!deleteTarget}
         title="Remove user"
         itemName={deleteTarget?.name || ''}
-        message="their account and login access are archived for admin review"
+        message={platform ? 'they lose access to this workspace; their own account stays theirs' : 'their account and login access are archived for admin review'}
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => {
           if (deleteTarget) handleRemove(deleteTarget.id);

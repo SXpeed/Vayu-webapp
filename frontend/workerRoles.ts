@@ -40,6 +40,14 @@ const sessionMemo = new WeakMap<Request, Promise<SessionData | null>>();
  * login, so a demoted admin kept admin rights until the session expired. A
  * deleted user's sessions stop working at once for the same reason.
  */
+/**
+ * Sets this request's session up front: requests for an organization are
+ * signed in with a platform account (frontend/orgApp.ts), not a bearer token.
+ */
+export function primeSession(request: Request, session: SessionData | null): void {
+  sessionMemo.set(request, Promise.resolve(session));
+}
+
 export function getSession(request: Request, kv: KVNamespace): Promise<SessionData | null> {
   let pending = sessionMemo.get(request);
   if (!pending) {

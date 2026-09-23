@@ -46,12 +46,16 @@
     "bindings": [
       { "name": "SYNC_HUB", "class_name": "SyncHub" },
       // One object (with its own SQLite database) per organization.
-      { "name": "ORG_STORE", "class_name": "OrgStore" }
+      { "name": "ORG_STORE", "class_name": "OrgStore" },
+      // Each organization's app database: the original app's tables, one
+      // SQLite database per organization (frontend/orgStorage.ts).
+      { "name": "ORG_APP_DB", "class_name": "OrgAppDb" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["SyncHub"] },
-    { "tag": "v2", "new_sqlite_classes": ["OrgStore"] }
+    { "tag": "v2", "new_sqlite_classes": ["OrgStore"] },
+    { "tag": "v3", "new_sqlite_classes": ["OrgAppDb"] }
   ],
   "analytics_engine_datasets": [{ "binding": "ANALYTICS" }],
   // Cloudflare Email Service: sign-up confirmations, password resets,

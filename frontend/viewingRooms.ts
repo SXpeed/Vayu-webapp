@@ -19,6 +19,7 @@
 //    passcode replaces grant_key, which cancels every pass issued before.
 //
 // Pure helpers here; the route handlers live in worker.ts.
+import { fileKeyFromUrl } from './workerEnv';
 
 export const PASS_TTL_MS = 6 * 60 * 60 * 1000;
 export const MAX_ROOM_ARTWORKS = 60;
@@ -111,10 +112,10 @@ export function roomStatus(row: { is_active: number; expires_at: number }, now =
   return row.expires_at <= now ? 'expired' : 'active';
 }
 
-/** R2 key behind an /api/files/ URL, or null for anything else. */
+/** R2 key behind a file URL (either form), or null for anything else. */
 export function fileKeyOf(url: string): string | null {
-  if (typeof url !== 'string' || !url.startsWith('/api/files/')) return null;
-  const key = decodeURIComponent(url.slice('/api/files/'.length));
+  if (typeof url !== 'string') return null;
+  const key = fileKeyFromUrl(url);
   return key && !key.includes('..') ? key : null;
 }
 
@@ -158,8 +159,9 @@ function availabilityOf(status: string | undefined): ClientArtwork['availability
 export function clientArtwork(art: {
   id: string; title: string; artist?: string; artworkYear?: string; medium?: string; dimensions?: string;
   description?: string; status?: string; price?: number; plusGst?: boolean; imageUrls?: string[];
-}, token: string, pass: string, showPrices: boolean): ClientArtwork {
-  const imageUrl = (key: string) => `/api/viewing/${token}/image?k=${encodeURIComponent(key)}&p=${encodeURIComponent(pass)}`;
+}, token: string, pass: string, showPrices: boolean, apiBase = '/api'): ClientArtwork {
+  // apiBase: '/api', or '/api/o/<id>' for a room in an organization's own workspace.
+  const imageUrl = (key: string) => `${apiBase}/viewing/${token}/image?k=${encodeURIComponent(key)}&p=${encodeURIComponent(pass)}`;
   const images = (art.imageUrls ?? []).map(fileKeyOf).filter((k): k is string => !!k)
     .map(key => ({ full: imageUrl(key), thumb: imageUrl(`${key}__thumb`) }));
   const availability = availabilityOf(art.status);

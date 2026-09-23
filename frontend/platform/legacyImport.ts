@@ -36,13 +36,20 @@ export interface ImportReport {
   warnings: string[];
 }
 
-interface LegacyUser {
+export interface LegacyUser {
   id: string;
   name?: string;
   email?: string;
   role?: string;
+  /** The original app stores its PBKDF2 hash here. */
+  hashedPassword?: string;
   password?: string;
   passwordHash?: string;
+}
+
+/** The stored password hash of an original-app user, whichever field holds it. */
+export function legacyPasswordHash(user: LegacyUser): string | undefined {
+  return user.hashedPassword || user.password || user.passwordHash || undefined;
 }
 
 async function tableCount(db: D1Database, table: string): Promise<number | null> {
@@ -54,7 +61,7 @@ async function tableCount(db: D1Database, table: string): Promise<number | null>
   }
 }
 
-async function readLegacyUsers(env: Env): Promise<LegacyUser[]> {
+export async function readLegacyUsers(env: Env): Promise<LegacyUser[]> {
   const users: LegacyUser[] = [];
   let cursor: string | undefined;
   do {
@@ -158,7 +165,7 @@ export async function importLegacyWorkspace(
           db.prepare('INSERT OR IGNORE INTO "user" (id, name, email, emailVerified, createdAt, updatedAt, twoFactorEnabled) VALUES (?, ?, ?, 0, ?, ?, 0)')
             .bind(user.id, user.name?.slice(0, 120) || email, email, nowIso, nowIso),
         );
-        const hash = user.password ?? user.passwordHash;
+        const hash = legacyPasswordHash(user);
         if (hash) {
           statements.push(
             db.prepare("INSERT OR IGNORE INTO account (id, accountId, providerId, userId, password, createdAt, updatedAt) VALUES (?, ?, 'credential', ?, ?, ?, ?)")

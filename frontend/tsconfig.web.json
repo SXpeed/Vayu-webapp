@@ -38,6 +38,10 @@
     "viewingRooms.ts",
     "fileAuth.ts",
     "deviceSessions.ts",
+    "orgApp.ts",
+    "orgAppDb.ts",
+    "orgStorage.ts",
+    "orgTeam.ts",
     "dist",
     "node_modules",
     ".wrangler"

@@ -1,10 +1,16 @@
+import { apiBase, isPlatformSession } from './workspace';
+
 const TOKEN_KEY = 'vayu_token';
 
-export function authHeaders(): Record<string, string> {
+/** Only the original sign-in sends a token; a platform sign-in is a cookie. */
+export function tokenHeader(): Record<string, string> {
+    if (isPlatformSession()) return {};
     const token = localStorage.getItem(TOKEN_KEY);
-    const base: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) base['Authorization'] = `Bearer ${token}`;
-    return base;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+export function authHeaders(): Record<string, string> {
+    return { 'Content-Type': 'application/json', ...tokenHeader() };
 }
 
 /** Fired on window when the server says this device was signed out. */
@@ -35,7 +41,10 @@ export async function parseApiResponse<T>(res: Response): Promise<T> {
         if (res.status === 401 && reason && typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent(SIGNED_OUT_EVENT, { detail: { reason } }));
         }
-        throw new Error((data as { error?: string } | null)?.error ?? `Request failed (${res.status})`);
+        const error = new Error((data as { error?: string } | null)?.error ?? `Request failed (${res.status})`) as Error & { status?: number; code?: string };
+        error.status = res.status;
+        error.code = (data as { code?: string } | null)?.code;
+        throw error;
     }
     return data as T;
 }
@@ -53,7 +62,7 @@ export async function apiCall<T>(path: string, options?: RequestInit): Promise<T
     const isRead = !options?.method || options.method.toUpperCase() === 'GET';
     let res: Response;
     try {
-        res = await fetch(`/api${path}`, {
+        res = await fetch(`${apiBase()}${path}`, {
             ...options,
             signal: options?.signal ?? (isRead ? AbortSignal.timeout(READ_TIMEOUT_MS) : undefined),
             headers: { ...authHeaders(), ...options?.headers },

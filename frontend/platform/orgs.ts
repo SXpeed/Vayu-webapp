@@ -145,7 +145,7 @@ export async function listOrganizations(db: D1Database, params: URLSearchParams)
 
 export async function getOrganization(db: D1Database, orgId: string) {
   const org = await db.prepare(
-    'SELECT id, slug, name, business_type, status, country, timezone, is_demo, created_at, updated_at FROM organizations WHERE id = ?',
+    'SELECT id, slug, name, business_type, status, country, timezone, is_demo, app_storage, created_at, updated_at FROM organizations WHERE id = ?',
   ).bind(orgId).first();
   if (!org) throw new OrgError(404, 'org_not_found', 'Organization not found.');
   const { results: members } = await db.prepare(

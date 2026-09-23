@@ -1,3 +1,4 @@
+import { currentWorkspace } from './workspace';
 import { Artwork, CalendarEvent, Catalog, Collection, Contact, Invoice, Inquiry, Conversation, Message, InquiryMessage, UserProfile } from '../types';
 
 const STORAGE_KEYS = {
@@ -30,13 +31,20 @@ const MOCK_IDS_TO_CLEAR = {
   messages: ['msg_general_1', 'msg_1', 'msg_2', 'msg_3', 'msg_4', 'msg_5'],
 };
 
+// Each workspace keeps its own offline copy, so two organizations used on
+// one device never mix. The original app's copy keeps its original keys.
+function scoped(key: string): string {
+  const workspace = currentWorkspace();
+  return workspace ? `${key}@${workspace.id}` : key;
+}
+
 function getArray<T>(key: string): T[] {
-  const raw = localStorage.getItem(key);
+  const raw = localStorage.getItem(scoped(key));
   return raw ? JSON.parse(raw) : [];
 }
 
 function setArray<T>(key: string, data: T[]): void {
-  localStorage.setItem(key, JSON.stringify(data));
+  localStorage.setItem(scoped(key), JSON.stringify(data));
 }
 
 function upsertById<T extends { id: string }>(arr: T[], item: T): T[] {
@@ -51,6 +59,15 @@ export type SavedList = 'artworks' | 'catalogs' | 'collections' | 'inquiries' | 
   | 'messages' | 'inquiryMessages' | 'events' | 'contacts';
 
 export const db = {
+  /** Removes this workspace's offline copy from the device (signing out). */
+  clearWorkspaceCopy(): void {
+    const workspace = currentWorkspace();
+    if (!workspace) return;
+    for (const key of Object.values(STORAGE_KEYS)) {
+      try { localStorage.removeItem(`${key}@${workspace.id}`); } catch { /* unavailable */ }
+    }
+  },
+
   /**
    * Replace a saved list with the server's copy. Only artworks used to be
    * mirrored, so e.g. the saved inquiries could be months old — and a

@@ -15,6 +15,9 @@
 //   POST            /api/v2/admin/orgs/:id/payments/razorpay/verify
 //   POST            /api/v2/admin/users                      create a sign-in account
 //   GET|POST        /api/v2/admin/orgs/:id/import-legacy     move the original app in
+//   POST            /api/v2/admin/orgs/:id/app-storage       use the original app's data (or its own)
+//   POST            /api/v2/admin/orgs/:id/import-original-people  the original app's people join it
+//   GET|POST        /api/v2/invitations/:token[/accept|/create-account]  the join page
 //   GET             /api/v2/admin/plans/schema               every limit/feature a plan can set
 //   GET|POST        /api/v2/admin/plans                      plans and versions
 //   GET|PATCH       /api/v2/admin/plans/:id
@@ -61,10 +64,12 @@ import {
 import { SecretsUnavailable } from './secrets';
 import { OrgAccessError, handleOrgRequest, listMyOrganizations, resolveOrgContext } from './orgApi';
 
-import { fail, reply } from './http';
+import { fail, jsonBody, reply } from './http';
 import { handleCenterRoute } from './centerRoutes';
 import { handleApplyRoute } from './applyRoutes';
 import { deliverOutbox } from './notify';
+import { acceptInvitation, createAccountFromInvitation, describeInvitation } from './invitations';
+import { importOriginalPeople, setAppStorage } from './originalApp';
 import { emailConfigured } from './email';
 
 interface AdminContext {
@@ -308,6 +313,14 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
         return reply(await importLegacyWorkspace(env, db, orgId, b, actor));
       } else if (rest === '/payments/razorpay/verify' && method === 'POST') {
         return reply(await verifyRazorpay(env, db, orgId, actor));
+      } else if (rest === '/app-storage' && method === 'POST') {
+        // Which data this organization works on in the app (originalApp.ts).
+        if (!fresh) return needFresh();
+        return reply(await setAppStorage(db, orgId, await body(), actor));
+      } else if (rest === '/import-original-people' && method === 'POST') {
+        const b = await body();
+        if (b.dryRun === false && !fresh) return needFresh();
+        return reply(await importOriginalPeople(env, db, orgId, b, actor));
       }
     } catch (e) {
       if (e instanceof OrgError) return fail(e.status, e.code, e.message);
@@ -337,6 +350,28 @@ export async function handlePlatformRequest(request: Request, env: Env, hooks: P
     hooks.waitUntil(deliverOutbox(env, db).catch(e => console.error('outbox delivery failed', e)));
   }
   return res;
+}
+
+/** Invitations: the join page (app /join/<token>) reads and accepts them. */
+async function handleInvitationRoute(env: Env, db: D1Database, auth: PlatformAuth, request: Request, path: string): Promise<Response | null> {
+  const invite = /^\/invitations\/([0-9a-f]{64})(\/accept|\/create-account)?$/.exec(path);
+  if (!invite) return null;
+  const [, token, action] = invite;
+  try {
+    if (!action && request.method === 'GET') return reply(await describeInvitation(db, token));
+    if (action === '/accept' && request.method === 'POST') {
+      const session = await auth.api.getSession({ headers: request.headers });
+      if (!session) return fail(401, 'unauthenticated', 'Sign in first.');
+      return reply(await acceptInvitation(env, db, token, session.user));
+    }
+    if (action === '/create-account' && request.method === 'POST') {
+      return reply(await createAccountFromInvitation(env, db, token, await jsonBody(request)));
+    }
+  } catch (e) {
+    if (e instanceof OrgError) return fail(e.status, e.code, e.message);
+    throw e;
+  }
+  return fail(405, 'method_not_allowed', 'Not allowed');
 }
 
 async function routePlatformRequest(request: Request, env: Env, hooks: PlatformHooks): Promise<Response | null> {
@@ -401,6 +436,9 @@ async function routePlatformRequest(request: Request, env: Env, hooks: PlatformH
 
     const apply = await handleApplyRoute(db, auth, request, path, { requireVerifiedEmail: emailConfigured(env) });
     if (apply) return apply;
+
+    const invitation = await handleInvitationRoute(env, db, auth, request, path);
+    if (invitation) return invitation;
 
     if (path === '/me/orgs' && request.method === 'GET') {
       try {

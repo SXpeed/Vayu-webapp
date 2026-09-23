@@ -35,11 +35,35 @@ export interface ActivityLog {
   timestamp: number;
 }
 
+export interface Invitation {
+  id: string;
+  email: string;
+  appRole: string;
+  status: 'pending' | 'accepted' | 'revoked' | 'expired';
+  invitedBy?: string | null;
+  createdAt: number;
+  expiresAt: number;
+}
+
 export interface PresenceMap {
   [userId: string]: { isOnline: boolean; lastSeen: number };
 }
 
 import { apiCall as call, authHeaders } from './apiClient';
+import { db } from './db';
+import { apiBase, authClient, isPlatformSession, setWorkspace, type Workspace } from './workspace';
+
+type DeviceInfo = { id: string; label: string; createdAt: number; lastUsedAt: number; current?: boolean };
+
+const BROWSERS: [RegExp, string][] = [[/Edg\//, 'Edge'], [/OPR\//, 'Opera'], [/Chrome\//, 'Chrome'], [/Firefox\//, 'Firefox'], [/Safari\//, 'Safari']];
+const SYSTEMS: [RegExp, string][] = [[/iPhone|iPad/, 'iPhone or iPad'], [/Android/, 'Android'], [/Windows/, 'Windows'], [/Mac OS X/, 'Mac'], [/Linux/, 'Linux']];
+
+/** "Chrome on Windows" from a browser's user agent string. */
+function deviceLabel(userAgent: string | null | undefined): string {
+  const ua = userAgent ?? '';
+  const pick = (list: [RegExp, string][], fallback: string) => list.find(([pattern]) => pattern.test(ua))?.[1] ?? fallback;
+  return `${pick(BROWSERS, 'A browser')} on ${pick(SYSTEMS, 'an unknown system')}`;
+}
 
 const TOKEN_KEY = 'vayu_token';
 
@@ -96,6 +120,14 @@ export const authService = {
   },
 
   async logout(): Promise<void> {
+    if (isPlatformSession()) {
+      // Close this workspace's live connection and file access, remove its
+      // offline copy from the device, then end the platform sign-in.
+      try { await fetch(`${apiBase()}/auth/logout`, { method: 'POST', headers: authHeaders() }); } catch { /* signing out anyway */ }
+      db.clearWorkspaceCopy();
+      try { await authClient.signOut(); } finally { setWorkspace(null); }
+      return;
+    }
     try {
       await fetch('/api/auth/logout', { method: 'POST', headers: authHeaders() });
     } finally {
@@ -103,12 +135,40 @@ export const authService = {
     }
   },
 
+  /**
+   * Opens a workspace with the platform sign-in: the person's record there,
+   * or an error saying why not (not a member any more, paused, plan not active).
+   */
+  async enterWorkspace(workspace: Workspace): Promise<AuthUser> {
+    setWorkspace(workspace);
+    try {
+      return await call<AuthUser>('/auth/me');
+    } catch (e) {
+      setWorkspace(null);
+      const status = (e as { status?: number }).status;
+      if (status === 404) throw new Error(`You're no longer a member of ${workspace.name}.`);
+      throw e;
+    }
+  },
+
   /** Drop this device's token without calling the server (already signed out there). */
   clearLocalSession(): void {
     localStorage.removeItem(TOKEN_KEY);
+    setWorkspace(null);
   },
 
   async getMe(): Promise<AuthUser | null> {
+    if (isPlatformSession()) {
+      try {
+        return await call<AuthUser>('/auth/me');
+      } catch (err) {
+        // Signed out, or no longer a member: back to sign-in. Anything else
+        // (offline, a blip) keeps the workspace for the next try.
+        const status = (err as { status?: number }).status;
+        if (status === 401 || status === 404) setWorkspace(null);
+        return null;
+      }
+    }
     if (!getToken()) return null;
     try {
       return await call<AuthUser>('/auth/me');
@@ -125,12 +185,29 @@ export const authService = {
   },
 
   /** Devices the signed-in person is signed in on, and their limit (null = unlimited). */
-  async getMyDevices(): Promise<{ limit: number | null; devices: { id: string; label: string; createdAt: number; lastUsedAt: number; current?: boolean }[] }> {
+  async getMyDevices(): Promise<{ limit: number | null; devices: DeviceInfo[] }> {
+    if (isPlatformSession()) {
+      // Every device signed in to this account (website, app, control centre).
+      const [{ data: sessions }, { data: current }] = await Promise.all([authClient.listSessions(), authClient.getSession()]);
+      const devices = (sessions ?? []).map(s => ({
+        id: s.token,
+        label: deviceLabel(s.userAgent),
+        createdAt: new Date(s.createdAt).getTime(),
+        lastUsedAt: new Date(s.updatedAt).getTime(),
+        current: s.token === current?.session.token,
+      }));
+      return { limit: null, devices };
+    }
     return call('/auth/devices');
   },
 
   /** Sign out one of your other devices. */
   async signOutDevice(id: string): Promise<void> {
+    if (isPlatformSession()) {
+      const { error } = await authClient.revokeSession({ token: id });
+      if (error) throw new Error(error.message || 'Could not sign that device out.');
+      return;
+    }
     await call('/auth/devices/signout', { method: 'POST', body: JSON.stringify({ id }) });
   },
 
@@ -144,7 +221,30 @@ export const authService = {
 
   /** Sign out every device except this one; returns how many. */
   async signOutOtherDevices(): Promise<number> {
+    if (isPlatformSession()) {
+      const before = (await authClient.listSessions()).data?.length ?? 1;
+      const { error } = await authClient.revokeOtherSessions();
+      if (error) throw new Error(error.message || 'Could not sign the other devices out.');
+      return Math.max(before - 1, 0);
+    }
     return (await call<{ signedOut: number }>('/auth/devices/signout-others', { method: 'POST' })).signedOut;
+  },
+
+  // ── Team invitations (platform sign-in) ──
+  async getInvitations(): Promise<Invitation[]> {
+    return call<Invitation[]>('/team/invitations');
+  },
+
+  async invite(email: string, role: string): Promise<{ invitation: Invitation; emailSent: boolean; link?: string }> {
+    const result = await call<{ invitation: Invitation; emailSent: boolean; link?: string }>('/team/invitations', {
+      method: 'POST', body: JSON.stringify({ email, role }),
+    });
+    broadcastSync();
+    return result;
+  },
+
+  async withdrawInvitation(id: string): Promise<void> {
+    await call(`/team/invitations/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },
 
   async getUsers(): Promise<AuthUser[]> {
