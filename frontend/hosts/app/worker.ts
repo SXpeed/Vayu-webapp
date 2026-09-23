@@ -11,6 +11,8 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
     if (isApi(path)) return toApi(request, env);
+    // A client's private viewing room: its own small page, not the app.
+    if (path.startsWith('/room/')) return env.ASSETS.fetch(new Request(new URL('/room', url), request));
     // Old links from when every page was served on every address.
     if (isAdminPath(path)) return redirect(ADMIN_ORIGIN, url, '/');
     const site = sitePath(path);

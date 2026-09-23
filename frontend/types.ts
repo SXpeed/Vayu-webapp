@@ -100,7 +100,8 @@ export interface Inquiry {
     customerAddress?: string;
     artworkIds: string[];
     notes: string;
-    source: 'Walk-in' | 'Phone' | 'Email' | 'Social Media' | 'Referral' | 'Other';
+    /** 'Private room': sent by a client from a private viewing room. */
+    source: 'Walk-in' | 'Phone' | 'Email' | 'Social Media' | 'Referral' | 'Private room' | 'Other';
     status: 'New' | 'Contacted' | 'Interested' | 'Converted' | 'Closed';
     catalogShared: boolean;
     date: number;

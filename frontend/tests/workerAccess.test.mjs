@@ -7,6 +7,7 @@ import { load } from './helpers/load.mjs';
 const tickets = await load('realtimeTickets.ts');
 const access = await load('entityAccess.ts');
 const rooms = await load('privateRooms.ts');
+const viewing = await load('viewingRooms.ts');
 const perms = await load('permissions.ts');
 const { cursorExpired, ackStatus } = await load('deltaSync.ts');
 const { normalizeRoute } = await load('rows.ts');
@@ -92,6 +93,48 @@ test('private rooms: who may use and manage them', () => {
     assert.equal(manage('adminOut', true, room), false);
     assert.equal(manage('a', false, chat), true, 'ordinary chats: any member, as before');
     assert.deepEqual(rooms.roomAccessOf({ participant_ids: '["x"]' }), { members: ['x'], isPrivate: false, createdBy: null }, 'rows from before the new columns');
+});
+
+test('viewing rooms: tokens, passcodes and passes', async () => {
+    const token = viewing.newRoomToken();
+    assert.match(token, viewing.ROOM_TOKEN_RE);
+    assert.notEqual(token, viewing.newRoomToken());
+    for (let i = 0; i < 50; i++) assert.match(viewing.newPasscode(), /^\d{6}$/);
+
+    const salt = viewing.newSecretHex(16);
+    const row = { passcode_salt: salt, passcode_hash: await viewing.hashPasscode('123456', salt) };
+    assert.equal(await viewing.passcodeMatches('123456', row), true);
+    assert.equal(await viewing.passcodeMatches('123457', row), false);
+    assert.equal(await viewing.passcodeMatches('12345', row), false, 'must be six digits');
+
+    const key = viewing.newSecretHex(32);
+    const now = 1_800_000_000_000;
+    const { pass } = await viewing.issuePass(key, token, now);
+    assert.equal(await viewing.passValid(pass, key, token, now + 1000), true);
+    assert.equal(await viewing.passValid(pass, key, token, now + viewing.PASS_TTL_MS + 1), false, 'expires');
+    assert.equal(await viewing.passValid(pass, viewing.newSecretHex(32), token, now), false, 'a new grant key cancels it');
+    assert.equal(await viewing.passValid(pass, key, viewing.newRoomToken(), now), false, 'bound to its room');
+    const [exp, mac] = pass.split('.');
+    assert.equal(await viewing.passValid(`${Number(exp) + 1000}.${mac}`, key, token, now), false, 'expiry cannot be stretched');
+    assert.equal(await viewing.passValid(null, key, token, now), false);
+});
+
+test('viewing rooms: the client sees only what the room shares', () => {
+    const art = { id: 'a1', title: 'Monsoon', customId: 'VD-1', location: 'Store B', status: 'Available', price: 1000, plusGst: true,
+        imageUrls: ['/api/files/uploads/u1/x.png', 'https://elsewhere.example/y.png'] };
+    const shown = viewing.clientArtwork(art, 'T'.repeat(43), '1.abc', true);
+    assert.equal(shown.price, 1000);
+    assert.equal(shown.availability, 'available');
+    assert.equal(shown.images.length, 1, 'only stored photos');
+    assert.match(shown.images[0].full, /^\/api\/viewing\/T{43}\/image\?k=uploads%2Fu1%2Fx\.png&p=/);
+    for (const internal of ['customId', 'location', 'status', 'imageUrls']) assert.ok(!(internal in shown), internal);
+    assert.ok(!('price' in viewing.clientArtwork(art, 't', 'p', false)), 'price on request');
+    assert.ok(!('price' in viewing.clientArtwork({ ...art, status: 'Sold' }, 't', 'p', true)), 'no price for sold pieces');
+    assert.equal(viewing.clientArtwork({ ...art, status: 'Reserved' }, 't', 'p', true).availability, 'reserved');
+    assert.deepEqual([...viewing.roomImageKeys([art])], ['uploads/u1/x.png', 'uploads/u1/x.png__thumb']);
+    assert.equal(viewing.fileKeyOf('/api/files/../secret'), null);
+    for (const ok of ['a@b.co', 'first.last@studio.example.in']) assert.equal(viewing.looksLikeEmail(ok), true, ok);
+    for (const bad of ['', 'no-at', '@b.co', 'a@b', 'a@b.', 'a@@b.co', 'a b@c.co', 'a@.co']) assert.equal(viewing.looksLikeEmail(bad), false, bad);
 });
 
 test('cursor expiry: pruned, ahead of the log, and the empty log', () => {

@@ -16,6 +16,7 @@
     // Everything else is served straight from the app's files.
     "run_worker_first": [
       "/api/*",
+      "/room/*",
       "/admin", "/admin/*", "/admin.html",
       "/welcome", "/welcome.html", "/signup", "/signup.html", "/legal", "/legal.html"
     ]

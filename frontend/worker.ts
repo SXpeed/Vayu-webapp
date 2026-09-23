@@ -32,6 +32,11 @@ import { APP_ORIGIN } from './brand';
 import {
   conversationScope, ensurePrivateRoomColumns, mayManageRoom, mayUseConversation, roomAccessOf, type RoomAccess,
 } from './privateRooms';
+import {
+  EXPIRY_DAY_CHOICES, MAX_ROOM_ARTWORKS, ROOM_TOKEN_RE, VIEWING_ROOMS_TABLE_SQL, cleanIds, cleanText,
+  clientArtwork, hashPasscode, issuePass, newPasscode, newRoomToken, newSecretHex, passValid, passcodeMatches,
+  looksLikeEmail, roomImageKeys, roomStatus, staffRoom,
+} from './viewingRooms';
 import { handlePlatformRequest } from './platform/routes';
 import { OrgStore } from './platform/orgStore';
 import {
@@ -228,6 +233,9 @@ function accessRule(path: string, method: string): AccessRule | null {
   }
   if (under('/collections')) return { section: 'collections', level };
   if (under('/catalogs')) return { section: 'catalogs', level };
+  // Private viewing rooms are shared catalogs. (/viewing/:token is the
+  // client's side: no account, checked by its own handlers.)
+  if (under('/viewing-rooms')) return { section: 'catalogs', level };
   if (under('/contacts')) return { section: 'contacts', level, readableBy: read ? ['inquiries', 'invoices', 'payments'] : undefined };
   if (under('/inquiries') || under('/inquiry-messages')) return { section: 'inquiries', level };
   if (under('/invoices')) return { section: 'invoices', level };
@@ -3287,12 +3295,349 @@ async function handleInvoicesDelete(ctx: Ctx): Promise<Response> {
   return json({ success: true });
 }
 
+// ── Private viewing rooms ───────────────────────────────────────────────────
+// A curated set of artworks shared with one client on a secret link with a
+// passcode and an expiry (viewingRooms.ts has the security model). Staff
+// routes sit under the Catalogs permission (accessRule); the client's routes
+// under /viewing/:token need no account and check the room themselves.
+
+function ensureViewingRoomsTable(db: D1Database): Promise<void> {
+  return runSetupOnce('viewingRoomsTable', async () => {
+    await db.prepare(VIEWING_ROOMS_TABLE_SQL).run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_viewing_rooms_created ON viewing_rooms(created_at DESC)').run();
+  });
+}
+
+/** Artwork rows for these ids, in the order given; missing (deleted) ones are skipped. */
+async function artworksByIds(db: D1Database, ids: string[]): Promise<ReturnType<typeof rowToArtwork>[]> {
+  if (ids.length === 0) return [];
+  await ensureColumns(db, 'artworks');
+  const found = new Map<string, ReturnType<typeof rowToArtwork>>();
+  for (let i = 0; i < ids.length; i += 90) {
+    const chunk = ids.slice(i, i + 90);
+    const res = await db.prepare(`SELECT * FROM artworks WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).all();
+    for (const row of res.results || []) found.set(String(row.id), rowToArtwork(row));
+  }
+  return ids.map(id => found.get(id)).filter((a): a is ReturnType<typeof rowToArtwork> => !!a);
+}
+
+interface RoomInput {
+  name: string; clientName: string; clientPhone: string; clientEmail: string; message: string;
+  artworkIds: string[]; showPrices: boolean;
+}
+
+/** Validates the staff form; returns an error message or the cleaned input. */
+async function readRoomInput(db: D1Database, body: Record<string, unknown>): Promise<RoomInput | string> {
+  const input: RoomInput = {
+    name: cleanText(body.name, 120),
+    clientName: cleanText(body.clientName, 120),
+    clientPhone: cleanText(body.clientPhone, 40),
+    clientEmail: cleanText(body.clientEmail, 200),
+    message: cleanText(body.message, 2000),
+    artworkIds: cleanIds(body.artworkIds),
+    showPrices: body.showPrices === true,
+  };
+  if (!input.name) return 'Give the room a name';
+  if (input.clientEmail && !looksLikeEmail(input.clientEmail)) return 'That email address does not look right';
+  if (input.artworkIds.length === 0) return 'Choose at least one artwork';
+  if (input.artworkIds.length > MAX_ROOM_ARTWORKS) return `A room can hold up to ${MAX_ROOM_ARTWORKS} artworks`;
+  const existing = await artworksByIds(db, input.artworkIds);
+  if (existing.length !== input.artworkIds.length) return 'Some of those artworks no longer exist';
+  return input;
+}
+
+function expiryFrom(days: unknown, now = Date.now()): number | null {
+  const n = Number(days);
+  return (EXPIRY_DAY_CHOICES as readonly number[]).includes(n) ? now + n * 86_400_000 : null;
+}
+
+/** A fresh passcode and the columns that store it (salt, hash, and a new grant key that cancels old passes). */
+async function passcodeColumns(): Promise<{ passcode: string; hash: string; salt: string; grantKey: string }> {
+  const passcode = newPasscode();
+  const salt = newSecretHex(16);
+  return { passcode, salt, hash: await hashPasscode(passcode, salt), grantKey: newSecretHex(32) };
+}
+
+async function handleViewingRoomsList(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  await ensureViewingRoomsTable(ctx.env.VAYU_DB);
+  const res = await ctx.env.VAYU_DB.prepare('SELECT * FROM viewing_rooms ORDER BY created_at DESC LIMIT 500').all();
+  return json((res.results || []).map(row => staffRoom(row)));
+}
+
+async function handleViewingRoomsCreate(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const db = ctx.env.VAYU_DB;
+  await ensureViewingRoomsTable(db);
+  const body = await ctx.request.json().catch(() => null) as Record<string, unknown> | null;
+  if (!body) return err('Send the room as JSON');
+  const input = await readRoomInput(db, body);
+  if (typeof input === 'string') return err(input);
+  const now = Date.now();
+  const expiresAt = expiryFrom(body.expiresInDays, now);
+  if (!expiresAt) return err(`Choose how long the link works: ${EXPIRY_DAY_CHOICES.join(', ')} days`);
+  const secret = await passcodeColumns();
+  const id = `vr_${crypto.randomUUID()}`;
+  const token = newRoomToken();
+  await db.prepare(
+    `INSERT INTO viewing_rooms (id, token, name, client_name, client_phone, client_email, message, artwork_ids,
+       show_prices, passcode_hash, passcode_salt, grant_key, expires_at, is_active, created_by, created_by_name, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+  ).bind(id, token, input.name, input.clientName, input.clientPhone, input.clientEmail, input.message,
+    JSON.stringify(input.artworkIds), input.showPrices ? 1 : 0, secret.hash, secret.salt, secret.grantKey,
+    expiresAt, session.userId, session.name, now, now).run();
+  logEntityChange(ctx, session, 'created', 'viewing_room', id,
+    `Created private room "${input.name}"${input.clientName ? ` for ${input.clientName}` : ''} (${input.artworkIds.length} artworks)`);
+  const row = await db.prepare('SELECT * FROM viewing_rooms WHERE id = ?').bind(id).first();
+  // The passcode is only ever shown now (and when a new one is made).
+  return json({ ...staffRoom(row!), passcode: secret.passcode }, 201);
+}
+
+async function handleViewingRoomsUpdate(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const db = ctx.env.VAYU_DB;
+  await ensureViewingRoomsTable(db);
+  const id = decodeURIComponent(ctx.path.slice('/viewing-rooms/'.length));
+  const row = await db.prepare('SELECT * FROM viewing_rooms WHERE id = ?').bind(id).first();
+  if (!row) return err('Private room not found', 404);
+  const body = await ctx.request.json().catch(() => null) as Record<string, unknown> | null;
+  if (!body) return err('Send the change as JSON');
+  const now = Date.now();
+  const sets: string[] = [];
+  const binds: unknown[] = [];
+  const changes: string[] = [];
+  if (body.details) {
+    const input = await readRoomInput(db, body.details as Record<string, unknown>);
+    if (typeof input === 'string') return err(input);
+    sets.push('name = ?', 'client_name = ?', 'client_phone = ?', 'client_email = ?', 'message = ?', 'artwork_ids = ?', 'show_prices = ?');
+    binds.push(input.name, input.clientName, input.clientPhone, input.clientEmail, input.message, JSON.stringify(input.artworkIds), input.showPrices ? 1 : 0);
+    changes.push('details');
+  }
+  if (typeof body.isActive === 'boolean') {
+    sets.push('is_active = ?');
+    binds.push(body.isActive ? 1 : 0);
+    changes.push(body.isActive ? 'switched on' : 'switched off');
+  }
+  if (body.expiresInDays !== undefined) {
+    const expiresAt = expiryFrom(body.expiresInDays, now);
+    if (!expiresAt) return err(`Choose how long the link works: ${EXPIRY_DAY_CHOICES.join(', ')} days`);
+    sets.push('expires_at = ?');
+    binds.push(expiresAt);
+    changes.push(`link valid ${body.expiresInDays} more days`);
+  }
+  let passcode: string | undefined;
+  if (body.newPasscode === true) {
+    const secret = await passcodeColumns();
+    passcode = secret.passcode;
+    sets.push('passcode_hash = ?', 'passcode_salt = ?', 'grant_key = ?');
+    binds.push(secret.hash, secret.salt, secret.grantKey);
+    changes.push('new passcode');
+  }
+  if (sets.length === 0) return err('Nothing to change');
+  sets.push('updated_at = ?');
+  binds.push(now, id);
+  await db.prepare(`UPDATE viewing_rooms SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+  logEntityChange(ctx, session, 'updated', 'viewing_room', id, `Private room "${String(row.name)}": ${changes.join(', ')}`);
+  const updated = await db.prepare('SELECT * FROM viewing_rooms WHERE id = ?').bind(id).first();
+  return json({ ...staffRoom(updated!), ...(passcode ? { passcode } : {}) });
+}
+
+async function handleViewingRoomsDelete(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const db = ctx.env.VAYU_DB;
+  await ensureViewingRoomsTable(db);
+  const id = decodeURIComponent(ctx.path.slice('/viewing-rooms/'.length));
+  const row = await db.prepare('SELECT name FROM viewing_rooms WHERE id = ?').bind(id).first<{ name: string }>();
+  if (!row) return err('Private room not found', 404);
+  await db.prepare('DELETE FROM viewing_rooms WHERE id = ?').bind(id).run();
+  logEntityChange(ctx, session, 'deleted', 'viewing_room', id, `Deleted private room "${row.name}"`);
+  return json({ success: true });
+}
+
+// ── The client's side (no account) ──
+
+const ROOM_UNAVAILABLE = 'This private room is no longer available. Please contact the gallery for a new link.';
+
+/** The room behind a link, when it exists and is on and unexpired. */
+async function openRoomByToken(ctx: Ctx, token: string): Promise<Record<string, unknown> | Response> {
+  if (!ROOM_TOKEN_RE.test(token)) return err(ROOM_UNAVAILABLE, 404);
+  await ensureViewingRoomsTable(ctx.env.VAYU_DB);
+  const row = await ctx.env.VAYU_DB.prepare('SELECT * FROM viewing_rooms WHERE token = ?').bind(token).first();
+  if (!row || roomStatus({ is_active: Number(row.is_active), expires_at: Number(row.expires_at) }) !== 'active') {
+    return err(ROOM_UNAVAILABLE, 404);
+  }
+  return row;
+}
+
+function viewingTokenOf(path: string, suffix: string): string {
+  return path.slice('/viewing/'.length, path.length - suffix.length);
+}
+
+/**
+ * POST /viewing/:token/open { passcode } | { pass } — the room and a (new)
+ * pass for its photos. Re-opening with a still-valid pass (a page reload)
+ * needs no passcode and is not rate limited; passcode tries are.
+ */
+async function handleViewingOpen(ctx: Ctx): Promise<Response> {
+  const token = viewingTokenOf(ctx.path, '/open');
+  const body = await ctx.request.json().catch(() => null) as { passcode?: unknown; pass?: unknown } | null;
+  const heldPass = typeof body?.pass === 'string' ? body.pass : null;
+  if (!heldPass) {
+    // Guessing: at most a few tries a minute per room and per address.
+    const ip = ctx.request.headers.get('cf-connecting-ip') ?? 'local';
+    if (!(await underLimit(ctx.env.LOGIN_EMAIL_LIMITER, `room:${token}`)) || !(await underLimit(ctx.env.LOGIN_IP_LIMITER, `room-ip:${ip}`))) {
+      return tooMany('Too many tries. Wait a minute and try again.');
+    }
+  }
+  const found = await openRoomByToken(ctx, token);
+  if (found instanceof Response) return found;
+  const row = found;
+  if (heldPass) {
+    if (!(await passValid(heldPass, String(row.grant_key), token))) return err('Enter the passcode again', 401);
+  } else {
+    const passcode = typeof body?.passcode === 'string' ? body.passcode.replace(/\s/g, '') : '';
+    if (!(await passcodeMatches(passcode, row as { passcode_hash: string; passcode_salt: string }))) {
+      return err("That passcode doesn't match. Check the message you received.", 403);
+    }
+  }
+  let artworkIds: string[] = [];
+  try { artworkIds = JSON.parse(String(row.artwork_ids)); } catch { /* malformed */ }
+  const artworks = await artworksByIds(ctx.env.VAYU_DB, artworkIds);
+  const { pass, expiresAt } = await issuePass(String(row.grant_key), token);
+  const showPrices = Number(row.show_prices) === 1;
+  ctx.execCtx.waitUntil(ctx.env.VAYU_DB.prepare(
+    'UPDATE viewing_rooms SET view_count = view_count + 1, last_viewed_at = ? WHERE id = ?',
+  ).bind(Date.now(), row.id).run().catch(() => { /* a missed view count is fine */ }));
+  const res = json({
+    room: {
+      name: String(row.name),
+      clientName: String(row.client_name ?? ''),
+      message: String(row.message ?? ''),
+      sharedBy: String(row.created_by_name ?? ''),
+      showPrices,
+      expiresAt: Number(row.expires_at),
+    },
+    artworks: artworks.map(art => clientArtwork(art, token, pass, showPrices)),
+    pass,
+    passExpiresAt: expiresAt,
+  });
+  res.headers.set('Cache-Control', 'no-store');
+  return res;
+}
+
+/** GET /viewing/:token/image?k=<R2 key>&p=<pass> — one of the room's own photos. */
+async function handleViewingImage(ctx: Ctx): Promise<Response> {
+  const token = viewingTokenOf(ctx.path, '/image');
+  const found = await openRoomByToken(ctx, token);
+  if (found instanceof Response) return found;
+  const row = found;
+  if (!(await passValid(ctx.url.searchParams.get('p'), String(row.grant_key), token))) return err('Open the room again', 401);
+  const key = ctx.url.searchParams.get('k') ?? '';
+  let artworkIds: string[] = [];
+  try { artworkIds = JSON.parse(String(row.artwork_ids)); } catch { /* malformed */ }
+  if (!roomImageKeys(await artworksByIds(ctx.env.VAYU_DB, artworkIds)).has(key)) return err('Not found', 404);
+  let obj = await ctx.env.VAYU_R2.get(key);
+  if (!obj && key.endsWith('__thumb')) obj = await ctx.env.VAYU_R2.get(key.slice(0, -'__thumb'.length));
+  if (!obj) return err('Not found', 404);
+  const how = delivery(obj.httpMetadata?.contentType);
+  // Photos only: anything else stays behind the staff app.
+  if (!how.contentType.startsWith('image/') || how.disposition !== 'inline') return err('Not found', 404);
+  const headers = new Headers();
+  headers.set('Content-Type', how.contentType);
+  headers.set('X-Content-Type-Options', 'nosniff');
+  if (how.csp) headers.set('Content-Security-Policy', how.csp);
+  headers.set('Cache-Control', 'private, max-age=3600');
+  return new Response(obj.body, { status: 200, headers });
+}
+
+/** POST /viewing/:token/interest — the client's "I'm interested", recorded as an inquiry. */
+async function handleViewingInterest(ctx: Ctx): Promise<Response> {
+  const token = viewingTokenOf(ctx.path, '/interest');
+  const ip = ctx.request.headers.get('cf-connecting-ip') ?? 'local';
+  if (!(await underLimit(ctx.env.LOGIN_IP_LIMITER, `room-interest:${ip}`))) {
+    return tooMany('Too many requests. Wait a minute and try again.');
+  }
+  const found = await openRoomByToken(ctx, token);
+  if (found instanceof Response) return found;
+  const row = found;
+  const body = await ctx.request.json().catch(() => null) as Record<string, unknown> | null;
+  if (!body || !(await passValid(typeof body.pass === 'string' ? body.pass : null, String(row.grant_key), token))) {
+    return err('Open the room again', 401);
+  }
+  const name = cleanText(body.name, 120);
+  const phone = cleanText(body.phone, 40);
+  const email = cleanText(body.email, 200);
+  const message = cleanText(body.message, 2000);
+  if (!name) return err('Please add your name');
+  if (!phone && !email) return err('Please add a phone number or an email address so we can reply');
+  if (email && !looksLikeEmail(email)) return err('That email address does not look right');
+  let roomArtworkIds: string[] = [];
+  try { roomArtworkIds = JSON.parse(String(row.artwork_ids)); } catch { /* malformed */ }
+  const artworkIds = cleanIds(body.artworkIds).filter(id => roomArtworkIds.includes(id));
+  if (artworkIds.length === 0) return err('Choose at least one artwork you are interested in');
+
+  const db = ctx.env.VAYU_DB;
+  await ensureColumns(db, 'inquiries');
+  await ensureChangeLogTable(db);
+  const now = Date.now();
+  const inquiry = {
+    id: `inq_${now}_${crypto.randomUUID()}`,
+    inquiryNumber: makeInquiryNumber(),
+    customerName: name,
+    customerPhone: phone,
+    customerEmail: email,
+    artworkIds,
+    notes: [`From private room "${String(row.name)}".`, message].filter(Boolean).join('\n\n'),
+    source: 'Private room',
+    status: 'New',
+    date: now,
+  };
+  const actorName = `${name} (private room)`;
+  await db.batch([
+    db.prepare(
+      `INSERT INTO inquiries (id, inquiry_number, customer_name, customer_phone, customer_email, customer_address,
+         artwork_ids, notes, source, status, catalog_shared, date, created_by, created_by_name, image_urls)
+       VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, 0, ?, ?, ?, '[]')`,
+    ).bind(inquiry.id, inquiry.inquiryNumber, name, phone, email, JSON.stringify(artworkIds), inquiry.notes,
+      inquiry.source, inquiry.status, now, String(row.created_by ?? ''), actorName),
+    changeLogStmt(db, ctx.env, 'inquiry', inquiry.id, 'put', { actorId: 'viewing-room' }),
+    db.prepare('UPDATE viewing_rooms SET inquiry_count = inquiry_count + 1 WHERE id = ?').bind(row.id),
+  ]);
+  queueHubNotify(ctx, [{ entity: 'inquiry', id: inquiry.id, op: 'put' }]);
+  ctx.execCtx.waitUntil(sendPushToAllExcept(ctx.env, '', {
+    title: `New inquiry — ${name}`,
+    body: `From private room "${String(row.name)}": ${artworkIds.length} artwork${artworkIds.length === 1 ? '' : 's'}`,
+    tag: `inquiry-${inquiry.id}`,
+    data: { view: 'inquiry', inquiryId: inquiry.id },
+  }).catch(e => console.error('Push notify (room inquiry) failed:', e)));
+  ctx.execCtx.waitUntil(logActivity(db, 'viewing-room', actorName, 'created', 'inquiry', inquiry.id,
+    `Inquiry ${inquiry.inquiryNumber} from private room "${String(row.name)}"`));
+  return json({ success: true }, 201);
+}
+
+/** "INQ-2026-042", the same shape the app gives inquiries (services/documentNumber.ts). */
+function makeInquiryNumber(): string {
+  const [random] = crypto.getRandomValues(new Uint32Array(1));
+  return `INQ-${new Date().getFullYear()}-${String(random % 1000).padStart(3, '0')}`;
+}
+
 // ── Route table ─────────────────────────────────────────────────────────────
 
 const isExact = (p: string) => (path: string) => path === p;
 const isPrefix = (p: string) => (path: string) => path.startsWith(p);
 
 const routes: Route[] = [
+  { method: 'GET', match: isExact('/viewing-rooms'), handler: handleViewingRoomsList },
+  { method: 'POST', match: isExact('/viewing-rooms'), handler: handleViewingRoomsCreate },
+  { method: 'PATCH', match: isPrefix('/viewing-rooms/'), handler: handleViewingRoomsUpdate },
+  { method: 'DELETE', match: isPrefix('/viewing-rooms/'), handler: handleViewingRoomsDelete },
+  { method: 'POST', match: (p) => p.startsWith('/viewing/') && p.endsWith('/open'), handler: handleViewingOpen },
+  { method: 'GET', match: (p) => p.startsWith('/viewing/') && p.endsWith('/image'), handler: handleViewingImage },
+  { method: 'POST', match: (p) => p.startsWith('/viewing/') && p.endsWith('/interest'), handler: handleViewingInterest },
   // Auth
   { method: 'GET', match: isExact('/auth/status'), handler: handleAuthStatus },
   { method: 'POST', match: isExact('/auth/setup'), handler: handleAuthSetup },

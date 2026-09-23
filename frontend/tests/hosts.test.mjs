@@ -60,6 +60,13 @@ describe('app.ateliersupport.com', () => {
         assert.equal((await visit('app', `${APP}/signup?mode=signin`)).location, 'https://ateliersupport.com/signup?mode=signin');
     });
 
+    test('serves the private viewing room page for /room/<token>', async () => {
+        const { res, seen } = await visit('app', `${APP}/room/${'a'.repeat(43)}`, { files: ['/room'] });
+        assert.equal(await res.text(), 'file');
+        assert.equal(new URL(seen.assets.url).pathname, '/room');
+        assert.equal(seen.api, null);
+    });
+
     test('serves its own files otherwise', async () => {
         const { res, seen } = await visit('app', `${APP}/`);
         assert.equal(await res.text(), 'file');

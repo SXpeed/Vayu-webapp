@@ -3,7 +3,7 @@
 | Address | Worker | Code and config | Serves |
 |---|---|---|---|
 | `ateliersupport.com` (+ `www`, redirected) | `ateliersupport-welcome` | `frontend/hosts/welcome/` | Landing page at `/`, `/signup`, `/legal` |
-| `app.ateliersupport.com` | `ateliersupport-app` | `frontend/hosts/app/` | The organization app (PWA) |
+| `app.ateliersupport.com` | `ateliersupport-app` | `frontend/hosts/app/` | The organization app (PWA), and clients' private viewing rooms at `/room/<secret>` |
 | `admin.ateliersupport.com` | `ateliersupport-admin` | `frontend/hosts/admin/` | The provider control centre, at `/` |
 | `api.ateliersupport.com` | `vayu-webapp` | `wrangler.jsonc`, `frontend/worker.ts` | The API: all databases, files, sync, sign-in |
 

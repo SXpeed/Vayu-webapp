@@ -11,10 +11,12 @@ const PAGES: Record<string, string> = {
     welcome: 'welcome.html',
     signup: 'signup.html',
     legal: 'legal.html',
+    // A client's private viewing room (app.ateliersupport.com/room/:token).
+    room: 'room.html',
 };
 /** Which pages each Worker serves (frontend/hosts/<site>). */
 const SITES: Record<string, string[]> = {
-    app: ['main'],
+    app: ['main', 'room'],
     admin: ['admin'],
     welcome: ['welcome', 'signup', 'legal'],
 };

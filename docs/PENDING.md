@@ -62,7 +62,19 @@ which blocked the website Worker, was removed. All live checks passed.
 - [ ] A few weeks after: stop passing the app's original `/api` on
       `ateliersupport.com` (`frontend/hosts/welcome/worker.ts`)
 
-## 2c. Private rooms — part 1 built (closed staff chat rooms)
+## 2c. Private rooms — built (staff chat rooms and client viewing rooms)
+
+**Part 2, private viewing rooms** (`frontend/viewingRooms.ts`, staff screen
+Catalogs → Private rooms, client page `app.ateliersupport.com/room/<secret>`):
+staff pick works for one client and send a secret link with a 6-digit
+passcode and an expiry (7/14/30/90 days); prices shown or "Price on request"
+per room. The client views the works and "I'm interested" creates an inquiry
+(source "Private room") and notifies staff. Passcodes are hashed and shown
+only when made; guesses are rate limited; photos load only through the room
+with a short-lived pass (so they keep working once FILE_AUTH is on). Tests:
+`tests/viewingRooms.integration.test.mjs`.
+
+**Part 1, closed staff chat rooms:**
 
 `frontend/privateRooms.ts`. A private room is a group only its members can see,
 even admins: not listed, not readable, not in sync, the live hub, receipts or
@@ -70,7 +82,7 @@ the deleted-items archive. Admins create them (New chat → New Group → Privat
 room); the creator, or an admin in the room, renames, changes members or
 deletes. Tests: `tests/privateRooms.integration.test.mjs`.
 
-- [ ] Part 2: private viewing rooms for clients (curated artworks on a private link)
+- [ ] Viewing rooms show the platform's look, not the organization's branding (§3.9)
 - [ ] The plan's "Private rooms" limit and switch are not checked yet (the main
       app is not on plans until §3.1)
 - [ ] Someone removed from a room keeps its already-downloaded messages on

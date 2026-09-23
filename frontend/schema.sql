@@ -116,6 +116,35 @@ CREATE TABLE IF NOT EXISTS inquiries (
 CREATE INDEX IF NOT EXISTS idx_inquiries_date ON inquiries(date DESC);
 CREATE INDEX IF NOT EXISTS idx_inquiries_status ON inquiries(status);
 
+-- Private viewing rooms: artworks shared with one client on a secret link
+-- with a passcode and an expiry (frontend/viewingRooms.ts). Also created on
+-- first use by the Worker.
+CREATE TABLE IF NOT EXISTS viewing_rooms (
+  id TEXT PRIMARY KEY,
+  token TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  client_name TEXT NOT NULL DEFAULT '',
+  client_phone TEXT NOT NULL DEFAULT '',
+  client_email TEXT NOT NULL DEFAULT '',
+  message TEXT NOT NULL DEFAULT '',
+  artwork_ids TEXT NOT NULL DEFAULT '[]',
+  show_prices INTEGER NOT NULL DEFAULT 0,
+  passcode_hash TEXT NOT NULL,
+  passcode_salt TEXT NOT NULL,
+  grant_key TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  view_count INTEGER NOT NULL DEFAULT 0,
+  last_viewed_at INTEGER,
+  inquiry_count INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_by_name TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_viewing_rooms_created ON viewing_rooms(created_at DESC);
+
 -- ── Inquiry Messages table ──────────────────────────────────────────────────
 -- Chat messages within an inquiry (team discussion about a customer inquiry).
 

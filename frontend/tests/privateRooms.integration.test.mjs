@@ -39,7 +39,7 @@ async function login(email, password) {
 before(async () => {
     // Production's conversations table predates the private-room columns.
     const schema = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8')
-        .replace(/\n\s*is_private [^\n]*/, '').replace(/\n\s*created_by TEXT,\s*-- creator[^\n]*/, '');
+        .split('\n').filter(line => !/^ *(is_private INTEGER|created_by TEXT, +-- creator)/.test(line)).join('\n');
     assert.ok(!/is_private/.test(schema.split('CREATE TABLE IF NOT EXISTS messages')[0]), 'old schema');
     worker = await startDevWorker({ port: 8818, inspectorPort: 9248, seedLegacy: { sql: schema } });
     assert.equal((await api(null, '/auth/setup', { method: 'POST', body: OWNER })).status, 200);

@@ -1198,7 +1198,8 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, onClose, onSel
         }, canCreatePrivate && isPrivate);
     };
 
-    const headerTitle = mode === 'group' ? (isPrivate ? 'New Private Room' : 'New Group') : 'New Message';
+    const groupTitle = isPrivate ? 'New Private Room' : 'New Group';
+    const headerTitle = mode === 'group' ? groupTitle : 'New Message';
 
     return (
         <div className="neu-sheet z-[60] animate-fade-in-up">

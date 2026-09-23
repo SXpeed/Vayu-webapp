@@ -64,6 +64,7 @@ const SOURCE_COLORS: Record<Inquiry['source'], string> = {
     'Email': 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400',
     'Social Media': 'bg-pink-50 dark:bg-pink-900/20 text-pink-700 dark:text-pink-400',
     'Referral': 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400',
+    'Private room': 'bg-gold-500/10 dark:bg-gold-900/20 text-gold-700 dark:text-gold-300',
     'Other': 'neu-status text-gray-700 dark:text-gray-400',
 };
 
@@ -1192,6 +1193,7 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                                 <option value="Email" className="dark:bg-gray-800">Email</option>
                                 <option value="Social Media" className="dark:bg-gray-800">Social Media</option>
                                 <option value="Referral" className="dark:bg-gray-800">Referral</option>
+                                <option value="Private room" className="dark:bg-gray-800">Private room</option>
                                 <option value="Other" className="dark:bg-gray-800">Other</option>
                             </select>
                         </div>

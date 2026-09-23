@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
-import { Plus, X, Edit2, Trash2, Download, Image as ImageIcon, Check, Loader2, Camera, Upload, FileText, FileDown, BookOpen } from 'lucide-react';
+import { Plus, X, Edit2, Trash2, Download, Image as ImageIcon, Check, Loader2, Camera, Upload, FileText, FileDown, BookOpen, Lock } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton, GhostIconButton, EmptyState } from '../components/ui';
 import { toast } from 'react-hot-toast';
@@ -24,6 +24,7 @@ import { generateCatalogPdf } from './CatalogStudio/catalogPdfClient';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { useIsDesktop } from '../hooks/useMediaQuery';
 import { IfCan } from '../components/Layout';
+import { ViewingRoomsPanel } from './ViewingRoomsPanel';
 
 export const THEME_INFO: { id: CatalogTheme; name: string; desc: string; bg: string; fg: string; accent: string }[] = [
     { id: 1, name: 'Classic', desc: 'White & gradient', bg: '#ffffff', fg: '#1a1a1a', accent: '#e0e0e0' },
@@ -60,6 +61,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
     const [renameValue, setRenameValue] = useState('');
     const [formCatalog, setFormCatalog] = useState<Catalog | null>(null);
     const [showForm, setShowForm] = useState(false);
+    const [showRooms, setShowRooms] = useState(false);
     const pdfInputRef = useRef<HTMLInputElement>(null);
 
     const [showCatalogStudio, setShowCatalogStudio] = useState(false);
@@ -237,6 +239,11 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                 title="Catalogs"
                 actions={
                     <>
+                        <IfCan section="catalogs" level="view"><GhostIconButton
+                            onClick={() => setShowRooms(true)}
+                            label="Private rooms"
+                            icon={<Lock size={16} />}
+                        /></IfCan>
                         {tab === 'catalogs' && (
                             <IfCan section="catalogs"><GhostIconButton
                                 onClick={() => pdfInputRef.current?.click()}
@@ -530,6 +537,11 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                     toast.success('Catalog PDF deleted');
                 }}
             />
+            {showRooms && (
+                <FullScreenPortal>
+                    <ViewingRoomsPanel artworks={artworks} onClose={() => setShowRooms(false)} />
+                </FullScreenPortal>
+            )}
         </PageRoot>
     );
 };

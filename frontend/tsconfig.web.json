@@ -21,6 +21,7 @@
     "views",
     "admin",
     "site",
+    "room",
     "assets"
   ],
   "exclude": [
@@ -34,6 +35,7 @@
     "realtimeTickets.ts",
     "entityAccess.ts",
     "privateRooms.ts",
+    "viewingRooms.ts",
     "fileAuth.ts",
     "deviceSessions.ts",
     "dist",
