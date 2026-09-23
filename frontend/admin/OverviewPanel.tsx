@@ -23,7 +23,15 @@ interface Overview {
     recentAudit: { at: number; action: string; actor_kind: string; actor_email: string | null }[];
     trialsEndingThisWeek: number;
     failedSetups: number;
+    emailConfigured?: boolean;
     generatedAt: number;
+}
+
+/** How waiting notices are described, depending on whether email is set up. */
+function noticeCopy(count: number, emailConfigured: boolean): { text: string; hint: string } {
+    const label = `${count} notice${count === 1 ? '' : 's'}`;
+    if (emailConfigured) return { text: `${label} not sent yet`, hint: 'Not sent yet' };
+    return { text: `${label} waiting for email to be set up`, hint: 'Email not set up' };
 }
 
 interface Health { checks: { name: string; ok: boolean; detail: string }[] }
@@ -113,13 +121,14 @@ export const OverviewPanel: React.FC<{ navigate: Navigate }> = ({ navigate }) =>
     const awaitingPayment = data.subscriptions.payment_required ?? 0;
     const notices = data.notifications.pending ?? 0;
     const healthIssues = (health?.checks ?? []).filter(c => !c.ok && c.name !== 'Google sign-in');
+    const mail = noticeCopy(notices, !!data.emailConfigured);
 
     const attention: { key: string; tone: 'bad' | 'warn' | 'info'; icon: React.ReactNode; text: string; action: string; go: () => void }[] = [];
     if (data.failedSetups) attention.push({ key: 'setup', tone: 'bad', icon: <Wrench size={16} />, text: `${data.failedSetups} approved workspace${data.failedSetups === 1 ? '' : 's'} failed to set up`, action: 'Retry', go: () => navigate('applications') });
     if (pending) attention.push({ key: 'review', tone: 'warn', icon: <ClipboardList size={16} />, text: `${pending} application${pending === 1 ? '' : 's'} waiting for your decision`, action: 'Review', go: () => navigate('applications') });
     if (awaitingPayment) attention.push({ key: 'pay', tone: 'warn', icon: <CreditCard size={16} />, text: `${awaitingPayment} organization${awaitingPayment === 1 ? '' : 's'} approved but awaiting payment`, action: 'Open', go: () => navigate('orgs') });
     if (data.trialsEndingThisWeek) attention.push({ key: 'trial', tone: 'info', icon: <Hourglass size={16} />, text: `${data.trialsEndingThisWeek} trial${data.trialsEndingThisWeek === 1 ? '' : 's'} end this week`, action: 'Open', go: () => navigate('orgs') });
-    if (notices) attention.push({ key: 'mail', tone: 'info', icon: <Mail size={16} />, text: `${notices} notice${notices === 1 ? '' : 's'} waiting for an email provider`, action: 'View', go: () => navigate('notifications') });
+    if (notices) attention.push({ key: 'mail', tone: 'info', icon: <Mail size={16} />, text: mail.text, action: 'View', go: () => navigate('notifications') });
     if (healthIssues.length) attention.push({ key: 'health', tone: 'warn', icon: <AlertTriangle size={16} />, text: `${healthIssues.length} configuration item${healthIssues.length === 1 ? '' : 's'} need attention`, action: 'Check', go: () => navigate('health') });
 
     return (
@@ -150,7 +159,7 @@ export const OverviewPanel: React.FC<{ navigate: Navigate }> = ({ navigate }) =>
                 <Tile icon={<Users size={15} />} label="Accounts" value={data.totals.users} hint={`${data.totals.new_users_7d} new this week`} onClick={() => navigate('accounts')} />
                 <Tile icon={<CreditCard size={15} />} label="Unpaid" value={awaitingPayment} tone={awaitingPayment ? 'warn' : undefined} hint="Approved, not yet paid" />
                 <Tile icon={<Hourglass size={15} />} label="Trials ending" value={data.trialsEndingThisWeek} hint="In the next 7 days" />
-                <Tile icon={<Mail size={15} />} label="Notices" value={notices} hint="No email provider yet" onClick={() => navigate('notifications')} />
+                <Tile icon={<Mail size={15} />} label="Notices" value={notices} hint={mail.hint} onClick={() => navigate('notifications')} />
             </div>
 
             <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">

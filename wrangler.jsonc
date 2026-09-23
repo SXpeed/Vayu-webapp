@@ -54,6 +54,12 @@
     { "tag": "v2", "new_sqlite_classes": ["OrgStore"] }
   ],
   "analytics_engine_datasets": [{ "binding": "ANALYTICS" }],
+  // Cloudflare Email Service: sign-up confirmations, password resets,
+  // invitations and notices (frontend/platform/email.ts). Sending works once
+  // ateliersupport.com is onboarded in the dashboard (Email Service).
+  "send_email": [{ "name": "EMAIL" }],
+  // Retries notices that could not be sent right away (platform/notify.ts).
+  "triggers": { "crons": ["*/10 * * * *"] },
   "ratelimits": [
     { "name": "LOGIN_IP_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
     { "name": "LOGIN_EMAIL_LIMITER", "namespace_id": "1002", "simple": { "limit": 5, "period": 60 } },
@@ -77,6 +83,8 @@
     "ADMIN_HOST": "admin.ateliersupport.com",
     // Where outside callers reach the API (the Razorpay webhook address the
     // control centre shows). docs/HOSTING.md.
-    "API_ORIGIN": "https://api.ateliersupport.com"
+    "API_ORIGIN": "https://api.ateliersupport.com",
+    // Sender for every email; must be on the onboarded domain.
+    "EMAIL_FROM": "no-reply@ateliersupport.com"
   }
 }

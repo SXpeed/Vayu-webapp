@@ -93,7 +93,7 @@ export async function startDevWorker({ port = 8810, inspectorPort = 9240, adminE
                 const text = await res.text();
                 let json = null;
                 try { json = JSON.parse(text); } catch { /* not JSON */ }
-                return { status: res.status, body: json, text };
+                return { status: res.status, body: json, text, location: res.headers.get('Location') };
             },
             signIn(email, password) {
                 return this.call('/auth/sign-in/email', { method: 'POST', body: { email, password } });
@@ -105,6 +105,21 @@ export async function startDevWorker({ port = 8810, inspectorPort = 9240, adminE
         origin,
         browser,
         log: () => log,
+        /**
+         * Emails "sent" so far. Locally the send_email binding writes each
+         * message's text to a file and logs where; this reads them back.
+         */
+        emails() {
+            const plain = log.replace(/\u001b\[[0-9;]*m/g, '');
+            const out = [];
+            for (const block of plain.split('send_email binding called with MessageBuilder:').slice(1)) {
+                const to = /^To: (.+)$/m.exec(block)?.[1]?.trim();
+                const subject = /^Subject: (.+)$/m.exec(block)?.[1]?.trim();
+                const file = /^Text: (.+\.txt)\s*$/m.exec(block)?.[1]?.trim();
+                out.push({ to, subject, text: file ? readFileSync(file, 'utf8') : '' });
+            }
+            return out;
+        },
         /** Reads from the legacy shared database (after the Worker stops). */
         queryLegacy(sql) {
             const out = execSql('VAYU_DB', sql);

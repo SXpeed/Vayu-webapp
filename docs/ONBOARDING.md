@@ -59,8 +59,10 @@ set-up fails, the application shows the error to you (not to the applicant) and
 Review, set-up and billing are three separate states internally: approving does
 not by itself mean a workspace exists or that anything was paid.
 
-**Email is not verified yet** (no email provider). The review screen warns you
-about this; confirm the applicant is genuine before approving.
+**Confirmed email.** With email on (`docs/EMAIL.md`), an application can only be
+sent once the applicant has opened the confirmation link (Google accounts
+arrive confirmed). The review screen still flags an unconfirmed address, for
+applications sent before email was switched on.
 
 ## The control centre
 

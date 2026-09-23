@@ -27,6 +27,7 @@
 import type { Env } from '../workerEnv';
 import { fail, jsonBody, reply } from './http';
 import { OrgError } from './orgs';
+import { emailConfigured } from './email';
 import {
   approveApplication, changeRequestedPlan, getApplication, listApplications,
   rejectApplication, requestInformation,
@@ -55,7 +56,7 @@ export async function handleCenterRoute(env: Env, db: D1Database, request: Reque
   let m: RegExpExecArray | null;
 
   try {
-    if (path === '/admin/overview' && method === 'GET') return reply(await overview(db));
+    if (path === '/admin/overview' && method === 'GET') return reply(await overview(env, db));
     if (path === '/admin/health' && method === 'GET') return reply(await systemHealth(env, db));
 
     // Applications
@@ -102,7 +103,7 @@ export async function handleCenterRoute(env: Env, db: D1Database, request: Reque
       else await cancelNotification(db, m[1], actor);
       return reply(await listOutbox(db, url.searchParams));
     }
-    if (path === '/admin/settings/notifications' && method === 'GET') return reply(await getNotificationSettings(db));
+    if (path === '/admin/settings/notifications' && method === 'GET') return reply({ ...await getNotificationSettings(db), emailConfigured: emailConfigured(env) });
     if (path === '/admin/settings/notifications' && method === 'PUT') {
       return reply(await updateNotificationSettings(db, await jsonBody(request), actor));
     }

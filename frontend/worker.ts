@@ -40,6 +40,8 @@ import {
 import { handlePlatformRequest } from './platform/routes';
 import { getAppPaymentsOrg, razorpayApiBase, verifiedRazorpayKeys } from './platform/payments';
 import { OrgStore } from './platform/orgStore';
+import { deliverOutbox } from './platform/notify';
+import { emailConfigured } from './platform/email';
 import {
   deviceLimit, enforceDeviceLimit, forgetAllDevices, forgetDevice, listDevices,
   parseMaxDevices, registerDevice, revokedReason, signOutDevices, touchDevice, type DeviceSummary,
@@ -3969,6 +3971,7 @@ export default {
     // Platform (SaaS) API. Handled first so the legacy wildcard CORS below
     // never applies to cookie-authenticated routes.
     const early = pageVisit(request) ?? await handlePlatformRequest(request, env, {
+      waitUntil: work => execCtx.waitUntil(work),
       // The organization whose account the app's payment links use: its
       // webhook updates those links, as the shared account's webhook does.
       onPaymentEvent: async (orgId, event) => {
@@ -4031,5 +4034,14 @@ export default {
       writeAnalytics(env, execCtx, request, route, response.status, Date.now() - startedAt, response.status === 101),
     ));
     return response;
+  },
+
+  /** Every 10 minutes: send notices that are due, including earlier failures. */
+  async scheduled(_controller: ScheduledController, env: Env, execCtx: ExecutionContext): Promise<void> {
+    if (!env.PLATFORM_DB || !emailConfigured(env)) return;
+    execCtx.waitUntil(deliverOutbox(env, env.PLATFORM_DB, 50).then(
+      r => { if (r.sent || r.failed) console.log(`outbox: ${r.sent} sent, ${r.failed} failed`); },
+      e => console.error('scheduled outbox delivery failed', e),
+    ));
   },
 };

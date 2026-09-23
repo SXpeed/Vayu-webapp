@@ -14,6 +14,7 @@ import { hashPassword, verifyPassword } from 'better-auth/crypto';
 import { APP_NAME } from '../brand';
 import type { Env } from '../workerEnv';
 import type { LoginMethods } from './settings';
+import { emailConfigured, sendEmail } from './email';
 
 export const AUTH_BASE_PATH = '/api/v2/auth';
 
@@ -85,10 +86,38 @@ function buildAuth(env: Env, db: D1Database, origin: string, methods: LoginMetho
       disableSignUp: !methods.emailPassword.signUp,
       minPasswordLength: 10,
       maxPasswordLength: 128,
+      // Signing in never waits on a confirmed email: accounts made before
+      // email existed (and by the control centre) would be locked out.
+      // Sending an application does need one (applyRoutes.ts).
+      requireEmailVerification: false,
+      resetPasswordTokenExpiresIn: 3600,
+      // A reset ends every session, so a stolen one stops working.
+      revokeSessionsOnPasswordReset: true,
+      sendResetPassword: async ({ user, url }) => {
+        await sendEmail(env, user.email, 'Reset your password', {
+          heading: 'Reset your password',
+          paragraphs: [`Someone asked to reset the password for ${user.email}. If it was you, choose a new one with the button below.`],
+          action: { label: 'Choose a new password', url },
+          footnote: 'The link works for one hour and only once. If you did not ask for this, ignore this email: your password stays as it is.',
+        });
+      },
       password: {
         hash: (password) => hashPassword(password),
         verify: ({ hash, password }) =>
           isLegacyHash(hash) ? verifyLegacyPbkdf2(password, hash) : verifyPassword({ hash, password }),
+      },
+    },
+    emailVerification: {
+      sendOnSignUp: emailConfigured(env),
+      autoSignInAfterVerification: true,
+      expiresIn: 86_400,
+      sendVerificationEmail: async ({ user, url }) => {
+        await sendEmail(env, user.email, 'Confirm your email address', {
+          heading: 'Confirm your email address',
+          paragraphs: [`Confirm that ${user.email} is yours, so we can reach you about your account and your application.`],
+          action: { label: 'Confirm email', url },
+          footnote: 'The link works for 24 hours. If you did not create an account, ignore this email.',
+        });
       },
     },
     socialProviders: methods.google.signIn

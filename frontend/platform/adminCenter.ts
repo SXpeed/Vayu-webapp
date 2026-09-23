@@ -13,6 +13,7 @@ import { googleConfigured, getEffectiveLoginMethods } from './settings';
 import { OrgError, type Actor } from './orgs';
 import { secretsConfigured } from './secrets';
 import { getNotificationSettings } from './notify';
+import { emailConfigured } from './email';
 
 // ── Overview ──────────────────────────────────────────────────────────────
 
@@ -21,7 +22,7 @@ async function countBy(db: D1Database, sql: string): Promise<Record<string, numb
   return Object.fromEntries(results.map(r => [r.k, r.n]));
 }
 
-export async function overview(db: D1Database) {
+export async function overview(env: Env, db: D1Database) {
   const [orgs, applications, subscriptions, outbox] = await Promise.all([
     countBy(db, 'SELECT status AS k, COUNT(*) AS n FROM organizations GROUP BY status'),
     countBy(db, 'SELECT review_status AS k, COUNT(*) AS n FROM applications GROUP BY review_status'),
@@ -63,6 +64,7 @@ export async function overview(db: D1Database) {
     totals, planMix, recentApplications, recentAudit,
     trialsEndingThisWeek: trialsEnding?.n ?? 0,
     failedSetups: failedSetups?.n ?? 0,
+    emailConfigured: emailConfigured(env),
     generatedAt: Date.now(),
   };
 }
@@ -233,7 +235,9 @@ export async function systemHealth(env: Env, db: D1Database) {
   check('Google sign-in', googleConfigured(env), googleConfigured(env) ? 'Credentials configured' : 'Not configured (optional)');
   check('Two-factor for admins', env.ADMIN_REQUIRE_2FA !== 'off', env.ADMIN_REQUIRE_2FA === 'off' ? 'OFF — only acceptable locally' : 'Required');
   check('Admin host restriction', !!env.ADMIN_HOST, env.ADMIN_HOST ? `Only on ${env.ADMIN_HOST}` : 'Not set (any configured host)');
-  check('Email delivery', false, 'No email provider configured — notices wait in the outbox');
+  check('Email delivery', emailConfigured(env), emailConfigured(env)
+    ? `Cloudflare Email Service, from ${env.EMAIL_FROM || 'no-reply@ateliersupport.com'}`
+    : 'Not configured — notices wait in the outbox; no confirmation or reset emails');
   const { providerEmail } = await getNotificationSettings(db);
   check('Provider notification address', !!providerEmail, providerEmail ?? 'Not set — new applications only appear in the queue');
   check('Private file access', env.FILE_AUTH === 'on', env.FILE_AUTH === 'on' ? 'Files need a session' : 'OFF — files are reachable by URL');

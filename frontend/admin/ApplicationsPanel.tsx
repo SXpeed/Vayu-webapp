@@ -184,7 +184,7 @@ const ApplicationDrawer: React.FC<{ id?: string; reauth: Reauth; onClose: () => 
                     {!d.applicant.emailVerified && open && (
                         <div className="neu-inset rounded-xl p-3.5 flex items-start gap-2.5 text-[13px] text-[var(--ac-warn)]">
                             <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-                            <span>This email address is not verified yet (no email provider is connected). Make sure the applicant is genuine before approving.</span>
+                            <span>This email address is not confirmed. Make sure the applicant is genuine before approving.</span>
                         </div>
                     )}
                     {a.provisioningError && (

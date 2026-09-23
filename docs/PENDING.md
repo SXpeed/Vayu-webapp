@@ -26,7 +26,7 @@ platform database does not exist there yet.
 
 | # | Needed | Blocks | Notes |
 |---|---|---|---|
-| 1.1 | **Email provider decision** (Resend recommended, or wait for Cloudflare's, or stay invite-only) | Public sign-up, invitations, password resets, approval notices | Free tier covers early use. Invite-only works meanwhile. |
+| 1.1 | ~~Email provider decision~~ **Decided: Cloudflare Email Service.** Built (`docs/EMAIL.md`); the owner onboards `ateliersupport.com` in the dashboard | — | Until then sends fail and notices wait in the outbox |
 | 1.2 | **Go-ahead to create production/staging resources** (platform database, secrets) | Everything platform-related going live | See §2 |
 | 1.3 | **Marketing content**: business description, contact email and address, whether privacy policy and terms exist | Marketing site | No legal text, testimonials or security claims will be invented |
 | 1.4 | **Plan line-up**: names, prices, what each includes | Public pricing | Or say the word and a starter set is created as drafts to edit |
@@ -113,7 +113,7 @@ deletes. Tests: `tests/privateRooms.integration.test.mjs`.
 - [x] Queue actions: approve, reject with reason, ask for information, change plan, approve with a billing exception
 - [x] Approval creates the organization, its database, owner membership and subscription — safe to retry, never duplicating; failed set-up is retryable
 - [x] Owner and provider notices queued (they wait for an email provider)
-- [ ] **Email verification** at sign-up (blocked on §1.1; the review screen warns meanwhile)
+- [x] **Email verification** at sign-up: an application can only be sent from a confirmed address (`docs/EMAIL.md`)
 - [ ] Optional logo upload during onboarding
 - [ ] Hosted checkout for paid plans after approval (§3.6)
 - [ ] An approved owner entering their workspace in the app (§3.1)
@@ -145,9 +145,10 @@ Seats and inventory items are enforced. Still to wire up (each is labelled
 
 ### 3.7 Email (Phase F, blocked on §1.1)
 - [x] Retryable, idempotent outbox (notices queue and wait; shown in the control centre)
-- [ ] Sending adapter that delivers the outbox
-- [ ] Verification, password reset, invitations, approval and ready notices
-- [ ] DNS records (SPF/DKIM/DMARC) for the sending domain
+- [x] Sending through Cloudflare Email Service, right after the change and retried by a 10-minute cron (`docs/EMAIL.md`)
+- [x] Verification, password reset, approval and ready notices
+- [ ] Invitations (with §3.4)
+- [ ] Onboard `ateliersupport.com` in Email Service (adds SPF/DKIM) and add DMARC — owner, in the dashboard
 
 ### 3.7b Control centre — built
 - [x] Sidebar layout with Overview, Applications, Organizations, Accounts, Plans, Notifications, Branding, Login & security, System health, Audit log

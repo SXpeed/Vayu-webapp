@@ -16,20 +16,35 @@ import { fail, jsonBody, reply } from './http';
 import { OrgError } from './orgs';
 import { getMyApplication, saveMyApplication, submitMyApplication, withdrawMyApplication } from './applications';
 
-export async function handleApplyRoute(db: D1Database, auth: PlatformAuth, request: Request, path: string): Promise<Response | null> {
+export interface ApplyOptions {
+  /** With email sending set up, an application can only be sent from a confirmed address. */
+  requireVerifiedEmail: boolean;
+}
+
+export async function handleApplyRoute(db: D1Database, auth: PlatformAuth, request: Request, path: string, opts: ApplyOptions): Promise<Response | null> {
   if (path !== '/apply' && !path.startsWith('/apply/')) return null;
   const session = await auth.api.getSession({ headers: request.headers });
   if (!session) return fail(401, 'unauthenticated', 'Sign in first.');
-  const userId = session.user.id;
-  const method = request.method;
+  const emailVerified = !!session.user.emailVerified;
+  if (path === '/apply/submit' && request.method === 'POST' && opts.requireVerifiedEmail && !emailVerified) {
+    return fail(403, 'email_not_verified', 'Confirm your email address first: open the link we sent you, or ask for a new one on this page.');
+  }
   try {
-    if (path === '/apply' && method === 'GET') return reply(await getMyApplication(db, userId));
-    if (path === '/apply' && method === 'PUT') return reply(await saveMyApplication(db, userId, await jsonBody(request)));
-    if (path === '/apply/submit' && method === 'POST') return reply(await submitMyApplication(db, userId, session.user.email));
-    if (path === '/apply/withdraw' && method === 'POST') return reply(await withdrawMyApplication(db, userId));
+    const work = applyAction(db, session.user, request, path);
+    if (!work) return fail(404, 'not_found', 'Not found');
+    // Every answer says whether the address is confirmed, so the page can ask for it.
+    return reply({ ...await work, emailVerified, emailRequired: opts.requireVerifiedEmail });
   } catch (e) {
     if (e instanceof OrgError) return fail(e.status, e.code, e.message);
     throw e;
   }
-  return fail(404, 'not_found', 'Not found');
+}
+
+function applyAction(db: D1Database, user: { id: string; email: string }, request: Request, path: string): Promise<object> | null {
+  const route = `${request.method} ${path}`;
+  if (route === 'GET /apply') return getMyApplication(db, user.id);
+  if (route === 'PUT /apply') return jsonBody(request).then(body => saveMyApplication(db, user.id, body));
+  if (route === 'POST /apply/submit') return submitMyApplication(db, user.id, user.email);
+  if (route === 'POST /apply/withdraw') return withdrawMyApplication(db, user.id);
+  return null;
 }

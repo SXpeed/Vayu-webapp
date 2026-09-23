@@ -71,12 +71,17 @@ export const Signup: React.FC = () => {
     const [events, setEvents] = useState<AppEvent[]>([]);
     const [draft, setDraft] = useState<Partial<Application>>(blank(tz));
     const [busy, setBusy] = useState(false);
+    // Sending an application needs a confirmed email once email is set up.
+    const [emailCheck, setEmailCheck] = useState({ verified: true, required: false });
+    const noteEmail = (res: { emailVerified?: boolean; emailRequired?: boolean }) =>
+        setEmailCheck({ verified: res.emailVerified !== false, required: !!res.emailRequired });
 
     const load = useCallback(async () => {
         const session = await authClient.getSession();
         if (!session.data) { setEmail(null); setStep('account'); return; }
         setEmail(session.data.user.email);
-        const res = await api<{ application: Application | null; events?: AppEvent[] }>('/apply');
+        const res = await api<{ application: Application | null; events?: AppEvent[]; emailVerified?: boolean; emailRequired?: boolean }>('/apply');
+        noteEmail(res);
         setApp(res.application);
         setEvents(res.events ?? []);
         if (!res.application) {
@@ -106,7 +111,8 @@ export const Signup: React.FC = () => {
         setBusy(true);
         try {
             const body = { ...draft, ...extra };
-            const res = await api<{ application: Application; events: AppEvent[] }>('/apply', { method: 'PUT', body: JSON.stringify(body) });
+            const res = await api<{ application: Application; events: AppEvent[]; emailVerified?: boolean; emailRequired?: boolean }>('/apply', { method: 'PUT', body: JSON.stringify(body) });
+            noteEmail(res);
             setApp(res.application);
             setEvents(res.events);
             setDraft(res.application);
@@ -143,7 +149,10 @@ export const Signup: React.FC = () => {
 
             {step === 'loading' && <p className="max-w-3xl mx-auto px-5 py-16 text-sm text-gray-600 dark:text-gray-400">Loading…</p>}
 
-            {step === 'account' && (
+            {step === 'account' && params.get('mode') === 'reset' && (
+                <ResetPassword token={params.get('token')} failed={params.get('error') === 'INVALID_TOKEN'} />
+            )}
+            {step === 'account' && params.get('mode') !== 'reset' && (
                 <AccountStep initialMode={params.get('mode') === 'signin' ? 'signin' : 'signup'} returnError={params.get('error')} onDone={() => load()} />
             )}
 
@@ -159,6 +168,8 @@ export const Signup: React.FC = () => {
                     )}
 
                     {stepIndex >= 0 && <Progress current={stepIndex} />}
+
+                    {email && emailCheck.required && !emailCheck.verified && step !== 'status' && <ConfirmEmailNotice email={email} />}
 
                     {step === 'business' && (
                         <Card padding="lg">
@@ -233,7 +244,8 @@ export const Signup: React.FC = () => {
                                     <Button onClick={() => setStep('business')}><ArrowLeft size={16} /> Edit details</Button>
                                     <Button onClick={() => setStep('plan')}>Change plan</Button>
                                 </div>
-                                <Button variant="primary" disabled={busy} onClick={submit}>Send application</Button>
+                                <Button variant="primary" disabled={busy || (emailCheck.required && !emailCheck.verified)} onClick={submit}
+                                    title={emailCheck.required && !emailCheck.verified ? 'Confirm your email address first' : undefined}>Send application</Button>
                             </div>
                         </Card>
                     )}
@@ -306,6 +318,7 @@ const AccountStep: React.FC<{ initialMode: Mode; returnError: string | null; onD
     const [methods, setMethods] = useState<LoginMethods | null>(null);
     const [busy, setBusy] = useState<Busy>(null);
     const [problem, setProblem] = useState<string | null>(returnError ? googleErrorText(returnError) : null);
+    const [forgot, setForgot] = useState(false);
 
     useEffect(() => { api<LoginMethods>('/public/login-methods').then(setMethods).catch(() => setMethods(null)); }, []);
 
@@ -325,18 +338,29 @@ const AccountStep: React.FC<{ initialMode: Mode; returnError: string | null; onD
         setBusy('email');
         setProblem(null);
         const result = mode === 'signup'
-            ? await authClient.signUp.email(details)
+            // The confirmation link brings them back here, signed in.
+            ? await authClient.signUp.email({ ...details, callbackURL: location.pathname })
             : await authClient.signIn.email({ email: details.email, password: details.password });
         setBusy(null);
         if (result.error) { setProblem(result.error.message || 'That did not work. Check the details and try again.'); return; }
         onDone();
     };
 
+    const invitationOnly = !signUpOpen && mode === 'signup';
+    if (forgot) {
+        return (
+            <main className="max-w-md mx-auto px-5 pt-10 pb-16 mk-settle">
+                <ForgotPassword onBack={() => { setForgot(false); switchMode('signin'); }} />
+            </main>
+        );
+    }
     return (
         <main className="max-w-6xl mx-auto px-5 pt-6 pb-16 lg:pt-14 grid gap-10 lg:grid-cols-[1fr_minmax(0,27rem)] lg:gap-16 items-start">
             <JoinStory />
             <div className="order-1 lg:order-2 mk-settle" style={rise(120)}>
-                {signUpOpen || mode === 'signin' ? (
+                {invitationOnly ? (
+                    <InvitationOnly onSignIn={() => switchMode('signin')} />
+                ) : (
                     <Card padding="lg" className="!p-6 sm:!p-8">
                         <ModeTabs mode={mode} onChange={switchMode} />
                         <h1 className="mt-7 font-serif text-[1.7rem] leading-tight text-gray-900 dark:text-gray-100">{mode === 'signup' ? 'Create your account' : 'Welcome back'}</h1>
@@ -354,14 +378,12 @@ const AccountStep: React.FC<{ initialMode: Mode; returnError: string | null; onD
                                 <span className="h-px flex-1 bg-gray-300/80 dark:bg-white/10" /> or use your email <span className="h-px flex-1 bg-gray-300/80 dark:bg-white/10" />
                             </div>
                         )}
-                        {emailHere && <EmailForm key={mode} mode={mode} busy={busy} spaced={!googleHere} onSubmit={withEmail} />}
+                        {emailHere && <EmailForm key={mode} mode={mode} busy={busy} spaced={!googleHere} onSubmit={withEmail} onForgot={() => setForgot(true)} />}
                         {!googleHere && !emailHere && methods && (
                             <p className="mt-6 text-sm text-gray-700 dark:text-gray-300">Signing in is switched off at the moment. Please contact us.</p>
                         )}
                         <SwitchModeLine mode={mode} onChange={switchMode} />
                     </Card>
-                ) : (
-                    <InvitationOnly onSignIn={() => switchMode('signin')} />
                 )}
             </div>
         </main>
@@ -441,7 +463,8 @@ const GoogleButton: React.FC<{ mode: Mode; busy: Busy; onClick: () => void }> = 
 const EmailForm: React.FC<{
     mode: Mode; busy: Busy; spaced: boolean;
     onSubmit: (details: { name: string; email: string; password: string }) => void;
-}> = ({ mode, busy, spaced, onSubmit }) => {
+    onForgot: () => void;
+}> = ({ mode, busy, spaced, onSubmit, onForgot }) => {
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
@@ -466,6 +489,13 @@ const EmailForm: React.FC<{
                     </button>
                 </div>
             </Field>
+            {!signup && (
+                <div className="-mt-2 text-right">
+                    <button type="button" onClick={onForgot} className="text-[13px] text-gray-600 dark:text-gray-400 underline underline-offset-2 hover:text-gray-900 dark:hover:text-gray-100">
+                        Forgot password?
+                    </button>
+                </div>
+            )}
             {signup && (
                 <label className="flex items-start gap-2.5 text-[13px] text-gray-700 dark:text-gray-300">
                     <input type="checkbox" className="mt-0.5 accent-[#c9a227]" checked={agree} onChange={e => setAgree(e.target.checked)} required />
@@ -500,6 +530,126 @@ const InvitationOnly: React.FC<{ onSignIn: () => void }> = ({ onSignIn }) => (
         </div>
     </Card>
 );
+
+/* -------------------------------- Passwords and email confirmation */
+
+/** Asks for a reset link. The answer is the same whether or not the address has an account. */
+const ForgotPassword: React.FC<{ onBack: () => void }> = ({ onBack }) => {
+    const [email, setEmail] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [sentTo, setSentTo] = useState<string | null>(null);
+    const [problem, setProblem] = useState<string | null>(null);
+    const send = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setBusy(true);
+        setProblem(null);
+        const { error } = await authClient.requestPasswordReset({ email, redirectTo: `${location.pathname}?mode=reset` });
+        setBusy(false);
+        if (error) setProblem(error.message || 'That did not work. Try again in a minute.');
+        else setSentTo(email);
+    };
+    return (
+        <Card padding="lg" className="!p-6 sm:!p-8">
+            <h1 className="font-serif text-[1.7rem] leading-tight text-gray-900 dark:text-gray-100">Reset your password</h1>
+            {sentTo ? (
+                <>
+                    <p className="mt-3 text-[14px] text-gray-700 dark:text-gray-300">
+                        If there is an account for <strong className="font-medium break-all">{sentTo}</strong>, we have emailed it a link to choose a new password. The link works for one hour.
+                    </p>
+                    <p className="mt-2 text-[13px] text-gray-600 dark:text-gray-400">Nothing after a few minutes? Check your spam folder, or try again.</p>
+                </>
+            ) : (
+                <form className="mt-5 space-y-4" onSubmit={send}>
+                    <p className="text-[13px] text-gray-600 dark:text-gray-400">Enter the email you sign in with. We will send you a link to choose a new password.</p>
+                    {problem && <p role="alert" className="rounded-xl px-3.5 py-2.5 text-[13px] bg-red-500/10 text-red-700 dark:text-red-300">{problem}</p>}
+                    <Field label="Email" htmlFor="f-email"><Input id="f-email" required type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} /></Field>
+                    <Button type="submit" variant="primary" block disabled={busy}>{busy ? 'Sending…' : 'Send reset link'}</Button>
+                </form>
+            )}
+            <p className="mt-6 text-[13px] text-center">
+                <button type="button" onClick={onBack} className="font-medium text-gray-900 dark:text-gray-100 underline underline-offset-2">Back to sign in</button>
+            </p>
+        </Card>
+    );
+};
+
+const EXPIRED_LINK = 'This link has expired or was already used. Ask for a new one.';
+
+/** Where the reset email's link lands: choose a new password. */
+const ResetPassword: React.FC<{ token: string | null; failed: boolean }> = ({ token, failed }) => {
+    const [password, setPassword] = useState('');
+    const [again, setAgain] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [done, setDone] = useState(false);
+    const [problem, setProblem] = useState<string | null>(null);
+    const [expired, setExpired] = useState(failed || !token);
+    const signInUrl = `${location.pathname}?mode=signin`;
+
+    const save = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (password !== again) { setProblem('The two passwords are different.'); return; }
+        setBusy(true);
+        setProblem(null);
+        const { error } = await authClient.resetPassword({ newPassword: password, token: token ?? '' });
+        setBusy(false);
+        if (!error) setDone(true);
+        else if (/token/i.test(error.message ?? '')) setExpired(true);
+        else setProblem(error.message || 'That did not work. Try again.');
+    };
+
+    if (expired) {
+        return (
+            <main className="max-w-md mx-auto px-5 pt-10 pb-16 space-y-4">
+                <p role="alert" className="rounded-xl px-3.5 py-2.5 text-[13px] bg-red-500/10 text-red-700 dark:text-red-300">{EXPIRED_LINK}</p>
+                <ForgotPassword onBack={() => { location.href = signInUrl; }} />
+            </main>
+        );
+    }
+    return (
+        <main className="max-w-md mx-auto px-5 pt-10 pb-16">
+            <Card padding="lg" className="!p-6 sm:!p-8">
+                <h1 className="font-serif text-[1.7rem] leading-tight text-gray-900 dark:text-gray-100">{done ? 'Password changed' : 'Choose a new password'}</h1>
+                {done ? (
+                    <>
+                        <p className="mt-3 text-[14px] text-gray-700 dark:text-gray-300">You are signed out on every device. Sign in again with your new password.</p>
+                        <a href={signInUrl} className="mt-6 neu-button neu-button-primary w-full justify-center">Sign in</a>
+                    </>
+                ) : (
+                    <form className="mt-5 space-y-4" onSubmit={save}>
+                        {problem && <p role="alert" className="rounded-xl px-3.5 py-2.5 text-[13px] bg-red-500/10 text-red-700 dark:text-red-300">{problem}</p>}
+                        <Field label="New password" htmlFor="r-pass" hint="At least 10 characters.">
+                            <Input id="r-pass" required type="password" minLength={10} autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} />
+                        </Field>
+                        <Field label="Type it again" htmlFor="r-pass2">
+                            <Input id="r-pass2" required type="password" minLength={10} autoComplete="new-password" value={again} onChange={e => setAgain(e.target.value)} />
+                        </Field>
+                        <Button type="submit" variant="primary" block disabled={busy}>{busy ? 'Saving…' : 'Save new password'}</Button>
+                    </form>
+                )}
+            </Card>
+        </main>
+    );
+};
+
+/** Shown while the address is unconfirmed: the application can be filled in, not sent. */
+const ConfirmEmailNotice: React.FC<{ email: string }> = ({ email }) => {
+    const [state, setState] = useState<'idle' | 'sending' | 'sent'>('idle');
+    const resend = async () => {
+        setState('sending');
+        const { error } = await authClient.sendVerificationEmail({ email, callbackURL: location.pathname });
+        if (error) { toast.error(error.message || 'Could not send the link. Try again in a minute.'); setState('idle'); }
+        else setState('sent');
+    };
+    const label = { idle: 'Send the link again', sending: 'Sending…', sent: 'Link sent' }[state];
+    return (
+        <div role="status" className="rounded-2xl px-4 py-3.5 bg-gold-500/10 text-[14px] text-gray-800 dark:text-gray-200 flex flex-wrap items-center gap-x-4 gap-y-2">
+            <p className="flex-1 min-w-[14rem]">
+                <strong className="font-medium">Confirm your email.</strong> We sent a link to <span className="[overflow-wrap:anywhere]">{email}</span>. You can fill everything in now; sending the application needs the confirmed address.
+            </p>
+            <Button onClick={resend} disabled={state !== 'idle'}>{label}</Button>
+        </div>
+    );
+};
 
 /* -------------------------------- Plan -------------------------------- */
 

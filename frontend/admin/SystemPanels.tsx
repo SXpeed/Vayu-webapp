@@ -121,6 +121,7 @@ export const NotificationsPanel: React.FC<{ onChange?: () => void }> = ({ onChan
     const [data, setData] = useState<{ notifications: Notice[]; counts: Record<string, number> } | null>(null);
     const [providerEmail, setProviderEmail] = useState('');
     const [savedEmail, setSavedEmail] = useState('');
+    const [sending, setSending] = useState<boolean | null>(null);
     const [filter, setFilter] = useState('all');
     const [busy, setBusy] = useState<string | null>(null);
 
@@ -128,11 +129,12 @@ export const NotificationsPanel: React.FC<{ onChange?: () => void }> = ({ onChan
         try {
             const [list, s] = await Promise.all([
                 api<{ notifications: Notice[]; counts: Record<string, number> }>('/admin/notifications'),
-                api<{ providerEmail: string | null }>('/admin/settings/notifications'),
+                api<{ providerEmail: string | null; emailConfigured?: boolean }>('/admin/settings/notifications'),
             ]);
             setData(list);
             setProviderEmail(s.providerEmail ?? '');
             setSavedEmail(s.providerEmail ?? '');
+            setSending(!!s.emailConfigured);
         } catch (e) { toast.error((e as ApiError).message); }
     }, []);
     useEffect(() => { load(); }, [load]);
@@ -167,10 +169,18 @@ export const NotificationsPanel: React.FC<{ onChange?: () => void }> = ({ onChan
                     <Button type="submit" variant="primary" disabled={providerEmail === savedEmail || busy === 'email'}>Save</Button>
                 </form>
                 <p className="mt-2 text-[12px] ac-faint">New and updated applications are sent here.</p>
-                <p className="mt-4 rounded-xl px-3 py-2 text-[13px] bg-[var(--ac-warn-bg)] text-[var(--ac-warn)]">
-                    No email provider is connected yet, so notices are queued here instead of being sent. Nothing is lost:
-                    they go out once a provider is connected, and every application is in the queue either way.
-                </p>
+                {sending === false && (
+                    <p className="mt-4 rounded-xl px-3 py-2 text-[13px] bg-[var(--ac-warn-bg)] text-[var(--ac-warn)]">
+                        Email sending is not set up, so notices are queued here instead of being sent. Nothing is lost:
+                        they go out once it is, and every application is in the queue either way.
+                    </p>
+                )}
+                {sending && (
+                    <p className="mt-4 text-[13px] ac-muted">
+                        Notices are emailed as soon as they are created. One that fails is tried again after 5 minutes, 30 minutes,
+                        2 hours and 12 hours, then marked failed; you can retry it below.
+                    </p>
+                )}
             </Section>
 
             <Section title="Outbox" description={data ? `${total} notice${total === 1 ? '' : 's'} in total.` : undefined}>

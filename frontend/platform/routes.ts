@@ -64,6 +64,8 @@ import { OrgAccessError, handleOrgRequest, listMyOrganizations, resolveOrgContex
 import { fail, reply } from './http';
 import { handleCenterRoute } from './centerRoutes';
 import { handleApplyRoute } from './applyRoutes';
+import { deliverOutbox } from './notify';
+import { emailConfigured } from './email';
 
 interface AdminContext {
   userId: string;
@@ -322,9 +324,22 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
 export interface PlatformHooks {
   /** A verified Razorpay event for an organization (the app applies its own payment links). */
   onPaymentEvent?: (orgId: string, event: unknown) => Promise<void>;
+  /** Work to finish after the response (the request's ExecutionContext.waitUntil). */
+  waitUntil?: (work: Promise<unknown>) => void;
 }
 
 export async function handlePlatformRequest(request: Request, env: Env, hooks: PlatformHooks = {}): Promise<Response | null> {
+  const res = await routePlatformRequest(request, env, hooks);
+  // A change may have queued notices (application sent, approved, ...):
+  // send them now rather than waiting for the scheduled run.
+  if (res && res.ok && request.method !== 'GET' && emailConfigured(env) && env.PLATFORM_DB && hooks.waitUntil) {
+    const db = env.PLATFORM_DB;
+    hooks.waitUntil(deliverOutbox(env, db).catch(e => console.error('outbox delivery failed', e)));
+  }
+  return res;
+}
+
+async function routePlatformRequest(request: Request, env: Env, hooks: PlatformHooks): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith('/api/v2/')) return null;
   const path = url.pathname.slice('/api/v2'.length);
@@ -384,7 +399,7 @@ export async function handlePlatformRequest(request: Request, env: Env, hooks: P
     }
     if (path.startsWith('/admin/')) return await handleAdmin(env, db, auth, request, url, path);
 
-    const apply = await handleApplyRoute(db, auth, request, path);
+    const apply = await handleApplyRoute(db, auth, request, path, { requireVerifiedEmail: emailConfigured(env) });
     if (apply) return apply;
 
     if (path === '/me/orgs' && request.method === 'GET') {

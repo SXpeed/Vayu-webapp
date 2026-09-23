@@ -77,6 +77,16 @@ export interface Env {
   // (frontend/platform/secrets.ts): 32 random bytes, base64, a Worker secret.
   // Without it, connecting a Razorpay account is refused.
   PAYMENT_SECRETS_KEY?: string;
+  // Cloudflare Email Service (`send_email` binding named EMAIL). The sending
+  // domain must be onboarded in the dashboard (Email Service → Onboard
+  // domain). Absent, nothing is sent and notices wait in the outbox.
+  EMAIL?: SendEmail;
+  // Sender and reply-to addresses; the sender must be on the onboarded domain.
+  EMAIL_FROM?: string;
+  EMAIL_REPLY_TO?: string;
+  // "off" stops all email even with the binding (a kill switch; the local
+  // test config starts with it off so tests opt in).
+  EMAIL_SENDING?: string;
 }
 
 /** Per-request context, shared by the router and the route handlers. */

@@ -45,6 +45,7 @@
     { "tag": "v2", "new_sqlite_classes": ["OrgStore"] }
   ],
   "analytics_engine_datasets": [{ "binding": "ANALYTICS" }],
+  "send_email": [{ "name": "EMAIL" }],
   "ratelimits": [
     { "name": "LOGIN_IP_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
     { "name": "LOGIN_EMAIL_LIMITER", "namespace_id": "1002", "simple": { "limit": 5, "period": 60 } },
@@ -54,6 +55,7 @@
     "WORKSPACE_ID": "default",
     "DELTA_SYNC_ENABLED": "off",
     "REALTIME_ENABLED": "off",
-    "FILE_AUTH": "off"
+    "FILE_AUTH": "off",
+    "EMAIL_SENDING": "off"
   }
 }
