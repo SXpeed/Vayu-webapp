@@ -1186,12 +1186,17 @@ async function handleActivityLogsList(ctx: Ctx): Promise<Response> {
 async function handleActivityLogsCreate(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
+  // The server records activity itself as things change; the app never
+  // posts here. Letting anyone write entries would let them pad or muddy
+  // the history, so only an admin may add one by hand.
+  if (session.role !== ADMIN_ROLE_ID) return err('Activity is recorded automatically', 403);
   const body = await ctx.request.json();
   const { action, entity, entityId, details } = body as {
     action?: string; entity?: string; entityId?: string; details?: string;
   };
   if (!action || !entity) return err('action and entity are required');
-  await logActivity(ctx.env.VAYU_DB, session.userId, session.name, action, entity, entityId || '', details || '');
+  const text = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max) : '');
+  await logActivity(ctx.env.VAYU_DB, session.userId, session.name, text(action, 100), text(entity, 50), text(entityId, 128), text(details, 2000));
   return json({ success: true }, 201);
 }
 

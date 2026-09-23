@@ -217,3 +217,9 @@ test('new passwords need at least 10 characters', async () => {
     assert.equal(res.status, 400);
     assert.match(res.body.error, /at least 10/);
 });
+
+test('only an admin may add to the activity history by hand', async () => {
+    const entry = { action: 'deleted', entity: 'invoice', entityId: 'inv_x', details: 'made up' };
+    assert.equal((await api(mallory.token, '/activity-logs', { method: 'POST', body: entry })).status, 403);
+    assert.equal((await api(admin.token, '/activity-logs', { method: 'POST', body: entry })).status, 201);
+});
