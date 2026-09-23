@@ -157,9 +157,26 @@ Seats and inventory items are enforced. Still to wire up (each is labelled
 - [ ] Closure and scheduled deletion; recovery from failed provisioning
 
 ### 3.14 Security and correctness
+Security review of 2026-09-23 — fixed locally, **not yet deployed** (commits a55c9ac … 4c630d2):
+- [x] Private chats: only members may read, update or delete a conversation; no take-over by re-creating an id
+- [x] Uploads can never run as the app (type from the file's bytes; only images, PDFs, text shown; the rest downloads, sandboxed, nosniff)
+- [x] Files: remove only your own / as admin / as an inventory editor; nothing outside `uploads/`; file list limited to your own
+- [x] Sign-in limited per IP (10/min) and per email (5/min); 600 API calls/min per device; no account-existence timing; 10-character passwords
+- [x] Security headers on every page and asset (`public/_headers`); nosniff on both APIs; old `/api` error handler no longer returns internal messages
+- [x] Manual activity-history entries admin-only; dev server bound to this computer
+
+Production steps, each needing the owner's go-ahead:
+- [ ] Deploy the commits above, then check sign-in, chat, uploads and images on the live app
+- [ ] A day later: `FILE_AUTH=on` (see §3.11 and `DEPLOYMENT.md`); test images in the installed PWA
+- [ ] After staff have moved to app.ateliersupport.com (it is still a legacy host in `brand.ts`): `workers_dev: false`, so the workers.dev address can't bypass zone rules
+- [ ] Cloudflare dashboard (owner): two-factor on the account, Bot Fight Mode, managed WAF rules, a usage/billing alert
+
+Still open:
 - [ ] Rate limits on expensive organization endpoints (auth endpoints are covered)
 - [ ] Dependency and secret scanning in CI (gitleaks, `npm audit`)
-- [ ] Review the old `/api` error handler, which returns internal messages
+- [ ] A script-src content security policy (needs testing with the PDF and background-removal libraries)
+- [ ] Move the old app's sign-in token out of `localStorage` into an HttpOnly cookie, as the new platform already does
+- [ ] Before opening public sign-up: Turnstile on sign-up and applications, email verification, `ADMIN_HOST`, Cloudflare Access in front of `/admin`
 - [ ] Split the old worker's KV user lists, which stop at 1,000 and break the team list
 - [ ] Concurrency review of the remaining inventory paths as they move over
 
