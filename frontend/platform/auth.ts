@@ -132,6 +132,12 @@ function buildAuth(env: Env, db: D1Database, origin: string, methods: LoginMetho
       },
     },
     advanced: {
+      // Off: the check starts when the instance is created and every later
+      // database call waits on it. On Workers, a request that finishes before
+      // it settles leaves it pending forever, so sign-in requests handled by
+      // that isolate hang (seen in production, 2026-09-23). The schema is ours
+      // anyway: platform/migrations, covered by the integration tests.
+      database: { validateSchema: false },
       useSecureCookies: secure,
       cookiePrefix: 'as',
       ipAddress: { ipAddressHeaders: ['cf-connecting-ip'] },
@@ -162,14 +168,21 @@ export type PlatformAuth = ReturnType<typeof buildAuth>;
 
 const instances = new Map<string, PlatformAuth>();
 
-export function getAuth(env: Env, db: D1Database, origin: string, methods: LoginMethods): PlatformAuth {
+/**
+ * One Better Auth instance per origin and login-method set, reused across
+ * requests. An instance is shared only once its start-up has finished inside
+ * the request that built it: Workers never lets one request wait on a promise
+ * that belongs to another, so sharing a half-started instance would leave
+ * every later request on it hanging.
+ */
+export async function getAuth(env: Env, db: D1Database, origin: string, methods: LoginMethods): Promise<PlatformAuth> {
   const key = `${origin}|${JSON.stringify(methods)}`;
-  let auth = instances.get(key);
-  if (!auth) {
-    if (instances.size > 16) instances.clear();
-    auth = buildAuth(env, db, origin, methods);
-    instances.set(key, auth);
-  }
+  const cached = instances.get(key);
+  if (cached) return cached;
+  const auth = buildAuth(env, db, origin, methods);
+  await auth.$context;
+  if (instances.size > 16) instances.clear();
+  instances.set(key, auth);
   return auth;
 }
 

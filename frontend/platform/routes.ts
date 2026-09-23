@@ -340,7 +340,7 @@ export async function handlePlatformRequest(request: Request, env: Env): Promise
 
   try {
     const methods = await getEffectiveLoginMethods(env, db);
-    const auth = getAuth(env, db, origin, methods);
+    const auth = await getAuth(env, db, origin, methods);
 
     if (path.startsWith('/auth/')) {
       const res = await auth.handler(request);
