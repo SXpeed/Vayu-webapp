@@ -35,6 +35,19 @@ export const content = {
     { title: 'Activity history', body: 'A record of who changed what, for every organization.' },
   ],
 
+  /** The product story on the welcome page: four real steps, artwork to sale. */
+  story: {
+    eyebrow: 'The workflow',
+    title: 'From the artwork to the sale',
+    body: 'Each step lives in the same workspace, so nothing gets lost between them.',
+    steps: [
+      { id: 'story-inventory', label: 'Inventory', title: 'Every artwork, in one place', body: 'Photos, dimensions, medium and price for each work, and whether it is available, reserved or sold.' },
+      { id: 'story-catalog', label: 'Catalogs', title: 'A catalog in a few taps', body: 'Choose the works and send a print-ready PDF, with clean cut-out photos from automatic background removal.' },
+      { id: 'story-inquiry', label: 'Inquiries', title: 'Follow every inquiry', body: 'Log each customer’s interest and follow it from first contact to a sale, with notes and photos.' },
+      { id: 'story-invoice', label: 'Invoices', title: 'Invoice and get paid', body: 'Proformas and invoices, and payment links paid into your own payment account.' },
+    ],
+  },
+
   howItWorks: [
     { title: 'Create your account', body: 'A name, your email and a password.' },
     { title: 'Tell us about your business', body: 'Name, type, location, and roughly how many people and stores. Save and come back any time.' },

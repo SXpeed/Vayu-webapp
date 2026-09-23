@@ -1,0 +1,190 @@
+/* Public website: motion and the few surfaces the app has no equivalent for.
+ *
+ * Everything is scoped to `.mk` (the welcome page root), so none of it can
+ * reach the organization app, the control centre or the sign-up form.
+ *
+ * Motion language — expressive, but short and quiet:
+ *   - one entrance curve (--mk-ease, a soft ease-out) and one exit curve;
+ *   - entrances move 16px at most and finish within about 0.6s;
+ *   - related elements stagger by 60ms;
+ *   - only transform and opacity animate;
+ *   - content is visible by default: it is hidden for an entrance only once
+ *     the reveal observer is running (.mk-reveal-ready), so a failed script
+ *     never leaves anything at opacity 0;
+ *   - reduced motion: no smooth scrolling, no parallax, no movement, no loops.
+ */
+
+@layer components {
+
+  .mk {
+    --mk-ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --mk-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+    --mk-fast: 150ms;
+    --mk-medium: 240ms;
+    --mk-slow: 600ms;
+    --mk-stagger: 60ms;
+    --mk-distance: 16px;
+    --mk-header: 64px;
+  }
+
+  /* Where anchors land, for smooth and plain jumps alike (Lenis honours
+     scroll-margin): cards stop just below the sticky header; sections,
+     which carry their own top padding, a little higher, so their heading
+     sits the same distance under the header. */
+  .mk [id] { scroll-margin-top: calc(var(--mk-header) + 16px); }
+  .mk section[id] { scroll-margin-top: calc(var(--mk-header) - 24px); }
+  .mk :focus-visible { outline: 2px solid rgba(212, 175, 55, 0.7); outline-offset: 3px; border-radius: 0.5rem; }
+  .mk section:focus { outline: none; }
+
+  /* ── Hero entrance ───────────────────────────────────────────────────
+   * Runs once on load, from CSS alone: brand, eyebrow, headline word by
+   * word, supporting copy, actions, then the product visual settles. */
+  .mk-rise { animation: mk-rise var(--mk-slow) var(--mk-ease) both; animation-delay: var(--d, 0ms); }
+  .mk-settle { animation: mk-settle 800ms var(--mk-ease) both; animation-delay: var(--d, 0ms); }
+  .mk-word { display: inline-block; white-space: nowrap; }
+
+  @keyframes mk-rise { from { opacity: 0; transform: translate3d(0, var(--mk-distance), 0); } to { opacity: 1; transform: none; } }
+  @keyframes mk-settle { from { opacity: 0; transform: translate3d(0, 24px, 0) scale(0.98); } to { opacity: 1; transform: none; } }
+  @keyframes mk-fade { from { opacity: 0; } to { opacity: 1; } }
+
+  /* ── Scroll reveals ──────────────────────────────────────────────────
+   * [data-reveal] elements rise into place the first time they enter the
+   * viewport; --i staggers siblings. The observer sets data-reveal-in. */
+  .mk [data-reveal] {
+    transition: opacity var(--mk-slow) var(--mk-ease), transform var(--mk-slow) var(--mk-ease);
+    transition-delay: calc(var(--i, 0) * var(--mk-stagger));
+  }
+  .mk-reveal-ready [data-reveal]:not([data-reveal-in]) { opacity: 0; transform: translate3d(0, var(--mk-distance), 0); }
+  .mk-reveal-ready [data-reveal="scale"]:not([data-reveal-in]) { opacity: 0; transform: translate3d(0, 12px, 0) scale(0.97); }
+
+  /* ── Header ──────────────────────────────────────────────────────────
+   * Transparent over the hero; a quiet surface and hairline once the page
+   * moves. The height never changes, so nothing below it shifts. */
+  .mk-header { transition: background-color var(--mk-medium) var(--mk-ease), box-shadow var(--mk-medium) var(--mk-ease); }
+  .mk-header[data-scrolled="true"] {
+    background-color: color-mix(in srgb, var(--neu-bg) 98%, transparent);
+    box-shadow: 0 1px 0 var(--neu-line), 0 10px 24px -18px var(--neu-shadow-dark);
+  }
+  .mk-navlink { position: relative; transition: color var(--mk-fast) ease; }
+  .mk-navlink::after {
+    content: ''; position: absolute; left: 0; right: 0; bottom: -6px; height: 2px; border-radius: 2px;
+    background: var(--neu-gold); transform: scaleX(0); transform-origin: left center;
+    transition: transform var(--mk-medium) var(--mk-ease);
+  }
+  .mk-navlink[aria-current="location"] { color: var(--neu-gold); }
+  .mk-navlink[aria-current="location"]::after { transform: scaleX(1); }
+
+  /* Mobile menu: fades and drops in; when closed it is hidden outright, so
+     nothing invisible is left over the page to catch taps. */
+  .mk-menu {
+    opacity: 0; transform: translate3d(0, -8px, 0); visibility: hidden;
+    transition: opacity var(--mk-fast) var(--mk-ease-exit), transform var(--mk-fast) var(--mk-ease-exit), visibility 0s linear var(--mk-fast);
+  }
+  .mk-menu[data-open="true"] {
+    opacity: 1; transform: none; visibility: visible;
+    transition: opacity var(--mk-medium) var(--mk-ease), transform var(--mk-medium) var(--mk-ease), visibility 0s;
+  }
+
+  /* ── Cards ───────────────────────────────────────────────────────────
+   * Feature cards are not links, so they do not lift; their icon well
+   * rises out of the card instead. Plan cards are actions, so they lift —
+   * by transform only, so they never change size or push their neighbours. */
+  .mk-feature .mk-icon {
+    transition: box-shadow var(--mk-medium) var(--mk-ease), transform var(--mk-medium) var(--mk-ease), color var(--mk-medium) ease;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .mk-feature:hover .mk-icon {
+      transform: translate3d(0, -2px, 0);
+      box-shadow: 4px 4px 10px var(--neu-shadow-dark), -4px -4px 10px var(--neu-shadow-light), inset 0 1px 0 var(--neu-highlight);
+    }
+    .mk-plan { transition: transform var(--mk-medium) var(--mk-ease), box-shadow var(--mk-medium) var(--mk-ease); }
+    .mk-plan:hover { transform: translate3d(0, -4px, 0); box-shadow: 12px 12px 28px var(--neu-shadow-dark), -12px -12px 28px var(--neu-shadow-light), inset 0 1px 0 var(--neu-highlight); }
+  }
+  .mk-plan:focus-within { box-shadow: 9px 9px 22px var(--neu-shadow-dark), -9px -9px 22px var(--neu-shadow-light), 0 0 0 2px rgba(212, 175, 55, 0.55); }
+
+  /* Buttons answer a press at once. */
+  .mk .neu-button:active:not(:disabled) { transform: translate3d(0, 1px, 0) scale(0.985); transition-duration: 80ms; }
+
+  /* ── How it works ────────────────────────────────────────────────────
+   * Each step lights up as it comes into view, and the rail to the next
+   * one draws in. On a computer the four arrive in sequence. */
+  .mk-step .mk-step-num {
+    color: var(--neu-gold);
+    background: linear-gradient(145deg, var(--neu-bg-lo), var(--neu-bg-hi));
+    box-shadow: inset 3px 3px 7px var(--neu-shadow-dark), inset -3px -3px 7px var(--neu-shadow-light);
+    transition: color var(--mk-medium) ease, box-shadow var(--mk-medium) var(--mk-ease), background-color var(--mk-medium) ease;
+    transition-delay: calc(var(--i, 0) * 140ms);
+  }
+  .mk-step[data-reached] .mk-step-num {
+    color: #241c04; background: linear-gradient(145deg, #f0d68a, #d4af37);
+    box-shadow: 3px 3px 8px var(--neu-shadow-dark), -3px -3px 7px var(--neu-shadow-light);
+  }
+  .mk-step .mk-rail > span {
+    display: block; width: 100%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #d4af37, #f0d68a);
+    transform: scaleX(0); transform-origin: left center;
+    transition: transform 700ms var(--mk-ease); transition-delay: calc(var(--i, 0) * 140ms + 120ms);
+  }
+  .mk-step .mk-rail-v > span { transform: scaleY(0); transform-origin: center top; background: linear-gradient(180deg, #d4af37, #f0d68a); }
+  .mk-step[data-reached] .mk-rail > span { transform: none; }
+
+  /* ── Product story ───────────────────────────────────────────────────
+   * The panel beside the text crossfades between four illustrations as
+   * each paragraph reaches the middle of the screen. */
+  .mk-scene { transition: opacity 500ms var(--mk-ease), transform 500ms var(--mk-ease); }
+  .mk-scene:not([data-active="true"]) { opacity: 0; transform: translate3d(0, 12px, 0) scale(0.985); pointer-events: none; }
+  .mk-story-item { transition: opacity var(--mk-medium) ease; }
+  @media (min-width: 1024px) {
+    .mk-story-item:not([data-active="true"]) { opacity: 0.45; }
+  }
+
+  /* Decorative glow behind the hero visual; drifts a little with scroll. */
+  .mk-glow { transform: translate3d(0, var(--mk-parallax, 0px), 0); will-change: transform; }
+
+  /* ── Hero motion graphic: artworks become a catalog ──────────────────
+   * One 9-second loop, all on the same clock. Each element's resting style
+   * is its final state; the keyframes only take it away and bring it back,
+   * so with animation off (reduced motion) the finished catalog shows. */
+  .mk-art { container-type: inline-size; }
+  .mk-art[data-paused="true"] .mk-loop { animation-play-state: paused; }
+  .mk-loop { animation-duration: 9s; animation-iteration-count: infinite; animation-timing-function: var(--mk-ease); animation-fill-mode: both; animation-delay: 1.3s; }
+
+  .mk-pick-1 { animation-name: mk-pick-1; }
+  .mk-pick-2 { animation-name: mk-pick-2; }
+  .mk-pick-3 { animation-name: mk-pick-3; }
+  .mk-page { animation-name: mk-page; }
+  .mk-thumb-1 { animation-name: mk-thumb-1; }
+  .mk-thumb-2 { animation-name: mk-thumb-2; }
+  .mk-thumb-3 { animation-name: mk-thumb-3; }
+  .mk-chip { animation-name: mk-chip; }
+
+  @keyframes mk-pick-1 { 0%, 8% { opacity: 0; } 12%, 88% { opacity: 1; } 94%, 100% { opacity: 0; } }
+  @keyframes mk-pick-2 { 0%, 14% { opacity: 0; } 18%, 88% { opacity: 1; } 94%, 100% { opacity: 0; } }
+  @keyframes mk-pick-3 { 0%, 20% { opacity: 0; } 24%, 88% { opacity: 1; } 94%, 100% { opacity: 0; } }
+  @keyframes mk-page { 0%, 30% { opacity: 0; transform: translate3d(0, 8%, 0) scale(0.96); } 40%, 86% { opacity: 1; transform: none; } 95%, 100% { opacity: 0; transform: translate3d(0, 4%, 0); } }
+  @keyframes mk-thumb-1 { 0%, 38% { opacity: 0; transform: translate3d(0, 10px, 0); } 44%, 86% { opacity: 1; transform: none; } 95%, 100% { opacity: 0; } }
+  @keyframes mk-thumb-2 { 0%, 42% { opacity: 0; transform: translate3d(0, 10px, 0); } 48%, 86% { opacity: 1; transform: none; } 95%, 100% { opacity: 0; } }
+  @keyframes mk-thumb-3 { 0%, 46% { opacity: 0; transform: translate3d(0, 10px, 0); } 52%, 86% { opacity: 1; transform: none; } 95%, 100% { opacity: 0; } }
+  @keyframes mk-chip { 0%, 56% { opacity: 0; transform: translate3d(0, 6px, 0) scale(0.94); } 61%, 86% { opacity: 1; transform: none; } 94%, 100% { opacity: 0; } }
+
+  /* Artwork swatches: soft painterly gradients standing in for photos. */
+  .mk-swatch { background-size: 140% 140%; }
+
+  /* ── Reduced motion ──────────────────────────────────────────────────
+   * Content shows at once; the only motion left is a short fade. */
+  @media (prefers-reduced-motion: reduce) {
+    .mk-rise, .mk-settle { animation: mk-fade 200ms linear both; animation-delay: 0ms; }
+    .mk-loop { animation: none !important; }
+    .mk [data-reveal] { transition: opacity 200ms linear; transition-delay: 0ms; }
+    .mk-reveal-ready [data-reveal]:not([data-reveal-in]),
+    .mk-reveal-ready [data-reveal="scale"]:not([data-reveal-in]) { transform: none; }
+    .mk-scene { transition: opacity 200ms linear; }
+    .mk-scene:not([data-active="true"]) { transform: none; }
+    .mk-glow { transform: none; will-change: auto; }
+    .mk-step .mk-rail > span, .mk-step .mk-step-num { transition-duration: 0ms; transition-delay: 0ms; }
+    .mk-menu, .mk-menu[data-open="true"] { transform: none; }
+  }
+
+  @media print {
+    .mk [data-reveal], .mk-rise, .mk-settle { opacity: 1 !important; transform: none !important; animation: none !important; }
+  }
+}

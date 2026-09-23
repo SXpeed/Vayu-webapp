@@ -1,8 +1,8 @@
 // Pieces shared by the public pages: header, footer, placeholder frames and
 // pricing cards fed from the plans published in the control centre.
 
-import React, { useEffect, useState } from 'react';
-import { Check } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Check, Menu, X } from 'lucide-react';
 import { useBranding } from '../useBranding';
 import type { Copy } from './content';
 import { content } from './content';
@@ -20,33 +20,108 @@ export const Text: React.FC<{ copy: Copy; className?: string }> = ({ copy, class
             </span>
         );
 
-export const SiteHeader: React.FC<{ minimal?: boolean }> = ({ minimal = false }) => {
+const NAV: { id: string; label: string }[] = [
+    { id: 'features', label: 'Features' },
+    { id: 'how', label: 'How it works' },
+    { id: 'pricing', label: 'Pricing' },
+    { id: 'about', label: 'About' },
+    { id: 'contact', label: 'Contact' },
+];
+
+/**
+ * The public header. Its height never changes: once the page moves it only
+ * gains a quiet surface and hairline. On the welcome page the section being
+ * read is marked. Phones get a menu button with a proper disclosure menu:
+ * Escape or a tap outside closes it, and focus goes back to the button.
+ */
+export const SiteHeader: React.FC<{ minimal?: boolean; active?: string | null }> = ({ minimal = false, active = null }) => {
     const b = useBranding();
+    const [scrolled, setScrolled] = useState(false);
+    const [open, setOpen] = useState(false);
+    const sentinel = useRef<HTMLSpanElement>(null);
+    const button = useRef<HTMLButtonElement>(null);
+    const menu = useRef<HTMLDivElement>(null);
+
+    // A 1px marker at the top of the page: when it leaves the screen, the page has moved.
+    useEffect(() => {
+        const el = sentinel.current;
+        if (!el || typeof IntersectionObserver === 'undefined') return;
+        const io = new IntersectionObserver(([e]) => setScrolled(!e.isIntersecting));
+        io.observe(el);
+        return () => io.disconnect();
+    }, []);
+
+    useEffect(() => {
+        if (!open) return;
+        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(false); button.current?.focus(); } };
+        const onDown = (e: PointerEvent) => {
+            const t = e.target as Node;
+            if (!menu.current?.contains(t) && !button.current?.contains(t)) setOpen(false);
+        };
+        const onWide = () => { if (window.innerWidth >= 1024) setOpen(false); };
+        document.addEventListener('keydown', onKey);
+        document.addEventListener('pointerdown', onDown);
+        window.addEventListener('resize', onWide);
+        return () => {
+            document.removeEventListener('keydown', onKey);
+            document.removeEventListener('pointerdown', onDown);
+            window.removeEventListener('resize', onWide);
+        };
+    }, [open]);
+
     return (
-        <header className="sticky top-0 z-20 backdrop-blur bg-[var(--neu-bg)]/85 border-b border-black/5 dark:border-white/10">
-            <div className="max-w-6xl mx-auto px-4 h-16 flex items-center gap-6">
-                <a href="/welcome" className="flex items-center gap-2.5 shrink-0">
-                    {b.logoUrl
-                        ? <img src={b.logoUrl} alt="" className="w-8 h-8 rounded-lg object-contain" />
-                        : <span className="w-8 h-8 rounded-lg neu-accent flex items-center justify-center font-serif">{b.appName.slice(0, 1).toUpperCase()}</span>}
-                    <span className="font-serif text-lg text-gray-900 dark:text-gray-100">{b.appName}</span>
-                </a>
-                {!minimal && (
-                    <nav className="hidden md:flex items-center gap-6 text-sm text-gray-700 dark:text-gray-300">
-                        <a href="/welcome#features" className="hover:text-gold-700">Features</a>
-                        <a href="/welcome#how" className="hover:text-gold-700">How it works</a>
-                        <a href="/welcome#pricing" className="hover:text-gold-700">Pricing</a>
-                        <a href="/welcome#about" className="hover:text-gold-700">About</a>
-                        <a href="/welcome#contact" className="hover:text-gold-700">Contact</a>
-                    </nav>
-                )}
-                <div className="ml-auto flex items-center gap-2">
-                    <a href={SIGNIN_URL} className="text-sm px-3 py-2 whitespace-nowrap text-gray-800 dark:text-gray-200 hover:text-gold-700">Log in</a>
-                    {/* On phones the hero carries the main button, so the header keeps only "Log in". */}
-                    {!minimal && <a href={SIGNUP_URL} className="hidden sm:inline-flex neu-button neu-button-primary text-sm whitespace-nowrap">Get started</a>}
+        <>
+            <span ref={sentinel} aria-hidden className="absolute top-0 left-0 h-px w-px" />
+            <header className="mk-header sticky top-0 z-30" data-scrolled={scrolled || open ? 'true' : 'false'}>
+                <div className="max-w-6xl mx-auto px-5 h-16 flex items-center gap-6">
+                    <a href="/welcome" className="flex items-center gap-2.5 shrink-0 rounded-lg">
+                        {b.logoUrl
+                            ? <img src={b.logoUrl} alt="" width={32} height={32} className="w-8 h-8 rounded-lg object-contain" />
+                            : <span className="w-8 h-8 rounded-lg neu-accent flex items-center justify-center font-serif">{b.appName.slice(0, 1).toUpperCase()}</span>}
+                        <span className="font-serif text-lg text-gray-900 dark:text-gray-100">{b.appName}</span>
+                    </a>
+                    {!minimal && (
+                        <nav aria-label="Sections" className="hidden lg:flex items-center gap-6 text-sm text-gray-700 dark:text-gray-300">
+                            {NAV.map(n => (
+                                <a key={n.id} href={`/welcome#${n.id}`} aria-current={active === n.id ? 'location' : undefined}
+                                    className="mk-navlink hover:text-gold-700 dark:hover:text-gold-300">{n.label}</a>
+                            ))}
+                        </nav>
+                    )}
+                    <div className="ml-auto flex items-center gap-2">
+                        <a href={SIGNIN_URL} className="text-sm px-3 py-2 whitespace-nowrap text-gray-800 dark:text-gray-200 hover:text-gold-700 rounded-lg">Log in</a>
+                        {/* On phones the hero carries the main button, so the header keeps only "Log in". */}
+                        {!minimal && <a href={SIGNUP_URL} className="hidden sm:inline-flex neu-button neu-button-primary text-sm whitespace-nowrap">Get started</a>}
+                        {!minimal && (
+                            <button ref={button} type="button" onClick={() => setOpen(o => !o)}
+                                aria-expanded={open} aria-controls="mk-menu" aria-label={open ? 'Close menu' : 'Open menu'}
+                                className="lg:hidden w-10 h-10 rounded-full neu-raised-sm neu-btn flex items-center justify-center text-gray-800 dark:text-gray-200 active-scale">
+                                {open ? <X size={18} /> : <Menu size={18} />}
+                            </button>
+                        )}
+                    </div>
                 </div>
-            </div>
-        </header>
+                {!minimal && (
+                    <div ref={menu} id="mk-menu" data-open={open ? 'true' : 'false'} data-lenis-prevent
+                        className="mk-menu lg:hidden absolute left-0 right-0 top-full px-4 pb-4">
+                        <nav aria-label="Sections menu" className="neu-card p-3">
+                            <ul className="space-y-1">
+                                {NAV.map(n => (
+                                    <li key={n.id}>
+                                        <a href={`/welcome#${n.id}`} onClick={() => setOpen(false)} tabIndex={open ? undefined : -1}
+                                            aria-current={active === n.id ? 'location' : undefined}
+                                            className={`block rounded-xl px-4 py-3 text-[15px] ${active === n.id ? 'neu-inset text-gold-700 dark:text-gold-300' : 'text-gray-800 dark:text-gray-200'}`}>
+                                            {n.label}
+                                        </a>
+                                    </li>
+                                ))}
+                            </ul>
+                            <a href={SIGNUP_URL} tabIndex={open ? undefined : -1} className="mt-3 neu-button neu-button-primary w-full justify-center">Get started</a>
+                        </nav>
+                    </div>
+                )}
+            </header>
+        </>
     );
 };
 
@@ -126,17 +201,17 @@ export function planPrice(p: PublicPlan, cycle: 'monthly' | 'annual'): { amount:
         : { amount: money(p.priceMonthly, p.currency), per: '/ month' };
 }
 
-export const PlanCard: React.FC<{ plan: PublicPlan; cycle: 'monthly' | 'annual'; selected?: boolean; onChoose?: () => void; cta?: string; href?: string }> = ({ plan, cycle, selected, onChoose, cta = 'Choose', href }) => {
+export const PlanCard: React.FC<{ plan: PublicPlan; cycle: 'monthly' | 'annual'; selected?: boolean; onChoose?: () => void; cta?: string; href?: string; className?: string }> = ({ plan, cycle, selected, onChoose, cta = 'Choose', href, className = '' }) => {
     const price = planPrice(plan, cycle);
     const Action = href
         ? <a href={href} className="neu-button neu-button-primary w-full justify-center mt-6">{cta}</a>
         : <button type="button" onClick={onChoose} className={`neu-button w-full justify-center mt-6 ${selected ? 'neu-button-primary' : ''}`}>{selected ? 'Selected' : cta}</button>;
     return (
-        <div className={`neu-card p-6 flex flex-col ${selected ? 'ring-2 ring-gold-500' : ''}`}>
+        <div className={`neu-card p-6 flex flex-col ${selected ? 'ring-2 ring-gold-500' : ''} ${className}`}>
             <p className="font-serif text-xl text-gray-900 dark:text-gray-100">{plan.name}</p>
             {plan.description && <p className="text-[13px] mt-1 text-gray-600 dark:text-gray-400">{plan.description}</p>}
             <p className="mt-4">
-                <span className="font-serif text-3xl text-gray-900 dark:text-gray-100">{price.amount}</span>
+                <span className="font-serif text-3xl text-gray-900 dark:text-gray-100 tabular-nums">{price.amount}</span>
                 <span className="text-sm text-gray-600 dark:text-gray-400"> {price.per}</span>
             </p>
             {plan.billingType === 'paid' && plan.trialDays > 0 && (
