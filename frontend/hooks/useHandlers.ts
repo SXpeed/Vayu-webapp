@@ -374,7 +374,7 @@ export function useHandlers(args: HandlerArgs) {
 
         const otherMember = teamMembers.find(m => m.id === participantId);
         const conv: Conversation = {
-            id: `conv_${Date.now()}`,
+            id: `conv_${Date.now()}_${crypto.randomUUID()}`,
             participantIds: [selfId, participantId],
             participantNames: [userProfile?.name || authUser?.name || 'You', otherMember?.name || 'Team Member'],
             lastMessage: '', lastMessageTime: Date.now(), unreadCount: 0,
@@ -418,7 +418,7 @@ export function useHandlers(args: HandlerArgs) {
             id === selfId ? (userProfile?.name || authUser?.name || 'You') : (teamMembers.find(m => m.id === id)?.name || 'Team Member')
         );
         const conv: Conversation = {
-            id: `conv_${Date.now()}`,
+            id: `conv_${Date.now()}_${crypto.randomUUID()}`,
             participantIds: allParticipantIds,
             participantNames: allParticipantNames,
             lastMessage: '', lastMessageTime: Date.now(), unreadCount: 0,

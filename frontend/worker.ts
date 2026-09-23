@@ -1261,6 +1261,30 @@ async function handleFileDelete(ctx: Ctx): Promise<Response> {
 
 // ── Messaging route handlers ────────────────────────────────────────────────
 
+/**
+ * A conversation's participant ids, or null when there is no such
+ * conversation. Every read or change of a single conversation checks this:
+ * knowing its id is not permission (ids used to be a bare timestamp, so they
+ * could be guessed).
+ */
+async function conversationMembers(db: D1Database, id: string): Promise<string[] | null> {
+  const row = await db.prepare('SELECT participant_ids FROM conversations WHERE id = ?').bind(id).first<{ participant_ids: string }>();
+  if (!row) return null;
+  try {
+    const ids: unknown = JSON.parse(row.participant_ids);
+    return Array.isArray(ids) ? ids.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Participants may use a conversation; admins may act on any, as before. */
+function inConversation(session: SessionData, members: string[]): boolean {
+  return session.role === ADMIN_ROLE_ID || members.includes(session.userId);
+}
+
+const NOT_A_MEMBER = 'You are not part of this conversation';
+
 async function handleConversationsList(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
@@ -1281,9 +1305,15 @@ async function handleConversationsCreate(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json();
   const conv = body as any;
   if (!conv.id || !conv.participantIds) return err('id and participantIds are required');
+  if (typeof conv.id !== 'string' || conv.id.length > 128) return err('Invalid conversation id');
   if (!Array.isArray(conv.participantIds) || (!conv.participantIds.includes(session.userId) && session.role !== ADMIN_ROLE_ID)) {
     return err('You can only start chats you are part of', 403);
   }
+  // This is an upsert, so an id that already exists belongs to that
+  // conversation: only its own members may write it again (a retried
+  // create). Anyone else would replace it and make themselves a member.
+  const existing = await conversationMembers(ctx.env.VAYU_DB, conv.id);
+  if (existing && !inConversation(session, existing)) return err(NOT_A_MEMBER, 403);
   await ensureChangeLogTable(ctx.env.VAYU_DB);
   // Conversation write + change-log row commit atomically.
   await ctx.env.VAYU_DB.batch([
@@ -1319,8 +1349,12 @@ async function handleConversationsUpdate(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
   const convId = ctx.path.slice('/conversations/'.length);
+  const members = await conversationMembers(ctx.env.VAYU_DB, convId);
+  if (!members) return err('Conversation not found', 404);
+  if (!inConversation(session, members)) return err(NOT_A_MEMBER, 403);
   const body = await ctx.request.json();
   const conv = body as any;
+  const participantIds: string[] = Array.isArray(conv.participantIds) ? conv.participantIds : members;
   await ensureChangeLogTable(ctx.env.VAYU_DB);
   await ctx.env.VAYU_DB.batch([
     ctx.env.VAYU_DB.prepare(
@@ -1330,7 +1364,7 @@ async function handleConversationsUpdate(ctx: Ctx): Promise<Response> {
          note = ?, is_group = ?, group_name = ?, is_pinned = ?, is_archived = ?
        WHERE id = ?`
     ).bind(
-      JSON.stringify(conv.participantIds),
+      JSON.stringify(participantIds),
       JSON.stringify(conv.participantNames || []),
       conv.lastMessage || '',
       conv.lastMessageTime || Date.now(),
@@ -1345,7 +1379,7 @@ async function handleConversationsUpdate(ctx: Ctx): Promise<Response> {
       convId
     ),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'conversation', convId, 'put',
-      { scope: conv.participantIds, actorId: session.userId }),
+      { scope: participantIds, actorId: session.userId }),
   ]);
   queueHubNotify(ctx, [{ entity: 'conversation', id: convId, op: 'put', conversationId: convId }]);
   return json(conv);
@@ -1356,6 +1390,10 @@ async function handleConversationsDelete(ctx: Ctx): Promise<Response> {
   if (!session) return err('Unauthorized', 401);
   const convId = ctx.path.slice('/conversations/'.length);
   const conv = await ctx.env.VAYU_DB.prepare('SELECT * FROM conversations WHERE id = ?').bind(convId).first();
+  if (conv) {
+    const members = await conversationMembers(ctx.env.VAYU_DB, convId);
+    if (members && !inConversation(session, members)) return err(NOT_A_MEMBER, 403);
+  }
   const msgRows = (await ctx.env.VAYU_DB.prepare(
     'SELECT id FROM messages WHERE conversation_id = ?'
   ).bind(convId).all<{ id: string }>()).results ?? [];
@@ -1395,6 +1433,9 @@ async function handleMessagesList(ctx: Ctx): Promise<Response> {
   const showAll = ctx.url.searchParams.get('all') === 'true' && session.role === 'admin';
   let results;
   if (conversationId) {
+    const members = await conversationMembers(ctx.env.VAYU_DB, conversationId);
+    if (!members) return json([]);
+    if (!inConversation(session, members)) return err(NOT_A_MEMBER, 403);
     results = await ctx.env.VAYU_DB.prepare(
       'SELECT * FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC'
     ).bind(conversationId).all();
