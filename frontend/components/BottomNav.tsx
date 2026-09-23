@@ -54,7 +54,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ currentView, onChangeView,
                             className="neu-dock-item relative flex-1 min-w-0 h-[52px] flex flex-col items-center justify-center gap-[5px]"
                         >
                             <Icon size={19} strokeWidth={isActive ? 2.2 : 1.8} className="neu-dock-icon" />
-                            <span className={`max-w-full truncate text-[9.5px] leading-none ${isActive ? 'font-semibold' : 'font-medium'}`}>
+                            <span className={`max-w-full truncate text-[9.5px] leading-[1.35] -my-[0.175em] ${isActive ? 'font-semibold' : 'font-medium'}`}>
                                 {item.label}
                             </span>
                         </button>

@@ -108,7 +108,9 @@ export const Sidebar: React.FC<{
             </span>
             {!collapsed && (
                 <>
-                    <span className={`flex-1 min-w-0 text-[13px] tracking-wide leading-none truncate ${active ? 'font-medium' : 'font-light'}`}>{label}</span>
+                    {/* truncate clips at the line box, so a line height of 1 cut off g, y and p.
+                        1.35 gives them room; the negative margin keeps the old layout height. */}
+                    <span className={`flex-1 min-w-0 text-[13px] tracking-wide leading-[1.35] -my-[0.175em] truncate ${active ? 'font-medium' : 'font-light'}`}>{label}</span>
                     {!!badge && <span className="ac-count">{badge}</span>}
                     {trailing}
                 </>
@@ -227,7 +229,7 @@ export const Dock: React.FC<{ items: NavItem[]; current: Tab; onNavigate: (t: Ta
                                 <Icon size={19} strokeWidth={item.active ? 2.2 : 1.8} className="neu-dock-icon" />
                                 {!!item.badge && <span className="ac-count absolute -top-2 -right-3 !min-w-[1.05rem] !h-[1.05rem] !text-[9px]">{item.badge}</span>}
                             </span>
-                            <span className={`max-w-full truncate text-[9.5px] leading-none ${item.active ? 'font-semibold' : 'font-medium'}`}>{item.label}</span>
+                            <span className={`max-w-full truncate text-[9.5px] leading-[1.35] -my-[0.175em] ${item.active ? 'font-semibold' : 'font-medium'}`}>{item.label}</span>
                         </button>
                     );
                 })}

@@ -126,7 +126,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     }`}
             />
             {!collapsed && (
-                <span className={`text-[13px] tracking-wide leading-none truncate ${isActive ? 'font-medium' : 'font-light'}`}>
+                // truncate clips at the line box, so a line height of 1 cut off g, y and p.
+                // 1.35 gives them room; the negative margin keeps the old layout height.
+                <span className={`text-[13px] tracking-wide leading-[1.35] -my-[0.175em] truncate ${isActive ? 'font-medium' : 'font-light'}`}>
                     {label}
                 </span>
             )}
