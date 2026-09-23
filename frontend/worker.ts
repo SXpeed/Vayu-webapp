@@ -1753,18 +1753,15 @@ const COLUMN_MIGRATIONS = {
 
 type MigratedTable = keyof typeof COLUMN_MIGRATIONS;
 
-const migratedTables = new Map<MigratedTable, Promise<void>>();
-
+/**
+ * Adds a table's missing columns at most once per isolate, remembering only a
+ * finished setup (runSetupOnce). It used to share the in-flight promise with
+ * later requests, the pattern that hung GET /catalogs and /events: a request
+ * cancelled mid-setup left it unsettled, and every later request awaiting it
+ * on that isolate hung.
+ */
 function ensureColumns(db: D1Database, table: MigratedTable): Promise<void> {
-  let pending = migratedTables.get(table);
-  if (!pending) {
-    pending = addMissingColumns(db, table).catch((e) => {
-      migratedTables.delete(table);
-      throw e;
-    });
-    migratedTables.set(table, pending);
-  }
-  return pending;
+  return runSetupOnce(`columns:${table}`, () => addMissingColumns(db, table));
 }
 
 async function addMissingColumns(db: D1Database, table: MigratedTable): Promise<void> {
