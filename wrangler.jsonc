@@ -63,7 +63,9 @@
     "WORKSPACE_ID": "default",
     "DELTA_SYNC_ENABLED": "on",
     "REALTIME_ENABLED": "on",
-    "FILE_AUTH": "off",
+    // Private files: /api/files/* needs the app's sign-in or its file cookie
+    // (frontend/fileAuth.ts); an address alone opens nothing.
+    "FILE_AUTH": "on",
     // Plain vars, not secrets: committed here (not set via the dashboard)
     // so they survive every deploy instead of being wiped by the next one.
     // Every address whose Worker hands /api to this one, so Better Auth

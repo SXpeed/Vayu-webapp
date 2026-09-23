@@ -94,6 +94,30 @@ export function useAuth() {
         navigateTo('login');
     }, [clearAuth]);
 
+    // Photos and attachments load with a private 7-day file cookie (FILE_AUTH)
+    // that /auth/me renews when it is missing or expired. /auth/me runs when
+    // the app starts, but an installed app can stay suspended for longer than
+    // a week, so ask again when it comes back after a long while (and hourly
+    // while open). Cheap: the server only issues a cookie when one is needed.
+    useEffect(() => {
+        if (!authUser) return;
+        let lastRenewal = Date.now();
+        const renew = () => {
+            if (document.visibilityState !== 'visible' || !navigator.onLine) return;
+            if (Date.now() - lastRenewal < 6 * 3_600_000) return;
+            lastRenewal = Date.now();
+            authService.getMe().catch(() => { /* next time */ });
+        };
+        const timer = setInterval(renew, 3_600_000);
+        document.addEventListener('visibilitychange', renew);
+        window.addEventListener('online', renew);
+        return () => {
+            clearInterval(timer);
+            document.removeEventListener('visibilitychange', renew);
+            window.removeEventListener('online', renew);
+        };
+    }, [authUser?.id]);
+
     // Presence is informational, not business-critical. A five-minute visible-
     // tab heartbeat avoids thousands of Worker invocations and KV writes per
     // employee while still providing a useful approximate online indicator.

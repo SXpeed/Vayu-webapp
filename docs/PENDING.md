@@ -183,7 +183,7 @@ Seats and inventory items are enforced. Still to wire up (each is labelled
 - [ ] Measure before claiming any saving
 
 ### 3.11 File security (Phase G)
-- [ ] Turn on `FILE_AUTH` in production (files are currently reachable by URL)
+- [x] Turn on `FILE_AUTH` in production: a file address alone opens nothing; the app uses its sign-in or a private 7-day cookie, renewed on start and after long pauses (`tests/fileAuth.integration.test.mjs`)
 - [ ] Per-organization file namespace and ownership records
 - [ ] Purge previously public cached copies (already-downloaded copies cannot be recalled)
 
