@@ -9,7 +9,11 @@
     { "pattern": "www.ateliersupport.com", "custom_domain": true },
     // The organization app's own address. The apex keeps serving the app
     // until everyone has moved, then becomes the marketing site.
-    { "pattern": "app.ateliersupport.com", "custom_domain": true }
+    { "pattern": "app.ateliersupport.com", "custom_domain": true },
+    // The provider control centre. custom_domain:true provisions this on
+    // deploy, the same way the three domains above already are — no manual
+    // DNS step needed, since the zone is already on Cloudflare.
+    { "pattern": "admin.ateliersupport.com", "custom_domain": true }
   ],
   "compatibility_date": "2026-06-24",
   "compatibility_flags": ["nodejs_compat"],
@@ -56,6 +60,15 @@
     "WORKSPACE_ID": "default",
     "DELTA_SYNC_ENABLED": "on",
     "REALTIME_ENABLED": "on",
-    "FILE_AUTH": "off"
+    "FILE_AUTH": "off",
+    // Plain vars, not secrets: committed here (not set via the dashboard)
+    // so they survive every deploy instead of being wiped by the next one.
+    // Every hostname routed to this Worker, so Better Auth accepts a
+    // sign-in from any of them.
+    "AUTH_ORIGINS": "https://ateliersupport.com,https://www.ateliersupport.com,https://app.ateliersupport.com,https://admin.ateliersupport.com",
+    // The control centre only answers on this host; every other host gets
+    // a plain 404 on /api/v2/admin/*. The platform database still needs to
+    // exist for the control centre to actually work (see docs/PENDING.md §2).
+    "ADMIN_HOST": "admin.ateliersupport.com"
   }
 }
