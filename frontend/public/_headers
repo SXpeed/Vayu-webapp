@@ -1,0 +1,23 @@
+# Security headers for every page and asset (Workers static assets read this
+# file from the build output). API responses set their own in the Worker.
+#
+# - HSTS: browsers only ever use HTTPS for this site from now on.
+# - frame-ancestors / X-Frame-Options: no other site can load the app or the
+#   control centre inside a frame and trick someone into clicking (the app
+#   never frames its own pages).
+# - base-uri / object-src / form-action: close off base-tag injection,
+#   plugins, and forms posting to another site.
+# - nosniff: the declared type is the type; no guessing.
+# - Permissions-Policy: location (attendance) and the camera for this site
+#   only; nothing else.
+#
+# Deliberately not here yet: a script-src policy. The app has inline theme
+# scripts and third-party libraries (PDF, background removal) that need
+# testing before scripts can be locked down.
+/*
+  Strict-Transport-Security: max-age=31536000
+  Content-Security-Policy: frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(self), geolocation=(self), microphone=(), payment=(), usb=(), serial=(), bluetooth=()

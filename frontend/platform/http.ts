@@ -2,7 +2,7 @@
 // are never cacheable unless a route opts in, and errors carry a short code
 // and a plain message, never internal details.
 
-const NO_STORE = { 'Cache-Control': 'no-store', 'Content-Type': 'application/json' };
+const NO_STORE = { 'Cache-Control': 'no-store', 'Content-Type': 'application/json', 'X-Content-Type-Options': 'nosniff' };
 
 export function reply(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: NO_STORE });

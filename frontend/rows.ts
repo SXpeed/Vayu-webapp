@@ -11,7 +11,7 @@ export const CORS: HeadersInit = {
 export function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'Content-Type': 'application/json', ...CORS },
+    headers: { 'Content-Type': 'application/json', 'X-Content-Type-Options': 'nosniff', ...CORS },
   });
 }
 

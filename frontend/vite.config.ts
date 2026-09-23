@@ -12,7 +12,8 @@ export default defineConfig(({ mode }) => {
     const useHttps = !!env.VITE_HTTPS;
     return {
       server: {
-        host: true,
+        // This computer only. `npm run dev:phone` passes --host to open it
+        // to the local network on purpose.
         ...(useHttps ? { https: {} } : {}),
         proxy: {
           // Dev API target: the deployed Worker by default, so `npm run dev`
