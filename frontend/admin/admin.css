@@ -111,6 +111,10 @@
    * Off: a small raised tile. On: pressed in, with a gold check — the same
    * "pressed = selected" rule as the app's pills and toggles. */
   .ac-check {
+    /* The tile holds its visually hidden checkbox. Without this the checkbox
+     * is placed relative to the drawer, far below its visible area, and a
+     * click (which focuses it) scrolls the whole drawer out of view. */
+    position: relative;
     display: flex; align-items: flex-start; gap: 0.75rem;
     padding: 0.75rem 0.9rem; border-radius: 0.875rem;
     background: linear-gradient(145deg, var(--neu-bg-hi), var(--neu-bg-lo));
@@ -150,7 +154,10 @@
   .ac-drawer {
     position: fixed; top: 0.75rem; right: 0.75rem; bottom: 0.75rem; z-index: 51;
     width: min(calc(100vw - 1.5rem), var(--ac-drawer-width, 640px));
-    display: flex; flex-direction: column; overflow: hidden;
+    /* clip, not just hidden: a hidden box can still be scrolled by focus or
+     * scrollIntoView, which would slide the header and footer out of sight.
+     * The body scrolls inside instead. */
+    display: flex; flex-direction: column; overflow: hidden; overflow: clip;
     animation: ac-slide-in 0.36s var(--ac-ease) both;
     will-change: transform;
   }
