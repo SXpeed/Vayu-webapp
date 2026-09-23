@@ -62,6 +62,20 @@ which blocked the website Worker, was removed. All live checks passed.
 - [ ] A few weeks after: stop passing the app's original `/api` on
       `ateliersupport.com` (`frontend/hosts/welcome/worker.ts`)
 
+## 2c. Private rooms — part 1 built (closed staff chat rooms)
+
+`frontend/privateRooms.ts`. A private room is a group only its members can see,
+even admins: not listed, not readable, not in sync, the live hub, receipts or
+the deleted-items archive. Admins create them (New chat → New Group → Private
+room); the creator, or an admin in the room, renames, changes members or
+deletes. Tests: `tests/privateRooms.integration.test.mjs`.
+
+- [ ] Part 2: private viewing rooms for clients (curated artworks on a private link)
+- [ ] The plan's "Private rooms" limit and switch are not checked yet (the main
+      app is not on plans until §3.1)
+- [ ] Someone removed from a room keeps its already-downloaded messages on
+      their device until the app's next full refresh (true of groups too)
+
 ## 3. Pending implementation
 
 ### 3.1 The app on the new foundation (biggest remaining piece)

@@ -319,6 +319,7 @@ const App: React.FC = () => {
                         teamMembers={teamMembers}
                         currentUserId={userProfile?.id || authUser?.id || ''}
                         currentUserName={userProfile?.name || authUser?.name || 'You'}
+                        isAdmin={authUser?.role === 'admin'}
                         onSendMessage={handlers.handleSendMessage}
                         onRetryMessage={handlers.handleRetryMessage}
                         onCreateConversation={handlers.handleCreateConversation}

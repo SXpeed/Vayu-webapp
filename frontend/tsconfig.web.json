@@ -33,6 +33,7 @@
     "realtime.ts",
     "realtimeTickets.ts",
     "entityAccess.ts",
+    "privateRooms.ts",
     "fileAuth.ts",
     "deviceSessions.ts",
     "dist",

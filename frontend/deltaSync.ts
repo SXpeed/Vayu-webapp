@@ -26,6 +26,7 @@ import {
 } from './rows';
 import { permissionsForRoles, readableEntities, scopeAllows, type SyncEntity } from './entityAccess';
 import { ADMIN_ROLE_ID, atLeast } from './permissions';
+import { CONVERSATION_SCOPE_SQL, mayUseConversation, roomAccessOf, type RoomAccess } from './privateRooms';
 import { getRoles, getSession } from './workerRoles';
 import {
   addD1Usage, flagEnabled, rawRealtimeSecret, realtimeEnabled, workspaceId,
@@ -93,6 +94,11 @@ interface StatusUpgradeOptions {
   conversationId?: string;
   /** Only upgrade rows in conversations this user participates in. */
   memberId?: string;
+  /**
+   * An admin: any conversation, except private rooms this admin is not in.
+   * (Callers pass memberId or adminId; the SQL needs the is_private column.)
+   */
+  adminId?: string;
 }
 
 /**
@@ -120,11 +126,17 @@ export function statusUpgradeStmts(
       ' WHERE c.id = messages.conversation_id AND p.value = ?)';
     binds.push(options.memberId);
   }
+  if (isChat && options.adminId !== undefined) {
+    where += ' AND EXISTS (SELECT 1 FROM conversations c WHERE c.id = messages.conversation_id' +
+      ' AND (IFNULL(c.is_private, 0) = 0 OR EXISTS (SELECT 1 FROM json_each(c.participant_ids) p WHERE p.value = ?)))';
+    binds.push(options.adminId);
+  }
   const update = db.prepare(
     `UPDATE ${table} SET status = ? WHERE ${where} RETURNING id${isChat ? ', conversation_id' : ''}`,
   ).bind(...binds);
+  // A private room's scope carries the private marker (privateRooms.ts).
   const scopeExpr = isChat
-    ? '(SELECT participant_ids FROM conversations c WHERE c.id = t.conversation_id)'
+    ? `(SELECT ${CONVERSATION_SCOPE_SQL} FROM conversations c WHERE c.id = t.conversation_id)`
     : 'NULL';
   const log = db.prepare(
     'INSERT INTO change_log (workspace_id, entity, entity_id, op, changed_at, actor_id, scope) ' +
@@ -350,14 +362,13 @@ async function snapshot(
   const records: unknown[] = [];
   if (entity === 'conversation') {
     for (const row of rows) {
-      const conv = map(row) as { participantIds: string[] };
-      if (isAdmin || conv.participantIds.includes(session.userId)) records.push(conv);
+      if (mayUseConversation(session.userId, isAdmin, roomAccessOf(row))) records.push(map(row));
     }
   } else if (entity === 'message') {
-    const memberships = await conversationMemberships(ctx, rows.map(r => String(r.conversation_id)));
+    const rooms = await conversationMemberships(ctx, rows.map(r => String(r.conversation_id)));
     for (const row of rows) {
-      const members = memberships.get(String(row.conversation_id));
-      if (members && (isAdmin || members.includes(session.userId))) records.push(map(row));
+      const room = rooms.get(String(row.conversation_id));
+      if (room && mayUseConversation(session.userId, isAdmin, room)) records.push(map(row));
     }
   } else if (entity === 'attendance' && ownAttendance) {
     for (const row of rows) records.push(map(row)); // already filtered in SQL
@@ -368,19 +379,18 @@ async function snapshot(
   return json({ mode: 'snapshot', entity, cursor, records, hasMore, afterId: after });
 }
 
-/** participant_ids for a set of conversations, in one query. */
-async function conversationMemberships(ctx: Ctx, conversationIds: string[]): Promise<Map<string, string[]>> {
-  const map = new Map<string, string[]>();
+/** Members and privacy for a set of conversations, in one query per chunk. */
+async function conversationMemberships(ctx: Ctx, conversationIds: string[]): Promise<Map<string, RoomAccess>> {
+  const map = new Map<string, RoomAccess>();
   const unique = [...new Set(conversationIds)].filter(Boolean);
   if (unique.length === 0) return map;
   for (const chunk of chunks(unique, MAX_BOUND_PARAMS)) {
+    // SELECT *: works whether or not the private-room columns exist yet.
     const res = await ctx.env.VAYU_DB.prepare(
-      `SELECT id, participant_ids FROM conversations WHERE id IN (${chunk.map(() => '?').join(',')})`,
-    ).bind(...chunk).all<{ id: string; participant_ids: string }>();
+      `SELECT * FROM conversations WHERE id IN (${chunk.map(() => '?').join(',')})`,
+    ).bind(...chunk).all<Record<string, unknown>>();
     addD1Usage(ctx.request, res.meta?.rows_read ?? 0, 0);
-    for (const row of res.results || []) {
-      try { map.set(row.id, JSON.parse(row.participant_ids)); } catch { /* malformed row */ }
-    }
+    for (const row of res.results || []) map.set(String(row.id), roomAccessOf(row));
   }
   return map;
 }

@@ -21,6 +21,7 @@ import {
 } from './entityAccess';
 import { ADMIN_ROLE_ID, type RoleDef } from './permissions';
 import { ackStatus, ensureChangeLogTable, statusUpgradeStmts } from './deltaSync';
+import { ensurePrivateRoomColumns, mayUseConversation, roomAccessOf, type RoomAccess } from './privateRooms';
 import { rawRealtimeSecret, workspaceId, type ChangeEvent, type Env } from './workerEnv';
 
 interface SocketMeta {
@@ -66,7 +67,7 @@ export class SyncHub {
   private meta = new WeakMap<WebSocket, SocketMeta>();
   private rate = new WeakMap<WebSocket, number[]>();
   private typingAt = new Map<string, number>();
-  private membership = new Map<string, { at: number; members: string[] }>();
+  private membership = new Map<string, { at: number; room: RoomAccess }>();
   private rolesCache: { at: number; roles: RoleDef[] } | null = null;
   private readableCache = new Map<string, { at: number; entities: Set<SyncEntity>; payments: boolean }>();
 
@@ -274,13 +275,13 @@ export class SyncHub {
     if (this.typingAt.size > 1000) {
       for (const [k, at] of this.typingAt) if (now - at > 60_000) this.typingAt.delete(k);
     }
-    const members = await this.members(conversationId);
-    if (meta.role !== ADMIN_ROLE_ID && !members.includes(meta.userId)) return;
+    const room = await this.room(conversationId);
+    if (!mayUseConversation(meta.userId, meta.role === ADMIN_ROLE_ID, room)) return;
 
     const payload = JSON.stringify({
       type: 'typing', conversationId, userId: meta.userId, name: meta.name, at: now,
     });
-    for (const userId of members) {
+    for (const userId of room.members) {
       if (userId === meta.userId) continue;
       for (const socket of this.sockets.get(userId) ?? []) {
         this.deliver(socket, payload);
@@ -302,11 +303,12 @@ export class SyncHub {
     const ids = msg.messageIds.filter((id): id is string => typeof id === 'string' && id.length <= 128);
     if (ids.length === 0) return;
     const conversationId = msg.conversationId;
-    const members = await this.members(conversationId);
-    if (meta.role !== ADMIN_ROLE_ID && !members.includes(meta.userId)) return;
+    const room = await this.room(conversationId);
+    if (!mayUseConversation(meta.userId, meta.role === ADMIN_ROLE_ID, room)) return;
 
     const db = this.env.VAYU_DB;
     await ensureChangeLogTable(db);
+    await ensurePrivateRoomColumns(db); // the receipt's scope SQL reads is_private
     // conversation_id is part of the WHERE: a member of this conversation
     // can't flip receipts on another conversation's messages.
     const results = await db.batch(ids.flatMap(id => statusUpgradeStmts(
@@ -335,11 +337,11 @@ export class SyncHub {
       }
     }
     // Resolve each mentioned conversation's members once, up front.
-    const convMembers = new Map<string, string[]>();
+    const convRooms = new Map<string, RoomAccess>();
     for (const event of events) {
       if ((event.entity === 'message' || event.entity === 'conversation') && event.conversationId) {
-        if (!convMembers.has(event.conversationId)) {
-          convMembers.set(event.conversationId, await this.members(event.conversationId));
+        if (!convRooms.has(event.conversationId)) {
+          convRooms.set(event.conversationId, await this.room(event.conversationId));
         }
       }
     }
@@ -354,7 +356,8 @@ export class SyncHub {
         if (event.entity === 'payments') return access.payments; // KV-backed signal
         if (!access.entities.has(event.entity as SyncEntity)) return false;
         if ((event.entity === 'message' || event.entity === 'conversation') && event.conversationId) {
-          return role === ADMIN_ROLE_ID || (convMembers.get(event.conversationId) ?? []).includes(userId);
+          const room = convRooms.get(event.conversationId);
+          return !!room && mayUseConversation(userId, role === ADMIN_ROLE_ID, room);
         }
         return true;
       });
@@ -472,21 +475,25 @@ export class SyncHub {
     }
   }
 
-  /** Conversation participants, cached briefly. Deleted chats yield []. */
-  private async members(conversationId: string): Promise<string[]> {
+  /**
+   * Conversation members and privacy, cached briefly. Deleted chats yield no
+   * members (not private: nothing is left to hide, and admins still hear of
+   * the deletion). SELECT * works before the private-room columns exist.
+   */
+  private async room(conversationId: string): Promise<RoomAccess> {
     const cached = this.membership.get(conversationId);
-    if (cached && Date.now() - cached.at < MEMBERSHIP_TTL_MS) return cached.members;
-    let members: string[] = [];
+    if (cached && Date.now() - cached.at < MEMBERSHIP_TTL_MS) return cached.room;
+    let room: RoomAccess = { members: [], isPrivate: false, createdBy: null };
     try {
       const row = await this.env.VAYU_DB.prepare(
-        'SELECT participant_ids FROM conversations WHERE id = ?',
-      ).bind(conversationId).first<{ participant_ids: string | null }>();
-      members = row?.participant_ids ? JSON.parse(row.participant_ids) : [];
+        'SELECT * FROM conversations WHERE id = ?',
+      ).bind(conversationId).first<Record<string, unknown>>();
+      if (row) room = roomAccessOf(row);
     } catch (e) {
       console.error('SyncHub membership lookup failed:', e);
     }
-    this.membership.set(conversationId, { at: Date.now(), members });
-    return members;
+    this.membership.set(conversationId, { at: Date.now(), room });
+    return room;
   }
 
   private async getRoles(): Promise<RoleDef[]> {

@@ -411,7 +411,7 @@ export function useHandlers(args: HandlerArgs) {
         }
     }, [setAllMessages]);
 
-    const handleCreateGroup = useCallback(async (participantIds: string[], groupName: string, details?: ConversationDetails): Promise<Conversation> => {
+    const handleCreateGroup = useCallback(async (participantIds: string[], groupName: string, details?: ConversationDetails, isPrivate = false): Promise<Conversation> => {
         const selfId = userProfile?.id || authUser?.id || '';
         const allParticipantIds = Array.from(new Set([selfId, ...participantIds]));
         const allParticipantNames = allParticipantIds.map(id =>
@@ -424,11 +424,12 @@ export function useHandlers(args: HandlerArgs) {
             lastMessage: '', lastMessageTime: Date.now(), unreadCount: 0,
             isGroup: true, groupName,
             title: details?.title, reason: details?.reason, note: details?.note,
+            ...(isPrivate ? { isPrivate: true, createdBy: selfId } : {}),
         };
         try {
             await messagingService.createConversation(conv);
         } catch (e) {
-            toast.error(`Couldn't create the group: ${(e as Error).message || 'check your connection'}`);
+            toast.error(`Couldn't create the ${isPrivate ? 'private room' : 'group'}: ${(e as Error).message || 'check your connection'}`);
             throw e;
         }
         await db.saveConversation(conv);

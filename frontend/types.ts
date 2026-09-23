@@ -205,6 +205,10 @@ export interface Conversation {
     groupName?: string;
     isPinned?: boolean;
     isArchived?: boolean;
+    /** A private room: a closed group only its members can see (privateRooms.ts). */
+    isPrivate?: boolean;
+    /** Who created it; for a private room, its manager. Set by the server. */
+    createdBy?: string;
 }
 
 export interface ConversationDetails {

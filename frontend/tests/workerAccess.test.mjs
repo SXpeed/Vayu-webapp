@@ -6,6 +6,7 @@ import { load } from './helpers/load.mjs';
 
 const tickets = await load('realtimeTickets.ts');
 const access = await load('entityAccess.ts');
+const rooms = await load('privateRooms.ts');
 const perms = await load('permissions.ts');
 const { cursorExpired, ackStatus } = await load('deltaSync.ts');
 const { normalizeRoute } = await load('rows.ts');
@@ -65,6 +66,32 @@ test('scope: team-wide, participant-only, admin override, malformed fails closed
     assert.equal(access.scopeAllows('["u2"]', 'u1', true), true);
     assert.equal(access.scopeAllows('not json', 'u1', false), false);
     assert.equal(access.scopeAllows('{"u1":1}', 'u1', false), false);
+});
+
+test('scope: a private room is members only, even for admins', () => {
+    const scope = JSON.stringify(rooms.conversationScope(['u1', 'u2'], true));
+    assert.equal(access.scopeAllows(scope, 'u1', false), true, 'member');
+    assert.equal(access.scopeAllows(scope, 'u1', true), true, 'admin member');
+    assert.equal(access.scopeAllows(scope, 'u3', false), false, 'outsider');
+    assert.equal(access.scopeAllows(scope, 'u3', true), false, 'admin outsider');
+    assert.equal(access.scopeAllows(JSON.stringify(rooms.conversationScope(['u1'], false)), 'u3', true), true, 'ordinary chat keeps the admin override');
+});
+
+test('private rooms: who may use and manage them', () => {
+    const room = { members: ['creator', 'member', 'adminIn'], isPrivate: true, createdBy: 'creator' };
+    const chat = { members: ['a', 'b'], isPrivate: false, createdBy: null };
+    const use = (id, admin, r) => rooms.mayUseConversation(id, admin, r);
+    const manage = (id, admin, r) => rooms.mayManageRoom(id, admin, r);
+    assert.equal(use('member', false, room), true);
+    assert.equal(use('adminOut', true, room), false, 'admins outside a private room are out');
+    assert.equal(use('adminOut', true, chat), true, 'admins still reach ordinary chats');
+    assert.equal(use('stranger', false, chat), false);
+    assert.equal(manage('creator', false, room), true, 'the creator manages it');
+    assert.equal(manage('adminIn', true, room), true, 'an admin in it manages it');
+    assert.equal(manage('member', false, room), false, 'a plain member does not');
+    assert.equal(manage('adminOut', true, room), false);
+    assert.equal(manage('a', false, chat), true, 'ordinary chats: any member, as before');
+    assert.deepEqual(rooms.roomAccessOf({ participant_ids: '["x"]' }), { members: ['x'], isPrivate: false, createdBy: null }, 'rows from before the new columns');
 });
 
 test('cursor expiry: pruned, ahead of the log, and the empty log', () => {

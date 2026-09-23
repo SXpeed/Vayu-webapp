@@ -5,6 +5,7 @@ import {
   ADMIN_PERMISSIONS, ADMIN_ROLE_ID, atLeast, normalizePermissions,
   type AccessLevel, type Permissions, type RoleDef, type SectionId,
 } from './permissions';
+import { PRIVATE_SCOPE } from './privateRooms';
 
 /** Entity names as they appear in change_log.entity. */
 export const SYNC_ENTITIES = [
@@ -52,14 +53,20 @@ export function canReadPayments(perms: Permissions): boolean {
   return atLeast(perms['payments'], 'view');
 }
 
-/** True when the row's scope allows this user (scope null = team-wide). */
+/**
+ * True when the row's scope allows this user (scope null = team-wide).
+ * Admins see every scoped row except a private room's, which only its
+ * members see (the scope then carries PRIVATE_SCOPE).
+ */
 export function scopeAllows(scope: string | null, userId: string, isAdmin: boolean): boolean {
-  if (isAdmin) return true;
   if (!scope) return true;
+  let ids: unknown;
   try {
-    const ids = JSON.parse(scope) as unknown;
-    return Array.isArray(ids) && ids.includes(userId);
+    ids = JSON.parse(scope);
   } catch {
-    return false; // malformed scope: fail closed
+    return isAdmin; // malformed scope: fail closed, as before, except for admins
   }
+  if (!Array.isArray(ids)) return isAdmin;
+  if (ids.includes(PRIVATE_SCOPE)) return ids.includes(userId);
+  return isAdmin || ids.includes(userId);
 }

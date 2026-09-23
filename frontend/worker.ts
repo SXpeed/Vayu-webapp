@@ -29,6 +29,9 @@ import {
 import { SyncHub } from './realtime';
 import { SNIFF_BYTES, delivery, downloadName, isRasterImage, safeExtension, storedContentType } from './fileTypes';
 import { APP_ORIGIN } from './brand';
+import {
+  conversationScope, ensurePrivateRoomColumns, mayManageRoom, mayUseConversation, roomAccessOf, type RoomAccess,
+} from './privateRooms';
 import { handlePlatformRequest } from './platform/routes';
 import { OrgStore } from './platform/orgStore';
 import {
@@ -1355,26 +1358,28 @@ async function handleFileDelete(ctx: Ctx): Promise<Response> {
 // ── Messaging route handlers ────────────────────────────────────────────────
 
 /**
- * A conversation's participant ids, or null when there is no such
- * conversation. Every read or change of a single conversation checks this:
- * knowing its id is not permission (ids used to be a bare timestamp, so they
- * could be guessed).
+ * A conversation's members, privacy and creator, or null when there is no
+ * such conversation. Every read or change of a single conversation checks
+ * this: knowing its id is not permission (ids used to be a bare timestamp, so
+ * they could be guessed). SELECT * keeps working before the private-room
+ * columns exist.
  */
-async function conversationMembers(db: D1Database, id: string): Promise<string[] | null> {
-  const row = await db.prepare('SELECT participant_ids FROM conversations WHERE id = ?').bind(id).first<{ participant_ids: string }>();
-  if (!row) return null;
-  try {
-    const ids: unknown = JSON.parse(row.participant_ids);
-    return Array.isArray(ids) ? ids.map(String) : [];
-  } catch {
-    return [];
-  }
+async function conversationAccess(db: D1Database, id: string): Promise<RoomAccess | null> {
+  const row = await db.prepare('SELECT * FROM conversations WHERE id = ?').bind(id).first<Record<string, unknown>>();
+  return row ? roomAccessOf(row) : null;
 }
 
-/** Participants may use a conversation; admins may act on any, as before. */
-function inConversation(session: SessionData, members: string[]): boolean {
-  return session.role === ADMIN_ROLE_ID || members.includes(session.userId);
+/** Members may use a conversation; admins may use any except a private room they are not in. */
+function inConversation(session: SessionData, room: RoomAccess): boolean {
+  return mayUseConversation(session.userId, session.role === ADMIN_ROLE_ID, room);
 }
+
+/** Rename, change members, delete: for a private room, only its managers (privateRooms.ts). */
+function managesConversation(session: SessionData, room: RoomAccess): boolean {
+  return mayManageRoom(session.userId, session.role === ADMIN_ROLE_ID, room);
+}
+
+const NOT_A_MANAGER = "Only the room's creator or an admin in it can change this private room";
 
 const NOT_A_MEMBER = 'You are not part of this conversation';
 
@@ -1387,8 +1392,9 @@ async function handleConversationsList(ctx: Ctx): Promise<Response> {
   ).all();
   const rows = results.results || [];
   const convos = rows.map(rowToConversation);
-  // Admin advance view: return all; otherwise filter to user's conversations
-  if (showAll) return json(convos);
+  // Admin advance view: every conversation except private rooms the admin is
+  // not in; otherwise the user's own conversations.
+  if (showAll) return json(convos.filter(c => !c.isPrivate || c.participantIds.includes(session.userId)));
   return json(convos.filter(c => c.participantIds.includes(session.userId)));
 }
 
@@ -1405,16 +1411,29 @@ async function handleConversationsCreate(ctx: Ctx): Promise<Response> {
   // This is an upsert, so an id that already exists belongs to that
   // conversation: only its own members may write it again (a retried
   // create). Anyone else would replace it and make themselves a member.
-  const existing = await conversationMembers(ctx.env.VAYU_DB, conv.id);
+  const existing = await conversationAccess(ctx.env.VAYU_DB, conv.id);
   if (existing && !inConversation(session, existing)) return err(NOT_A_MEMBER, 403);
+  // A private room is created by an admin, as a group they are in. Once it
+  // exists, it stays private with the same creator, and only its managers
+  // may write it again (privateRooms.ts).
+  const isPrivate = existing ? existing.isPrivate : conv.isPrivate === true;
+  if (isPrivate && !existing) {
+    if (session.role !== ADMIN_ROLE_ID) return err('Only admins can create private rooms', 403);
+    if (!conv.isGroup) return err('A private room is a group conversation');
+    if (!conv.participantIds.includes(session.userId)) return err('You must be in the private room you create');
+  }
+  if (existing?.isPrivate && !managesConversation(session, existing)) return err(NOT_A_MANAGER, 403);
+  const createdBy = existing ? existing.createdBy : session.userId;
+  await ensurePrivateRoomColumns(ctx.env.VAYU_DB);
   await ensureChangeLogTable(ctx.env.VAYU_DB);
   // Conversation write + change-log row commit atomically.
   await ctx.env.VAYU_DB.batch([
     ctx.env.VAYU_DB.prepare(
       `INSERT OR REPLACE INTO conversations
        (id, participant_ids, participant_names, last_message, last_message_time,
-        unread_count, title, reason, note, is_group, group_name, is_pinned, is_archived, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        unread_count, title, reason, note, is_group, group_name, is_pinned, is_archived, created_at,
+        is_private, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       conv.id,
       JSON.stringify(conv.participantIds),
@@ -1429,25 +1448,40 @@ async function handleConversationsCreate(ctx: Ctx): Promise<Response> {
       conv.groupName || null,
       conv.isPinned ? 1 : 0,
       conv.isArchived ? 1 : 0,
-      Date.now()
+      Date.now(),
+      isPrivate ? 1 : 0,
+      createdBy,
     ),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'conversation', conv.id, 'put',
-      { scope: conv.participantIds, actorId: session.userId }),
+      { scope: conversationScope(conv.participantIds, isPrivate), actorId: session.userId }),
   ]);
   queueHubNotify(ctx, [{ entity: 'conversation', id: conv.id, op: 'put', conversationId: conv.id }]);
-  return json(conv, 201);
+  return json({ ...conv, isPrivate, createdBy: createdBy ?? undefined }, 201);
 }
 
 async function handleConversationsUpdate(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
   const convId = ctx.path.slice('/conversations/'.length);
-  const members = await conversationMembers(ctx.env.VAYU_DB, convId);
-  if (!members) return err('Conversation not found', 404);
-  if (!inConversation(session, members)) return err(NOT_A_MEMBER, 403);
+  const current = await ctx.env.VAYU_DB.prepare('SELECT * FROM conversations WHERE id = ?').bind(convId).first<Record<string, unknown>>();
+  if (!current) return err('Conversation not found', 404);
+  const room = roomAccessOf(current);
+  if (!inConversation(session, room)) return err(NOT_A_MEMBER, 403);
   const body = await ctx.request.json();
   const conv = body as any;
-  const participantIds: string[] = Array.isArray(conv.participantIds) ? conv.participantIds : members;
+  let participantIds: string[] = Array.isArray(conv.participantIds) ? conv.participantIds : room.members;
+  // Members pin, archive and bump the last message through this route too.
+  // In a private room only its managers may change who is in it or its name:
+  // for everyone else those fields stay as stored. Privacy and creator are
+  // never changed here.
+  if (room.isPrivate && !managesConversation(session, room)) {
+    participantIds = room.members;
+    let storedNames: unknown = [];
+    try { storedNames = JSON.parse(String(current.participant_names ?? '[]')); } catch { /* malformed row */ }
+    conv.participantNames = storedNames;
+    conv.groupName = current.group_name ?? undefined;
+  }
+  if (room.isPrivate) conv.isGroup = true;
   await ensureChangeLogTable(ctx.env.VAYU_DB);
   await ctx.env.VAYU_DB.batch([
     ctx.env.VAYU_DB.prepare(
@@ -1472,21 +1506,23 @@ async function handleConversationsUpdate(ctx: Ctx): Promise<Response> {
       convId
     ),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'conversation', convId, 'put',
-      { scope: participantIds, actorId: session.userId }),
+      { scope: conversationScope(participantIds, room.isPrivate), actorId: session.userId }),
   ]);
   queueHubNotify(ctx, [{ entity: 'conversation', id: convId, op: 'put', conversationId: convId }]);
-  return json(conv);
+  return json({ ...conv, participantIds, isPrivate: room.isPrivate, createdBy: room.createdBy ?? undefined });
 }
 
 async function handleConversationsDelete(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
   const convId = ctx.path.slice('/conversations/'.length);
-  const conv = await ctx.env.VAYU_DB.prepare('SELECT * FROM conversations WHERE id = ?').bind(convId).first();
-  if (conv) {
-    const members = await conversationMembers(ctx.env.VAYU_DB, convId);
-    if (members && !inConversation(session, members)) return err(NOT_A_MEMBER, 403);
+  const conv = await ctx.env.VAYU_DB.prepare('SELECT * FROM conversations WHERE id = ?').bind(convId).first<Record<string, unknown>>();
+  const room = conv ? roomAccessOf(conv) : null;
+  if (room) {
+    if (!inConversation(session, room)) return err(NOT_A_MEMBER, 403);
+    if (!managesConversation(session, room)) return err(NOT_A_MANAGER, 403);
   }
+  const isPrivate = room?.isPrivate ?? false;
   const msgRows = (await ctx.env.VAYU_DB.prepare(
     'SELECT id FROM messages WHERE conversation_id = ?'
   ).bind(convId).all<{ id: string }>()).results ?? [];
@@ -1500,15 +1536,19 @@ async function handleConversationsDelete(ctx: Ctx): Promise<Response> {
     ctx.env.VAYU_DB.prepare('DELETE FROM messages WHERE conversation_id = ?').bind(convId),
     ctx.env.VAYU_DB.prepare('DELETE FROM conversations WHERE id = ?').bind(convId),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'conversation', convId, 'delete',
-      { scope: participants, actorId: session.userId }),
+      { scope: conversationScope(participants, isPrivate), actorId: session.userId }),
     ...changeLogStmts(ctx.env.VAYU_DB, ctx.env, 'message', messageIds, 'delete',
-      { scope: participants, actorId: session.userId }),
+      { scope: conversationScope(participants, isPrivate), actorId: session.userId }),
   ]);
   queueHubNotify(ctx, [
     { entity: 'conversation', id: convId, op: 'delete', conversationId: convId },
     ...messageIds.map(id => ({ entity: 'message', id, op: 'delete' as const, conversationId: convId })),
   ]);
-  if (conv) {
+  if (conv && isPrivate) {
+    // The archive and activity log are for admins, who must not see into a
+    // private room: nothing of it is kept, and the log names no room.
+    logEntityChange(ctx, session, 'deleted', 'conversation', convId, 'Deleted a private room');
+  } else if (conv) {
     const raw = conv as Record<string, unknown>;
     const label = String(raw.group_name || raw.title || 'conversation');
     archiveDeletedAsync(ctx, session, 'conversation', convId,
@@ -1526,17 +1566,22 @@ async function handleMessagesList(ctx: Ctx): Promise<Response> {
   const showAll = ctx.url.searchParams.get('all') === 'true' && session.role === 'admin';
   let results;
   if (conversationId) {
-    const members = await conversationMembers(ctx.env.VAYU_DB, conversationId);
-    if (!members) return json([]);
-    if (!inConversation(session, members)) return err(NOT_A_MEMBER, 403);
+    const room = await conversationAccess(ctx.env.VAYU_DB, conversationId);
+    if (!room) return json([]);
+    if (!inConversation(session, room)) return err(NOT_A_MEMBER, 403);
     results = await ctx.env.VAYU_DB.prepare(
       'SELECT * FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC'
     ).bind(conversationId).all();
   } else if (showAll) {
-    // Admin advance view: fetch ALL messages
+    // Admin advance view: every message except those in private rooms the
+    // admin is not in (messages whose chat is gone stay visible, as before).
+    await ensurePrivateRoomColumns(ctx.env.VAYU_DB);
     results = await ctx.env.VAYU_DB.prepare(
-      'SELECT * FROM messages ORDER BY timestamp ASC'
-    ).all();
+      `SELECT m.* FROM messages m LEFT JOIN conversations c ON c.id = m.conversation_id
+       WHERE c.id IS NULL OR IFNULL(c.is_private, 0) = 0
+          OR EXISTS (SELECT 1 FROM json_each(c.participant_ids) p WHERE p.value = ?)
+       ORDER BY m.timestamp ASC`
+    ).bind(session.userId).all();
   } else {
     // Fetch all messages for conversations the user is part of
     results = await fetchUserMessages(ctx, session.userId);
@@ -1570,14 +1615,11 @@ async function handleMessagesCreate(ctx: Ctx): Promise<Response> {
   // The chat must exist and the sender must be in it. Messages used to be
   // stored into missing chats (or chats the sender wasn't part of), then
   // never returned to anyone, so they silently vanished from the app.
-  const convRow = await ctx.env.VAYU_DB.prepare('SELECT participant_ids FROM conversations WHERE id = ?')
-    .bind(msg.conversationId).first();
-  if (!convRow) return err('This chat no longer exists on the server — start a new one', 404);
-  let members: string[] = [];
-  try { members = JSON.parse(convRow.participant_ids as string); } catch { /* malformed row */ }
-  if (!members.includes(session.userId) && session.role !== ADMIN_ROLE_ID) {
-    return err("You're not a member of this chat", 403);
-  }
+  const room = await conversationAccess(ctx.env.VAYU_DB, msg.conversationId);
+  if (!room) return err('This chat no longer exists on the server — start a new one', 404);
+  if (!inConversation(session, room)) return err("You're not a member of this chat", 403);
+  const members = room.members;
+  const scope = conversationScope(members, room.isPrivate);
   // Sender is whoever is signed in — never trust the id the app sends.
   msg.senderId = session.userId;
   msg.senderName = session.name;
@@ -1613,9 +1655,9 @@ async function handleMessagesCreate(ctx: Ctx): Promise<Response> {
       `UPDATE conversations SET last_message = ?, last_message_time = ? WHERE id = ?`
     ).bind(lastMsgPreview, msg.timestamp || Date.now(), msg.conversationId),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'message', msg.id, 'put',
-      { scope: members, actorId: session.userId }),
+      { scope, actorId: session.userId }),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'conversation', msg.conversationId, 'put',
-      { scope: members, actorId: session.userId }),
+      { scope, actorId: session.userId }),
   ]);
   queueHubNotify(ctx, [
     { entity: 'message', id: msg.id, op: 'put', conversationId: msg.conversationId },
@@ -1661,10 +1703,12 @@ async function applyMessageStatus(ctx: Ctx, session: SessionData, messageIds: st
   if (!to || ids.length === 0) return;
   const db = ctx.env.VAYU_DB;
   await ensureChangeLogTable(db);
-  // Receipts come from conversation participants; admins may act on any.
-  const memberId = session.role === ADMIN_ROLE_ID ? undefined : session.userId;
+  await ensurePrivateRoomColumns(db);
+  // Receipts come from conversation participants; admins may act on any
+  // conversation except a private room they are not in.
+  const who = session.role === ADMIN_ROLE_ID ? { adminId: session.userId } : { memberId: session.userId };
   const results = await db.batch(ids.flatMap(id =>
-    statusUpgradeStmts(db, ctx.env, 'messages', id, to, { actorId: session.userId, memberId })));
+    statusUpgradeStmts(db, ctx.env, 'messages', id, to, { actorId: session.userId, ...who })));
   // Only rows that actually changed get a change-log entry and a hub signal.
   const events: ChangeEvent[] = [];
   for (let i = 0; i < ids.length; i++) {

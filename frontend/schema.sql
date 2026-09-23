@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS conversations (
   group_name TEXT,
   is_pinned INTEGER DEFAULT 0,
   is_archived INTEGER DEFAULT 0,
+  is_private INTEGER DEFAULT 0,     -- private room: members only, even for admins
+  created_by TEXT,                  -- creator; manages a private room
   created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
 );
 

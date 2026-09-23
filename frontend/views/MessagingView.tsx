@@ -1,8 +1,8 @@
 import React, { useState, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
-import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit2, Check, CheckCheck, Pin, Archive, MoreVertical, Paperclip, Reply, Loader2, Trash2, Camera, AlertCircle } from 'lucide-react';
+import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit2, Check, CheckCheck, Pin, Archive, MoreVertical, Paperclip, Reply, Loader2, Trash2, Camera, AlertCircle, Lock } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
 import { useIsDesktop } from '../hooks/useMediaQuery';
-import { PageRoot, PageHeader, PageBody, PrimaryIconButton } from '../components/ui';
+import { PageRoot, PageHeader, PageBody, PrimaryIconButton, ToggleRow } from '../components/ui';
 import { Conversation, ConversationDetails, Message, MessageTag, MessageReplyTo, MessageAttachment, UserProfile } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
@@ -18,11 +18,13 @@ interface MessagingViewProps {
     teamMembers: UserProfile[];
     currentUserId: string;
     currentUserName: string;
+    /** Admins can create private rooms (closed groups only their members see). */
+    isAdmin?: boolean;
     onSendMessage: (conversationId: string, text: string, tags: MessageTag[], replyTo?: MessageReplyTo, attachment?: MessageAttachment) => void;
     /** Resend a message the server never accepted. */
     onRetryMessage?: (messageId: string) => void;
     onCreateConversation: (participantId: string, details?: ConversationDetails) => Promise<Conversation>;
-    onCreateGroup: (participantIds: string[], groupName: string, details?: ConversationDetails) => Promise<Conversation>;
+    onCreateGroup: (participantIds: string[], groupName: string, details?: ConversationDetails, isPrivate?: boolean) => Promise<Conversation>;
     onUpdateConversationDetails: (conversationId: string, details: ConversationDetails) => void;
     onUpdateGroup?: (conversationId: string, groupName: string, participantIds: string[], details?: ConversationDetails) => void;
     onTogglePinConversation: (conversationId: string) => void;
@@ -41,7 +43,7 @@ export const TAG_COLORS: Record<MessageTag, string> = {
 
 export const ALL_TAGS: MessageTag[] = ['General', 'Urgent', 'Follow-up', 'Artwork', 'Inquiry', 'Invoice'];
 
-export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, messages, teamMembers, currentUserId, currentUserName, onSendMessage, onRetryMessage, onCreateConversation, onCreateGroup, onUpdateConversationDetails, onUpdateGroup, onTogglePinConversation, onToggleArchiveConversation, onDeleteConversation }) => {
+export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, messages, teamMembers, currentUserId, currentUserName, isAdmin = false, onSendMessage, onRetryMessage, onCreateConversation, onCreateGroup, onUpdateConversationDetails, onUpdateGroup, onTogglePinConversation, onToggleArchiveConversation, onDeleteConversation }) => {
     // Desktop shows the thread inline beside the list; phones open it as a
     // full-screen overlay. That's a choice of component, not just of styling.
     const isDesktop = useIsDesktop();
@@ -78,7 +80,15 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
 
     const onlineMembers = useMemo(() => teamMembers.filter(m => m.isOnline && m.id !== currentUserId), [teamMembers, currentUserId]);
 
-    const groupConversations = useMemo(() => conversations.filter(c => c.isGroup), [conversations]);
+    // Private rooms first, then ordinary groups.
+    const groupConversations = useMemo(
+        () => conversations.filter(c => c.isGroup).sort((a, b) => Number(!!b.isPrivate) - Number(!!a.isPrivate)),
+        [conversations],
+    );
+    /** Rename, change members, delete: for a private room only its creator or an admin in it (the server enforces this too). */
+    const canManage = (conv: Conversation) =>
+        !conv.isPrivate || conv.createdBy === currentUserId || (isAdmin && conv.participantIds.includes(currentUserId));
+    const deletingPrivate = !!deleteConvId && !!conversations.find(c => c.id === deleteConvId)?.isPrivate;
 
     const resolveName = useMemberNames(teamMembers);
     const participantName = (conv: Conversation, idx: number) =>
@@ -261,33 +271,38 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                                     <button
                                         type="button"
                                         onClick={() => { setOpenMenuId(null); handleConvClick(group); }}
-                                        aria-label={`Open group ${group.groupName || 'Group'}`}
+                                        aria-label={`Open ${group.isPrivate ? 'private room' : 'group'} ${group.groupName || 'Group'}`}
                                         className="absolute inset-0 z-[1] w-full h-full rounded-lg cursor-pointer"
                                     />
                                     <div className="w-11 h-11 rounded-full bg-gold-500/10 dark:bg-gold-900/20 flex items-center justify-center text-gold-700 dark:text-gold-300 shrink-0">
-                                        <Users size={20} strokeWidth={1.5} />
+                                        {group.isPrivate ? <Lock size={18} strokeWidth={1.7} /> : <Users size={20} strokeWidth={1.5} />}
                                     </div>
                                     <div className="flex-1 min-w-0">
+                                        {group.isPrivate && (
+                                            <p className="text-[10px] font-bold text-gold-700 dark:text-gold-300 uppercase tracking-widest">Private room</p>
+                                        )}
                                         <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm">{group.groupName || 'Group'}</h3>
                                         <p className="text-[11px] text-gray-700 dark:text-gray-300 mt-0.5 line-clamp-1 font-light">
                                             {group.participantIds.length} members • {group.lastMessage || 'No messages yet'}
                                         </p>
                                     </div>
-                                    <button type="button" aria-label="Group options"
-                                        onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === group.id ? null : group.id); }}
-                                        className="relative z-[2] neu-icon-btn-sm text-gray-600 dark:text-gray-300 active-scale"
-                                    >
-                                        <MoreVertical size={16} />
-                                    </button>
+                                    {canManage(group) && (
+                                        <button type="button" aria-label={group.isPrivate ? 'Private room options' : 'Group options'}
+                                            onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === group.id ? null : group.id); }}
+                                            className="relative z-[2] neu-icon-btn-sm text-gray-600 dark:text-gray-300 active-scale"
+                                        >
+                                            <MoreVertical size={16} />
+                                        </button>
+                                    )}
                                 </div>
-                                {openMenuId === group.id && (
+                                {openMenuId === group.id && canManage(group) && (
                                     <div className="absolute right-10 top-1/2 -translate-y-1/2 z-20 neu-raised-sm overflow-hidden animate-scale-in flex flex-col min-w-[110px]">
                                         {onUpdateGroup && (
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); setOpenMenuId(null); setEditingGroup(group); }}
                                                 className="w-full flex items-center gap-2 px-2 py-1.5 text-[11px] text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
                                             >
-                                                <Edit2 size={12} /> Edit Group
+                                                <Edit2 size={12} /> {group.isPrivate ? 'Edit Room' : 'Edit Group'}
                                             </button>
                                         )}
                                         {onDeleteConversation && (
@@ -470,9 +485,10 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                                 handleConvClick(conv);
                             } catch { /* the reason is already shown; keep the picker open */ }
                         }}
-                        onCreateGroup={async (participantIds, groupName, details) => {
+                        canCreatePrivate={isAdmin}
+                        onCreateGroup={async (participantIds, groupName, details, isPrivate) => {
                             try {
-                                const conv = await onCreateGroup(participantIds, groupName, details);
+                                const conv = await onCreateGroup(participantIds, groupName, details, isPrivate);
                                 setShowNewChat(false);
                                 handleConvClick(conv);
                             } catch { /* the reason is already shown; keep the picker open */ }
@@ -483,9 +499,9 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
 
             <TypeDeleteDialog
                 isOpen={!!deleteConvId}
-                title="Delete conversation"
-                itemName="this conversation"
-                message="all of its messages are archived for admin review"
+                title={deletingPrivate ? 'Delete private room' : 'Delete conversation'}
+                itemName={deletingPrivate ? 'this private room' : 'this conversation'}
+                message={deletingPrivate ? 'its messages are deleted for everyone and not kept anywhere' : 'all of its messages are archived for admin review'}
                 onClose={() => setDeleteConvId(null)}
                 onConfirm={() => {
                     if (deleteConvId && onDeleteConversation) onDeleteConversation(deleteConvId);
@@ -1144,15 +1160,18 @@ interface NewChatModalProps {
     existingConvIds: string[];
     onClose: () => void;
     onSelectMember: (memberId: string, details?: ConversationDetails) => void;
-    onCreateGroup: (participantIds: string[], groupName: string, details: ConversationDetails) => void;
+    onCreateGroup: (participantIds: string[], groupName: string, details: ConversationDetails, isPrivate: boolean) => void;
+    /** Admins may make the group a private room. */
+    canCreatePrivate?: boolean;
 }
 
-const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, onClose, onSelectMember, onCreateGroup }) => {
+const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, onClose, onSelectMember, onCreateGroup, canCreatePrivate = false }) => {
     const [mode, setMode] = useState<'direct' | 'group'>('direct');
     const [startingId, setStartingId] = useState<string | null>(null);
     const [formData, setFormData] = useState<ConversationDetails>({ title: '', reason: '', note: '' });
     const [groupName, setGroupName] = useState('');
     const [selectedGroupMemberIds, setSelectedGroupMemberIds] = useState<Set<string>>(new Set());
+    const [isPrivate, setIsPrivate] = useState(false);
 
     // 1-on-1 chats start immediately on member tap — no title/reason form beforehand.
     const handleSelectMember = (member: UserProfile) => {
@@ -1176,10 +1195,10 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, onClose, onSel
             title: formData.title?.trim() || undefined,
             reason: formData.reason?.trim() || undefined,
             note: formData.note?.trim() || undefined,
-        });
+        }, canCreatePrivate && isPrivate);
     };
 
-    const headerTitle = mode === 'group' ? 'New Group' : 'New Message';
+    const headerTitle = mode === 'group' ? (isPrivate ? 'New Private Room' : 'New Group') : 'New Message';
 
     return (
         <div className="neu-sheet z-[60] animate-fade-in-up">
@@ -1272,6 +1291,16 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, onClose, onSel
                             className="neu-field"
                         />
                     </div>
+
+                    {canCreatePrivate && (
+                        <ToggleRow
+                            icon={<Lock size={16} />}
+                            title="Private room"
+                            description="Only the people you add can see it, including other admins. Only you, or an admin you add, can change or delete it."
+                            checked={isPrivate}
+                            onChange={() => setIsPrivate(v => !v)}
+                        />
+                    )}
 
                     <div>
                         <div className="flex items-center justify-between mb-3 px-1">

@@ -36,6 +36,8 @@ export function rowToConversation(row: Record<string, unknown>): any {
     groupName: row.group_name || undefined,
     isPinned: !!row.is_pinned,
     isArchived: !!row.is_archived,
+    isPrivate: !!row.is_private,
+    createdBy: row.created_by || undefined,
   };
 }
 
