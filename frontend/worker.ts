@@ -27,6 +27,7 @@ import {
   fileCookieToken, fileCookieValid, forgetFileToken, issueFileCookie,
 } from './fileAuth';
 import { SyncHub } from './realtime';
+import { SNIFF_BYTES, delivery, downloadName, isRasterImage, safeExtension, storedContentType } from './fileTypes';
 import { handlePlatformRequest } from './platform/routes';
 import { OrgStore } from './platform/orgStore';
 import {
@@ -1162,19 +1163,27 @@ async function handleUpload(ctx: Ctx): Promise<Response> {
   const file = formData.get('file') as FormField;
   if (!file || typeof file === 'string') return err('No file provided');
   if (file.size > 100 * 1024 * 1024) return err('File too large (max 100MB)');
-  const ext = file.name.split('.').pop()?.toLowerCase() || '';
+  // The type is judged from the file's own bytes, not from what the browser
+  // claims (see fileTypes.ts): a file that would run in a browser must never
+  // be stored as something that is shown.
+  const head = new Uint8Array(await file.slice(0, SNIFF_BYTES).arrayBuffer());
+  const ext = safeExtension(file.name);
   const key = `uploads/${session.userId}/${Date.now()}-${crypto.randomUUID()}${ext ? '.' + ext : ''}`;
   await ctx.env.VAYU_R2.put(key, file.stream(), {
-    httpMetadata: { contentType: file.type || 'application/octet-stream' },
+    httpMetadata: { contentType: storedContentType(file.type, head) },
   });
 
   // Optional small preview generated client-side, stored alongside the
   // original under a derivable key so grids can load it without schema changes.
+  // Only a real image is accepted as one.
   const thumb = formData.get('thumb') as FormField;
   if (thumb && typeof thumb !== 'string') {
-    await ctx.env.VAYU_R2.put(`${key}__thumb`, thumb.stream(), {
-      httpMetadata: { contentType: thumb.type || 'image/jpeg' },
-    });
+    const thumbHead = new Uint8Array(await thumb.slice(0, SNIFF_BYTES).arrayBuffer());
+    if (isRasterImage(thumbHead)) {
+      await ctx.env.VAYU_R2.put(`${key}__thumb`, thumb.stream(), {
+        httpMetadata: { contentType: storedContentType(thumb.type, thumbHead) },
+      });
+    }
   }
 
   return json({ key, url: `/api/files/${key}`, thumbUrl: `/api/files/${key}__thumb` });
@@ -1196,6 +1205,14 @@ async function handleFileGet(ctx: Ctx): Promise<Response> {
   if (!obj) return err('File not found', 404);
   const headers = new Headers();
   obj.writeHttpMetadata(headers);
+  // Never let a stored file run as the app: whatever type it was saved
+  // under (older uploads kept the uploader's claim), only images, PDFs and
+  // plain text are shown; everything else downloads inside a sandbox.
+  const how = delivery(obj.httpMetadata?.contentType);
+  headers.set('Content-Type', how.contentType);
+  headers.set('Content-Disposition', `${how.disposition}; filename="${downloadName(key)}"`);
+  headers.set('X-Content-Type-Options', 'nosniff');
+  if (how.csp) headers.set('Content-Security-Policy', how.csp);
   if (fileAuthEnabled(ctx)) {
     // Private: this browser may reuse it, no shared cache may. Repeat views
     // then cost no Worker request, no R2 read and no CPU.
@@ -1238,11 +1255,13 @@ async function handleThumbBackfillUpload(ctx: Ctx): Promise<Response> {
   if (!key || typeof key !== 'string' || !thumb || typeof thumb === 'string') {
     return err('key and thumb are required');
   }
-  // Only attach thumbnails to files that actually exist.
+  // Only attach thumbnails to files that actually exist, and only images.
   const original = await ctx.env.VAYU_R2.head(key);
   if (!original) return err('File not found', 404);
+  const thumbHead = new Uint8Array(await thumb.slice(0, SNIFF_BYTES).arrayBuffer());
+  if (!isRasterImage(thumbHead)) return err('A thumbnail must be an image');
   await ctx.env.VAYU_R2.put(`${key}__thumb`, thumb.stream(), {
-    httpMetadata: { contentType: thumb.type || 'image/jpeg' },
+    httpMetadata: { contentType: storedContentType(thumb.type, thumbHead) },
   });
   return json({ success: true });
 }

