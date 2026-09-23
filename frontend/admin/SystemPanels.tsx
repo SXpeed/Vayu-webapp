@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 import { Activity, CheckCircle2, Mail, RefreshCw, ShieldCheck, TriangleAlert, UserPlus } from 'lucide-react';
 import { Button, Field, Input, Select } from '../components/ui';
 import { api, guarded, timeAgo, type ApiError, type Reauth } from './api';
-import { Avatar, Detail, EmptyState, Section, Segmented, Skeleton, SkeletonRows, StatusPill, useDialogs } from './kit';
+import { Avatar, Detail, EmptyState, STAT_TILE_H, Section, Segmented, Skeleton, SkeletonRows, StatTile, StatusPill, useDialogs } from './kit';
 
 /* -------------------------- Provider admins --------------------------- */
 
@@ -188,8 +188,8 @@ export const NotificationsPanel: React.FC<{ onChange?: () => void }> = ({ onChan
                         {shown.map(n => (
                             <li key={n.id} className="px-2 py-2.5 grid items-center gap-x-3 gap-y-2 grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,1fr)_auto_6rem]">
                                 <div className="min-w-0">
-                                    <p className="text-sm font-medium truncate">{n.subject}</p>
-                                    <p className="text-[12px] ac-faint truncate">
+                                    <p className="text-sm font-medium break-words">{n.subject}</p>
+                                    <p className="text-[12px] font-light ac-faint break-words">
                                         to {n.recipient} · {n.kind.replace(/_/g, ' ')} · {timeAgo(n.created_at)}
                                         {n.attempts > 1 ? ` · ${n.attempts} tries` : ''}
                                     </p>
@@ -235,10 +235,10 @@ export const HealthPanel: React.FC = () => {
     if (!h) {
         return (
             <div className="space-y-6" aria-busy="true">
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-                    {[0, 1, 2, 3].map(i => <Skeleton key={i} className="h-[92px] rounded-[18px]" />)}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-5">
+                    {[0, 1, 2, 3].map(i => <Skeleton key={i} className={`${STAT_TILE_H} rounded-2xl`} />)}
                 </div>
-                <Skeleton className="h-96 rounded-[18px]" />
+                <Skeleton className="h-96 rounded-2xl" />
             </div>
         );
     }
@@ -250,7 +250,7 @@ export const HealthPanel: React.FC = () => {
 
     return (
         <div className="space-y-6">
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-5">
                 <HealthTile label="Environment" value={h.environment} />
                 <HealthTile label="Checks" value={<span className="tabular-nums">{h.checks.length - problems.length}<span className="ac-faint text-base"> / {h.checks.length}</span></span>}
                     foot={problems.length === 0 ? 'All configured' : `${problems.length} need attention`} tone={problems.length ? 'warn' : 'ok'} />
@@ -312,10 +312,4 @@ export const HealthPanel: React.FC = () => {
     );
 };
 
-const HealthTile: React.FC<{ label: string; value: React.ReactNode; foot?: string; tone?: 'ok' | 'warn' }> = ({ label, value, foot, tone }) => (
-    <div className="neu-card h-[92px] px-4 pt-3.5 min-w-0 overflow-hidden">
-        <p className="text-[12px] ac-muted truncate">{label}</p>
-        <div className="mt-1 text-lg font-semibold leading-7 truncate">{value}</div>
-        <p className={`mt-0.5 text-[12px] leading-[18px] truncate ${tone === 'warn' ? 'text-[var(--ac-warn)]' : tone === 'ok' ? 'text-[var(--ac-ok)]' : 'ac-faint'}`}>{foot || ' '}</p>
-    </div>
-);
+const HealthTile: React.FC<{ label: string; value: React.ReactNode; foot?: string; tone?: 'ok' | 'warn' }> = props => <StatTile {...props} />;

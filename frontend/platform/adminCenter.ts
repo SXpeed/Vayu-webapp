@@ -99,9 +99,10 @@ export async function getUser(db: D1Database, userId: string) {
     `SELECT m.id, m.role, m.status, o.id AS org_id, o.name AS org_name, o.status AS org_status
      FROM memberships m JOIN organizations o ON o.id = m.org_id WHERE m.user_id = ? ORDER BY o.name`,
   ).bind(userId).all();
-  // Sessions are described, never exposed: no token leaves the server.
+  // Sessions are described, never exposed: no token leaves the server. The id
+  // is not a credential; it lets a person's own profile mark "this device".
   const { results: sessions } = await db.prepare(
-    `SELECT createdAt AS created_at, updatedAt AS last_active, expiresAt AS expires_at, userAgent AS user_agent, ipAddress AS ip
+    `SELECT id, createdAt AS created_at, updatedAt AS last_active, expiresAt AS expires_at, userAgent AS user_agent, ipAddress AS ip
      FROM session WHERE userId = ? AND expiresAt > ? ORDER BY updatedAt DESC LIMIT 20`,
   ).bind(userId, new Date().toISOString()).all();
   const { results: logins } = await db.prepare('SELECT providerId AS provider FROM account WHERE userId = ?').bind(userId).all();

@@ -34,48 +34,106 @@ export function useHashRoute(): [Route, (section: string, id?: string) => void] 
     return [route, go];
 }
 
+/* ───────────────────────────── Buttons ───────────────────────────────── */
+
+/** The app's round 36px secondary action (GhostIconButton). */
+export const IconButton: React.FC<{
+    label: string; onClick?: () => void; children: React.ReactNode; disabled?: boolean; className?: string;
+}> = ({ label, onClick, children, disabled = false, className = '' }) => (
+    <button type="button" onClick={onClick} aria-label={label} title={label} disabled={disabled}
+        className={`w-9 h-9 shrink-0 neu-raised-sm neu-btn rounded-full flex items-center justify-center active-scale text-gray-700 dark:text-gray-200 disabled:opacity-40 disabled:pointer-events-none ${className}`}>
+        {children}
+    </button>
+);
+
 /* ───────────────────────────── Page header ───────────────────────────── */
 
+/**
+ * The app's PageHeader: a gold serif title with a small-caps line under it,
+ * and actions on the right. A back arrow sits before the title, the way the
+ * app's detail pages do it.
+ */
 export const PageHeader: React.FC<{
     title: React.ReactNode; description?: React.ReactNode; actions?: React.ReactNode;
     back?: { label: string; onClick: () => void }; meta?: React.ReactNode;
 }> = ({ title, description, actions, back, meta }) => (
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div className="min-w-0">
+    <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3 min-w-0">
             {back && (
-                <button type="button" onClick={back.onClick} className="mb-2 inline-flex items-center gap-1.5 text-[13px] ac-muted hover:text-[var(--ac-text)] transition-colors">
-                    <ArrowLeft size={14} /> {back.label}
-                </button>
+                <IconButton label={back.label} onClick={back.onClick}>
+                    <ArrowLeft size={17} className="text-brand-900 dark:text-gold-400" />
+                </IconButton>
             )}
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <h1 className="font-serif text-[1.65rem] leading-tight tracking-tight break-words">{title}</h1>
-                {meta}
+            <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <h1 className="text-[1.35rem] md:text-2xl lg:text-[1.75rem] font-serif leading-tight tracking-wide text-gold-700 dark:text-gold-300 break-words">{title}</h1>
+                    {meta}
+                </div>
+                {description && (
+                    <p className="mt-1 text-[11px] uppercase tracking-[0.14em] font-light text-gray-600 dark:text-gray-400 break-words">{description}</p>
+                )}
             </div>
-            {description && <p className="mt-1 text-sm ac-muted max-w-2xl">{description}</p>}
         </div>
-        {actions && <div className="flex flex-wrap items-center gap-2 shrink-0">{actions}</div>}
-    </div>
+        {actions && <div className="flex flex-wrap items-center gap-2.5 shrink-0">{actions}</div>}
+    </header>
 );
 
-/** A titled surface. The padding is the same everywhere. */
+/** A titled card: the app's Card with its small-caps SectionTitle. */
 export const Section: React.FC<{
     title?: React.ReactNode; description?: React.ReactNode; actions?: React.ReactNode;
     children?: React.ReactNode; className?: string; flush?: boolean;
 }> = ({ title, description, actions, children, className = '', flush = false }) => (
     <section className={`neu-card ${className}`}>
         {(title || actions) && (
-            <header className="flex flex-wrap items-start justify-between gap-3 px-5 pt-4 pb-3">
+            <header className="flex flex-wrap items-start justify-between gap-3 px-5 lg:px-6 pt-5 lg:pt-6 pb-3">
                 {/* Takes the free width, so a small action (an icon) stays on the title row. */}
                 <div className="min-w-0 flex-1 basis-[min(100%,16rem)]">
-                    {title && <h2 className="text-[0.95rem] font-semibold">{title}</h2>}
-                    {description && <p className="mt-0.5 text-[13px] ac-muted">{description}</p>}
+                    {title && <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-700 dark:text-gray-200">{title}</h2>}
+                    {description && <p className="mt-1.5 text-[12px] font-light leading-relaxed text-gray-600 dark:text-gray-400">{description}</p>}
                 </div>
                 {actions && <div className="flex flex-wrap items-center gap-2 shrink-0">{actions}</div>}
             </header>
         )}
-        <div className={flush ? '' : `px-5 ${title || actions ? 'pb-5' : 'py-5'}`}>{children}</div>
+        <div className={flush ? '' : `px-5 lg:px-6 ${title || actions ? 'pb-5 lg:pb-6' : 'py-5 lg:py-6'}`}>{children}</div>
     </section>
 );
+
+/**
+ * The app's dashboard StatTile: gold glyph, small-caps label, serif figure.
+ * Fixed height and single lines, so the placeholder and the real tile are
+ * the same size and nothing moves when data lands.
+ */
+export const StatTile: React.FC<{
+    icon?: React.ReactNode; label: string; value: React.ReactNode; foot?: React.ReactNode;
+    tone?: 'ok' | 'warn' | 'bad'; onClick?: () => void;
+    meter?: { share: number; tone: 'ok' | 'warn' | 'bad' };
+}> = ({ icon, label, value, foot, tone, onClick, meter }) => {
+    const ink = tone === 'bad' ? 'text-[var(--ac-bad)]' : tone === 'warn' ? 'text-[var(--ac-warn)]' : tone === 'ok' ? 'text-[var(--ac-ok)]' : 'text-gray-900 dark:text-white';
+    const body = (
+        <>
+            <span className="flex items-center gap-2 min-w-0">
+                {icon && <span className="shrink-0 text-gold-500">{icon}</span>}
+                <span className="text-[11px] font-medium uppercase tracking-wider lg:tracking-widest text-gray-700 dark:text-gray-300 truncate">{label}</span>
+            </span>
+            <span className={`block mt-2 text-xl lg:text-2xl font-serif leading-8 tabular-nums truncate ${ink}`}>{value}</span>
+            <span className="block mt-0.5 text-[11px] font-light leading-[18px] text-gray-600 dark:text-gray-400 truncate">{foot || ' '}</span>
+            {meter && (
+                <span className="ac-meter absolute left-3 right-3 bottom-2.5 lg:left-4 lg:right-4 lg:bottom-3" data-tone={meter.tone}>
+                    <span style={{ transform: `scaleX(${meter.share})` }} />
+                </span>
+            )}
+        </>
+    );
+    // flex-col + justify-start: a <button> would otherwise centre its content
+    // vertically, so clickable and plain tiles would not line up.
+    const cls = 'relative flex flex-col justify-start h-[118px] p-3 lg:p-4 min-w-0 overflow-hidden text-left';
+    return onClick
+        ? <button type="button" onClick={onClick} className={`neu-card-interactive cursor-pointer ${cls}`}>{body}</button>
+        : <div className={`neu-card ${cls}`}>{body}</div>;
+};
+
+/** Height of a StatTile, for placeholders. */
+export const STAT_TILE_H = 'h-[118px]';
 
 /* ───────────────────────────── Status pills ──────────────────────────── */
 
@@ -98,8 +156,9 @@ const LABELS: Record<string, string> = {
 export const toneFor = (status: string): Tone => TONES[status] ?? 'neutral';
 export const labelFor = (status: string): string => LABELS[status] ?? status.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
 
+/** The app's status chip (neu-status): pressed in, coloured small caps. */
 export const StatusPill: React.FC<{ status?: string; tone?: Tone; children?: React.ReactNode }> = ({ status, tone, children }) => (
-    <span className="ac-tone" data-tone={tone ?? (status ? toneFor(status) : 'neutral')}>{children ?? (status ? labelFor(status) : '')}</span>
+    <span className="ac-status" data-tone={tone ?? (status ? toneFor(status) : 'neutral')}>{children ?? (status ? labelFor(status) : '')}</span>
 );
 
 /* ───────────────────────────── Loading ───────────────────────────────── */
@@ -125,31 +184,33 @@ export const SkeletonRows: React.FC<{ rows?: number }> = ({ rows = 5 }) => (
 );
 
 export const SkeletonCards: React.FC<{ count?: number; height?: number }> = ({ count = 4, height = 104 }) => (
-    <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(min(100%,15rem),1fr))]" aria-busy="true">
-        {Array.from({ length: count }, (_, i) => <Skeleton key={i} className="rounded-[14px]" style={{ height }} />)}
+    <div className="grid gap-4 lg:gap-5 [grid-template-columns:repeat(auto-fill,minmax(min(100%,15rem),1fr))]" aria-busy="true">
+        {Array.from({ length: count }, (_, i) => <Skeleton key={i} className="rounded-2xl" style={{ height }} />)}
     </div>
 );
 
+/** The app's empty state: an inset icon well and a serif line. */
 export const EmptyState: React.FC<{ icon?: React.ReactNode; title: string; body?: string; action?: React.ReactNode; compact?: boolean }> = ({ icon, title, body, action, compact = false }) => (
-    <div className={`flex flex-col items-center text-center px-4 ${compact ? 'py-4' : 'py-10'}`}>
-        {icon && <div className="mb-3 w-11 h-11 rounded-2xl flex items-center justify-center bg-[var(--ac-accent-soft)] text-[var(--ac-accent)]">{icon}</div>}
-        <p className="font-medium">{title}</p>
-        {body && <p className="mt-1 text-[13px] ac-muted max-w-sm">{body}</p>}
+    <div className={`flex flex-col items-center text-center px-4 ${compact ? 'py-5' : 'py-10 lg:py-12'}`}>
+        {icon && <div className="mb-3 w-12 h-12 rounded-full neu-inset flex items-center justify-center text-gray-600 dark:text-gray-300">{icon}</div>}
+        <p className="text-sm lg:text-base font-serif text-gray-700 dark:text-gray-200">{title}</p>
+        {body && <p className="mt-1.5 text-xs lg:text-sm font-light leading-relaxed text-gray-600 dark:text-gray-300 max-w-sm">{body}</p>}
         {action && <div className="mt-4">{action}</div>}
     </div>
 );
 
 /* ───────────────────────────── Controls ──────────────────────────────── */
 
+/** The app's filter pills: raised at rest, pressed in and gold when chosen. */
 export const Segmented: React.FC<{
     options: { value: string; label: React.ReactNode; count?: number }[]; value: string; onChange: (v: string) => void;
 }> = ({ options, value, onChange }) => (
-    <div role="tablist" className="ac-segmented">
+    <div role="tablist" className="flex flex-wrap gap-2">
         {options.map(o => (
             <button key={o.value} role="tab" type="button" aria-selected={value === o.value} onClick={() => onChange(o.value)}
                 className={`neu-pill ${value === o.value ? 'neu-pill-active' : ''}`}>
                 {o.label}
-                {o.count !== undefined && o.count > 0 && <span className="text-[11px] ac-faint tabular-nums">{o.count}</span>}
+                {o.count !== undefined && o.count > 0 && <span className="text-[10px] opacity-70 tabular-nums">{o.count}</span>}
             </button>
         ))}
     </div>
@@ -157,21 +218,30 @@ export const Segmented: React.FC<{
 
 export const Kbd: React.FC<{ children: React.ReactNode }> = ({ children }) => <kbd className="ac-kbd">{children}</kbd>;
 
-/** A labelled key/value, used in detail views. */
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map(p => p[0]?.toUpperCase()).join('') || '?';
 
 /** A person's initials in a pressed circle; fixed size, so rows line up. */
 export const Avatar: React.FC<{ name: string; size?: number }> = ({ name, size = 36 }) => (
-    <span className="neu-inset rounded-full flex items-center justify-center text-[12px] font-semibold text-[var(--ac-accent)] shrink-0"
-        style={{ width: size, height: size }} aria-hidden>{initials(name)}</span>
+    <span className="neu-inset rounded-full flex items-center justify-center font-serif text-gold-700 dark:text-gold-300 shrink-0"
+        style={{ width: size, height: size, fontSize: Math.max(11, Math.round(size * 0.36)) }} aria-hidden>{initials(name)}</span>
 );
 
+/** A labelled value in a detail view — the app's small-caps field label. */
 export const Detail: React.FC<{ label: string; children?: React.ReactNode }> = ({ label, children }) => (
     <div className="min-w-0">
-        <dt className="text-[12px] ac-muted">{label}</dt>
-        <dd className="mt-0.5 text-sm break-words">{children === null || children === undefined || children === '' ? <span className="ac-faint">—</span> : children}</dd>
+        <dt className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-gray-600 dark:text-gray-400">{label}</dt>
+        <dd className="mt-1 text-sm break-words">{children === null || children === undefined || children === '' ? <span className="ac-faint">—</span> : children}</dd>
     </div>
 );
+
+/** "Chrome on Windows" from a user-agent string. */
+export function device(ua: string | null): { label: string; phone: boolean } {
+    if (!ua) return { label: 'Unknown device', phone: false };
+    const phone = /iphone|android|mobile/i.test(ua);
+    const os = /windows/i.test(ua) ? 'Windows' : /mac os/i.test(ua) ? 'Mac' : /iphone|ipad/i.test(ua) ? 'iPhone / iPad' : /android/i.test(ua) ? 'Android' : /linux/i.test(ua) ? 'Linux' : 'Device';
+    const browser = /edg\//i.test(ua) ? 'Edge' : /chrome\//i.test(ua) ? 'Chrome' : /safari\//i.test(ua) ? 'Safari' : /firefox\//i.test(ua) ? 'Firefox' : 'Browser';
+    return { label: `${browser} on ${os}`, phone };
+}
 
 /* ─────────────────────────── Overlay plumbing ────────────────────────── */
 
@@ -213,20 +283,20 @@ export const Drawer: React.FC<{
     if (!open) return null;
     return portal(
         <>
-            <div className="ac-scrim" onClick={onClose} />
-            <div ref={panel} tabIndex={-1} role="dialog" aria-modal="true" className="ac-drawer outline-none"
+            <div className="ac-scrim neu-scrim" onClick={onClose} />
+            <div ref={panel} tabIndex={-1} role="dialog" aria-modal="true" className="ac-drawer neu-modal outline-none"
                 style={{ ['--ac-drawer-width' as string]: `${width}px` }}>
                 <header className="flex items-start gap-3 px-5 sm:px-6 py-4">
                     <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                            <h2 className="font-serif text-xl leading-tight break-words">{title}</h2>
+                            <h2 className="font-serif text-xl leading-tight text-gold-700 dark:text-gold-300 break-words">{title}</h2>
                             {meta}
                         </div>
-                        {subtitle && <p className="mt-0.5 text-[13px] ac-muted break-words">{subtitle}</p>}
+                        {subtitle && <p className="mt-1 text-[11px] uppercase tracking-[0.12em] font-light text-gray-600 dark:text-gray-400 break-words">{subtitle}</p>}
                     </div>
-                    <button type="button" onClick={onClose} aria-label="Close" className="neu-button !h-9 !w-9 !p-0 shrink-0"><X size={16} /></button>
+                    <IconButton label="Close" onClick={onClose}><X size={16} /></IconButton>
                 </header>
-                <div className="flex-1 overflow-y-auto px-5 sm:px-6 py-5 space-y-5">{children}</div>
+                <div className="flex-1 overflow-y-auto ac-no-scrollbar px-5 sm:px-6 py-5 space-y-5">{children}</div>
                 {footer && <footer className="px-5 sm:px-6 py-3 flex flex-wrap items-center justify-end gap-2">{footer}</footer>}
             </div>
         </>,
@@ -294,11 +364,11 @@ export const DialogProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             {children}
             {pending && portal(
                 <>
-                    <div className="ac-scrim ac-dialog-scrim" onClick={() => close(false)} />
-                    <form role="alertdialog" aria-modal="true" className="ac-dialog p-5"
+                    <div className="ac-scrim ac-dialog-scrim neu-scrim" onClick={() => close(false)} />
+                    <form role="alertdialog" aria-modal="true" className="ac-dialog neu-modal p-6"
                         onSubmit={e => { e.preventDefault(); if (!tooShort) close(true); }}>
-                        <h2 className="text-base font-semibold">{pending.o.title}</h2>
-                        {pending.o.body && <div className="mt-1.5 text-sm ac-muted">{pending.o.body}</div>}
+                        <h2 className="text-lg font-serif text-gray-900 dark:text-gray-100">{pending.o.title}</h2>
+                        {pending.o.body && <div className="mt-2 text-sm font-light leading-relaxed text-gray-700 dark:text-gray-300">{pending.o.body}</div>}
                         {pending.kind === 'prompt' && (
                             <div className="mt-4">
                                 {pending.o.label && <label className="neu-label" htmlFor="ac-prompt">{pending.o.label}</label>}
@@ -313,7 +383,7 @@ export const DialogProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                                 {pending.o.hint && <p className="mt-1.5 text-[12px] ac-faint">{pending.o.hint}</p>}
                             </div>
                         )}
-                        <div className="mt-5 flex justify-end gap-2">
+                        <div className="mt-6 flex flex-wrap justify-end gap-2.5">
                             <button type="button" className="neu-button" onClick={() => close(false)}>{pending.o.cancelLabel ?? 'Cancel'}</button>
                             <button type="submit" autoFocus={pending.kind === 'confirm'} disabled={tooShort}
                                 className={`neu-button ${pending.o.danger ? 'neu-button-danger' : 'neu-button-primary'}`}>

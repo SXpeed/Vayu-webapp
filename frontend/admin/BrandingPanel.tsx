@@ -45,8 +45,8 @@ export const BrandingPanel: React.FC = () => {
     if (!saved) {
         return (
             <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,22rem)] items-start">
-                <Skeleton className="h-[26rem] rounded-[18px]" />
-                <Skeleton className="h-72 rounded-[18px]" />
+                <Skeleton className="h-[26rem] rounded-2xl" />
+                <Skeleton className="h-72 rounded-2xl" />
             </div>
         );
     }

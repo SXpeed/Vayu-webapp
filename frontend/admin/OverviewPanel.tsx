@@ -10,7 +10,7 @@ import {
     AlertTriangle, ArrowRight, Building2, CheckCircle2, ClipboardList, CreditCard, Hourglass, Mail, RefreshCw, Users, Wrench,
 } from 'lucide-react';
 import { api, timeAgo, type ApiError } from './api';
-import { PageHeader, Section, Skeleton, StatusPill } from './kit';
+import { PageHeader, STAT_TILE_H, Section, Skeleton, StatTile, StatusPill } from './kit';
 
 interface Overview {
     organizations: Record<string, number>;
@@ -38,23 +38,12 @@ const readable = (action: string) => action.replace(/[._]/g, ' ').replace(/^./, 
 
 /** A metric tile. The number is tabular, so updates never change its width. */
 // Six tiles: two rows of three on a computer, three rows of two on a phone.
-const TILE_GRID = 'grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4';
+const TILE_GRID = 'grid grid-cols-2 lg:grid-cols-3 gap-3 lg:gap-5';
 
-const Tile: React.FC<{ icon: React.ReactNode; label: string; value: number; hint?: string; tone?: 'warn' | 'bad'; onClick?: () => void }> = ({ icon, label, value, hint, tone, onClick }) => {
-    const body = (
-        <>
-            <div className="flex items-center gap-2 text-[12px] ac-muted min-w-0">
-                <span className="w-7 h-7 rounded-[10px] neu-inset flex items-center justify-center shrink-0">{icon}</span>
-                <span className="truncate">{label}</span>
-            </div>
-            <p className={`mt-3 font-serif text-[2rem] leading-none tabular-nums ${tone === 'bad' ? 'text-[var(--ac-bad)]' : tone === 'warn' ? 'text-[var(--ac-warn)]' : ''}`}>{value}</p>
-            <p className="mt-2 text-[12px] ac-faint truncate min-h-[1.1rem]">{hint ?? ''}</p>
-        </>
-    );
-    return onClick
-        ? <button type="button" onClick={onClick} className="neu-card-interactive p-4 text-left min-w-0">{body}</button>
-        : <div className="neu-card p-4 min-w-0">{body}</div>;
-};
+const Tile: React.FC<{ icon: React.ReactNode; label: string; value: number; hint?: string; tone?: 'warn' | 'bad'; onClick?: () => void }> = ({ hint, ...rest }) => (
+    <StatTile {...rest} foot={hint} />
+);
+
 
 export const OverviewPanel: React.FC<{ navigate: Navigate }> = ({ navigate }) => {
     const [data, setData] = useState<Overview | null>(null);
@@ -94,7 +83,7 @@ export const OverviewPanel: React.FC<{ navigate: Navigate }> = ({ navigate }) =>
     const header = (
         <PageHeader
             title="Overview"
-            description="What needs you, and how the platform is doing."
+            description="Platform at a glance"
             actions={
                 <div className="flex items-center gap-3">
                     <span className="text-[12px] ac-faint whitespace-nowrap min-w-[7.5rem] text-right">
@@ -112,9 +101,9 @@ export const OverviewPanel: React.FC<{ navigate: Navigate }> = ({ navigate }) =>
         return (
             <div className="space-y-6">
                 {header}
-                <Skeleton className="h-28 rounded-[18px]" />
-                <div className={TILE_GRID}>{[0, 1, 2, 3, 4, 5].map(i => <Skeleton key={i} className="h-[126px] rounded-[18px]" />)}</div>
-                <div className="grid gap-6 lg:grid-cols-2"><Skeleton className="h-64 rounded-[18px]" /><Skeleton className="h-64 rounded-[18px]" /></div>
+                <Skeleton className="h-28 rounded-2xl" />
+                <div className={TILE_GRID}>{[0, 1, 2, 3, 4, 5].map(i => <Skeleton key={i} className={`${STAT_TILE_H} rounded-2xl`} />)}</div>
+                <div className="grid gap-6 lg:grid-cols-2"><Skeleton className="h-64 rounded-2xl" /><Skeleton className="h-64 rounded-2xl" /></div>
             </div>
         );
     }
@@ -159,9 +148,9 @@ export const OverviewPanel: React.FC<{ navigate: Navigate }> = ({ navigate }) =>
                 <Tile icon={<ClipboardList size={15} />} label="To review" value={pending} hint={`${waitingOn} waiting on applicant`} tone={pending ? 'warn' : undefined} onClick={() => navigate('applications')} />
                 <Tile icon={<Building2 size={15} />} label="Organizations" value={sum(data.organizations)} hint={`${data.organizations.active ?? 0} active · ${data.organizations.suspended ?? 0} suspended`} onClick={() => navigate('orgs')} />
                 <Tile icon={<Users size={15} />} label="Accounts" value={data.totals.users} hint={`${data.totals.new_users_7d} new this week`} onClick={() => navigate('accounts')} />
-                <Tile icon={<CreditCard size={15} />} label="Awaiting payment" value={awaitingPayment} tone={awaitingPayment ? 'warn' : undefined} hint="Approved, not yet paid" />
+                <Tile icon={<CreditCard size={15} />} label="Unpaid" value={awaitingPayment} tone={awaitingPayment ? 'warn' : undefined} hint="Approved, not yet paid" />
                 <Tile icon={<Hourglass size={15} />} label="Trials ending" value={data.trialsEndingThisWeek} hint="In the next 7 days" />
-                <Tile icon={<Mail size={15} />} label="Notices waiting" value={notices} hint="No email provider yet" onClick={() => navigate('notifications')} />
+                <Tile icon={<Mail size={15} />} label="Notices" value={notices} hint="No email provider yet" onClick={() => navigate('notifications')} />
             </div>
 
             <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">
@@ -191,7 +180,7 @@ export const OverviewPanel: React.FC<{ navigate: Navigate }> = ({ navigate }) =>
                             <li key={i} className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-3 text-[13px]">
                                 <span className="text-[12px] ac-faint tabular-nums">{timeAgo(e.at)}</span>
                                 <span className="min-w-0">
-                                    <span className="block truncate">{readable(e.action)}</span>
+                                    <span className="block break-words">{readable(e.action)}</span>
                                     <span className="block text-[12px] ac-faint truncate">{e.actor_email ?? e.actor_kind}</span>
                                 </span>
                             </li>

@@ -5,7 +5,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Building2, ChevronDown, CreditCard, Gauge, Layers, Plus, UserPlus, Users } from 'lucide-react';
 import { Button, Card, Field, Input, Select } from '../components/ui';
-import { Avatar, Detail, EmptyState, PageHeader, Section, Skeleton, SkeletonRows, StatusPill, useDialogs } from './kit';
+import { Avatar, Detail, EmptyState, PageHeader, STAT_TILE_H, Section, Skeleton, SkeletonRows, StatTile, StatusPill, useDialogs } from './kit';
 import { api, guarded as sharedGuarded, timeAgo, type ApiError, type Reauth } from './api';
 import { FEATURE_FIELDS, LIMIT_FIELDS, MODULE_FIELDS } from '../platform/planFields';
 
@@ -230,16 +230,16 @@ const OrgDetailView: React.FC<{ orgId: string; reauth: Reauth; onBack: () => voi
                 {/* The real header and tile sizes, so nothing moves when the data lands. */}
                 <PageHeader
                     back={{ label: 'All organizations', onClick: onBack }}
-                    title={<Skeleton className="inline-block align-middle h-7 w-64 max-w-full" />}
-                    description={<Skeleton className="inline-block align-middle h-3.5 w-80 max-w-full" />}
+                    title={<Skeleton className="inline-block align-middle h-5 w-64 max-w-full" />}
+                    description={<Skeleton className="inline-block align-middle h-3 w-56 max-w-full" />}
                     actions={<Skeleton className="h-10 w-24 rounded-xl" />}
                 />
                 <div className={TILE_GRID}>
-                    {[0, 1, 2, 3].map(i => <Skeleton key={i} className={`${TILE_H} rounded-[18px]`} />)}
+                    {[0, 1, 2, 3].map(i => <Skeleton key={i} className={`${TILE_H} rounded-2xl`} />)}
                 </div>
                 <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)] items-start">
-                    <div className="space-y-6"><Skeleton className="h-80 rounded-[18px]" /><Skeleton className="h-64 rounded-[18px]" /></div>
-                    <div className="space-y-6"><Skeleton className="h-72 rounded-[18px]" /><Skeleton className="h-48 rounded-[18px]" /></div>
+                    <div className="space-y-6"><Skeleton className="h-80 rounded-2xl" /><Skeleton className="h-64 rounded-2xl" /></div>
+                    <div className="space-y-6"><Skeleton className="h-72 rounded-2xl" /><Skeleton className="h-48 rounded-2xl" /></div>
                 </div>
             </div>
         );
@@ -287,7 +287,7 @@ const OrgDetailView: React.FC<{ orgId: string; reauth: Reauth; onBack: () => voi
                         {seats.overLimit ? 'Over the limit' : seats.remaining === null ? 'No seat limit' : `${seats.remaining} left`}
                     </span> : ''}
                     meter={seats?.limit ? { share: seatShare, tone: seats.overLimit ? 'bad' : seatShare >= 0.85 ? 'warn' : 'ok' } : undefined} />
-                <Tile icon={<CreditCard size={15} />} label="Customer payments"
+                <Tile icon={<CreditCard size={15} />} label="Payments"
                     value={<StatusPill tone={rzTone}>{rzLabel}</StatusPill>}
                     foot={rz?.connected ? (rz.hasWebhookSecret ? 'Webhook secret set' : 'No webhook secret') : 'Razorpay not linked'} />
             </div>
@@ -320,25 +320,10 @@ const OrgDetailView: React.FC<{ orgId: string; reauth: Reauth; onBack: () => voi
     );
 };
 
-const TILE_GRID = 'grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4';
-const TILE_H = 'h-[108px]';
+const TILE_GRID = 'grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-5';
+const TILE_H = STAT_TILE_H;
+const Tile = StatTile;
 
-/** Fixed height and single lines, so every tile matches its placeholder exactly. */
-const Tile: React.FC<{
-    icon: React.ReactNode; label: string; value: React.ReactNode; foot?: React.ReactNode;
-    meter?: { share: number; tone: 'ok' | 'warn' | 'bad' };
-}> = ({ icon, label, value, foot, meter }) => (
-    <div className={`neu-card relative ${TILE_H} px-4 pt-3.5 min-w-0 overflow-hidden`}>
-        <p className="flex items-center gap-1.5 text-[12px] ac-muted truncate"><span className="ac-faint shrink-0">{icon}</span>{label}</p>
-        <div className="mt-1.5 text-lg font-semibold truncate leading-7">{value}</div>
-        <div className="mt-0.5 text-[12px] leading-[18px] ac-faint truncate">{foot || ' '}</div>
-        {meter && (
-            <span className="ac-meter absolute left-4 right-4 bottom-3" data-tone={meter.tone}>
-                <span style={{ transform: `scaleX(${meter.share})` }} />
-            </span>
-        )}
-    </div>
-);
 
 const MembersCard: React.FC<{ org: OrgDetail; onChange: (o: OrgDetail) => void }> = ({ org, onChange }) => {
     const dialogs = useDialogs();
@@ -495,10 +480,10 @@ const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; on
                 ))}
             </dl>
 
-            <p className="mt-5 mb-2 text-[12px] ac-muted">Included</p>
+            <p className="mt-6 mb-2.5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-gray-600 dark:text-gray-400">Included</p>
             <div className="flex flex-wrap gap-1.5">
                 {included.length === 0 ? <span className="text-[13px] ac-faint">Nothing</span>
-                    : included.map(f => <span key={f.key} className="ac-tone" data-tone="neutral">{f.label}</span>)}
+                    : included.map(f => <span key={f.key} className="neu-badge">{f.label}</span>)}
             </div>
 
             <div className="mt-6 rounded-2xl neu-inset p-3.5 space-y-3">

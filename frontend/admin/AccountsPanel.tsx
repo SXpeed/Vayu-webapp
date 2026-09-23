@@ -12,7 +12,7 @@ import toast from 'react-hot-toast';
 import { KeyRound, LogOut, Monitor, Search, ShieldCheck, Smartphone, UserCheck, UserX, Users } from 'lucide-react';
 import { Input } from '../components/ui';
 import { api, guarded, postJson, timeAgo, type ApiError, type Reauth } from './api';
-import { Avatar, Detail, Drawer, EmptyState, PageHeader, Section, SkeletonRows, StatusPill, useDialogs } from './kit';
+import { Avatar, Detail, Drawer, EmptyState, PageHeader, Section, SkeletonRows, StatusPill, device, useDialogs } from './kit';
 
 interface AccountRow {
     id: string; name: string; email: string; email_verified: number; two_factor: number | null; created_at: string;
@@ -25,14 +25,6 @@ interface AccountDetail {
     sessions: { created_at: string; last_active: string; expires_at: string; user_agent: string | null; ip: string | null }[];
     loginMethods: string[];
     providerAdmin: { role: string; status: string } | null;
-}
-
-function device(ua: string | null): { label: string; phone: boolean } {
-    if (!ua) return { label: 'Unknown device', phone: false };
-    const phone = /iphone|android|mobile/i.test(ua);
-    const os = /windows/i.test(ua) ? 'Windows' : /mac os/i.test(ua) ? 'Mac' : /iphone|ipad/i.test(ua) ? 'iPhone / iPad' : /android/i.test(ua) ? 'Android' : /linux/i.test(ua) ? 'Linux' : 'Device';
-    const browser = /edg\//i.test(ua) ? 'Edge' : /chrome\//i.test(ua) ? 'Chrome' : /safari\//i.test(ua) ? 'Safari' : /firefox\//i.test(ua) ? 'Firefox' : 'Browser';
-    return { label: `${browser} on ${os}`, phone };
 }
 
 export const AccountsPanel: React.FC<{ reauth: Reauth; routeId?: string; go: (section: string, id?: string) => void }> = ({ reauth, routeId, go }) => {
@@ -48,7 +40,7 @@ export const AccountsPanel: React.FC<{ reauth: Reauth; routeId?: string; go: (se
 
     return (
         <div className="space-y-6">
-            <PageHeader title="Accounts" description="Everyone who can sign in: the organizations they belong to and where they are signed in." />
+            <PageHeader title="Accounts" description="Everyone who can sign in" />
             <Section>
                 <div className="relative mb-4 md:max-w-sm">
                     <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 ac-faint pointer-events-none" />
@@ -146,13 +138,13 @@ const AccountDrawer: React.FC<{ id?: string; reauth: Reauth; onClose: () => void
             {!d ? <SkeletonRows rows={6} /> : (
                 <>
                     {newPassword && (
-                        <div className="neu-inset rounded-[14px] p-4 ac-enter-soft">
+                        <div className="neu-inset rounded-xl p-4 ac-enter-soft">
                             <p className="text-[13px] ac-muted">New temporary password — pass it on privately. It is not shown again.</p>
                             <p className="mt-2 font-mono text-lg tracking-wide select-all break-all">{newPassword}</p>
                         </div>
                     )}
                     {disabled && d.user.status_reason && (
-                        <div className="neu-inset rounded-[14px] p-3.5 text-[13px] text-[var(--ac-bad)]">Disabled: {d.user.status_reason}</div>
+                        <div className="neu-inset rounded-xl p-3.5 text-[13px] text-[var(--ac-bad)]">Disabled: {d.user.status_reason}</div>
                     )}
 
                     <Section title="Account">

@@ -115,6 +115,10 @@ Seats and inventory items are enforced. Still to wire up (each is labelled
 - [x] Neumorphic polish pass: shared kit (drawers, dialogs, skeletons, status pills), address-based navigation,
       command palette (Ctrl K), phone tab bar, Plans redesign, organization page with at-a-glance tiles.
       Checked headlessly at 1400px and 390px: no layout shift, no sideways scroll, no clipped text on any screen
+- [x] Same design as the organization app: its floating shell, sidebar rows, phone dock, cards, pills, status chips,
+      sheets and sign-in screen, light and dark
+- [x] Profile: name, password change (optionally signing out other devices), two-factor on/off and new backup codes,
+      signed-in devices with per-device sign-out, dark mode, sign out
 - [ ] Organization data export, closure and scheduled deletion (§3.13)
 - [ ] Usage and cost visibility per organization (needs usage counters, §3.5)
 

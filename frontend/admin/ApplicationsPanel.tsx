@@ -74,7 +74,7 @@ export const ApplicationsPanel: React.FC<{ reauth: Reauth; routeId?: string; go:
 
     return (
         <div className="space-y-6">
-            <PageHeader title="Applications" description="Businesses asking to join. Approving sets up their workspace; nothing is charged before you decide." />
+            <PageHeader title="Applications" description="Businesses asking to join" />
 
             <Section>
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between mb-4">
@@ -182,13 +182,13 @@ const ApplicationDrawer: React.FC<{ id?: string; reauth: Reauth; onClose: () => 
             {!d || !a ? <SkeletonRows rows={6} /> : (
                 <>
                     {!d.applicant.emailVerified && open && (
-                        <div className="neu-inset rounded-[14px] p-3.5 flex items-start gap-2.5 text-[13px] text-[var(--ac-warn)]">
+                        <div className="neu-inset rounded-xl p-3.5 flex items-start gap-2.5 text-[13px] text-[var(--ac-warn)]">
                             <AlertTriangle size={16} className="mt-0.5 shrink-0" />
                             <span>This email address is not verified yet (no email provider is connected). Make sure the applicant is genuine before approving.</span>
                         </div>
                     )}
                     {a.provisioningError && (
-                        <div className="neu-inset rounded-[14px] p-3.5 flex items-start gap-2.5 text-[13px] text-[var(--ac-bad)]">
+                        <div className="neu-inset rounded-xl p-3.5 flex items-start gap-2.5 text-[13px] text-[var(--ac-bad)]">
                             <XCircle size={16} className="mt-0.5 shrink-0" />
                             <span>Setup failed: {a.provisioningError}. Fix the cause, then press <strong>Retry setup</strong> — nothing is duplicated.</span>
                         </div>

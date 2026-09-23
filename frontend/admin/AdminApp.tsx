@@ -3,24 +3,26 @@
 // This screen is convenience, not security: every /api/v2/admin call is
 // checked on the server (session + provider_admins row + 2FA).
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import toast from 'react-hot-toast';
 import {
-    Activity, Building2, ChevronsLeft, ChevronsRight, ClipboardList, History, Image as ImageIcon, KeyRound,
-    LayoutDashboard, Layers, LogOut, Mail, MoreHorizontal, Search, ShieldCheck, Users, X,
+    Activity, Building2, ClipboardList, History, Image as ImageIcon, KeyRound,
+    LayoutDashboard, Layers, Mail, Search, ShieldCheck, User as UserIcon, Users,
 } from 'lucide-react';
-import { api, authClient, guarded, type ApiError, type Reauth } from './api';
+import { api, authClient, guarded, timeAgo, type ApiError, type Reauth } from './api';
 import { OrgsPanel } from './OrgsPanel';
 import { PlansPanel } from './PlansPanel';
 import { BrandingPanel } from './BrandingPanel';
 import { OverviewPanel } from './OverviewPanel';
 import { ApplicationsPanel } from './ApplicationsPanel';
 import { AccountsPanel } from './AccountsPanel';
+import { ProfilePanel } from './ProfilePanel';
 import { AdminsPanel, HealthPanel, NotificationsPanel } from './SystemPanels';
-import { DialogProvider, Kbd, PageHeader, Section, Segmented, SkeletonRows, StatusPill, useHashRoute } from './kit';
+import { DialogProvider, EmptyState, PageHeader, Section, Segmented, SkeletonRows, StatusPill, useHashRoute } from './kit';
+import { CommandPalette, Dock, MoreSheet, PhoneHeader, Sidebar, useSmoothScroll, type NavGroup, type NavItem, type Tab } from './Shell';
 import { useBranding } from '../useBranding';
-import { Button, Card, Field, Input, SectionTitle, ToggleRow } from '../components/ui';
+import { Button, Field, Input, ToggleRow } from '../components/ui';
 
 interface LoginMethods {
     emailPassword: { signIn: boolean; signUp: boolean };
@@ -51,24 +53,20 @@ type Screen =
     | { kind: 'signed-out' }
     | { kind: 'not-admin' }
     | { kind: 'setup-2fa' }
-    | { kind: 'ready'; email: string; role: string }
+    | { kind: 'ready'; userId: string; email: string; role: string; name: string }
     | { kind: 'unavailable'; message: string };
-
-type Tab = 'overview' | 'applications' | 'orgs' | 'accounts' | 'plans' | 'notifications' | 'branding' | 'security' | 'health' | 'audit';
-
-interface NavItem { tab: Tab; label: string; short: string; icon: React.ReactNode; badge?: number }
 
 /** Titles for sections whose panel does not render its own page header. */
 const HEADERS: Partial<Record<Tab, { title: string; description: string }>> = {
-    orgs: { title: 'Organizations', description: 'Every business on the platform: members, plan, payments and status.' },
-    notifications: { title: 'Notifications', description: 'Where notices go, and the queue of notices waiting to be sent.' },
-    branding: { title: 'Branding', description: 'The platform name and logo shown on sign-in, the app and here.' },
-    security: { title: 'Login & security', description: 'How people sign in, and who administers the platform.' },
-    health: { title: 'System health', description: 'What is configured and what needs attention.' },
-    audit: { title: 'Audit log', description: 'Every administrative action, newest first.' },
+    orgs: { title: 'Organizations', description: 'Every business on the platform' },
+    notifications: { title: 'Notifications', description: 'Where notices go and what is queued' },
+    branding: { title: 'Branding', description: 'Platform name, logo and colour' },
+    security: { title: 'Login & security', description: 'Sign-in methods and administrators' },
+    health: { title: 'System health', description: 'Configuration and checks' },
+    audit: { title: 'Audit log', description: 'Every administrative action' },
 };
 
-const TABS: Tab[] = ['overview', 'applications', 'orgs', 'accounts', 'plans', 'notifications', 'branding', 'security', 'health', 'audit'];
+const TABS: Tab[] = ['overview', 'applications', 'orgs', 'accounts', 'plans', 'notifications', 'branding', 'security', 'health', 'audit', 'profile'];
 
 const SIDEBAR_KEY = 'ac.sidebar.collapsed';
 const readCollapsed = () => { try { return localStorage.getItem(SIDEBAR_KEY) === '1'; } catch { return false; } };
@@ -79,8 +77,19 @@ export const AdminApp: React.FC = () => (
     </DialogProvider>
 );
 
+/** The app's floating shell: inset from the window on a computer, full-bleed on a phone. */
+const ShellFrame: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+    <div className="ac h-dvh flex items-stretch justify-center p-0 lg:p-3 xl:p-4">
+        <div className="w-full h-full relative overflow-hidden flex flex-col lg:flex-row bg-[var(--neu-bg)] lg:rounded-[1.5rem] lg:ring-1 lg:ring-gray-900/5 dark:lg:ring-white/5"
+            style={{ boxShadow: '0 30px 70px -24px var(--neu-shadow-dark), 0 4px 14px var(--neu-shadow-light)' }}>
+            {children}
+        </div>
+    </div>
+);
+
 const ControlCentre: React.FC = () => {
     const branding = useBranding();
+    const brand = { appName: branding.appName, logoUrl: branding.logoUrl };
     const [screen, setScreen] = useState<Screen>({ kind: 'loading' });
     const [route, go] = useHashRoute();
     const tab: Tab = (TABS as string[]).includes(route.section) ? route.section as Tab : 'overview';
@@ -90,11 +99,16 @@ const ControlCentre: React.FC = () => {
     const [badges, setBadges] = useState({ applications: 0, notifications: 0 });
     const [reauthResolve, setReauthResolve] = useState<((ok: boolean) => void) | null>(null);
     const reauth = useCallback(() => new Promise<boolean>(resolve => setReauthResolve(() => resolve)), []);
+    const mainRef = useRef<HTMLElement>(null);
+    useSmoothScroll(mainRef);
 
     const refresh = useCallback(async () => {
         try {
-            const me = await api<{ email: string; role: string }>('/admin/me');
-            setScreen({ kind: 'ready', email: me.email, role: me.role });
+            const [me, session] = await Promise.all([
+                api<{ userId: string; email: string; role: string }>('/admin/me'),
+                authClient.getSession().catch(() => null),
+            ]);
+            setScreen({ kind: 'ready', userId: me.userId, email: me.email, role: me.role, name: session?.data?.user.name ?? '' });
         } catch (e) {
             const err = e as ApiError;
             if (err.status === 401) setScreen({ kind: 'signed-out' });
@@ -133,7 +147,7 @@ const ControlCentre: React.FC = () => {
     // A new screen starts at the top; opening a record inside it does not scroll.
     const lastTab = useRef(tab);
     useEffect(() => {
-        if (lastTab.current !== tab) { window.scrollTo({ top: 0 }); lastTab.current = tab; }
+        if (lastTab.current !== tab) { mainRef.current?.scrollTo({ top: 0 }); lastTab.current = tab; }
         setMoreOpen(false);
     }, [tab]);
 
@@ -144,327 +158,137 @@ const ControlCentre: React.FC = () => {
         return !c;
     });
 
-    const signOut = async () => { await authClient.signOut(); setScreen({ kind: 'signed-out' }); };
+    const signOut = async () => { await authClient.signOut(); setMoreOpen(false); setScreen({ kind: 'signed-out' }); };
 
     if (screen.kind !== 'ready') {
         return (
-            <div className="ac min-h-dvh px-4 py-10 lg:py-16">
-                <div className="w-full max-w-md mx-auto space-y-6 ac-enter">
-                    <header className="flex items-center gap-3">
-                        {branding.logoUrl
-                            ? <img src={branding.logoUrl} alt="" width={44} height={44} className="w-11 h-11 rounded-2xl object-contain" />
-                            : <span className="w-11 h-11 rounded-2xl neu-accent flex items-center justify-center font-serif text-lg">{branding.appName.slice(0, 1).toUpperCase()}</span>}
-                        <div>
-                            <h1 className="font-serif text-2xl text-[var(--ac-accent)]">{branding.appName}</h1>
-                            <p className="text-[11px] uppercase tracking-[0.16em] ac-muted">Control centre</p>
+            <ShellFrame>
+                <div className="flex-1 overflow-y-auto ac-no-scrollbar">
+                    <div className="min-h-full flex flex-col items-center justify-center p-6">
+                        <div className="w-full max-w-sm space-y-10 ac-enter">
+                            <div className="text-center space-y-1">
+                                {branding.logoUrl && <img src={branding.logoUrl} alt="" width={80} height={80} className="w-20 h-20 mx-auto mb-2 rounded-2xl object-contain" />}
+                                <h1 className="text-4xl sm:text-5xl font-serif text-gold-500 tracking-wide break-words">{branding.appName}</h1>
+                                <p className="text-[11px] text-gold-600 dark:text-gold-400 tracking-[0.24em] uppercase">Control centre</p>
+                            </div>
+                            {screen.kind === 'loading' && <div className="neu-raised rounded-3xl p-8"><SkeletonRows rows={2} /></div>}
+                            {screen.kind === 'unavailable' && <div className="neu-raised rounded-3xl p-8 text-sm text-center">{screen.message}</div>}
+                            {screen.kind === 'signed-out' && <SignIn onDone={refresh} />}
+                            {screen.kind === 'not-admin' && (
+                                <div className="neu-raised rounded-3xl p-8 text-center space-y-6">
+                                    <p className="text-sm font-light">This account is not a provider administrator.</p>
+                                    <button type="button" onClick={signOut} className="w-full neu-raised-sm neu-btn text-gold-700 dark:text-gold-300 rounded-full py-3 text-sm font-medium tracking-wide active-scale">Sign out</button>
+                                </div>
+                            )}
+                            {screen.kind === 'setup-2fa' && (
+                                <>
+                                    <SetupTwoFactor onDone={refresh} />
+                                    <button type="button" onClick={signOut} className="w-full text-[11px] uppercase tracking-[0.16em] text-gray-600 dark:text-gray-400">Sign out</button>
+                                </>
+                            )}
                         </div>
-                    </header>
-                    {screen.kind === 'loading' && <Card><SkeletonRows rows={2} /></Card>}
-                    {screen.kind === 'unavailable' && <Card><p className="text-sm">{screen.message}</p></Card>}
-                    {screen.kind === 'signed-out' && <SignIn onDone={refresh} />}
-                    {screen.kind === 'not-admin' && (
-                        <Card>
-                            <p className="text-sm mb-4">This account is not a provider administrator.</p>
-                            <Button onClick={signOut} icon={<LogOut size={16} />}>Sign out</Button>
-                        </Card>
-                    )}
-                    {screen.kind === 'setup-2fa' && (
-                        <>
-                            <SetupTwoFactor onDone={refresh} />
-                            <Button onClick={signOut} icon={<LogOut size={16} />}>Sign out</Button>
-                        </>
-                    )}
+                    </div>
                 </div>
-            </div>
+            </ShellFrame>
         );
     }
 
-    const groups: { title: string; items: NavItem[] }[] = [
+    const groups: NavGroup[] = [
         { title: 'Business', items: [
-            { tab: 'overview', label: 'Overview', short: 'Overview', icon: <LayoutDashboard size={18} /> },
-            { tab: 'applications', label: 'Applications', short: 'Review', icon: <ClipboardList size={18} />, badge: badges.applications },
-            { tab: 'orgs', label: 'Organizations', short: 'Orgs', icon: <Building2 size={18} /> },
-            { tab: 'accounts', label: 'Accounts', short: 'Accounts', icon: <Users size={18} /> },
-            { tab: 'plans', label: 'Plans', short: 'Plans', icon: <Layers size={18} /> },
+            { tab: 'overview', label: 'Overview', short: 'Overview', icon: LayoutDashboard },
+            { tab: 'applications', label: 'Applications', short: 'Review', icon: ClipboardList, badge: badges.applications },
+            { tab: 'orgs', label: 'Organizations', short: 'Orgs', icon: Building2 },
+            { tab: 'accounts', label: 'Accounts', short: 'Accounts', icon: Users },
+            { tab: 'plans', label: 'Plans', short: 'Plans', icon: Layers },
         ] },
         { title: 'Platform', items: [
-            { tab: 'notifications', label: 'Notifications', short: 'Notices', icon: <Mail size={18} />, badge: badges.notifications },
-            { tab: 'branding', label: 'Branding', short: 'Branding', icon: <ImageIcon size={18} /> },
-            { tab: 'security', label: 'Login & security', short: 'Security', icon: <ShieldCheck size={18} /> },
-            { tab: 'health', label: 'System health', short: 'Health', icon: <Activity size={18} /> },
-            { tab: 'audit', label: 'Audit log', short: 'Audit', icon: <History size={18} /> },
+            { tab: 'notifications', label: 'Notifications', short: 'Notices', icon: Mail, badge: badges.notifications },
+            { tab: 'branding', label: 'Branding', short: 'Branding', icon: ImageIcon },
+            { tab: 'security', label: 'Login & security', short: 'Security', icon: ShieldCheck },
+            { tab: 'health', label: 'System health', short: 'Health', icon: Activity },
+            { tab: 'audit', label: 'Audit log', short: 'Audit', icon: History },
         ] },
     ];
     const all = groups.flatMap(g => g.items);
     const dockTabs: Tab[] = ['overview', 'applications', 'orgs', 'accounts'];
+    const dockItems = dockTabs.map(t => all.find(i => i.tab === t)!);
+    const paletteItems: NavItem[] = [...all, { tab: 'profile', label: 'Profile', short: 'Profile', icon: UserIcon }];
     const header = HEADERS[tab];
     // Organization detail has its own header with a way back.
     const showHeader = !!header && !(tab === 'orgs' && route.id);
 
-    const logo = (size: number) => branding.logoUrl
-        ? <img src={branding.logoUrl} alt="" width={size} height={size} style={{ width: size, height: size }} className="rounded-xl object-contain shrink-0" />
-        : <span style={{ width: size, height: size }} className="rounded-xl neu-accent flex items-center justify-center font-serif shrink-0">{branding.appName.slice(0, 1).toUpperCase()}</span>;
-
     return (
-        <div className="ac min-h-dvh lg:flex">
-            {/* ── Desktop sidebar ─────────────────────────────────────── */}
-            <aside className={`hidden lg:flex lg:flex-col lg:shrink-0 lg:sticky lg:top-0 lg:h-dvh py-5 gap-5 ${collapsed ? 'lg:w-[4.75rem] px-2.5' : 'lg:w-64 px-4'}`}>
-                <div className={`flex items-center gap-3 ${collapsed ? 'justify-center' : 'px-1'}`}>
-                    {logo(38)}
-                    {!collapsed && (
-                        <div className="min-w-0">
-                            <p className="font-serif text-lg leading-tight text-[var(--ac-accent)] truncate">{branding.appName}</p>
-                            <p className="text-[10px] uppercase tracking-[0.16em] ac-faint">Control centre</p>
-                        </div>
-                    )}
-                </div>
+        <ShellFrame>
+            <Sidebar brand={brand} groups={groups} current={tab} onNavigate={t => navigate(t)}
+                collapsed={collapsed} onToggleCollapsed={toggleSidebar} name={screen.name || screen.email}
+                onOpenPalette={() => setPaletteOpen(true)} />
 
-                <button type="button" onClick={() => setPaletteOpen(true)}
-                    className={`neu-inset rounded-[12px] h-10 flex items-center gap-2 text-[13px] ac-muted ${collapsed ? 'justify-center' : 'px-3'}`}
-                    title="Search or jump (Ctrl K)">
-                    <Search size={15} />
-                    {!collapsed && <><span className="flex-1 text-left">Search or jump…</span><Kbd>Ctrl K</Kbd></>}
-                </button>
+            {/* Content column: phone header, the scroller, the phone dock. `min-h-0`
+                lets it shrink to the shell instead of growing to the content. */}
+            <div className="flex-1 flex flex-col min-w-0 min-h-0 relative">
+                <PhoneHeader brand={brand} name={screen.name || screen.email} onOpenPalette={() => setPaletteOpen(true)}
+                    onOpenProfile={() => navigate('profile')} onHome={() => navigate('overview')} />
 
-                <nav className="flex-1 overflow-y-auto space-y-5 -mx-1 px-1 py-1">
-                    {groups.map(g => (
-                        <div key={g.title}>
-                            {!collapsed && <p className="px-3 mb-2 text-[10px] uppercase tracking-[0.18em] ac-faint">{g.title}</p>}
-                            <ul className="space-y-1.5">
-                                {g.items.map(item => (
-                                    <li key={item.tab}>
-                                        <button type="button" onClick={() => navigate(item.tab)} aria-current={tab === item.tab ? 'page' : undefined}
-                                            title={collapsed ? item.label : undefined}
-                                            className={`ac-nav-item ${collapsed ? 'justify-center !px-0' : ''}`}>
-                                            <span className="relative">
-                                                {item.icon}
-                                                {collapsed && !!item.badge && <span className="absolute -top-1.5 -right-2 ac-count !min-w-[1rem] !h-4 !leading-4 !text-[0.6rem]">{item.badge}</span>}
-                                            </span>
-                                            {!collapsed && <span className="flex-1 text-left truncate">{item.label}</span>}
-                                            {!collapsed && !!item.badge && <span className="ac-count">{item.badge}</span>}
-                                        </button>
-                                    </li>
-                                ))}
-                            </ul>
+                <main ref={mainRef} id="ac-main"
+                    className="flex-1 min-h-0 overflow-y-auto ac-no-scrollbar overscroll-contain neu-scroll-fade"
+                    style={{ WebkitOverflowScrolling: 'touch' }}>
+                    <div className="w-full max-w-[1200px] mx-auto px-5 md:px-8 lg:px-10 pt-3 md:pt-5 lg:pt-8 pb-[calc(7rem+env(safe-area-inset-bottom,0px))] lg:pb-12">
+                        {/* Keyed by section, so each screen fades in; opening a record does not re-animate the list. */}
+                        <div key={tab} className="ac-enter space-y-6">
+                            {showHeader && header && <PageHeader title={header.title} description={header.description} />}
+                            {tab === 'overview' && <OverviewPanel navigate={navigate} />}
+                            {tab === 'applications' && <ApplicationsPanel reauth={reauth} routeId={route.id} go={navigate} onCountsChange={loadBadges} />}
+                            {tab === 'orgs' && <OrgsPanel reauth={reauth} routeId={route.id} go={navigate} />}
+                            {tab === 'accounts' && <AccountsPanel reauth={reauth} routeId={route.id} go={navigate} />}
+                            {tab === 'plans' && <PlansPanel routeId={route.id} go={navigate} />}
+                            {tab === 'notifications' && <NotificationsPanel onChange={loadBadges} />}
+                            {tab === 'branding' && <BrandingPanel />}
+                            {tab === 'security' && (
+                                <div className="space-y-6">
+                                    <LoginMethodsPanel reauth={reauth} />
+                                    <AdminsPanel reauth={reauth} myRole={screen.role} myEmail={screen.email} />
+                                </div>
+                            )}
+                            {tab === 'health' && <HealthPanel />}
+                            {tab === 'audit' && <AuditPanel />}
+                            {tab === 'profile' && (
+                                <ProfilePanel me={screen} reauth={reauth}
+                                    onNameChange={name => setScreen(s => s.kind === 'ready' ? { ...s, name } : s)}
+                                    onSecurityChange={refresh} onSignOut={signOut} />
+                            )}
                         </div>
-                    ))}
-                </nav>
-
-                <div className={`space-y-3 ${collapsed ? 'flex flex-col items-center' : ''}`}>
-                    {!collapsed && (
-                        <div className="neu-inset rounded-[14px] px-3 py-2.5 min-w-0">
-                            <p className="text-[12px] truncate">{screen.email}</p>
-                            <p className="text-[11px] ac-faint">Provider {screen.role}</p>
-                        </div>
-                    )}
-                    <div className={`flex gap-2 ${collapsed ? 'flex-col' : ''}`}>
-                        <button type="button" className={`neu-button ${collapsed ? '!w-10 !px-0' : 'flex-1'}`} onClick={signOut} title="Sign out">
-                            <LogOut size={15} />{!collapsed && 'Sign out'}
-                        </button>
-                        <button type="button" className="neu-button !w-10 !px-0" onClick={toggleSidebar} title={collapsed ? 'Expand menu' : 'Collapse menu'}>
-                            {collapsed ? <ChevronsRight size={16} /> : <ChevronsLeft size={16} />}
-                        </button>
                     </div>
-                </div>
-            </aside>
+                </main>
 
-            {/* ── Phone header ─────────────────────────────────────────── */}
-            <header className="lg:hidden sticky top-0 z-30 flex items-center gap-3 px-4 h-16 bg-[var(--ac-bg)]/90 backdrop-blur-sm">
-                {logo(34)}
-                <div className="min-w-0 flex-1">
-                    <p className="font-serif text-base leading-tight text-[var(--ac-accent)] truncate">{branding.appName}</p>
-                    <p className="text-[10px] uppercase tracking-[0.16em] ac-faint">Control centre</p>
-                </div>
-                <button type="button" aria-label="Search or jump" className="neu-button !w-10 !px-0" onClick={() => setPaletteOpen(true)}><Search size={17} /></button>
-            </header>
+                <Dock items={dockItems} current={tab} onNavigate={t => navigate(t)} onMore={() => setMoreOpen(true)} moreBadge={badges.notifications} />
+            </div>
 
-            {/* ── Content ──────────────────────────────────────────────── */}
-            <main className="flex-1 min-w-0 px-4 pt-4 pb-28 sm:px-6 lg:px-10 lg:pt-9 lg:pb-12">
-                <div className="w-full max-w-[1200px] mx-auto">
-                    {/* Keyed by section, so each screen fades in; opening a record does not re-animate the list. */}
-                    <div key={tab} className="ac-enter space-y-6">
-                        {showHeader && header && <PageHeader title={header.title} description={header.description} />}
-                        {tab === 'overview' && <OverviewPanel navigate={navigate} />}
-                        {tab === 'applications' && <ApplicationsPanel reauth={reauth} routeId={route.id} go={navigate} onCountsChange={loadBadges} />}
-                        {tab === 'orgs' && <OrgsPanel reauth={reauth} routeId={route.id} go={navigate} />}
-                        {tab === 'accounts' && <AccountsPanel reauth={reauth} routeId={route.id} go={navigate} />}
-                        {tab === 'plans' && <PlansPanel routeId={route.id} go={navigate} />}
-                        {tab === 'notifications' && <NotificationsPanel onChange={loadBadges} />}
-                        {tab === 'branding' && <BrandingPanel />}
-                        {tab === 'security' && (
-                            <div className="space-y-6">
-                                <LoginMethodsPanel reauth={reauth} />
-                                <AdminsPanel reauth={reauth} myRole={screen.role} myEmail={screen.email} />
-                            </div>
-                        )}
-                        {tab === 'health' && <HealthPanel />}
-                        {tab === 'audit' && <AuditPanel />}
-                    </div>
-                </div>
-            </main>
-
-            {/* ── Phone tab bar ────────────────────────────────────────── */}
-            <nav className="lg:hidden ac-dock" aria-label="Sections">
-                {dockTabs.map(t => {
-                    const item = all.find(i => i.tab === t)!;
-                    return (
-                        <button key={t} type="button" onClick={() => navigate(t)} aria-current={tab === t ? 'page' : undefined} className="ac-dock-item">
-                            {item.icon}<span>{item.short}</span>
-                            {!!item.badge && <span className="ac-count">{item.badge}</span>}
-                        </button>
-                    );
-                })}
-                <button type="button" onClick={() => setMoreOpen(true)} aria-current={!dockTabs.includes(tab) ? 'page' : undefined} className="ac-dock-item">
-                    <MoreHorizontal size={18} /><span>More</span>
-                    {!!badges.notifications && <span className="ac-count">{badges.notifications}</span>}
-                </button>
-            </nav>
-
-            {moreOpen && <MoreSheet items={all.filter(i => !dockTabs.includes(i.tab))} current={tab} email={screen.email} role={screen.role}
+            {moreOpen && <MoreSheet items={all.filter(i => !dockTabs.includes(i.tab))} current={tab} name={screen.name} email={screen.email} role={screen.role}
                 onPick={t => navigate(t)} onClose={() => setMoreOpen(false)} onSignOut={signOut} />}
 
-            {paletteOpen && <CommandPalette items={all} onClose={() => setPaletteOpen(false)} navigate={navigate} />}
+            {paletteOpen && <CommandPalette items={paletteItems} onClose={() => setPaletteOpen(false)} navigate={navigate} />}
 
             {reauthResolve && createPortal(
-                <div className="ac">
-                    <div className="ac-scrim ac-dialog-scrim" />
-                    <div className="ac-dialog p-1" role="dialog" aria-modal="true">
-                        <SignIn email={screen.email} title="Confirm it's you" onDone={() => { reauthResolve(true); setReauthResolve(null); }} />
-                        <div className="px-5 pb-4 flex justify-end">
-                            <Button onClick={() => { reauthResolve(false); setReauthResolve(null); }}>Cancel</Button>
+                <>
+                    <div className="ac-scrim ac-dialog-scrim neu-scrim" />
+                    <div className="ac-dialog neu-modal p-6" role="dialog" aria-modal="true" aria-label="Confirm it's you">
+                        <SignIn email={screen.email} title="Confirm it's you" compact onDone={() => { reauthResolve(true); setReauthResolve(null); }} />
+                        <div className="mt-3 flex justify-center">
+                            <button type="button" className="text-[11px] uppercase tracking-[0.16em] text-gray-600 dark:text-gray-400 py-2"
+                                onClick={() => { reauthResolve(false); setReauthResolve(null); }}>Cancel</button>
                         </div>
                     </div>
-                </div>,
+                </>,
                 document.getElementById('ac-overlays') ?? document.body,
             )}
-        </div>
-    );
-};
-
-/* ───────────────────────────── Phone "More" ──────────────────────────── */
-
-const MoreSheet: React.FC<{ items: NavItem[]; current: Tab; email: string; role: string; onPick: (t: Tab) => void; onClose: () => void; onSignOut: () => void }> = ({ items, current, email, role, onPick, onClose, onSignOut }) => {
-    useEffect(() => {
-        const on = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-        window.addEventListener('keydown', on);
-        return () => window.removeEventListener('keydown', on);
-    }, [onClose]);
-    return createPortal(
-        <div className="ac">
-            <div className="ac-scrim" onClick={onClose} />
-            <div className="ac-drawer ac-drawer-fit" role="dialog" aria-modal="true" style={{ ['--ac-drawer-width' as string]: '360px' }}>
-                <header className="flex items-center justify-between px-5 py-4">
-                    <p className="font-serif text-lg">More</p>
-                    <button type="button" aria-label="Close" onClick={onClose} className="neu-button !w-9 !h-9 !p-0"><X size={16} /></button>
-                </header>
-                <div className="flex-1 overflow-y-auto p-4 space-y-2">
-                    {items.map(i => (
-                        <button key={i.tab} type="button" onClick={() => onPick(i.tab)} aria-current={current === i.tab ? 'page' : undefined} className="ac-nav-item !min-h-[3rem]">
-                            {i.icon}<span className="flex-1 text-left">{i.label}</span>{!!i.badge && <span className="ac-count">{i.badge}</span>}
-                        </button>
-                    ))}
-                </div>
-                <footer className="px-5 py-4 flex items-center gap-3">
-                    <div className="min-w-0 flex-1"><p className="text-[12px] truncate">{email}</p><p className="text-[11px] ac-faint">Provider {role}</p></div>
-                    <button type="button" className="neu-button" onClick={onSignOut}><LogOut size={15} /> Sign out</button>
-                </footer>
-            </div>
-        </div>,
-        document.getElementById('ac-overlays') ?? document.body,
-    );
-};
-
-/* ───────────────────────────── Quick jump ────────────────────────────── */
-
-interface Hit { key: string; label: string; hint: string; icon: React.ReactNode; go: () => void }
-
-const CommandPalette: React.FC<{ items: NavItem[]; onClose: () => void; navigate: (section: string, id?: string) => void }> = ({ items, onClose, navigate }) => {
-    const [q, setQ] = useState('');
-    const [active, setActive] = useState(0);
-    const [remote, setRemote] = useState<Hit[]>([]);
-    const input = useRef<HTMLInputElement>(null);
-
-    useEffect(() => { input.current?.focus(); }, []);
-
-    // Search organizations and accounts as you type (debounced).
-    useEffect(() => {
-        const term = q.trim();
-        if (term.length < 2) { setRemote([]); return; }
-        const t = setTimeout(async () => {
-            try {
-                const [orgs, accounts] = await Promise.all([
-                    api<{ organizations: { id: string; name: string; status: string }[] }>(`/admin/orgs?q=${encodeURIComponent(term)}&limit=5`),
-                    api<{ accounts: { id: string; name: string; email: string }[] }>(`/admin/accounts?q=${encodeURIComponent(term)}&limit=5`),
-                ]);
-                setRemote([
-                    ...orgs.organizations.map(o => ({ key: `o-${o.id}`, label: o.name, hint: `Organization · ${o.status}`, icon: <Building2 size={16} />, go: () => navigate('orgs', o.id) })),
-                    ...accounts.accounts.map(a => ({ key: `a-${a.id}`, label: a.name, hint: a.email, icon: <Users size={16} />, go: () => navigate('accounts', a.id) })),
-                ]);
-            } catch { setRemote([]); }
-        }, 200);
-        return () => clearTimeout(t);
-    }, [q, navigate]);
-
-    const hits: Hit[] = useMemo(() => {
-        const term = q.trim().toLowerCase();
-        const sections = items
-            .filter(i => !term || i.label.toLowerCase().includes(term))
-            .map(i => ({ key: `s-${i.tab}`, label: i.label, hint: 'Go to section', icon: i.icon, go: () => navigate(i.tab) }));
-        return [...sections, ...remote];
-    }, [q, items, remote, navigate]);
-
-    useEffect(() => { setActive(0); }, [q]);
-
-    const pick = (h: Hit | undefined) => {
-        if (!h) return;
-        h.go();
-        onClose();
-    };
-
-    return createPortal(
-        <div className="ac">
-            <div className="ac-scrim ac-dialog-scrim" onClick={onClose} />
-            <div className="ac-dialog !top-[12vh] overflow-hidden" role="dialog" aria-modal="true" style={{ ['--ac-dialog-width' as string]: '560px' }}
-                onKeyDown={e => {
-                    if (e.key === 'Escape') onClose();
-                    else if (e.key === 'ArrowDown') { e.preventDefault(); setActive(a => Math.min(a + 1, hits.length - 1)); }
-                    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(a => Math.max(a - 1, 0)); }
-                    else if (e.key === 'Enter') { e.preventDefault(); pick(hits[active]); }
-                }}>
-                <div className="p-3">
-                    <div className="neu-field !p-0 flex items-center gap-2 px-3">
-                        <Search size={16} className="ml-3 ac-faint shrink-0" />
-                        <input ref={input} value={q} onChange={e => setQ(e.target.value)} placeholder="Jump to a section, organization or account…"
-                            className="flex-1 min-w-0 bg-transparent py-2.5 pr-3 text-sm outline-none" aria-label="Search" />
-                    </div>
-                </div>
-                <ul className="max-h-[55vh] overflow-y-auto px-2 pb-2" role="listbox">
-                    {hits.length === 0 && <li className="px-3 py-6 text-center text-sm ac-muted">No matches.</li>}
-                    {hits.map((h, i) => (
-                        <li key={h.key} role="option" aria-selected={i === active}>
-                            <button type="button" onMouseEnter={() => setActive(i)} onClick={() => pick(h)}
-                                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-[12px] text-left ${i === active ? 'neu-inset' : ''}`}>
-                                <span className="ac-muted">{h.icon}</span>
-                                <span className="min-w-0 flex-1">
-                                    <span className="block text-sm truncate">{h.label}</span>
-                                    <span className="block text-[12px] ac-faint truncate">{h.hint}</span>
-                                </span>
-                            </button>
-                        </li>
-                    ))}
-                </ul>
-                <div className="px-4 py-2.5 flex flex-wrap gap-3 text-[11px] ac-faint" style={{ boxShadow: '0 -1px 0 var(--ac-line)' }}>
-                    <span><Kbd>↑</Kbd> <Kbd>↓</Kbd> move</span><span><Kbd>Enter</Kbd> open</span><span><Kbd>Esc</Kbd> close</span>
-                </div>
-            </div>
-        </div>,
-        document.getElementById('ac-overlays') ?? document.body,
+        </ShellFrame>
     );
 };
 
 /* ------------------------------ Sign in ------------------------------ */
 
-const SignIn: React.FC<{ onDone: () => void; email?: string; title?: string }> = ({ onDone, email: fixedEmail, title }) => {
+/** The app's sign-in form: small-caps labels, deep wells, a raised pill button. */
+const SignIn: React.FC<{ onDone: () => void; email?: string; title?: string; compact?: boolean }> = ({ onDone, email: fixedEmail, title, compact = false }) => {
     const [methods, setMethods] = useState<LoginMethods | null>(null);
     const [email, setEmail] = useState(fixedEmail ?? '');
     const [password, setPassword] = useState('');
@@ -504,42 +328,45 @@ const SignIn: React.FC<{ onDone: () => void; email?: string; title?: string }> =
         if (error) toast.error(error.message || 'Google sign-in failed');
     };
 
+    const pillButton = 'w-full neu-raised-sm neu-btn text-gold-700 dark:text-gold-300 rounded-full py-3 text-sm font-medium tracking-wide active-scale disabled:opacity-50';
+
     return (
-        <Card padding="lg">
-            <SectionTitle>{title ?? 'Sign in'}</SectionTitle>
-            <form onSubmit={submit} className="space-y-4">
-                {!needsCode ? (
-                    methods?.emailPassword.signIn !== false && (
-                        <>
+        <form onSubmit={submit} className={compact ? 'space-y-5' : 'space-y-6 neu-raised rounded-3xl p-8'}>
+            <div className="text-center">
+                <h2 className="text-lg font-serif text-gray-800 dark:text-gray-200">{needsCode ? 'Two-factor code' : (title ?? 'Welcome back')}</h2>
+                {fixedEmail && <p className="text-[11px] text-gray-600 dark:text-gray-300 mt-1 break-all">{fixedEmail}</p>}
+            </div>
+            {!needsCode ? (
+                methods?.emailPassword.signIn !== false && (
+                    <>
+                        {!fixedEmail && (
                             <Field label="Email" htmlFor="adm-email">
                                 <Input id="adm-email" type="email" autoComplete="username" required value={email}
-                                    readOnly={!!fixedEmail} onChange={e => setEmail(e.target.value)} />
+                                    placeholder="you@example.com" onChange={e => setEmail(e.target.value)} />
                             </Field>
-                            <Field label="Password" htmlFor="adm-password">
-                                <Input id="adm-password" type="password" autoComplete="current-password" required
-                                    value={password} onChange={e => setPassword(e.target.value)} />
-                            </Field>
-                            <Button type="submit" variant="primary" block disabled={busy}>
-                                {busy ? 'Signing in…' : 'Sign in'}
-                            </Button>
-                        </>
-                    )
-                ) : (
-                    <>
-                        <Field label="Authenticator code" htmlFor="adm-code" hint="The 6-digit code from your authenticator app.">
-                            <Input id="adm-code" inputMode="numeric" autoComplete="one-time-code" required
-                                value={code} onChange={e => setCode(e.target.value)} />
+                        )}
+                        <Field label="Password" htmlFor="adm-password">
+                            <Input id="adm-password" type="password" autoComplete="current-password" required autoFocus={!!fixedEmail}
+                                value={password} onChange={e => setPassword(e.target.value)} />
                         </Field>
-                        <Button type="submit" variant="primary" block disabled={busy}>Verify</Button>
+                        <button type="submit" disabled={busy} className={`${pillButton} mt-2`}>
+                            {busy ? 'Signing in…' : 'Sign in'}
+                        </button>
                     </>
-                )}
-            </form>
-            {!needsCode && methods?.google.signIn && (
-                <div className="mt-4">
-                    <Button block onClick={google}>Continue with Google</Button>
-                </div>
+                )
+            ) : (
+                <>
+                    <Field label="Authenticator code" htmlFor="adm-code" hint="The 6-digit code from your authenticator app.">
+                        <Input id="adm-code" inputMode="numeric" autoComplete="one-time-code" required autoFocus
+                            value={code} onChange={e => setCode(e.target.value)} />
+                    </Field>
+                    <button type="submit" disabled={busy} className={pillButton}>Verify</button>
+                </>
             )}
-        </Card>
+            {!needsCode && methods?.google.signIn && (
+                <button type="button" onClick={google} className={pillButton}>Continue with Google</button>
+            )}
+        </form>
     );
 };
 
@@ -548,7 +375,6 @@ const SignIn: React.FC<{ onDone: () => void; email?: string; title?: string }> =
 const SetupTwoFactor: React.FC<{ onDone: () => void }> = ({ onDone }) => {
     const [password, setPassword] = useState('');
     const [secret, setSecret] = useState<string | null>(null);
-    const [uri, setUri] = useState<string | null>(null);
     const [backupCodes, setBackupCodes] = useState<string[]>([]);
     const [code, setCode] = useState('');
     const [busy, setBusy] = useState(false);
@@ -559,7 +385,6 @@ const SetupTwoFactor: React.FC<{ onDone: () => void }> = ({ onDone }) => {
         const { data, error } = await authClient.twoFactor.enable({ password });
         setBusy(false);
         if (error || !data || !('totpURI' in data)) { toast.error(error?.message || 'Could not start 2FA set-up'); return; }
-        setUri(data.totpURI);
         setSecret(new URL(data.totpURI).searchParams.get('secret'));
         setBackupCodes(data.backupCodes);
     };
@@ -574,37 +399,38 @@ const SetupTwoFactor: React.FC<{ onDone: () => void }> = ({ onDone }) => {
         onDone();
     };
 
+    const pillButton = 'w-full neu-raised-sm neu-btn text-gold-700 dark:text-gold-300 rounded-full py-3 text-sm font-medium tracking-wide active-scale disabled:opacity-50';
+
     return (
-        <Card padding="lg">
-            <SectionTitle>Set up two-factor authentication</SectionTitle>
-            <p className="text-sm mb-4 text-gray-700 dark:text-gray-300">
-                Provider administrators must use an authenticator app (Google Authenticator, 1Password, Authy…).
-            </p>
+        <div className="neu-raised rounded-3xl p-8 space-y-6">
+            <div className="text-center">
+                <h2 className="text-lg font-serif text-gray-800 dark:text-gray-200">Set up two-factor</h2>
+                <p className="text-[11px] text-gray-600 dark:text-gray-300 mt-1">Provider administrators must use an authenticator app.</p>
+            </div>
             {!secret ? (
-                <form onSubmit={start} className="space-y-4">
+                <form onSubmit={start} className="space-y-6">
                     <Field label="Confirm your password" htmlFor="tfa-password">
                         <Input id="tfa-password" type="password" autoComplete="current-password" required
                             value={password} onChange={e => setPassword(e.target.value)} />
                     </Field>
-                    <Button type="submit" variant="primary" disabled={busy}>Continue</Button>
+                    <button type="submit" disabled={busy} className={pillButton}>Continue</button>
                 </form>
             ) : (
-                <form onSubmit={confirm} className="space-y-4">
-                    <Field label="1. Add this key to your authenticator app" hint="Choose “enter a setup key”, type: time-based.">
-                        <p className="neu-value font-mono break-all select-all">{secret}</p>
+                <form onSubmit={confirm} className="space-y-5">
+                    <Field label="1. Add this key to your app" hint="Choose “enter a setup key”, time-based.">
+                        <p className="neu-value font-mono text-[13px] break-all select-all">{secret}</p>
                     </Field>
-                    {uri && <p className="text-[11px] break-all text-gray-600 dark:text-gray-400">{uri}</p>}
-                    <Field label="2. Save these backup codes somewhere safe" hint="Each works once if you lose your phone. They are not shown again.">
-                        <p className="neu-value font-mono text-sm whitespace-pre-wrap select-all">{backupCodes.join('\n')}</p>
+                    <Field label="2. Save these backup codes" hint="Each works once if you lose your phone. They are not shown again.">
+                        <p className="neu-value font-mono text-[13px] whitespace-pre-wrap select-all">{backupCodes.join('\n')}</p>
                     </Field>
-                    <Field label="3. Enter the 6-digit code it shows" htmlFor="tfa-code">
+                    <Field label="3. Enter the 6-digit code" htmlFor="tfa-code">
                         <Input id="tfa-code" inputMode="numeric" autoComplete="one-time-code" required
                             value={code} onChange={e => setCode(e.target.value)} />
                     </Field>
-                    <Button type="submit" variant="primary" disabled={busy}>Turn on 2FA</Button>
+                    <button type="submit" disabled={busy} className={pillButton}>Turn on 2FA</button>
                 </form>
             )}
-        </Card>
+        </div>
     );
 };
 
@@ -753,19 +579,22 @@ const AuditPanel: React.FC = () => {
                 </div>
             </div>
             {!entries ? <SkeletonRows rows={8} /> : shown.length === 0 ? (
-                <p className="py-10 text-center text-sm ac-muted">Nothing matches.</p>
+                <EmptyState icon={<History size={20} />} title="Nothing matches" body="Try another area or search." />
             ) : (
                 <ul className="ac-divide">
                     {shown.map(e => (
                         <li key={e.id}>
                             <button type="button" onClick={() => setOpen(open === e.id ? null : e.id)}
-                                className="ac-row w-full text-left px-2 py-2.5 grid gap-x-4 gap-y-0.5 grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[9.5rem_minmax(0,1fr)_minmax(0,14rem)]">
-                                <span className="text-[12px] ac-faint tabular-nums order-3 sm:order-none col-span-2 sm:col-span-1">{new Date(e.at).toLocaleString()}</span>
-                                <span className="text-sm font-medium truncate">{readable(e.action)}</span>
-                                <span className="text-[12px] ac-muted truncate text-right sm:text-left">{e.actor_email ?? e.actor_kind}</span>
+                                className="ac-row w-full text-left px-2 py-2.5 grid gap-x-4 gap-y-0.5 grid-cols-1 sm:items-center sm:grid-cols-[9.5rem_minmax(0,1fr)_minmax(0,14rem)]">
+                                <span className="hidden sm:block text-[12px] ac-faint tabular-nums">{new Date(e.at).toLocaleString()}</span>
+                                {/* Wraps rather than cutting off; the phone puts who and when underneath. */}
+                                <span className="text-sm font-medium break-words">{readable(e.action)}</span>
+                                <span className="text-[12px] font-light ac-muted truncate">
+                                    {e.actor_email ?? e.actor_kind}<span className="sm:hidden"> · {timeAgo(e.at)}</span>
+                                </span>
                             </button>
                             {open === e.id && e.details && (
-                                <pre className="mx-2 mb-3 neu-inset rounded-[12px] p-3 text-[11px] font-mono whitespace-pre-wrap break-all ac-enter-soft">
+                                <pre className="mx-2 mb-3 neu-inset rounded-xl p-3 text-[11px] font-mono whitespace-pre-wrap break-all ac-enter-soft">
                                     {(() => { try { return JSON.stringify(JSON.parse(e.details), null, 2); } catch { return e.details; } })()}
                                 </pre>
                             )}

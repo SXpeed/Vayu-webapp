@@ -107,7 +107,7 @@ const PlanList: React.FC<{ onOpen: (id: string) => void }> = ({ onOpen }) => {
         <div className="space-y-6">
             <PageHeader
                 title="Plans"
-                description="What each plan costs and includes. Published versions are locked; a change is a new version that organizations move to when you say so."
+                description="What each plan costs and includes"
                 actions={<button type="button" className="neu-button neu-button-primary" onClick={create}><Plus size={16} /> New plan</button>}
             />
             {plans && plans.length > 0 && (
@@ -208,8 +208,8 @@ const PlanDetailView: React.FC<{ planId: string; onBack: () => void }> = ({ plan
                 <Skeleton className="h-4 w-24" />
                 <Skeleton className="h-9 w-64" />
                 <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,22rem)]">
-                    <Skeleton className="h-80 rounded-[18px]" />
-                    <Skeleton className="h-64 rounded-[18px]" />
+                    <Skeleton className="h-80 rounded-2xl" />
+                    <Skeleton className="h-64 rounded-2xl" />
                 </div>
             </div>
         );
