@@ -143,6 +143,37 @@ async function verifyPassword(password: string, stored: string): Promise<boolean
   return diff === 0;
 }
 
+/** New and changed passwords; existing ones keep working until changed. */
+const MIN_PASSWORD_LENGTH = 10;
+const PASSWORD_TOO_SHORT = `Password must be at least ${MIN_PASSWORD_LENGTH} characters`;
+
+/**
+ * A well-formed stored hash that matches no password. Checking against it
+ * costs the same as a real check, so a sign-in for an email with no account
+ * takes as long as one with a wrong password — the timing no longer tells
+ * which emails have accounts.
+ */
+const NO_ACCOUNT_HASH = `${'A'.repeat(22)}==.${'A'.repeat(43)}=`;
+
+/**
+ * True while `key` is under its limit. Fails open: if the limiter itself is
+ * missing or errors, requests are served rather than refused.
+ */
+async function underLimit(limiter: RateLimit | undefined, key: string): Promise<boolean> {
+  if (!limiter) return true;
+  try {
+    return (await limiter.limit({ key })).success;
+  } catch {
+    return true;
+  }
+}
+
+function tooMany(message: string): Response {
+  const res = json({ error: message }, 429);
+  res.headers.set('Retry-After', '60');
+  return res;
+}
+
 function generateToken(): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(32)))
     .map(b => b.toString(16).padStart(2, '0'))
@@ -662,7 +693,7 @@ async function handleAuthSetup(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json();
   const { name, email, password } = body as { name?: string; email?: string; password?: string };
   if (!name || !email || !password) return err('name, email and password are required');
-  if (password.length < 6) return err('Password must be at least 6 characters');
+  if (password.length < MIN_PASSWORD_LENGTH) return err(PASSWORD_TOO_SHORT);
   const id = `admin_${Date.now()}`;
   const user: StoredUser = {
     id, name, email: email.toLowerCase().trim(),
@@ -679,10 +710,19 @@ async function handleAuthLogin(ctx: Ctx): Promise<Response> {
   const loginBody = await ctx.request.json();
   const { email, password } = loginBody as { email?: string; password?: string };
   if (!email || !password) return err('email and password are required');
-  const userId = await ctx.env.VAYU_KV.get(`auth:email:${email.toLowerCase().trim()}`);
-  if (!userId) return err('Invalid email or password', 401);
-  const raw = await ctx.env.VAYU_KV.get(`auth:user:${userId}`);
-  if (!raw) return err('Invalid email or password', 401);
+  const emailKey = email.toLowerCase().trim();
+  // Password guessing: a few tries a minute per address and per account.
+  const ip = ctx.request.headers.get('cf-connecting-ip') ?? 'local';
+  if (!(await underLimit(ctx.env.LOGIN_IP_LIMITER, `ip:${ip}`))
+    || !(await underLimit(ctx.env.LOGIN_EMAIL_LIMITER, `email:${emailKey}`))) {
+    return tooMany('Too many sign-in attempts. Wait a minute and try again.');
+  }
+  const userId = await ctx.env.VAYU_KV.get(`auth:email:${emailKey}`);
+  const raw = userId ? await ctx.env.VAYU_KV.get(`auth:user:${userId}`) : null;
+  if (!raw) {
+    await verifyPassword(password, NO_ACCOUNT_HASH);
+    return err('Invalid email or password', 401);
+  }
   const user: StoredUser = JSON.parse(raw);
   if (!await verifyPassword(password, user.hashedPassword)) return err('Invalid email or password', 401);
   const token = generateToken();
@@ -916,7 +956,7 @@ async function handleAuthUsersCreate(ctx: Ctx): Promise<Response> {
   if (!name || !email || !password) return err('name, email and password are required');
   const createLimit = parseMaxDevices(maxDevices);
   if (!createLimit.ok) return err('Max devices must be a whole number from 1 to 10');
-  if (password.length < 6) return err('Password must be at least 6 characters');
+  if (password.length < MIN_PASSWORD_LENGTH) return err(PASSWORD_TOO_SHORT);
   const emailKey = `auth:email:${email.toLowerCase().trim()}`;
   if (await ctx.env.VAYU_KV.get(emailKey)) return err('A user with this email already exists', 409);
   const roles = await getRoles(ctx.env.VAYU_KV);
@@ -991,6 +1031,7 @@ async function handleAuthUsersUpdate(ctx: Ctx): Promise<Response> {
     }
     resolvedRole = role;
   }
+  if (password && password.length < MIN_PASSWORD_LENGTH) return err(PASSWORD_TOO_SHORT);
   const updated: StoredUser = {
     ...existing,
     name: name || existing.name,
@@ -3509,6 +3550,12 @@ export default {
         if (r.method === ctx.method && r.match(path)) {
           route = normalizeRoute(path);
           matched = true;
+          // Floods and enumeration from one device: far above normal use.
+          const device = bearerToken(request);
+          if (device && !(await underLimit(env.API_LIMITER, `device:${device.slice(0, 32)}`))) {
+            response = tooMany('Too many requests. Slow down and try again in a minute.');
+            break;
+          }
           const denied = await checkAccess(ctx);
           if (denied) { response = denied; break; }
           response = await r.handler(ctx);
@@ -3520,7 +3567,10 @@ export default {
         response = json({ error: 'Not found' }, 404);
       }
     } catch (e) {
-      response = json({ error: (e as Error).message }, 500);
+      // The details go to the logs, not to the caller: internal messages can
+      // reveal table names, queries or other internals.
+      console.error(`Unhandled error on ${request.method} ${route}:`, e);
+      response = json({ error: 'Something went wrong. Please try again.' }, 500);
     }
     // A device signed out by the device limit learns why, so the app can
     // say so instead of failing with a bare "Unauthorized".

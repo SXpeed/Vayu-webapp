@@ -4,6 +4,12 @@
 // back into worker.ts.
 
 export interface Env {
+  /** Sign-in attempts per IP address, per minute (wrangler.json "ratelimits"). */
+  LOGIN_IP_LIMITER?: RateLimit;
+  /** Sign-in attempts per email address, per minute. */
+  LOGIN_EMAIL_LIMITER?: RateLimit;
+  /** API calls per signed-in device, per minute. */
+  API_LIMITER?: RateLimit;
   VAYU_KV: KVNamespace;
   VAYU_R2: R2Bucket;
   VAYU_DB: D1Database;

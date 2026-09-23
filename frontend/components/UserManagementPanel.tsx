@@ -153,8 +153,8 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
       setAddError('All fields are required.');
       return;
     }
-    if (password.length < 6) {
-      setAddError('Password must be at least 6 characters.');
+    if (password.length < 10) {
+      setAddError('Password must be at least 10 characters.');
       return;
     }
     setAdding(true);
@@ -216,8 +216,8 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
       setEditError('Name and email are required.');
       return;
     }
-    if (editPassword && editPassword.length < 6) {
-      setEditError('Password must be at least 6 characters.');
+    if (editPassword && editPassword.length < 10) {
+      setEditError('Password must be at least 10 characters.');
       return;
     }
     setEditSaving(true);
@@ -431,7 +431,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={e => setPassword(e.target.value)}
-                placeholder="Min 6 characters"
+                placeholder="Min 10 characters"
                 className="neu-field pr-10"
               />
               <button

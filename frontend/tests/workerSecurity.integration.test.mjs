@@ -189,3 +189,31 @@ test('the list of files is limited to your own unless you are an admin', async (
     const forAdmin = await api(admin.token, '/files-missing-thumbs');
     assert.ok(forAdmin.body.missing.includes(mine) && forAdmin.body.missing.includes(theirs));
 });
+
+/* ── Sign-in abuse (last: it uses up this address's sign-in allowance) ──── */
+
+test('an unknown email and a wrong password get the same answer', async () => {
+    const unknown = await api(null, '/auth/login', { method: 'POST', body: { email: 'nobody@example.com', password: 'whatever-1234' } });
+    const wrong = await api(null, '/auth/login', { method: 'POST', body: { email: 'bob@example.com', password: 'not-his-password' } });
+    assert.equal(unknown.status, 401);
+    assert.equal(wrong.status, 401);
+    assert.deepEqual(unknown.body, wrong.body);
+});
+
+test('password guessing is cut off, even when the right password comes next', async () => {
+    const statuses = [];
+    for (let i = 0; i < 8; i++) {
+        statuses.push((await api(null, '/auth/login', { method: 'POST', body: { email: 'alice@example.com', password: `guess-${i}-xxxx` } })).status);
+    }
+    assert.ok(statuses.includes(429), `no attempt was refused: ${statuses}`);
+    const right = await api(null, '/auth/login', { method: 'POST', body: { email: 'alice@example.com', password: PASSWORD } });
+    assert.equal(right.status, 429, 'a correct password must not slip through while limited');
+    assert.equal(right.headers.get('retry-after'), '60');
+    assert.match(right.body.error, /Too many sign-in attempts/);
+});
+
+test('new passwords need at least 10 characters', async () => {
+    const res = await api(admin.token, '/auth/users', { method: 'POST', body: { name: 'Short', email: 'short@example.com', password: 'abc12345' } });
+    assert.equal(res.status, 400);
+    assert.match(res.body.error, /at least 10/);
+});
