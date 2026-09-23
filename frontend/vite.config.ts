@@ -20,7 +20,7 @@ export default defineConfig(({ mode }) => {
           // works without running `wrangler dev`. Set VITE_API_PROXY in .env
           // (e.g. http://127.0.0.1:8787) to use a local worker instead.
           '/api': {
-            target: env.VITE_API_PROXY || 'https://vayu-webapp.gulshanprajapati1998.workers.dev',
+            target: env.VITE_API_PROXY || 'https://app.ateliersupport.com',
             changeOrigin: true,
           },
         },
