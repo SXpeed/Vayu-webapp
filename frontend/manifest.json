@@ -10,50 +10,57 @@
   "orientation": "portrait",
   "background_color": "#e9edf4",
   "theme_color": "#e9edf4",
-  "description": "A mobile-first application to manage artworks, create catalogs, and automate billing.",
+  "description": "Run your gallery or design studio from your phone: inventory, catalogs, clients and inquiries, invoices and payment links, and team chat, all in one place.",
   "categories": [
     "business",
     "productivity"
   ],
   "screenshots": [
     {
-      "src": "/screenshots/home.webp",
+      "src": "/screenshots/home.webp?v=2",
       "sizes": "1080x1920",
       "type": "image/webp",
       "form_factor": "narrow",
-      "label": "Home dashboard with revenue, inventory and quick actions"
+      "label": "Home: revenue, stock, catalogs and upcoming events at a glance"
     },
     {
-      "src": "/screenshots/messaging.webp",
+      "src": "/screenshots/inventory.webp?v=2",
       "sizes": "1080x1920",
       "type": "image/webp",
       "form_factor": "narrow",
-      "label": "Team messaging with photos, tags and notifications"
+      "label": "Inventory: every artwork with its status, price and size"
     },
     {
-      "src": "/screenshots/inquiry.webp",
+      "src": "/screenshots/inquiry.webp?v=2",
       "sizes": "1080x1920",
       "type": "image/webp",
       "form_factor": "narrow",
-      "label": "Customer inquiries tracked from first contact to sale"
+      "label": "Inquiries: clients followed from first contact to sale"
     },
     {
-      "src": "/screenshots/wide.webp",
+      "src": "/screenshots/messaging.webp?v=2",
+      "sizes": "1080x1920",
+      "type": "image/webp",
+      "form_factor": "narrow",
+      "label": "Team chat with tags for invoices and follow-ups"
+    },
+    {
+      "src": "/screenshots/wide.webp?v=2",
       "sizes": "1920x1080",
       "type": "image/webp",
       "form_factor": "wide",
-      "label": "ateliersupport — artworks, catalogs, invoices and client conversations in one place"
+      "label": "ateliersupport on a computer: inventory, catalogs, clients, invoices and team chat in one place"
     }
   ],
   "icons": [
     {
-      "src": "/icon.png",
+      "src": "/icon.png?v=2",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon.png",
+      "src": "/icon-maskable.png?v=2",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

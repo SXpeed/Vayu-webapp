@@ -23,9 +23,12 @@
 
     <!-- PWA Manifest -->
     <link rel="manifest" href="./manifest.json">
-    <link rel="apple-touch-icon" href="/icon.png">
-    <link rel="icon" type="image/png" sizes="192x192" href="/icon.png">
-    <link rel="icon" type="image/png" sizes="512x512" href="/icon.png">
+    <!-- The platform logo on the app's light page colour, not on black: the
+         phone builds its launch screen from these before any of our code
+         runs, so they must match the loading screen that follows. ?v= makes
+         phones fetch them again after a change (iOS caches icons by address). -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2">
+    <link rel="icon" type="image/png" sizes="512x512" href="/icon.png?v=2">
 
     <script>
         // Apply theme immediately to prevent flash during React mount

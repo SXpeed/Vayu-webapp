@@ -226,7 +226,8 @@ export async function buildProformaPdf(invoice: Invoice, artworks: Artwork[]): P
 
     const artById = new Map(artworks.map(a => [a.id, a]));
     const [logo, ...images] = await Promise.all([
-        loadImage('/icon.png', 400),
+        // The invoice's own letterhead logo, kept apart from the app icon.
+        loadImage('/invoice-logo.png', 400),
         ...invoice.items.map((item) => {
             const url = artById.get(item.artworkId)?.imageUrls?.[0];
             return url ? loadImage(getThumbUrl(url), 600) : Promise.resolve(null);
