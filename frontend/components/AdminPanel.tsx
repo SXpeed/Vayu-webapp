@@ -133,7 +133,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUserId, onClose }
                         </div>
                     </PageHeader>
 
-                    <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar neu-scroll-fade px-5 md:px-8 lg:px-10 pt-3 pb-[calc(1.5rem+var(--safe-bottom,env(safe-area-inset-bottom,0px)))]">
+                    <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar neu-scroll-fade px-5 md:px-8 lg:px-10 pt-[calc(0.75rem+var(--page-tools-h,0px))] pb-[calc(1.5rem+var(--safe-bottom,env(safe-area-inset-bottom,0px)))]">
                         <div className="w-full max-w-6xl mx-auto">
 
                             {tab === 'deleted' && (

@@ -8,6 +8,7 @@ import { Inquiry, Artwork, InquiryMessage, MessageReplyTo, MessageAttachment, Me
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { TAG_COLORS, ALL_TAGS } from './MessagingView';
+import { useStickToBottom } from '../hooks/useStickToBottom';
 import { useMemberNames } from '../hooks/useMemberNames';
 import { usePhotoCapture } from '../hooks/usePhotoCapture';
 import { PhotoAttachments } from '../components/PhotoAttachments';
@@ -375,19 +376,11 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
     const [pendingAttachments, setPendingAttachments] = useState<MessageAttachment[]>([]);
     const [showSearch, setShowSearch] = useState(false);
     const [chatSearchQuery, setChatSearchQuery] = useState('');
-    const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
-
-    useEffect(() => {
-        setTimeout(() => {
-            if (messagesEndRef.current) {
-                const container = messagesEndRef.current.parentElement;
-                if (container) {
-                    container.scrollTop = container.scrollHeight;
-                }
-            }
-        }, 50);
-    }, [messages]);
+    // Opens on the latest message and stays there through late photos, syncing
+    // messages and the keyboard — unless the reader scrolls up into history.
+    // (It used to re-jump 50ms after every update, reading history included.)
+    const { scrollerRef, contentRef, scrollToLatest } = useStickToBottom(inquiry.id);
 
     const [uploadingCount, setUploadingCount] = useState(0);
     const isUploading = uploadingCount > 0;
@@ -434,6 +427,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
         if (!text.trim() && pendingAttachments.length === 0) return;
         const [first, ...rest] = pendingAttachments;
         const outgoing = { text: text.trim(), tags: Array.from(selectedTags), replyTo: replyingTo ?? undefined };
+        scrollToLatest();
         setText('');
         setSelectedTags(new Set());
         setShowTagPicker(false);
@@ -497,76 +491,77 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                 </div>
             )}
 
-            <div className="flex-1 overflow-y-auto p-3 space-y-3 no-scrollbar">
-                {messages.length === 0 && (
-                    <div className="text-center text-gray-600 dark:text-gray-300 mt-10 font-light text-sm">
-                        No messages yet for this inquiry.
-                    </div>
-                )}
-                {displayedMessages.length === 0 && chatSearchQuery.trim() && (
-                    <div className="text-center text-gray-600 dark:text-gray-300 mt-10 font-light text-sm">
-                        No messages match "{chatSearchQuery}".
-                    </div>
-                )}
-                {displayedMessages.map((msg) => {
-                    const isMe = msg.senderId === currentUserId;
-                    const bubble = (
-                        <div className={`max-w-[80%] rounded-[12px] px-3.5 py-2.5 shadow-sm ${isMe
-                            ? 'bg-[#FEFFF7] dark:bg-[#2a2a2a] text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-700 rounded-br-[4px]'
-                            : 'neu-raised text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-800 rounded-bl-[4px]'
-                            }`}>
-                            {!isMe && (
-                                <p className="text-[11px] font-bold uppercase tracking-widest mb-1 text-gold-700 dark:text-gold-300">{resolveName(msg.senderId, msg.senderName)}</p>
-                            )}
-                            {msg.replyTo && (
-                                <div className={`mb-1.5 pl-2 py-1 border-l-2 rounded-[4px] ${isMe ? 'border-gold-500/50 bg-gold-500/10 dark:border-gray-500/50 dark:bg-gray-700/50' : 'border-gold-400 neu-inset'}`}>
-                                    <p className={`text-[11px] font-bold ${isMe ? 'text-gold-700 dark:text-gold-400' : 'text-gold-700 dark:text-gold-300'}`}>{replySenderName(msg.replyTo)}</p>
-                                    <p className={`text-[11px] line-clamp-1 ${isMe ? 'text-gray-600 dark:text-gray-400' : 'text-gray-700 dark:text-gray-300'}`}>{msg.replyTo.text}</p>
-                                </div>
-                            )}
-                            {msg.attachment && (
-                                msg.attachment.type === 'image' ? (
-                                    <img loading="lazy" decoding="async" src={getThumbUrl(msg.attachment.url)} alt={msg.attachment.name} className="rounded-[8px] max-w-full max-h-48 object-cover mb-1.5" />
-                                ) : (
-                                    <div className={`flex items-center gap-2 mb-1.5 p-2 rounded-lg ${isMe ? 'bg-gold-500/10 dark:bg-gray-700/50' : 'neu-inset'}`}>
-                                        <Paperclip size={14} className="text-gold-700 dark:text-gold-300" />
-                                        <span className="text-[11px] truncate">{msg.attachment.name}</span>
-                                    </div>
-                                )
-                            )}
-                            {msg.text && <p className="text-[13px] leading-relaxed">{msg.text}</p>}
-                            <div className="flex items-center justify-between mt-1.5 gap-2">
-                                {msg.tags.length > 0 && (
-                                    <div className="flex gap-1 flex-wrap">
-                                        {msg.tags.map(tag => (
-                                            <span key={tag} className={`text-[7px] px-1.5 py-0.5 rounded-[3px] font-bold uppercase tracking-wider ${TAG_COLORS[tag]}`}>{tag}</span>
-                                        ))}
+            <div ref={scrollerRef} className="flex-1 overflow-y-auto overscroll-contain p-3 no-scrollbar">
+                <div ref={contentRef} className="space-y-3">
+                    {messages.length === 0 && (
+                        <div className="text-center text-gray-600 dark:text-gray-300 mt-10 font-light text-sm">
+                            No messages yet for this inquiry.
+                        </div>
+                    )}
+                    {displayedMessages.length === 0 && chatSearchQuery.trim() && (
+                        <div className="text-center text-gray-600 dark:text-gray-300 mt-10 font-light text-sm">
+                            No messages match "{chatSearchQuery}".
+                        </div>
+                    )}
+                    {displayedMessages.map((msg) => {
+                        const isMe = msg.senderId === currentUserId;
+                        const bubble = (
+                            <div className={`max-w-[80%] rounded-[12px] px-3.5 py-2.5 shadow-sm ${isMe
+                                ? 'bg-[#FEFFF7] dark:bg-[#2a2a2a] text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-700 rounded-br-[4px]'
+                                : 'neu-raised text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-800 rounded-bl-[4px]'
+                                }`}>
+                                {!isMe && (
+                                    <p className="text-[11px] font-bold uppercase tracking-widest mb-1 text-gold-700 dark:text-gold-300">{resolveName(msg.senderId, msg.senderName)}</p>
+                                )}
+                                {msg.replyTo && (
+                                    <div className={`mb-1.5 pl-2 py-1 border-l-2 rounded-[4px] ${isMe ? 'border-gold-500/50 bg-gold-500/10 dark:border-gray-500/50 dark:bg-gray-700/50' : 'border-gold-400 neu-inset'}`}>
+                                        <p className={`text-[11px] font-bold ${isMe ? 'text-gold-700 dark:text-gold-400' : 'text-gold-700 dark:text-gold-300'}`}>{replySenderName(msg.replyTo)}</p>
+                                        <p className={`text-[11px] line-clamp-1 ${isMe ? 'text-gray-600 dark:text-gray-400' : 'text-gray-700 dark:text-gray-300'}`}>{msg.replyTo.text}</p>
                                     </div>
                                 )}
-                                <span className={`flex items-center gap-1 text-[11px] shrink-0 ml-auto ${isMe ? 'text-gray-500 dark:text-gray-500' : 'text-gray-600 dark:text-gray-300'}`}>
-                                    {formatMessageTime(msg.timestamp)}
-                                    {isMe && renderMessageStatusIcon(msg.status)}
-                                </span>
+                                {msg.attachment && (
+                                    msg.attachment.type === 'image' ? (
+                                        <img loading="lazy" decoding="async" src={getThumbUrl(msg.attachment.url)} alt={msg.attachment.name} className="rounded-[8px] max-w-full max-h-48 object-cover mb-1.5" />
+                                    ) : (
+                                        <div className={`flex items-center gap-2 mb-1.5 p-2 rounded-lg ${isMe ? 'bg-gold-500/10 dark:bg-gray-700/50' : 'neu-inset'}`}>
+                                            <Paperclip size={14} className="text-gold-700 dark:text-gold-300" />
+                                            <span className="text-[11px] truncate">{msg.attachment.name}</span>
+                                        </div>
+                                    )
+                                )}
+                                {msg.text && <p className="text-[13px] leading-relaxed">{msg.text}</p>}
+                                <div className="flex items-center justify-between mt-1.5 gap-2">
+                                    {msg.tags.length > 0 && (
+                                        <div className="flex gap-1 flex-wrap">
+                                            {msg.tags.map(tag => (
+                                                <span key={tag} className={`text-[7px] px-1.5 py-0.5 rounded-[3px] font-bold uppercase tracking-wider ${TAG_COLORS[tag]}`}>{tag}</span>
+                                            ))}
+                                        </div>
+                                    )}
+                                    <span className={`flex items-center gap-1 text-[11px] shrink-0 ml-auto ${isMe ? 'text-gray-500 dark:text-gray-500' : 'text-gray-600 dark:text-gray-300'}`}>
+                                        {formatMessageTime(msg.timestamp)}
+                                        {isMe && renderMessageStatusIcon(msg.status)}
+                                    </span>
+                                </div>
                             </div>
-                        </div>
-                    );
-                    const replyButton = (
-                        <button
-                            onClick={() => setReplyingTo({ id: msg.id, senderName: resolveName(msg.senderId, msg.senderName), text: msg.text || (msg.attachment ? msg.attachment.name : '') })}
-                            className="p-1 mb-1 text-gray-600 dark:text-gray-300 hover:text-gold-500 dark:hover:text-gold-400 transition-colors shrink-0 active-scale"
-                        >
-                            <Reply size={14} />
-                        </button>
-                    );
-                    return (
-                        <div key={msg.id} className={`flex items-end gap-1 ${isMe ? 'justify-end' : 'justify-start'}`}>
-                            {!isMe && replyButton}
-                            {bubble}
-                            {isMe && replyButton}
-                        </div>
-                    );
-                })}
-                <div ref={messagesEndRef} />
+                        );
+                        const replyButton = (
+                            <button
+                                onClick={() => setReplyingTo({ id: msg.id, senderName: resolveName(msg.senderId, msg.senderName), text: msg.text || (msg.attachment ? msg.attachment.name : '') })}
+                                className="p-1 mb-1 text-gray-600 dark:text-gray-300 hover:text-gold-500 dark:hover:text-gold-400 transition-colors shrink-0 active-scale"
+                            >
+                                <Reply size={14} />
+                            </button>
+                        );
+                        return (
+                            <div key={msg.id} className={`flex items-end gap-1 ${isMe ? 'justify-end' : 'justify-start'}`}>
+                                {!isMe && replyButton}
+                                {bubble}
+                                {isMe && replyButton}
+                            </div>
+                        );
+                    })}
+                </div>
             </div>
 
             {/* Tag Picker */}
@@ -592,7 +587,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
             {/* Message Input — bottom padding follows the iPhone home indicator */}
             <div
                 className="px-3 pt-[9px] transition-colors"
-                style={{ paddingBottom: 'calc(9px + var(--safe-bottom, env(safe-area-inset-bottom, 0px)))' }}
+                style={{ paddingBottom: 'calc(9px + var(--safe-bottom-tucked))' }}
             >
                 {selectedTags.size > 0 && (
                     <div className="flex gap-1 mb-2 flex-wrap">
@@ -676,12 +671,6 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                         value={text}
                         onChange={(e) => setText(e.target.value)}
                         onKeyDown={handleKeyDown}
-                        onFocus={() => {
-                            setTimeout(() => {
-                                window.scrollTo(0, 0);
-                                document.body.scrollTop = 0;
-                            }, 50);
-                        }}
                         placeholder="Type a message..."
                         autoComplete="off"
                         autoCorrect="off"

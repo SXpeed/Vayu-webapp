@@ -352,13 +352,26 @@
                 const h = keyboardOpen ? vv.height : null;
                 if (h) {
                     root.style.setProperty('--app-height', h + 'px');
+                    // iOS reveals a focused field by panning the visual
+                    // viewport down over the (unshrunk) layout viewport, which
+                    // carries the fixed app up and its header off screen.
+                    // Follow the pan instead of snapping it back: the app sits
+                    // exactly in the visible strip whatever iOS does.
+                    root.style.setProperty('--app-top', Math.max(0, vv.offsetTop) + 'px');
                 } else {
                     root.style.removeProperty('--app-height');
+                    root.style.removeProperty('--app-top');
                 }
+                // Lets CSS drop what only makes sense without a keyboard —
+                // the dock, which would otherwise ride on top of it.
+                root.classList.toggle('kb-open', keyboardOpen);
 
                 const insets = safeInsets();
                 const shortBy = keyboardOpen ? 0 : viewShortfall(insets);
-                const safeBottom = shortBy > 0 ? Math.max(0, insets.bottom - shortBy) : null;
+                // The keyboard covers the home indicator, so nothing needs to
+                // clear it: a message bar sits right on the keyboard.
+                let safeBottom = shortBy > 0 ? Math.max(0, insets.bottom - shortBy) : null;
+                if (keyboardOpen) safeBottom = 0;
                 if (safeBottom === null) {
                     root.style.removeProperty('--safe-bottom');
                 } else {
@@ -376,7 +389,8 @@
                     'screen ' + globalThis.screen.width + 'x' + globalThis.screen.height
                         + '  standalone ' + (globalThis.navigator.standalone === true),
                     'inset top ' + m.insets.top + '  bottom ' + m.insets.bottom + '  short by ' + m.shortBy,
-                    '--app-height ' + (m.h ? m.h + 'px' : 'unset (100%)') + (m.keyboardOpen ? '  [keyboard]' : ''),
+                    '--app-height ' + (m.h ? m.h + 'px' : 'unset (100%)') + (m.keyboardOpen ? '  [keyboard]' : '')
+                        + '  vvTop ' + (m.vv ? Math.round(m.vv.offsetTop) : '-') + '  scrollY ' + Math.round(globalThis.scrollY),
                     '--safe-bottom ' + (m.safeBottom === null ? 'unset (env)' : m.safeBottom + 'px'),
                 ];
                 let el = document.getElementById('vp-debug');

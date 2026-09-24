@@ -316,7 +316,7 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
     };
 
     return (
-        <div className="absolute inset-0 bg-[var(--neu-bg)] z-50 flex flex-col lg:flex-row animate-fade-in-up pb-[var(--safe-bottom,env(safe-area-inset-bottom,0px))]">
+        <div className="absolute inset-0 bg-[var(--neu-bg)] z-50 flex flex-col lg:flex-row animate-fade-in-up">
 
             {/* ═══════════════════ Settings column ═══════════════════ */}
             <div className="flex flex-col flex-1 min-w-0 min-h-0 lg:flex-none lg:w-[27rem] xl:w-[29rem] lg:shrink-0 lg:h-full lg:border-r lg:border-gray-200/60 dark:lg:border-white/5">
@@ -697,8 +697,10 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                     </div>
                 </div>
 
-                {/* Footer — generate */}
-                <div className="shrink-0 border-t border-gray-200/70 dark:border-white/5 px-4 py-3 bg-[var(--neu-bg)]">
+                {/* Footer — generate. Its bottom padding tucks into the iPhone
+                    home-indicator strip like the dock does; clearing the whole
+                    strip (on the page root) left a band of dead space under it. */}
+                <div className="shrink-0 border-t border-gray-200/70 dark:border-white/5 px-4 pt-3 pb-[calc(0.75rem+var(--safe-bottom-tucked))] bg-[var(--neu-bg)]">
                     {pageCount === 0 && (
                         <p className="mb-2 flex items-center gap-1.5 text-[11px] text-amber-700 dark:text-amber-400">
                             <TriangleAlert size={12} className="shrink-0" />

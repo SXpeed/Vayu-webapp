@@ -51,6 +51,8 @@ body,
     width: 100%;
     /* Full screen height on installed iPhones — see setAppHeight in index.html */
     height: var(--app-height, 100dvh);
+    /* Keyboard open: follows iOS's pan of the visual viewport (index.html). */
+    top: var(--app-top, 0px);
     overflow: hidden;
     position: fixed;
     /* Lock the root viewport so iOS Safari overscroll/rubber-banding
@@ -144,6 +146,12 @@ html.page-scroll #root {
  * top-lit gradients on raised surfaces and a vibrant gold accent for
  * primary actions. Text/icon contrast targets WCAG AA. */
 :root {
+    /* Bottom inset for bars pinned to the bottom edge (message bar, Catalog
+       Studio footer) — the dock's rule: tuck 18px into the home-indicator
+       strip instead of clearing all ~34px of it, which read as dead space
+       under the bar. 0 while the keyboard is open (--safe-bottom is 0 then,
+       see index.html). */
+    --safe-bottom-tucked: max(calc(var(--safe-bottom, env(safe-area-inset-bottom, 0px)) - 18px), 0px);
     --neu-bg: #e9edf4;
     /* hi/lo hug the page colour so surfaces merge into one continuous
        background — depth comes from the paired shadows, not the gradient. */
@@ -1210,6 +1218,14 @@ select.neu-field option {
  * fades scrolling content into the page surface before it reaches the dock:
  * paired shadows only read as depth on a flat --neu-bg, and over photos the
  * light shadow turns into a white halo. */
+
+/* Keyboard open (html.kb-open, set in index.html): the app shrinks to the
+ * strip above the keyboard, and the dock would ride up on top of the keyboard
+ * eating a fifth of what is left — native tab bars stay behind the keyboard. */
+html.kb-open .neu-dock-scrim {
+    display: none;
+}
+
 @layer components {
     .neu-dock-scrim {
         background: linear-gradient(to bottom, transparent, var(--neu-bg) 20px);

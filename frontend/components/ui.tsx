@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowLeft, Search } from 'lucide-react';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 
@@ -65,10 +65,17 @@ const PHONE_QUERY = '(max-width: 767px)';
  *
  * Listens in the capture phase on the page root, so it hears whichever
  * element actually scrolls (PageBody, or a view's own scroller) without every
- * view wiring it up. Guards against the classic feedback loop — folding the
- * tools makes the scroller taller, which can clamp scrollTop and fire a
- * scroll that would open them again — with a lock that outlives the fold
- * animation after each change.
+ * view wiring it up. Direction is judged on the distance travelled since the
+ * last reversal, not per event: iOS fires a scroll per frame, so a slow drag
+ * moves a pixel or two at a time and a single-event threshold either never
+ * trips or trips on noise.
+ *
+ * A floating tools row (the phone default, see PageHeader) sits over the
+ * scroller, so folding it never resizes anything and it can follow the finger
+ * both ways at once. An in-flow row does resize the scroller, which risks the
+ * classic feedback loop — folding makes the scroller taller, which can clamp
+ * scrollTop and fire a scroll that would open it again — so that one gets a
+ * lock that outlives the fold animation after each change.
  *
  * Returns `expand()`: the way back in from the folded search bar's stand-in
  * icon. It routes through the same internal flag as the scroll path, so the
@@ -92,10 +99,14 @@ const useCollapseOnScroll = (
         const lastTop = new WeakMap<Element, number>();
         let collapsed = false;
         let lockUntil = 0;
+        // Signed distance scrolled since the direction last changed.
+        let travel = 0;
+        const tools = () => root.querySelector<HTMLElement>('[data-page-header-tools]');
         const set = (value: boolean) => {
             if (value === collapsed) return;
             collapsed = value;
-            lockUntil = performance.now() + 420;
+            travel = 0;
+            lockUntil = tools()?.dataset.floating === undefined ? performance.now() + 420 : 0;
             setCollapsed(value);
         };
 
@@ -109,6 +120,7 @@ const useCollapseOnScroll = (
             const delta = top - (lastTop.get(el) ?? top);
             lastTop.set(el, top);
             if (delta === 0) return; // horizontal scroll
+            travel = Math.sign(delta) === Math.sign(travel) ? travel + delta : delta;
 
             if (top <= 8) { set(false); return; } // back at the top: always open
             if (performance.now() < lockUntil) return;
@@ -119,17 +131,21 @@ const useCollapseOnScroll = (
                 || ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName))) return;
 
             const max = el.scrollHeight - el.clientHeight;
-            // Only fold when the page can still scroll without the tools:
-            // folding them back would un-scroll the page, clamp scrollTop to 0
-            // and pop them straight open again. Measured while they are still
-            // expanded — i.e. exactly the space folding them gives back.
-            const tools = root.querySelector<HTMLElement>('[data-page-header-tools]');
-            const toolsHeight = tools && tools.offsetHeight > 0
-                ? tools.offsetHeight + (parseFloat(getComputedStyle(tools).marginTop) || 0)
+            const row = tools();
+            const floating = row?.dataset.floating !== undefined;
+            const toolsHeight = row && row.offsetHeight > 0
+                ? row.offsetHeight + (Number.parseFloat(getComputedStyle(row).marginTop) || 0)
                 : 0;
-            if (delta > 4 && top > 32 && max > toolsHeight + 24) {
+            // Floating: fold once the content has slid up under the row, so it
+            // never leaves a blank band where it was. In flow: only fold when
+            // the page can still scroll without the tools — folding them back
+            // would un-scroll the page, clamp scrollTop to 0 and pop them
+            // straight open again. Measured while they are still expanded,
+            // i.e. exactly the space folding them gives back.
+            const canFold = floating ? top > toolsHeight : top > 32 && max > toolsHeight + 24;
+            if (travel > 12 && canFold) {
                 set(true);
-            } else if (delta < -10 && top < max - 4) {
+            } else if (travel < -16 && top < max - 4) {
                 // Ignore iOS bounce-back at the bottom edge, which reads as an
                 // upward scroll.
                 set(false);
@@ -157,9 +173,11 @@ export const PageRoot: React.FC<PageRootProps> = ({ children, width = 'default',
     const [collapsed, setCollapsed] = useState(false);
     const expand = useCollapseOnScroll(rootRef, isPhone, setCollapsed);
 
+    // The class resets `--page-tools-h` so a page nested inside another never
+    // inherits the outer page's value; a floating tools row overrides it inline.
     return (
         <PageChromeContext.Provider value={{ width, isPhone, collapsed: isPhone && collapsed, expand }}>
-            <div ref={rootRef} className={`flex flex-col h-full min-h-0 w-full ${className}`}>
+            <div ref={rootRef} data-page-root className={`flex flex-col h-full min-h-0 w-full [--page-tools-h:0px] ${className}`}>
                 {children}
             </div>
         </PageChromeContext.Provider>
@@ -178,6 +196,11 @@ interface PageHeaderProps {
      *  in normal document flow with uniform vertical rhythm so nothing
      *  ever overlaps — no absolute positioning, no negative margins. */
     children?: React.ReactNode;
+    /** Phone: float the tools over the top of the scroller (default) rather
+     *  than stacking them in flow above it. Needs the scroller right under the
+     *  header to pad by `--page-tools-h`, as PageBody does — turn it off for
+     *  a page with anything else in between. */
+    floatTools?: boolean;
     className?: string;
 }
 
@@ -192,15 +215,40 @@ interface PageHeaderProps {
  * fades and drifts up while the magnifier rises straight up out of the closing
  * row into the title line in its place — and tapping that magnifier brings the
  * field back, caret and all.
+ * The tools float over the top of the scroller rather than sitting above it,
+ * and the scroller is padded by their height, so at rest the page looks the
+ * same — but folding is only a fade and a nudge (compositor work), never a
+ * resize. Resizing the scroller mid-scroll re-laid out the page every frame
+ * and slid the list up faster than the finger: the jerk this replaced.
  * Sitting permanently above the content, tools and all, this header used to
  * eat up to 27% of an iPhone screen.
  * Tablet/desktop: never folds — full size and width-matched to the body, so
  * the title sits over the content instead of off in the left margin.
  */
 export const PageHeader: React.FC<PageHeaderProps> = ({
-    title, subtitle, actions, onBack, children, className = '',
+    title, subtitle, actions, onBack, children, floatTools = true, className = '',
 }) => {
     const { width, isPhone, collapsed, expand } = useContext(PageChromeContext);
+    const floating = isPhone && floatTools && !!children;
+
+    // Publish the floating row's height on the page root for the scroller to
+    // pad by. Before paint, so the first frame already has the list below the
+    // row. The root is found through the DOM, not PageRoot's ref: on mount a
+    // child's layout effect runs before its parent's ref is attached.
+    const toolsRef = useRef<HTMLDivElement>(null);
+    useLayoutEffect(() => {
+        const row = toolsRef.current;
+        const root = row?.closest<HTMLElement>('[data-page-root]');
+        if (!floating || !row || !root) return;
+        const publish = () => root.style.setProperty('--page-tools-h', `${row.offsetHeight}px`);
+        publish();
+        const observer = new ResizeObserver(publish);
+        observer.observe(row);
+        return () => {
+            observer.disconnect();
+            root.style.removeProperty('--page-tools-h');
+        };
+    }, [floating]);
 
     // A SearchBar among the tools registers itself here. That is what earns the
     // title row its stand-in magnifier — a row with no field in it has nothing
@@ -225,7 +273,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
     return (
         <header
             data-collapsed={collapsed || undefined}
-            className={`shrink-0 w-full ${GUTTER} pt-[calc(0.375rem+env(safe-area-inset-top,0px))] pb-2 md:pt-[calc(1.25rem+env(safe-area-inset-top,0px))] md:pb-4 lg:pt-6 lg:pb-5 ${className}`}
+            className={`shrink-0 w-full ${floating ? 'relative z-10' : ''} ${GUTTER} pt-[calc(0.375rem+env(safe-area-inset-top,0px))] pb-2 md:pt-[calc(1.25rem+env(safe-area-inset-top,0px))] md:pb-4 lg:pt-6 lg:pb-5 ${className}`}
         >
             <div className={WIDTH_CLS[width]}>
                 {/* Title row — never folds. The phone keeps its title and
@@ -288,8 +336,9 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
                     )}
                 </div>
 
-                {/* Search bar / filter pills — the only thing that folds.
-                    Three tracks run together so it reads as one motion: the
+                {/* Search bar / filter pills in flow — tablet/desktop, where
+                    nothing folds, and phone pages that opt out of floating.
+                    On those the row is the only thing that folds. Three tracks run together so it reads as one motion: the
                     1fr→0fr grid row (animated margin included) takes the space
                     away over 360ms on an ease-out curve; the contents fade and
                     drift straight up towards the title line, shrinking a hair
@@ -302,7 +351,30 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
                     `inert` keeps the folded controls out of the tab order, and
                     the context is what a SearchBar in here registers itself
                     with. */}
-                {children && (
+                {/* Phone: the same row, floated. It hangs off the bottom of the
+                    header over the scroller's top padding, on the page colour
+                    with a short fade underneath that stands in for the
+                    scroller's own edge fade — content slides up under it
+                    until it folds. Folding is opacity and translate only. */}
+                {children && floating && (
+                    <HeaderToolsContext.Provider value={headerTools}>
+                        <div
+                            ref={toolsRef}
+                            data-page-header-tools
+                            data-floating
+                            inert={collapsed || undefined}
+                            className={`absolute inset-x-0 top-full ${GUTTER} pb-2 bg-[var(--neu-bg)] after:absolute after:inset-x-0 after:top-full after:h-3.5 after:bg-gradient-to-b after:from-[var(--neu-bg)] after:to-transparent after:pointer-events-none transition-[opacity,translate] duration-[280ms] ease-[cubic-bezier(0.32,0.72,0,1)] will-change-[opacity,translate] ${collapsed
+                                ? 'opacity-0 -translate-y-2 pointer-events-none'
+                                : 'opacity-100 translate-y-0'
+                                }`}
+                        >
+                            <div className={`${WIDTH_CLS[width]} space-y-2`}>
+                                {children}
+                            </div>
+                        </div>
+                    </HeaderToolsContext.Provider>
+                )}
+                {children && !floating && (
                     <HeaderToolsContext.Provider value={headerTools}>
                         <div
                             data-page-header-tools
@@ -370,11 +442,12 @@ export const PageBody: React.FC<PageBodyProps> = ({
 }) => {
     const { width } = useContext(PageChromeContext);
     // `pt-3` gives the first row's raised shadow room above the scroll-clip
-    // edge, and `neu-scroll-fade` melts scrolled content into the header
+    // edge — plus, on a phone, the height of the header's tools floating over
+    // the top of this scroller (0 everywhere else) — and `neu-scroll-fade` melts scrolled content into the header
     // instead of shearing it on a hard line — header and body read as one
     // surface. The bottom padding clears the phone dock and the iOS home
     // indicator; lg:pb-10 takes it back on desktop, where the dock is hidden.
-    const base = `flex-1 min-h-0 w-full ${GUTTER} pt-3 pb-[calc(6rem+var(--safe-bottom,env(safe-area-inset-bottom,0px)))] lg:pb-10 no-scrollbar neu-scroll-fade overflow-y-auto`;
+    const base = `flex-1 min-h-0 w-full ${GUTTER} pt-[calc(0.75rem+var(--page-tools-h,0px))] pb-[calc(6rem+var(--safe-bottom,env(safe-area-inset-bottom,0px)))] lg:pb-10 no-scrollbar neu-scroll-fade overflow-y-auto`;
     const inner = columns
         ? `${WIDTH_CLS[width]} ${COLS_CLS[columns]} gap-3 md:gap-4 lg:gap-5`
         : `${WIDTH_CLS[width]} ${SPACE_CLS[space]}`;

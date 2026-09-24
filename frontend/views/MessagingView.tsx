@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit2, Check, CheckCheck, Pin, Archive, MoreVertical, Paperclip, Reply, Loader2, Trash2, Camera, AlertCircle, Lock } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
 import { useIsDesktop } from '../hooks/useMediaQuery';
@@ -9,6 +9,7 @@ import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import storageService, { getThumbUrl } from '../services/storageService';
 import { useMemberNames } from '../hooks/useMemberNames';
 import { usePhotoCapture } from '../hooks/usePhotoCapture';
+import { useStickToBottom } from '../hooks/useStickToBottom';
 import toast from 'react-hot-toast';
 import { IfCan } from '../components/Layout';
 
@@ -554,38 +555,9 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
         reason: conversation.reason || '',
         note: conversation.note || '',
     });
-    const messagesEndRef = useRef<HTMLDivElement>(null);
-
-    const scrollToBottom = () => {
-        const container = messagesEndRef.current?.parentElement;
-        if (container) container.scrollTop = container.scrollHeight;
-    };
-
-    // Jump straight to the latest message BEFORE the first paint, so opening
-    // a chat (especially large group chats) never shows the top of the list
-    // and then visibly snaps down.
-    useLayoutEffect(() => {
-        scrollToBottom();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [conversation.id]);
-
-    // While the chat is open, follow incoming messages only when the user is
-    // already at (or near) the bottom — reading history must not be yanked.
-    useEffect(() => {
-        const container = messagesEndRef.current?.parentElement;
-        if (!container) return;
-        const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
-        if (isNearBottom) container.scrollTop = container.scrollHeight;
-    }, [messages.length]);
-
-    // Keyboard open/close: re-anchor to the bottom on the next frame after
-    // the visual viewport resizes.
-    useEffect(() => {
-        const onViewportResize = () => requestAnimationFrame(scrollToBottom);
-        window.visualViewport?.addEventListener('resize', onViewportResize);
-        return () => window.visualViewport?.removeEventListener('resize', onViewportResize);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    // Opens on the latest message and stays there through late photos, syncing
+    // messages and the keyboard — unless the reader scrolls up into history.
+    const { scrollerRef, contentRef, scrollToLatest } = useStickToBottom(conversation.id);
 
     useEffect(() => {
         setDetailsForm({
@@ -643,6 +615,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
 
     const handleSend = () => {
         if (!newMessage.trim() && !pendingAttachment) return;
+        scrollToLatest();
         onSendMessage(conversation.id, newMessage.trim(), Array.from(selectedTags), replyingTo ?? undefined, pendingAttachment ?? undefined);
         setNewMessage('');
         setSelectedTags(new Set());
@@ -680,6 +653,75 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
         if (status === 'delivered') return <CheckCheck size={12} />;
         return <Check size={12} />;
     };
+
+    // Rows are memoised so typing in the message box (state on this
+    // component) doesn't rebuild every bubble of a long thread per keystroke.
+    const messageRows = useMemo(() => displayedMessages.map((msg) => {
+        const isMe = msg.senderId === currentUserId;
+        const bubble = (
+            <div className={`max-w-[80%] px-3.5 py-2.5 ${isMe ? 'neu-bubble-out' : 'neu-bubble-in'}`}>
+                {!isMe && (
+                    <p className="text-[11px] font-bold uppercase tracking-widest mb-1 text-gold-700 dark:text-gold-300">{resolveName(msg.senderId, msg.senderName)}</p>
+                )}
+                {msg.replyTo && (
+                    <div className="mb-2 pl-2.5 pr-2 py-1.5 neu-inset rounded-xl border-l-2 border-gold-500">
+                        <p className="text-[11px] font-bold text-gold-700 dark:text-gold-300">{replySenderName(msg.replyTo)}</p>
+                        <p className="text-[11px] line-clamp-1 text-[var(--neu-text-dim)]">{msg.replyTo.text}</p>
+                    </div>
+                )}
+                {msg.attachment && (
+                    msg.attachment.type === 'image' ? (
+                        <img loading="lazy" decoding="async" src={getThumbUrl(msg.attachment.url)} alt={msg.attachment.name} className="rounded-xl max-w-full max-h-48 object-cover mb-2" />
+                    ) : (
+                        <div className="flex items-center gap-2 mb-2 p-2 neu-inset rounded-xl">
+                            <Paperclip size={14} className="text-gold-700 dark:text-gold-300" />
+                            <span className="text-[11px] truncate">{msg.attachment.name}</span>
+                        </div>
+                    )
+                )}
+                {msg.text && <p className="text-[13px] leading-relaxed">{msg.text}</p>}
+                <div className="flex items-center justify-between mt-1.5 gap-2">
+                    {msg.tags.length > 0 && (
+                        <div className="flex gap-1 flex-wrap">
+                            {msg.tags.map(tag => (
+                                <span key={tag} className={`text-[7px] px-1.5 py-0.5 rounded-[3px] font-bold uppercase tracking-wider ${TAG_COLORS[tag]}`}>{tag}</span>
+                            ))}
+                        </div>
+                    )}
+                    {isMe && msg.status === 'failed' ? (
+                        <button
+                            type="button"
+                            onClick={() => onRetryMessage?.(msg.id)}
+                            className="flex items-center gap-1 text-[11px] font-semibold shrink-0 ml-auto text-red-600 dark:text-red-400 active-scale"
+                        >
+                            <AlertCircle size={12} /> Not sent · Tap to retry
+                        </button>
+                    ) : (
+                        <span className="flex items-center gap-1 text-[11px] shrink-0 ml-auto text-[var(--neu-text-dim)]">
+                            {formatMessageTime(msg.timestamp)}
+                            {isMe && renderMessageStatusIcon(msg.status)}
+                        </span>
+                    )}
+                </div>
+            </div>
+        );
+        const replyButton = (
+            <button
+                onClick={() => setReplyingTo({ id: msg.id, senderName: resolveName(msg.senderId, msg.senderName), text: msg.text || (msg.attachment ? msg.attachment.name : '') })}
+                aria-label="Reply"
+                className="p-1.5 mb-1 text-[var(--neu-text-dim)] hover:text-gold-600 dark:hover:text-gold-400 transition-colors shrink-0 active-scale"
+            >
+                <Reply size={14} />
+            </button>
+        );
+        return (
+            <div key={msg.id} className={`flex items-end gap-1.5 ${isMe ? 'justify-end' : 'justify-start'}`}>
+                {!isMe && replyButton}
+                {bubble}
+                {isMe && replyButton}
+            </div>
+        );
+    }), [displayedMessages, messages, currentUserId, resolveName, onRetryMessage]);
 
     const renderConversationDetails = () => {
         if (isEditingDetails) {
@@ -813,80 +855,21 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                 {renderConversationDetails()}
             </div>
 
-            {/* Messages */}
-            <div className={`flex-1 overflow-y-auto p-4 md:p-6 space-y-3.5 no-scrollbar neu-scroll-fade w-full ${inline ? 'pb-4' : 'pb-[calc(6rem+var(--safe-bottom,env(safe-area-inset-bottom,0px)))] lg:pb-8 lg:max-w-5xl lg:mx-auto'}`}>
-                {displayedMessages.length === 0 && chatSearchQuery.trim() && (
-                    <div className="text-center text-gray-600 dark:text-gray-300 mt-10 font-light text-sm">
-                        No messages match "{chatSearchQuery}".
-                    </div>
-                )}
-                {displayedMessages.map((msg) => {
-                    const isMe = msg.senderId === currentUserId;
-                    const bubble = (
-                        <div className={`max-w-[80%] px-3.5 py-2.5 ${isMe ? 'neu-bubble-out' : 'neu-bubble-in'}`}>
-                            {!isMe && (
-                                <p className="text-[11px] font-bold uppercase tracking-widest mb-1 text-gold-700 dark:text-gold-300">{resolveName(msg.senderId, msg.senderName)}</p>
-                            )}
-                            {msg.replyTo && (
-                                <div className="mb-2 pl-2.5 pr-2 py-1.5 neu-inset rounded-xl border-l-2 border-gold-500">
-                                    <p className="text-[11px] font-bold text-gold-700 dark:text-gold-300">{replySenderName(msg.replyTo)}</p>
-                                    <p className="text-[11px] line-clamp-1 text-[var(--neu-text-dim)]">{msg.replyTo.text}</p>
-                                </div>
-                            )}
-                            {msg.attachment && (
-                                msg.attachment.type === 'image' ? (
-                                    <img loading="lazy" decoding="async" src={getThumbUrl(msg.attachment.url)} alt={msg.attachment.name} className="rounded-xl max-w-full max-h-48 object-cover mb-2" />
-                                ) : (
-                                    <div className="flex items-center gap-2 mb-2 p-2 neu-inset rounded-xl">
-                                        <Paperclip size={14} className="text-gold-700 dark:text-gold-300" />
-                                        <span className="text-[11px] truncate">{msg.attachment.name}</span>
-                                    </div>
-                                )
-                            )}
-                            {msg.text && <p className="text-[13px] leading-relaxed">{msg.text}</p>}
-                            <div className="flex items-center justify-between mt-1.5 gap-2">
-                                {msg.tags.length > 0 && (
-                                    <div className="flex gap-1 flex-wrap">
-                                        {msg.tags.map(tag => (
-                                            <span key={tag} className={`text-[7px] px-1.5 py-0.5 rounded-[3px] font-bold uppercase tracking-wider ${TAG_COLORS[tag]}`}>{tag}</span>
-                                        ))}
-                                    </div>
-                                )}
-                                {isMe && msg.status === 'failed' ? (
-                                    <button
-                                        type="button"
-                                        onClick={() => onRetryMessage?.(msg.id)}
-                                        className="flex items-center gap-1 text-[11px] font-semibold shrink-0 ml-auto text-red-600 dark:text-red-400 active-scale"
-                                    >
-                                        <AlertCircle size={12} /> Not sent · Tap to retry
-                                    </button>
-                                ) : (
-                                    <span className="flex items-center gap-1 text-[11px] shrink-0 ml-auto text-[var(--neu-text-dim)]">
-                                        {formatMessageTime(msg.timestamp)}
-                                        {isMe && renderMessageStatusIcon(msg.status)}
-                                    </span>
-                                )}
-                            </div>
+            {/* Messages — the message bar is in flow right below, and this
+                sheet covers the dock, so there's nothing at the bottom to clear
+                (it used to reserve the dock's 6rem: a blank band above the bar). */}
+            <div
+                ref={scrollerRef}
+                className={`flex-1 overflow-y-auto overscroll-contain p-4 md:p-6 no-scrollbar neu-scroll-fade w-full ${inline ? '' : 'lg:max-w-5xl lg:mx-auto'}`}
+            >
+                <div ref={contentRef} className="space-y-3.5">
+                    {displayedMessages.length === 0 && chatSearchQuery.trim() && (
+                        <div className="text-center text-gray-600 dark:text-gray-300 mt-10 font-light text-sm">
+                            No messages match "{chatSearchQuery}".
                         </div>
-                    );
-                    const replyButton = (
-                        <button
-                            onClick={() => setReplyingTo({ id: msg.id, senderName: resolveName(msg.senderId, msg.senderName), text: msg.text || (msg.attachment ? msg.attachment.name : '') })}
-                            aria-label="Reply"
-                            className="p-1.5 mb-1 text-[var(--neu-text-dim)] hover:text-gold-600 dark:hover:text-gold-400 transition-colors shrink-0 active-scale"
-                        >
-                            <Reply size={14} />
-                        </button>
-                    );
-                    return (
-                        <div key={msg.id} className={`flex items-end gap-1.5 ${isMe ? 'justify-end' : 'justify-start'}`}>
-                            {!isMe && replyButton}
-                            {bubble}
-                            {isMe && replyButton}
-                        </div>
-                    );
-                })}
-                <div ref={messagesEndRef} />
+                    )}
+                    {messageRows}
+                </div>
             </div>
 
             {/* Tag Picker */}
@@ -913,7 +896,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                 so the bar is never cropped, even with reply/tag previews stacked */}
             <div
                 className="px-3 pt-[9px] transition-colors"
-                style={{ paddingBottom: 'calc(9px + var(--safe-bottom, env(safe-area-inset-bottom, 0px)))' }}
+                style={{ paddingBottom: 'calc(9px + var(--safe-bottom-tucked))' }}
             >
                 {replyingTo && (
                     <div className="flex items-center justify-between gap-2 mb-2 pl-3 pr-2 py-1.5 neu-raised-sm neu-btn rounded-lg border-l-2 border-gold-500 animate-fade-in">
@@ -985,12 +968,6 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                         value={newMessage}
                         onChange={(e) => setNewMessage(e.target.value)}
                         onKeyDown={handleKeyDown}
-                        onFocus={() => {
-                            setTimeout(() => {
-                                window.scrollTo(0, 0);
-                                document.body.scrollTop = 0;
-                            }, 50);
-                        }}
                         placeholder="Type a message..."
                         autoComplete="off"
                         autoCorrect="off"

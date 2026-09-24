@@ -133,6 +133,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) =>
                 title="Calendar"
                 subtitle={`${MONTHS[viewMonth]} ${viewYear}`}
                 onBack={onBack}
+                // The legend and month grid sit between this header and the
+                // scroller, where a floating stepper would cover them.
+                floatTools={false}
                 actions={
                     <Button onClick={goToday} className="text-[11px] uppercase tracking-widest px-3 py-1.5">
                         Today
