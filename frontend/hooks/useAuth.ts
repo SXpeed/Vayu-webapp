@@ -13,7 +13,12 @@ import { realtimeService } from '../services/realtimeService';
 export function useAuth() {
     const [authUser, setAuthUser] = useState<AuthUser | null>(null);
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
-    const [theme, setTheme] = useState<'light' | 'dark'>('light');
+    // Starts from the saved theme, not 'light': the effect below runs on mount,
+    // and a 'light' start stripped the dark class index.html had set — so the
+    // loading screen flashed light for anyone on the dark theme.
+    const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+        try { return localStorage.getItem('vayu_theme') === 'dark' ? 'dark' : 'light'; } catch { return 'light'; }
+    });
 
     // Ref to access current authUser inside callbacks without adding it as a dependency
     const authUserRef = useRef<AuthUser | null>(null);

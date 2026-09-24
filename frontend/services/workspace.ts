@@ -18,6 +18,9 @@ export interface Workspace {
     name: string;
     /** Platform role: owner, admin, manager or staff. */
     role: string;
+    /** Its own logo (set in the control centre), or null for the platform's.
+     *  Kept with the workspace so the loading screen can show it at once. */
+    logoUrl?: string | null;
 }
 
 const WORKSPACE_KEY = 'as_workspace';
@@ -67,8 +70,22 @@ export async function myWorkspaces(): Promise<Workspace[]> {
     const res = await fetch('/api/v2/me/orgs', { credentials: 'same-origin', signal: AbortSignal.timeout(20_000) });
     if (res.status === 401) return [];
     if (!res.ok) throw new Error('Could not load your workspaces. Please try again.');
-    const body = await res.json() as { organizations: { id: string; name: string; role: string; status: string }[] };
-    return body.organizations.filter(o => o.status === 'active').map(o => ({ id: o.id, name: o.name, role: o.role }));
+    const body = await res.json() as { organizations: { id: string; name: string; role: string; status: string; logoUrl?: string | null }[] };
+    return body.organizations.filter(o => o.status === 'active').map(o => ({ id: o.id, name: o.name, role: o.role, logoUrl: o.logoUrl ?? null }));
+}
+
+/**
+ * Brings the saved workspace's name, role and logo up to date, so a logo
+ * changed in the control centre shows on the next launch. Quiet: a failure
+ * just keeps what is saved.
+ */
+export async function refreshCurrentWorkspace(): Promise<void> {
+    const saved = current;
+    if (!saved) return;
+    try {
+        const fresh = (await myWorkspaces()).find(w => w.id === saved.id);
+        if (fresh && current?.id === saved.id) setWorkspace(fresh);
+    } catch { /* offline — keep the saved copy */ }
 }
 
 /** The platform account signed in on this device, if any. */

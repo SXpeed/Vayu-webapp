@@ -1,8 +1,8 @@
 // Provider branding: the platform's own name and logo, set from the control
 // panel instead of being baked into the build.
 //
-// Organization branding (each business's own name and logo) is a separate,
-// later feature; this is the ateliersupport brand itself.
+// Each organization can also have its own logo (end of this file), which its
+// app shows in place of this one.
 //
 // The logo is validated properly: an allowed type, a real image of that type
 // (checked by its own bytes, not the name or the declared type), a sane size
@@ -137,7 +137,8 @@ export function inspectImage(bytes: Uint8Array): ImageInfo | null {
   return null;
 }
 
-export async function uploadLogo(env: Env, db: D1Database, request: Request, actor: Actor): Promise<Branding> {
+/** Reads and checks an uploaded logo: the raw image is the request body. */
+async function readLogo(env: Env, request: Request): Promise<{ bytes: Uint8Array; info: ImageInfo; extension: string }> {
   if (!env.VAYU_R2) throw new OrgError(503, 'storage_unavailable', 'File storage is not configured in this environment.');
   const declared = request.headers.get('Content-Type') ?? '';
   if (!/^image\/(png|jpeg|webp)$/.test(declared.split(';')[0].trim())) {
@@ -154,11 +155,28 @@ export async function uploadLogo(env: Env, db: D1Database, request: Request, act
   }
   if (info.width < MIN_PX || info.height < MIN_PX) throw new OrgError(400, 'invalid', `The logo must be at least ${MIN_PX}×${MIN_PX} pixels.`);
   if (info.width > MAX_PX || info.height > MAX_PX) throw new OrgError(400, 'invalid', `The logo must be at most ${MAX_PX}×${MAX_PX} pixels.`);
-
-  const current = await getBranding(db);
   const extension = info.type === 'image/png' ? 'png' : info.type === 'image/jpeg' ? 'jpg' : 'webp';
+  return { bytes, info, extension };
+}
+
+/** Streams a stored logo. Safe to cache hard: its address carries a version. */
+async function logoResponse(env: Env, key: string | null): Promise<Response> {
+  if (!key || !env.VAYU_R2) return new Response('Not found', { status: 404 });
+  const object = await env.VAYU_R2.get(key);
+  if (!object) return new Response('Not found', { status: 404 });
+  return new Response(object.body, {
+    headers: {
+      'Content-Type': object.httpMetadata?.contentType ?? 'image/png',
+      'Cache-Control': 'public, max-age=31536000, immutable',
+    },
+  });
+}
+
+export async function uploadLogo(env: Env, db: D1Database, request: Request, actor: Actor): Promise<Branding> {
+  const { bytes, info, extension } = await readLogo(env, request);
+  const current = await getBranding(db);
   const key = `platform/branding/logo-${crypto.randomUUID()}.${extension}`;
-  await env.VAYU_R2.put(key, bytes, { httpMetadata: { contentType: info.type } });
+  await env.VAYU_R2!.put(key, bytes, { httpMetadata: { contentType: info.type } });
 
   const next: Branding = { ...current, logoKey: key, logoVersion: current.logoVersion + 1 };
   await db.batch([
@@ -172,18 +190,105 @@ export async function uploadLogo(env: Env, db: D1Database, request: Request, act
 
 /** Serves the current logo. Public, because it is on the sign-in screen. */
 export async function serveLogo(env: Env, db: D1Database): Promise<Response> {
-  const branding = await getBranding(db);
-  if (!branding.logoKey || !env.VAYU_R2) return new Response('Not found', { status: 404 });
-  const object = await env.VAYU_R2.get(branding.logoKey);
-  if (!object) return new Response('Not found', { status: 404 });
-  return new Response(object.body, {
-    headers: {
-      'Content-Type': object.httpMetadata?.contentType ?? 'image/png',
-      // Safe to cache hard: the address carries a version that changes on
-      // every upload.
-      'Cache-Control': 'public, max-age=31536000, immutable',
-    },
-  });
+  return logoResponse(env, (await getBranding(db)).logoKey);
+}
+
+// ── Organization logos ────────────────────────────────────────────────────
+//
+// Each organization's own logo: what its app shows on the loading screen, in
+// place of the platform's. Kept in platform_settings under one key per
+// organization, so it needs no schema change. Set from the control centre.
+
+export interface OrgBranding {
+  logoKey: string | null;
+  logoVersion: number;
+}
+
+const orgKey = (orgId: string) => `org_branding:${orgId}`;
+
+export async function getOrgBranding(db: D1Database, orgId: string): Promise<OrgBranding> {
+  const row = await db.prepare('SELECT value FROM platform_settings WHERE key = ?').bind(orgKey(orgId)).first<{ value: string }>();
+  if (!row) return { logoKey: null, logoVersion: 0 };
+  try {
+    const parsed = JSON.parse(row.value) as Partial<OrgBranding>;
+    return {
+      logoKey: typeof parsed.logoKey === 'string' ? parsed.logoKey : null,
+      logoVersion: typeof parsed.logoVersion === 'number' ? parsed.logoVersion : 0,
+    };
+  } catch {
+    return { logoKey: null, logoVersion: 0 };
+  }
+}
+
+/** The logo's address, or null while the organization has none. */
+export function orgLogoUrl(orgId: string, b: OrgBranding): string | null {
+  return b.logoKey ? `/api/v2/public/orgs/${orgId}/logo?v=${b.logoVersion}` : null;
+}
+
+/** Logo addresses for many organizations at once (the workspace list). */
+export async function orgLogoUrls(db: D1Database, orgIds: string[]): Promise<Map<string, string | null>> {
+  const urls = new Map<string, string | null>();
+  if (orgIds.length === 0) return urls;
+  const { results } = await db.prepare(
+    `SELECT key, value FROM platform_settings WHERE key IN (${orgIds.map(() => '?').join(',')})`,
+  ).bind(...orgIds.map(orgKey)).all<{ key: string; value: string }>();
+  const byKey = new Map(results.map(r => [r.key, r.value]));
+  for (const id of orgIds) {
+    let b: OrgBranding = { logoKey: null, logoVersion: 0 };
+    const raw = byKey.get(orgKey(id));
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as Partial<OrgBranding>;
+        if (typeof parsed.logoKey === 'string') b = { logoKey: parsed.logoKey, logoVersion: Number(parsed.logoVersion) || 0 };
+      } catch { /* treated as no logo */ }
+    }
+    urls.set(id, orgLogoUrl(id, b));
+  }
+  return urls;
+}
+
+function saveOrg(db: D1Database, orgId: string, value: OrgBranding, actorId: string): D1PreparedStatement {
+  return db.prepare(
+    `INSERT INTO platform_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
+  ).bind(orgKey(orgId), JSON.stringify(value), Date.now(), actorId);
+}
+
+async function requireOrg(db: D1Database, orgId: string): Promise<void> {
+  const org = await db.prepare('SELECT 1 FROM organizations WHERE id = ?').bind(orgId).first();
+  if (!org) throw new OrgError(404, 'org_not_found', 'Organization not found.');
+}
+
+export async function uploadOrgLogo(env: Env, db: D1Database, orgId: string, request: Request, actor: Actor): Promise<OrgBranding> {
+  await requireOrg(db, orgId);
+  const { bytes, info, extension } = await readLogo(env, request);
+  const current = await getOrgBranding(db, orgId);
+  const key = `platform/orgs/${orgId}/logo-${crypto.randomUUID()}.${extension}`;
+  await env.VAYU_R2!.put(key, bytes, { httpMetadata: { contentType: info.type } });
+  const next: OrgBranding = { logoKey: key, logoVersion: current.logoVersion + 1 };
+  await db.batch([
+    saveOrg(db, orgId, next, actor.userId),
+    auditStmt(db, { actorUserId: actor.userId, actorKind: 'provider_admin', action: 'org.logo.upload', targetType: 'organization', targetId: orgId, orgId, details: { key, type: info.type, width: info.width, height: info.height, bytes: bytes.length }, ip: actor.ip }),
+  ]);
+  return next;
+}
+
+/** Back to the platform's logo. The file stays, like replaced platform logos. */
+export async function removeOrgLogo(db: D1Database, orgId: string, actor: Actor): Promise<OrgBranding> {
+  await requireOrg(db, orgId);
+  const current = await getOrgBranding(db, orgId);
+  // The version keeps counting, so a later upload never reuses an address.
+  const next: OrgBranding = { logoKey: null, logoVersion: current.logoVersion };
+  await db.batch([
+    saveOrg(db, orgId, next, actor.userId),
+    auditStmt(db, { actorUserId: actor.userId, actorKind: 'provider_admin', action: 'org.logo.remove', targetType: 'organization', targetId: orgId, orgId, details: { key: current.logoKey }, ip: actor.ip }),
+  ]);
+  return next;
+}
+
+/** Public, like the platform logo: the loading screen shows it before any sign-in check. */
+export async function serveOrgLogo(env: Env, db: D1Database, orgId: string): Promise<Response> {
+  return logoResponse(env, (await getOrgBranding(db, orgId)).logoKey);
 }
 
 /** Test hook. */

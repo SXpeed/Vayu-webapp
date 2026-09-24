@@ -26,6 +26,8 @@ import { canOpenView, makeCan, permissionsOf } from './access';
 import { SIGNED_OUT_EVENT } from './services/apiClient';
 import { PageRoot, PageHeader, PageBody, EmptyState, Button } from './components/ui';
 import { APP_NAME } from './brand';
+import { useBranding } from './useBranding';
+import { currentWorkspace, refreshCurrentWorkspace } from './services/workspace';
 
 /** Views a push-notification click may deep-link into. */
 const PUSH_VIEWS = ['messaging', 'inquiry', 'payments'] as const;
@@ -212,6 +214,8 @@ const App: React.FC = () => {
                     setCurrentView(launchView || 'home');
                     globalThis.history.pushState({ view: launchView || 'home' }, '');
                     pushService.syncSubscription();
+                    // Picks up a logo changed in the control centre, for next launch.
+                    void refreshCurrentWorkspace();
 
                     // Saved copy first (local, instant): what shows if the
                     // sync below is still running when the splash lifts.
@@ -282,20 +286,33 @@ const App: React.FC = () => {
 
     // Hooks must run before the loading early-return below.
     const can = useMemo(() => makeCan(permissionsOf(authUser)), [authUser]);
+    const branding = useBranding();
 
     if (isLoading) {
+        // On the page colour of the current theme, with the workspace's own
+        // logo (saved with the workspace, so it is there before any network)
+        // or else the platform's — both uploaded with a transparent
+        // background. Used to be the old app icon, a logo baked onto black.
+        const splashLogo = currentWorkspace()?.logoUrl ?? branding.logoUrl;
         return (
-            <div className="h-full bg-black flex flex-col items-center justify-center">
-                <div className="animate-pulse flex flex-col items-center justify-center">
-                    <img src="/icon.png" alt={`${APP_NAME} logo`} className="w-48 h-48 object-contain rounded-[20px]" />
+            <div className="h-full bg-[var(--neu-bg)] flex flex-col items-center justify-center">
+                <div className="animate-pulse flex flex-col items-center justify-center px-10">
+                    {splashLogo ? (
+                        <img src={splashLogo} alt={`${currentWorkspace()?.name ?? branding.appName} logo`}
+                            className="w-56 max-w-full h-40 object-contain" />
+                    ) : (
+                        <span className="font-serif text-4xl tracking-wide text-gold-700 dark:text-gold-300">
+                            {branding.appName || APP_NAME}
+                        </span>
+                    )}
                 </div>
                 {bootStalled && (
                     <div className="mt-8 flex flex-col items-center gap-3 text-center px-8 animate-fade-in">
-                        <p className="text-sm text-white/70">{bootStep}… this is taking longer than usual.</p>
+                        <p className="text-sm text-gray-600 dark:text-gray-300">{bootStep}… this is taking longer than usual.</p>
                         <button
                             type="button"
                             onClick={() => globalThis.location.reload()}
-                            className="px-5 py-2 rounded-full bg-white/10 text-white text-sm active-scale"
+                            className="neu-button px-5 py-2 text-sm active-scale"
                         >
                             Reload
                         </button>

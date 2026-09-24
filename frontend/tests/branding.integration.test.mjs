@@ -139,3 +139,46 @@ test('branding is provider-admin only', async () => {
     assert.equal((await stranger.call('/admin/settings/branding', { method: 'PATCH', body: { appName: 'Hijacked' } })).status, 401);
     assert.equal((await admin.call('/public/branding')).body.appName, 'Atelier Support');
 });
+
+test('an organization can have its own logo, set by a provider admin', async () => {
+    await h.createUser('owner-1', 'owner@example.com', await hashPassword(PASSWORD));
+    let res = await admin.call('/admin/orgs', { method: 'POST', body: { name: 'Logo Studio', businessType: 'studio', ownerEmail: 'owner@example.com' } });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    const orgId = res.body.id;
+    const owner = h.browser();
+    assert.equal((await owner.call('/auth/sign-in/email', { method: 'POST', body: { email: 'owner@example.com', password: PASSWORD } })).status, 200);
+
+    assert.equal((await admin.call(`/admin/orgs/${orgId}`)).body.logoUrl, null, 'none until one is set');
+    assert.equal((await owner.call('/me/orgs')).body.organizations[0].logoUrl, null);
+
+    // The same checks as the platform logo.
+    res = await admin.call(`/admin/orgs/${orgId}/logo`, { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: Buffer.from('<svg></svg>') });
+    assert.equal(res.status, 400);
+
+    res = await admin.call(`/admin/orgs/${orgId}/logo`, { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: png(200, 200) });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    const url = `/api/v2/public/orgs/${orgId}/logo?v=1`;
+    assert.equal(res.body.logoUrl, url);
+    assert.equal((await admin.call(`/admin/orgs/${orgId}`)).body.logoUrl, url);
+    assert.equal((await owner.call('/me/orgs')).body.organizations[0].logoUrl, url, 'its members see it in their workspace list');
+    assert.ok(await h.db.prepare("SELECT 1 FROM platform_audit WHERE action = 'org.logo.upload'").first(), 'audited');
+
+    const file = await h.platform.handlePlatformRequest(new Request(`https://app.test${url}`), { ...h.env, VAYU_R2: r2 });
+    assert.equal(file.status, 200);
+    assert.equal(file.headers.get('Content-Type'), 'image/png');
+
+    // The platform logo is untouched by an organization's.
+    assert.equal((await admin.call('/public/branding')).body.logoUrl, '/api/v2/public/branding/logo?v=2');
+
+    // Removing it goes back to none; a later upload gets a fresh address.
+    res = await admin.call(`/admin/orgs/${orgId}/logo`, { method: 'DELETE' });
+    assert.equal(res.body.logoUrl, null);
+    assert.equal((await h.platform.handlePlatformRequest(new Request(`https://app.test${url}`), { ...h.env, VAYU_R2: r2 })).status, 404);
+    res = await admin.call(`/admin/orgs/${orgId}/logo`, { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: png(200, 200) });
+    assert.equal(res.body.logoUrl, `/api/v2/public/orgs/${orgId}/logo?v=2`);
+
+    // Only provider admins can change it — not even the organization's owner.
+    assert.equal((await owner.call(`/admin/orgs/${orgId}/logo`, { method: 'DELETE' })).status, 403);
+    assert.equal((await h.browser().call(`/admin/orgs/${orgId}/logo`, { method: 'DELETE' })).status, 401);
+    assert.equal((await admin.call('/admin/orgs/no-such-org/logo', { method: 'DELETE' })).status, 404);
+});

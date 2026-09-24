@@ -29,6 +29,8 @@
 //   GET             /api/v2/public/plans                     published public plans
 //   GET             /api/v2/public/branding                  platform name, tagline, logo
 //   GET             /api/v2/public/branding/logo             the logo file
+//   GET             /api/v2/public/orgs/:id/logo             an organization's own logo
+//   POST|DELETE     /api/v2/admin/orgs/:id/logo              set (raw image body) / remove it
 //   GET|PATCH       /api/v2/admin/settings/branding          name, tagline, accent colour
 //   POST            /api/v2/admin/settings/branding/logo     upload a logo (raw image body)
 //   POST            /api/v2/webhooks/razorpay/:orgId         signed, per organization
@@ -55,7 +57,10 @@ import {
 import { connectRazorpay, describeRazorpay, disconnectRazorpay, receiveRazorpayWebhook, setAppPaymentsOrg, verifyRazorpay } from './payments';
 import { importLegacyWorkspace, listImports } from './legacyImport';
 import { PLAN_SCHEMA } from './planFields';
-import { getBranding, publicBranding, serveLogo, updateBranding, uploadLogo } from './branding';
+import {
+  getBranding, getOrgBranding, orgLogoUrl, orgLogoUrls, publicBranding, removeOrgLogo, serveLogo, serveOrgLogo,
+  updateBranding, uploadLogo, uploadOrgLogo,
+} from './branding';
 import {
   createPlan, createPlanVersion, extendTrial, getPlan, listPlans, publicPlans,
   removeOverride, resolveEntitlements, seatUsage, setOverride, setSubscription,
@@ -257,7 +262,13 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
         if (method === 'GET') return reply({ organizations: await listOrganizations(db, url.searchParams) });
         if (method === 'POST') return reply(await createOrganization(db, await body(), actor), 201);
       } else if (rest === '' && method === 'GET') {
-        return reply(await getOrganization(db, orgId));
+        const [org, branding] = await Promise.all([getOrganization(db, orgId), getOrgBranding(db, orgId)]);
+        return reply({ ...org, logoUrl: orgLogoUrl(orgId, branding) });
+      } else if (rest === '/logo' && (method === 'POST' || method === 'DELETE')) {
+        const branding = method === 'POST'
+          ? await uploadOrgLogo(env, db, orgId, request, actor)
+          : await removeOrgLogo(db, orgId, actor);
+        return reply({ logoUrl: orgLogoUrl(orgId, branding) });
       } else if (rest === '/status' && method === 'POST') {
         if (!fresh) return needFresh();
         return reply(await setOrganizationStatus(db, orgId, await body(), actor));
@@ -420,6 +431,10 @@ async function routePlatformRequest(request: Request, env: Env, hooks: PlatformH
     if (path === '/public/branding/logo' && request.method === 'GET') {
       return await serveLogo(env, db);
     }
+    const orgLogo = /^\/public\/orgs\/([A-Za-z0-9-]{1,64})\/logo$/.exec(path);
+    if (orgLogo && request.method === 'GET') {
+      return await serveOrgLogo(env, db, orgLogo[1]);
+    }
     if (path === '/public/plans' && request.method === 'GET') {
       // Public: only published, public plans, and only what a price card needs.
       const res = reply({ plans: await publicPlans(db) });
@@ -442,7 +457,9 @@ async function routePlatformRequest(request: Request, env: Env, hooks: PlatformH
 
     if (path === '/me/orgs' && request.method === 'GET') {
       try {
-        return reply({ organizations: await listMyOrganizations(db, auth, request) });
+        const organizations = await listMyOrganizations(db, auth, request) as { id: string }[];
+        const logos = await orgLogoUrls(db, organizations.map(o => o.id));
+        return reply({ organizations: organizations.map(o => ({ ...o, logoUrl: logos.get(o.id) ?? null })) });
       } catch (e) {
         if (e instanceof OrgAccessError) return fail(e.status, e.code, e.message);
         throw e;

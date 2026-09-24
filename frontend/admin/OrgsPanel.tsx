@@ -9,6 +9,7 @@ import { Avatar, Detail, EmptyState, PageHeader, STAT_TILE_H, Section, Skeleton,
 import { api, guarded as sharedGuarded, timeAgo, type ApiError, type Reauth } from './api';
 import { FEATURE_FIELDS, LIMIT_FIELDS, MODULE_FIELDS } from '../platform/planFields';
 import { AppDataCard } from './AppDataCard';
+import { OrgLogoCard } from './OrgLogoCard';
 
 interface OrgRow {
     id: string; slug: string; name: string; business_type: string; status: string; is_demo: number;
@@ -22,6 +23,8 @@ interface OrgDetail {
     timezone: string | null; is_demo: number; created_at: number; members: Member[];
     /** Which data it works on in the app (platform/originalApp.ts). */
     app_storage?: 'own' | 'original';
+    /** Its own app logo, or null for the platform's. */
+    logoUrl?: string | null;
 }
 
 interface Razorpay {
@@ -307,6 +310,8 @@ const OrgDetailView: React.FC<{ orgId: string; reauth: Reauth; onBack: () => voi
                 <div className="space-y-6 min-w-0">
                     {rz ? <RazorpayCard path={rzPath} info={rz} reauth={reauth} onChange={setRz} onReload={reloadRz} />
                         : <Section title="Customer payments"><EmptyState title="Could not load payments" action={<Button onClick={reloadRz}>Try again</Button>} /></Section>}
+                    <OrgLogoCard orgId={orgId} logoUrl={org.logoUrl ?? null}
+                        onChange={logoUrl => setOrg(o => (o ? { ...o, logoUrl } : o))} />
                     <Section title="Details">
                         <dl className="grid grid-cols-2 gap-x-5 gap-y-4">
                             <Detail label="Business type">{typeLabel(org.business_type)}</Detail>
