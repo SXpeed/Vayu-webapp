@@ -108,8 +108,24 @@ const ViewFallback = () => (
     </div>
 );
 
+/** How long the splash waits for the first sync before opening on the saved copy. */
+const BOOT_SYNC_WAIT_MS = 3500;
+/** After this, the splash says what it is waiting on and offers a reload. */
+const BOOT_STALL_MS = 8000;
+
+const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
 const App: React.FC = () => {
     const [isLoading, setIsLoading] = useState(true);
+    // What start-up is waiting on — shown on the splash if it runs long, so a
+    // stuck start says where it is stuck instead of pulsing forever.
+    const [bootStep, setBootStep] = useState('Starting');
+    const [bootStalled, setBootStalled] = useState(false);
+    useEffect(() => {
+        if (!isLoading) return;
+        const timer = setTimeout(() => setBootStalled(true), BOOT_STALL_MS);
+        return () => clearTimeout(timer);
+    }, [isLoading]);
 
     // ── Navigation ─────────────────────────────────────────────────────────
     const {
@@ -172,11 +188,18 @@ const App: React.FC = () => {
     }, []);
 
     // ── Initialize DB and load data — runs ONCE on mount ──────────────────
+    // The splash used to wait for the whole first sync. Every read has a 20s
+    // timeout and a sync can take many pages, so on a slow phone connection
+    // it could sit on the logo for minutes — it looked stuck. Now it opens on
+    // the device's saved copy once the sync has had BOOT_SYNC_WAIT_MS to
+    // finish, and the sync carries on in the background.
     useEffect(() => {
         const initApp = async () => {
             try {
+                setBootStep('Starting');
                 await db.init();
 
+                setBootStep('Checking your sign-in');
                 const me = await authService.getMe();
                 if (me) {
                     applyAuthUser(me);
@@ -190,21 +213,31 @@ const App: React.FC = () => {
                     globalThis.history.pushState({ view: launchView || 'home' }, '');
                     pushService.syncSubscription();
 
-                    const migrated = await migrateLocalToD1();
-                    await syncAll();
-                    await loadTeamMembers();
-                    if (migrated) {
+                    // Saved copy first (local, instant): what shows if the
+                    // sync below is still running when the splash lifts.
+                    await loadData(false);
+
+                    setBootStep('Syncing');
+                    const firstSync = (async () => {
+                        const migrated = await migrateLocalToD1();
                         await syncAll();
-                    }
-                    backfillThumbnailsQuietly();
-                    prefetchViews();
+                        await loadTeamMembers();
+                        if (migrated) {
+                            await syncAll();
+                        }
+                    })().catch(err => console.error('First sync failed:', err));
+                    void firstSync.then(() => {
+                        backfillThumbnailsQuietly();
+                        prefetchViews();
+                    });
+                    await Promise.race([firstSync, delay(BOOT_SYNC_WAIT_MS)]);
                 } else {
                     globalThis.history.pushState({ view: 'login' }, '');
                     await loadData(false);
                 }
             } catch (err) {
                 console.error('App initialization error:', err);
-                await loadData(false);
+                await loadData(false).catch(() => undefined);
             } finally {
                 setIsLoading(false);
             }
@@ -252,10 +285,22 @@ const App: React.FC = () => {
 
     if (isLoading) {
         return (
-            <div className="h-full bg-black flex items-center justify-center">
+            <div className="h-full bg-black flex flex-col items-center justify-center">
                 <div className="animate-pulse flex flex-col items-center justify-center">
                     <img src="/icon.png" alt={`${APP_NAME} logo`} className="w-48 h-48 object-contain rounded-[20px]" />
                 </div>
+                {bootStalled && (
+                    <div className="mt-8 flex flex-col items-center gap-3 text-center px-8 animate-fade-in">
+                        <p className="text-sm text-white/70">{bootStep}… this is taking longer than usual.</p>
+                        <button
+                            type="button"
+                            onClick={() => globalThis.location.reload()}
+                            className="px-5 py-2 rounded-full bg-white/10 text-white text-sm active-scale"
+                        >
+                            Reload
+                        </button>
+                    </div>
+                )}
             </div>
         );
     }
