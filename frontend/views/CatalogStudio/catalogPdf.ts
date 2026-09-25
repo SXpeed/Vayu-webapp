@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import type { Artwork, CatalogTheme, PdfOptions } from '../../types';
-import { planArtworkPages, getThemePalette, ThemePalette, logoBox, letterMark } from './catalogLayout';
+import { planCatalogPages, getThemePalette, ThemePalette, logoBox, letterMark, type PlannedPage } from './catalogLayout';
 
 /* ------------------------------------------------------------------ */
 /*  Catalog PDF generator.                                             */
@@ -479,31 +479,22 @@ const drawPage1Text = (doc: jsPDF, art: Artwork, options: PdfOptions, palette: T
     doc.text(splitDesc, 13, 268 + yOff);
 };
 
-interface PageDrawContext {
+/** What every page shares, prepared once per catalog. */
+interface CatalogDrawContext {
     doc: jsPDF;
-    art: Artwork;
-    artIndex: number;
     options: PdfOptions;
-    themeId: CatalogTheme;
+    palette: ThemePalette;
     background: PageBackground | null;
     logo: PdfImageInfo | null;
     catalogName: string;
-    onProgress: (message: string) => void;
-    onWarning: (message: string) => void;
-    /** Pages already in the document — shared across artworks. */
+    /** Pages already in the document. */
     pageCount: { value: number };
 }
 
-const drawSinglePage = async (
-    ctx: PageDrawContext,
-    imgUrl: string | undefined,
-    pageIndex: number,
-): Promise<void> => {
-    const { doc, art, artIndex, options, themeId, background, logo, catalogName, onProgress, onWarning, pageCount } = ctx;
-
-    const imgInfo = await loadImageInfo(imgUrl, themeId, options, onProgress, onWarning, art.title);
-    const palette = getThemePalette(themeId, options);
-
+/** Draw one planned page with its (already prepared) photo. */
+const drawPlannedPage = (ctx: CatalogDrawContext, page: PlannedPage, imgInfo: PdfImageInfo | null): void => {
+    const { doc, options, palette, background, logo, catalogName, pageCount } = ctx;
+    const { art, artIndex, pageIndex } = page;
     const hasBottomText = pageIndex === 0 || (pageIndex === 1 && options.showDescription && art.description);
 
     // Uniform A4 pages; the image fits inside the image box above the text zone.
@@ -529,35 +520,38 @@ const drawSinglePage = async (
     }
 };
 
-const drawArtworkPages = async (pageCtx: PageDrawContext): Promise<void> => {
-    // Which pages exist is decided in catalogLayout.ts, shared with the
-    // studio's live preview so the two can't drift apart.
-    for (const page of planArtworkPages(pageCtx.art, pageCtx.options)) {
-        await drawSinglePage(pageCtx, page.imgUrl, page.pageIndex);
-    }
-};
+/**
+ * How many pages' photos are prepared ahead of the page being drawn. Fetching,
+ * decoding and re-encoding run on the browser's own threads, so several at
+ * once use several cores; background removal still takes one image at a time
+ * (imageCutoutService), since each run already uses the GPU or every core.
+ */
+const prefetchDepth = (): number => Math.max(2, Math.min(4, (globalThis.navigator?.hardwareConcurrency ?? 4) - 1));
 
 /**
  * The chosen end-page design, once, after every other page: fitted inside the
  * page at its own aspect ratio (never cropped or stretched), centred on the
  * page background. No logo or border — it is a finished design.
  */
-const drawLastPage = async (
-    doc: jsPDF,
-    url: string,
-    background: PageBackground | null,
-    palette: ThemePalette,
-    pageCount: { value: number },
-    onWarning: (message: string) => void,
-): Promise<void> => {
-    let info: PdfImageInfo;
+/** Prepare the end-page design (started early, alongside the artwork pages). */
+const loadLastPage = async (url: string, onWarning: (message: string) => void): Promise<PdfImageInfo | null> => {
     try {
-        info = await prepareImage(url, urlLooksPng(url), `lastpage|${url}`, 0, false, false);
+        return await prepareImage(url, urlLooksPng(url), `lastpage|${url}`, 0, false, false);
     } catch (e) {
         console.error('Failed to load the last page design', e);
         onWarning("Couldn't load the last page design — the catalog ends without it.");
-        return;
+        return null;
     }
+};
+
+const drawLastPage = (
+    doc: jsPDF,
+    info: PdfImageInfo | null,
+    background: PageBackground | null,
+    palette: ThemePalette,
+    pageCount: { value: number },
+): void => {
+    if (!info) return;
     if (pageCount.value > 0) doc.addPage();
     pageCount.value += 1;
     drawPageBackground(doc, background, palette, PAGE_H);
@@ -589,20 +583,37 @@ export const buildCatalogPdf = async (job: CatalogPdfJob, callbacks: CatalogPdfC
         resolveLogo(customLogo || catalogCoverUrl),
     ]);
 
-    const pageCount = { value: 0 };
-    for (let i = 0; i < artworks.length; i++) {
-        const prefix = `Image ${i + 1} of ${artworks.length}`;
-        callbacks.onProgress(prefix);
-        await drawArtworkPages({
-            doc, art: artworks[i], artIndex: i, options, themeId, background, logo, catalogName, pageCount,
-            onProgress: (message) => callbacks.onProgress(`${prefix} — ${message}`),
-            onWarning: callbacks.onWarning,
-        });
+    // The end-page design loads alongside everything else.
+    const lastPage = options.lastPage ? loadLastPage(options.lastPage, callbacks.onWarning) : null;
+
+    // Which pages exist is decided in catalogLayout.ts, shared with the
+    // studio's live preview so the two can't drift apart. Photos for the next
+    // few pages are prepared while the current one is drawn; pages are still
+    // added strictly in order.
+    const pages = planCatalogPages(artworks, options);
+    const prefix = (page: PlannedPage) => `Image ${page.artIndex + 1} of ${artworks.length}`;
+    const photos: (Promise<PdfImageInfo | null> | null)[] = [];
+    const prepare = (k: number) => {
+        const page = pages[k];
+        photos[k] ??= loadImageInfo(
+            page.imgUrl, themeId, options,
+            (message) => callbacks.onProgress(`${prefix(page)} — ${message}`),
+            callbacks.onWarning, page.art.title,
+        );
+    };
+    const ctx: CatalogDrawContext = { doc, options, palette, background, logo, catalogName, pageCount: { value: 0 } };
+    const depth = prefetchDepth();
+    for (let k = 0; k < pages.length; k++) {
+        for (let ahead = k; ahead < Math.min(pages.length, k + depth); ahead++) prepare(ahead);
+        callbacks.onProgress(prefix(pages[k]));
+        const photo = await photos[k];
+        photos[k] = null; // drawn: let its bytes go
+        drawPlannedPage(ctx, pages[k], photo);
     }
 
-    if (options.lastPage) {
+    if (lastPage) {
         callbacks.onProgress('Last page');
-        await drawLastPage(doc, options.lastPage, background, palette, pageCount, callbacks.onWarning);
+        drawLastPage(doc, await lastPage, background, palette, ctx.pageCount);
     }
 
     callbacks.onProgress('Assembling PDF…');

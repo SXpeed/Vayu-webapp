@@ -3,10 +3,15 @@ import { removeBackground } from '@imgly/background-removal';
 /**
  * Background removal for catalog PDFs.
  *
- * Runs inside the catalog-PDF Web Worker, never on the page: the model runs
- * on the CPU as single-threaded WASM, and on the main thread each image froze
- * the UI for seconds. So nothing here may touch the DOM — decoding goes
- * through createImageBitmap and drawing through OffscreenCanvas.
+ * Runs inside the catalog-PDF Web Worker, never on the page: on the main
+ * thread each image froze the UI for seconds. So nothing here may touch the
+ * DOM — decoding goes through createImageBitmap and drawing through
+ * OffscreenCanvas.
+ *
+ * Speed: the model runs on the GPU (WebGPU) where the device has one; the
+ * library falls back to the CPU by itself when it doesn't. On the CPU it
+ * uses every core when the app is cross-origin isolated (see the app's
+ * _headers in scripts/build-sites.mjs) and a single core otherwise.
  */
 
 /** Progress messages ("Downloading AI model 45%", "Removing background…"). */
@@ -32,6 +37,34 @@ const forwardProgress = (key: string, current: number, total: number) => {
         currentProgress('Removing background…');
     }
 };
+
+/** Try the GPU until a GPU run fails once; then stay on the CPU for this session. */
+let gpuUsable = true;
+
+/**
+ * One model run at a time. Each run already uses the whole GPU (or every CPU
+ * core), and the progress forwarding above assumes a single image in flight;
+ * the PDF generator still prepares other pages' photos alongside.
+ */
+let modelQueue: Promise<unknown> = Promise.resolve();
+const exclusive = <T>(task: () => Promise<T>): Promise<T> => {
+    const next = modelQueue.then(task, task);
+    modelQueue = next.catch(() => undefined);
+    return next;
+};
+
+const runModel = async (image: Blob, onProgress?: CutoutProgress): Promise<Blob> => exclusive(async () => {
+    currentProgress = onProgress;
+    if (gpuUsable) {
+        try {
+            return await removeBackground(image, { progress: forwardProgress, device: 'gpu' });
+        } catch (e) {
+            gpuUsable = false;
+            console.warn('Background removal on the GPU failed; using the CPU from now on.', e);
+        }
+    }
+    return removeBackground(image, { progress: forwardProgress, device: 'cpu' });
+});
 
 /** Cutouts, kept for the worker's lifetime so regenerating is quick. */
 const cutoutCache = new Map<string, Blob>();
@@ -91,8 +124,7 @@ export async function removeBackgroundToBlob(imgUrl: string, onProgress?: Cutout
     if (!res.ok) throw new Error(`Image request failed (${res.status})`);
     const original = await res.blob();
 
-    currentProgress = onProgress;
-    const transparentBlob = await removeBackground(original, { progress: forwardProgress });
+    const transparentBlob = await runModel(original, onProgress);
     onProgress?.('Removing background…');
 
     const result = await onOriginalCanvas(transparentBlob, original);

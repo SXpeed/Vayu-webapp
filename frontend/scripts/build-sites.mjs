@@ -4,7 +4,7 @@
 //   dist/welcome  ateliersupport.com        the website, landing page at /
 //
 //   node scripts/build-sites.mjs   (npm run build)
-import { copyFileSync, renameSync, rmSync } from 'node:fs';
+import { appendFileSync, copyFileSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'vite';
@@ -28,4 +28,17 @@ for (const site of ['admin', 'welcome']) {
     rmSync(dist(site, 'screenshots'), { recursive: true, force: true });
 }
 rmSync(dist('admin', 'sw.js'), { force: true });
+
+// The app is cross-origin isolated, so the catalog generator's background
+// removal can run on every CPU core (WebAssembly threads need
+// SharedArrayBuffer) when the device has no usable GPU. The app loads nothing
+// from other sites except the model itself, fetched with CORS; `credentialless`
+// would still let a public image from elsewhere load, just without cookies.
+// Browsers that don't support it (Safari) ignore it and use one core.
+appendFileSync(dist('app', '_headers'), `
+# Cross-origin isolation: multi-core background removal (scripts/build-sites.mjs).
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: credentialless
+`);
 copyFileSync(join(frontend, 'hosts', 'welcome', 'sw.js'), dist('welcome', 'sw.js'));
