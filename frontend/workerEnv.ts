@@ -223,6 +223,8 @@ export interface SessionData {
   expiresAt: number;
   /** Inside an organization: the platform account behind this app user. */
   platformUserId?: string;
+  /** Inside an organization: the platform sign-in (device) making the request. */
+  platformSessionId?: string;
 }
 
 /** One committed change, as announced to the hub and to clients. */

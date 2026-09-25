@@ -75,6 +75,8 @@ export function deviceLabel(userAgent: string | null): string {
   else if (/Firefox\//.test(ua)) browser = 'Firefox';
   else if (/Chrome\/|CriOS/.test(ua)) browser = 'Chrome';
   else if (/Safari\//.test(ua)) browser = 'Safari';
+  // The installed iPhone/iPad app reports WebKit without a browser name.
+  else if (/iPhone|iPad/.test(ua) && /AppleWebKit/.test(ua)) browser = 'App';
   let os = '';
   if (/iPhone/.test(ua)) os = 'iPhone';
   else if (/iPad/.test(ua)) os = 'iPad';

@@ -17,7 +17,7 @@ import {
   bearerToken, getSession, getRoles, permissionsFor, primeSession, saveRoles, SESSION_TTL_DAYS,
   type StoredUser,
 } from './workerRoles';
-import { ORG_PATH, openOrgRequest, orgMemberRecords, orgStorageEnv } from './orgApp';
+import { ORG_PATH, openOrgRequest, orgMemberDevices, orgMemberRecords, orgStorageEnv, signOutOrgMemberDevices } from './orgApp';
 import { orgAccountRoutes } from './orgTeam';
 import { OrgAppDb } from './orgAppDb';
 import {
@@ -908,6 +908,7 @@ async function handleAuthUserDevicesSignOut(ctx: Ctx): Promise<Response> {
   if (!session) return err('Unauthorized', 401);
   if (session.role !== ADMIN_ROLE_ID) return err('Forbidden', 403);
   const userId = decodeURIComponent(ctx.path.slice('/auth/users/'.length, -'/devices/signout'.length));
+  if (ctx.env.ORG_ID) return signOutWorkspaceMemberDevices(ctx, session, userId);
   const raw = await ctx.env.VAYU_KV.get(`auth:user:${userId}`);
   if (!raw) return err('User not found', 404);
   const user: StoredUser = JSON.parse(raw);
@@ -926,6 +927,25 @@ async function handleAuthUserDevicesSignOut(ctx: Ctx): Promise<Response> {
       ? `Signed out all devices of "${user.name}" (${signedOut})`
       : `Signed out a device of "${user.name}"`);
   return json({ signedOut, devices: await listDevices(ctx.env.VAYU_KV, userId, keep) });
+}
+
+/** The workspace form of the above: members' devices are platform sessions. */
+async function signOutWorkspaceMemberDevices(ctx: Ctx, session: SessionData, userId: string): Promise<Response> {
+  const body = await ctx.request.json().catch(() => ({})) as { id?: unknown };
+  let only: string | undefined;
+  if (body.id !== undefined) {
+    if (typeof body.id !== 'string' || !/^[\w-]{8,64}$/.test(body.id)) return err('Invalid device id');
+    only = body.id;
+  }
+  const keep = userId === session.userId ? session.platformSessionId : undefined;
+  const signedOut = await signOutOrgMemberDevices(ctx.env, userId, keep, only);
+  if (signedOut === null) return err('User not found', 404);
+  if (only !== undefined && signedOut === 0) return err('That device is no longer signed in', 404);
+  if (signedOut > 0) revokeHubAsync(ctx, userId);
+  logEntityChange(ctx, session, 'updated', 'user', userId,
+    only === undefined ? `Signed out all devices of a team member (${signedOut})` : 'Signed out a device of a team member');
+  const devices = (await orgMemberDevices(ctx.env, session.platformSessionId)).get(userId) ?? [];
+  return json({ signedOut, devices });
 }
 
 async function handleAuthLogout(ctx: Ctx): Promise<Response> {
@@ -982,12 +1002,20 @@ async function handleAuthUsersList(ctx: Ctx): Promise<Response> {
     if (parts.length >= 3) usersWithPush.add(parts[2]);
   }
 
+  // A workspace's members sign in with platform accounts: their devices are
+  // platform sessions, with no per-person limit.
+  const orgDevices = ctx.env.ORG_ID ? await orgMemberDevices(ctx.env, session.platformSessionId) : null;
   const users: PublicUser[] = [];
   for (const stored of records) {
     const pub = stripPassword(stored);
     pub.notificationsEnabled = usersWithPush.has(pub.id);
-    pub.deviceLimit = deviceLimit(stored);
-    pub.devices = await listDevices(ctx.env.VAYU_KV, pub.id, pub.id === session.userId ? bearerToken(ctx.request) : null);
+    if (orgDevices) {
+      pub.deviceLimit = null;
+      pub.devices = orgDevices.get(pub.id) ?? [];
+    } else {
+      pub.deviceLimit = deviceLimit(stored);
+      pub.devices = await listDevices(ctx.env.VAYU_KV, pub.id, pub.id === session.userId ? bearerToken(ctx.request) : null);
+    }
     users.push(pub);
   }
   users.sort((a, b) => a.createdAt - b.createdAt);

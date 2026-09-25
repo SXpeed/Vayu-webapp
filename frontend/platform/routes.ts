@@ -35,6 +35,8 @@
 //   POST            /api/v2/admin/settings/branding/logo     upload a logo (raw image body)
 //   POST            /api/v2/webhooks/razorpay/:orgId         signed, per organization
 //   GET             /api/v2/me/orgs                          my organizations
+//   GET             /api/v2/me/sessions                      my signed-in devices
+//   POST            /api/v2/me/sessions/signout { id? }      sign out one other device, or all of them
 //   /api/v2/org/:orgId/*                                     that org's own data
 //   /api/v2/apply*                                           my business application (applyRoutes.ts)
 //   /api/v2/admin/{overview,applications,accounts,admins,notifications,health}  (centerRoutes.ts)
@@ -76,6 +78,7 @@ import { deliverOutbox } from './notify';
 import { acceptInvitation, createAccountFromInvitation, describeInvitation } from './invitations';
 import { importOriginalPeople, setAppStorage } from './originalApp';
 import { emailConfigured } from './email';
+import { listMySessions, signOutMySessions } from './mySessions';
 
 interface AdminContext {
   userId: string;
@@ -460,6 +463,20 @@ async function routePlatformRequest(request: Request, env: Env, hooks: PlatformH
         const organizations = await listMyOrganizations(db, auth, request) as { id: string }[];
         const logos = await orgLogoUrls(db, organizations.map(o => o.id));
         return reply({ organizations: organizations.map(o => ({ ...o, logoUrl: logos.get(o.id) ?? null })) });
+      } catch (e) {
+        if (e instanceof OrgAccessError) return fail(e.status, e.code, e.message);
+        throw e;
+      }
+    }
+
+    if (path === '/me/sessions' || path === '/me/sessions/signout') {
+      try {
+        if (request.method === 'GET' && path === '/me/sessions') return reply({ sessions: await listMySessions(db, auth, request) });
+        if (request.method === 'POST' && path === '/me/sessions/signout') {
+          const b = await jsonBody(request);
+          const id = typeof b.id === 'string' && b.id ? b.id : undefined;
+          return reply({ signedOut: await signOutMySessions(db, auth, request, id) });
+        }
       } catch (e) {
         if (e instanceof OrgAccessError) return fail(e.status, e.code, e.message);
         throw e;

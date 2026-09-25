@@ -187,7 +187,8 @@ export function orgAccountRoutes(deps: TeamDeps): OrgRoute[] {
     { method: 'GET', match: exact('/auth/devices'), handler: async () => json({ limit: null, devices: [] }) },
     { method: 'POST', match: exact('/auth/devices/signout'), handler: notHere },
     { method: 'POST', match: exact('/auth/devices/signout-others'), handler: notHere },
-    { method: 'POST', match: (p) => /^\/auth\/users\/[^/]+\/devices\/signout$/.test(p), handler: notHere },
+    // An admin signing out a member's devices is handled by the app route:
+    // in a workspace those devices are platform sessions (worker.ts).
     { method: 'POST', match: exact('/auth/users'), handler: usersCreate },
     { method: 'PUT', match: under('/auth/users/'), handler: usersUpdate },
     { method: 'DELETE', match: under('/auth/users/'), handler: usersDelete },

@@ -55,14 +55,32 @@ import { apiBase, authClient, isPlatformSession, setWorkspace, type Workspace } 
 
 type DeviceInfo = { id: string; label: string; createdAt: number; lastUsedAt: number; current?: boolean };
 
-const BROWSERS: [RegExp, string][] = [[/Edg\//, 'Edge'], [/OPR\//, 'Opera'], [/Chrome\//, 'Chrome'], [/Firefox\//, 'Firefox'], [/Safari\//, 'Safari']];
-const SYSTEMS: [RegExp, string][] = [[/iPhone|iPad/, 'iPhone or iPad'], [/Android/, 'Android'], [/Windows/, 'Windows'], [/Mac OS X/, 'Mac'], [/Linux/, 'Linux']];
+const BROWSERS: [RegExp, string][] = [
+  [/Edg(A|iOS)?\//, 'Edge'], [/SamsungBrowser\//, 'Samsung Internet'], [/OPR\//, 'Opera'],
+  [/Chrome\/|CriOS\//, 'Chrome'], [/Firefox\/|FxiOS\//, 'Firefox'], [/Safari\//, 'Safari'],
+];
+const SYSTEMS: [RegExp, string][] = [[/iPhone/, 'iPhone'], [/iPad/, 'iPad'], [/Android/, 'Android'], [/Windows/, 'Windows'], [/Mac OS X/, 'Mac'], [/Linux/, 'Linux']];
 
 /** "Chrome on Windows" from a browser's user agent string. */
 function deviceLabel(userAgent: string | null | undefined): string {
   const ua = userAgent ?? '';
-  const pick = (list: [RegExp, string][], fallback: string) => list.find(([pattern]) => pattern.test(ua))?.[1] ?? fallback;
-  return `${pick(BROWSERS, 'A browser')} on ${pick(SYSTEMS, 'an unknown system')}`;
+  const pick = (list: [RegExp, string][]) => list.find(([pattern]) => pattern.test(ua))?.[1];
+  const system = pick(SYSTEMS);
+  // The installed iPhone/iPad app reports WebKit without a browser name.
+  const browser = pick(BROWSERS) ?? (/iPhone|iPad/.test(ua) && /AppleWebKit/.test(ua) ? 'App' : 'A browser');
+  return `${browser} on ${system ?? 'an unknown system'}`;
+}
+
+/** The platform API (/api/v2), signed in by the platform session cookie. */
+async function platformCall<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`/api/v2${path}`, {
+    credentials: 'same-origin',
+    ...init,
+    headers: { 'Content-Type': 'application/json', ...init?.headers },
+  });
+  const body = await res.json().catch(() => ({})) as T & { error?: string };
+  if (!res.ok) throw new Error(body.error || 'Something went wrong. Please try again.');
+  return body;
 }
 
 const TOKEN_KEY = 'vayu_token';
@@ -188,14 +206,10 @@ export const authService = {
   async getMyDevices(): Promise<{ limit: number | null; devices: DeviceInfo[] }> {
     if (isPlatformSession()) {
       // Every device signed in to this account (website, app, control centre).
-      const [{ data: sessions }, { data: current }] = await Promise.all([authClient.listSessions(), authClient.getSession()]);
-      const devices = (sessions ?? []).map(s => ({
-        id: s.token,
-        label: deviceLabel(s.userAgent),
-        createdAt: new Date(s.createdAt).getTime(),
-        lastUsedAt: new Date(s.updatedAt).getTime(),
-        current: s.token === current?.session.token,
-      }));
+      // Our own endpoint: Better Auth's list-sessions refuses sign-ins older
+      // than 30 minutes (freshAge), which emptied this list.
+      const { sessions } = await platformCall<{ sessions: { id: string; userAgent: string | null; createdAt: number; lastUsedAt: number; current: boolean }[] }>('/me/sessions');
+      const devices = sessions.map(s => ({ ...s, label: deviceLabel(s.userAgent) }));
       return { limit: null, devices };
     }
     return call('/auth/devices');
@@ -204,8 +218,7 @@ export const authService = {
   /** Sign out one of your other devices. */
   async signOutDevice(id: string): Promise<void> {
     if (isPlatformSession()) {
-      const { error } = await authClient.revokeSession({ token: id });
-      if (error) throw new Error(error.message || 'Could not sign that device out.');
+      await platformCall('/me/sessions/signout', { method: 'POST', body: JSON.stringify({ id }) });
       return;
     }
     await call('/auth/devices/signout', { method: 'POST', body: JSON.stringify({ id }) });
@@ -222,10 +235,7 @@ export const authService = {
   /** Sign out every device except this one; returns how many. */
   async signOutOtherDevices(): Promise<number> {
     if (isPlatformSession()) {
-      const before = (await authClient.listSessions()).data?.length ?? 1;
-      const { error } = await authClient.revokeOtherSessions();
-      if (error) throw new Error(error.message || 'Could not sign the other devices out.');
-      return Math.max(before - 1, 0);
+      return (await platformCall<{ signedOut: number }>('/me/sessions/signout', { method: 'POST', body: '{}' })).signedOut;
     }
     return (await call<{ signedOut: number }>('/auth/devices/signout-others', { method: 'POST' })).signedOut;
   },

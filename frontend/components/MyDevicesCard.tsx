@@ -80,7 +80,7 @@ export const MyDevicesCard: React.FC = () => {
                         You're signed in on {deviceCountText(data.devices.length, data.limit)}.
                         {data.limit
                             ? ' Signing in on another device signs out the one used longest ago.'
-                            : ' Admins can sign in on any number of devices.'}
+                            : ' There is no limit on how many devices you can use.'}
                         {others > 0 && " Don't recognise one, or lost a phone? Sign it out."}
                     </p>
                     <DeviceList devices={data.devices} onSignOut={signOutOne} busyId={busyId} />

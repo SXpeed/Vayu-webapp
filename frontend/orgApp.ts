@@ -26,6 +26,7 @@ import { resolveEntitlements } from './platform/plans';
 import { orgDatabase, orgFilePrefix, orgKvPrefix, prefixedBucket, prefixedKv } from './orgStorage';
 import type { Env, SessionData } from './workerEnv';
 import type { StoredUser } from './workerRoles';
+import { deviceLabel, type DeviceSummary } from './deviceSessions';
 
 export const ORG_PATH = /^\/api\/o\/([A-Za-z0-9-]{1,64})(\/[^?]*)?$/;
 
@@ -113,13 +114,13 @@ async function planActive(db: D1Database, orgId: string): Promise<boolean> {
 }
 
 /** The platform account signed in on this request (Better Auth cookie), if any. */
-async function platformSignIn(request: Request, env: Env, db: D1Database): Promise<{ user: { id: string; name: string; email: string } | null; expiresAt: number }> {
+async function platformSignIn(request: Request, env: Env, db: D1Database): Promise<{ user: { id: string; name: string; email: string } | null; expiresAt: number; sessionId?: string }> {
   const authOrigin = resolveAuthOrigin(env, new URL(request.url));
   if (!authOrigin) return { user: null, expiresAt: 0 };
   const auth = await getAuth(env, db, authOrigin, await getEffectiveLoginMethods(env, db));
   const signedIn = await auth.api.getSession({ headers: request.headers });
   if (!signedIn) return { user: null, expiresAt: 0 };
-  return { user: signedIn.user, expiresAt: new Date(signedIn.session.expiresAt).getTime() };
+  return { user: signedIn.user, expiresAt: new Date(signedIn.session.expiresAt).getTime(), sessionId: signedIn.session.id };
 }
 
 export interface OpenedOrg {
@@ -138,7 +139,7 @@ export async function openOrgRequest(request: Request, env: Env, orgId: string, 
     return Response.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  const { user, expiresAt } = await platformSignIn(request, env, db);
+  const { user, expiresAt, sessionId } = await platformSignIn(request, env, db);
 
   const row = await db.prepare(
     `SELECT o.id, o.name, o.status, o.app_storage, m.role, m.status AS member_status, m.app_user_id
@@ -162,7 +163,10 @@ export async function openOrgRequest(request: Request, env: Env, orgId: string, 
   let session: SessionData | null = null;
   if (user && member) {
     const record = await ensureAppUser(orgEnv, { appUserId: row.app_user_id ?? user.id, name: user.name, email: user.email, role: member });
-    session = { userId: record.id, email: record.email, name: record.name, role: record.role, expiresAt, platformUserId: user.id };
+    session = {
+      userId: record.id, email: record.email, name: record.name, role: record.role, expiresAt,
+      platformUserId: user.id, platformSessionId: sessionId,
+    };
   }
   return { env: orgEnv, session, orgId };
 }
@@ -181,4 +185,54 @@ export async function orgMemberRecords(env: Env): Promise<StoredUser[]> {
   return Promise.all(results.map(m => ensureAppUser(env, {
     appUserId: m.app_user_id ?? m.user_id, name: m.name, email: m.email, role: m.role,
   })));
+}
+
+// Members sign in with platform accounts, so their devices are platform
+// sessions: the app's own device index only knows the original sign-in.
+
+/** D1 keeps Better Auth's dates as ISO text. */
+const sessionTime = (value: unknown): number => {
+  const ms = typeof value === 'number' ? value : Date.parse(String(value ?? ''));
+  return Number.isFinite(ms) ? ms : 0;
+};
+
+/** Each active member's signed-in devices, keyed by app user id. */
+export async function orgMemberDevices(env: Env, currentSessionId?: string): Promise<Map<string, DeviceSummary[]>> {
+  const byUser = new Map<string, DeviceSummary[]>();
+  const db = env.PLATFORM_DB;
+  if (!db || !env.ORG_ID) return byUser;
+  const { results } = await db.prepare(
+    `SELECT COALESCE(m.app_user_id, m.user_id) AS app_id, s.id, s.userAgent, s.createdAt, s.updatedAt
+     FROM memberships m JOIN session s ON s.userId = m.user_id
+     WHERE m.org_id = ? AND m.status = 'active' AND s.expiresAt > ?
+     ORDER BY s.updatedAt DESC`,
+  ).bind(env.ORG_ID, new Date().toISOString()).all<{ app_id: string; id: string; userAgent: string | null; createdAt: unknown; updatedAt: unknown }>();
+  for (const r of results) {
+    const device: DeviceSummary = {
+      id: r.id, label: deviceLabel(r.userAgent), createdAt: sessionTime(r.createdAt), lastUsedAt: sessionTime(r.updatedAt),
+    };
+    if (currentSessionId) device.current = r.id === currentSessionId;
+    byUser.set(r.app_id, [...(byUser.get(r.app_id) ?? []), device]);
+  }
+  return byUser;
+}
+
+/**
+ * Admin: sign a member out of one device (`only`, a session id) or all of
+ * them. A platform session is that person's sign-in everywhere, so this
+ * signs the device out of every workspace. The admin's own current device
+ * (`keepSessionId`) is never signed out here. Returns how many were.
+ */
+export async function signOutOrgMemberDevices(env: Env, appUserId: string, keepSessionId: string | undefined, only?: string): Promise<number | null> {
+  const db = env.PLATFORM_DB;
+  if (!db || !env.ORG_ID) return null;
+  const member = await db.prepare(
+    'SELECT user_id FROM memberships WHERE org_id = ? AND COALESCE(app_user_id, user_id) = ?',
+  ).bind(env.ORG_ID, appUserId).first<{ user_id: string }>();
+  if (!member) return null;
+  const keep = keepSessionId ?? '';
+  const result = only
+    ? await db.prepare('DELETE FROM session WHERE id = ? AND userId = ? AND id <> ?').bind(only, member.user_id, keep).run()
+    : await db.prepare('DELETE FROM session WHERE userId = ? AND id <> ?').bind(member.user_id, keep).run();
+  return result.meta.changes ?? 0;
 }

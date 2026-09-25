@@ -139,7 +139,8 @@ const DeviceSettings: React.FC<{
 /** Team members and the add-user form — the Admin sheet's Users tab. */
 const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
   // Inside a workspace, people have their own platform accounts: they join by
-  // invitation and manage their own email, password and devices.
+  // invitation and manage their own email and password. Admins still see
+  // (and can sign out) the devices they are signed in on.
   const platform = isPlatformSession();
   const deleteLabel = platform ? 'Remove from the team' : 'Delete user';
   const [users, setUsers] = useState<AuthUser[]>([]);
@@ -384,7 +385,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
                         )}
                       </p>
                       <p className="text-[11px] text-[var(--neu-text-dim)] truncate">{u.email}</p>
-                      {!platform && u.devices && (
+                      {u.devices && (
                         <button
                           type="button"
                           onClick={() => setDevicesOpenId(id => (id === u.id ? null : u.id))}
