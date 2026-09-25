@@ -6,7 +6,7 @@ import { removeBackground } from '@imgly/background-removal';
  * Runs inside the catalog-PDF Web Worker, never on the page: the model runs
  * on the CPU as single-threaded WASM, and on the main thread each image froze
  * the UI for seconds. So nothing here may touch the DOM — decoding goes
- * through createImageBitmap and cropping through OffscreenCanvas.
+ * through createImageBitmap and drawing through OffscreenCanvas.
  */
 
 /** Progress messages ("Downloading AI model 45%", "Removing background…"). */
@@ -14,9 +14,6 @@ export type CutoutProgress = (message: string) => void;
 
 // Let the library resolve its own CDN URL based on its internal PACKAGE_VERSION.
 // Do NOT hardcode publicPath — the library already uses the correct default.
-
-const CROP_PADDING_PX = 30;
-const ALPHA_THRESHOLD = 10;
 
 /**
  * The library memoises its setup keyed on JSON.stringify(config) — which drops
@@ -36,59 +33,53 @@ const forwardProgress = (key: string, current: number, total: number) => {
     }
 };
 
-/** Cropped cutouts, kept for the worker's lifetime so regenerating is quick. */
+/** Cutouts, kept for the worker's lifetime so regenerating is quick. */
 const cutoutCache = new Map<string, Blob>();
 const MAX_CACHE = 20;
 
-interface Bounds {
-    minX: number;
-    minY: number;
-    maxX: number;
-    maxY: number;
-}
+/** How far apart two aspect ratios may be and still count as the same frame. */
+const ASPECT_TOLERANCE = 0.01;
 
-/** Bounding box of pixels more opaque than ALPHA_THRESHOLD; null when none are. */
-function findOpaqueBounds(data: Uint8ClampedArray, width: number, height: number): Bounds | null {
-    let minX = width, minY = height, maxX = -1, maxY = -1;
-    for (let y = 0; y < height; y++) {
-        const rowStart = y * width;
-        for (let x = 0; x < width; x++) {
-            if (data[(rowStart + x) * 4 + 3] <= ALPHA_THRESHOLD) continue;
-            minX = Math.min(minX, x);
-            maxX = Math.max(maxX, x);
-            minY = Math.min(minY, y);
-            maxY = Math.max(maxY, y);
+/**
+ * Put the cutout on the photo's own canvas: same width, height and framing.
+ *
+ * The product must keep exactly the size and position it has in the original
+ * photo — the page fits whatever image it gets into the same box, so any
+ * change to the canvas shows up as the product moving or zooming. (Cropping
+ * the cutout to the product, as this used to, made it look zoomed in.)
+ *
+ * The library returns the whole frame, normally at the source size. A
+ * uniformly resized frame is scaled back onto the original canvas; anything
+ * else (a different shape: cropped or rotated) is refused rather than
+ * stretched, and the caller falls back to the original photo.
+ */
+async function onOriginalCanvas(cutout: Blob, original: Blob): Promise<Blob> {
+    // `from-image` honours EXIF rotation, exactly as the page image is decoded.
+    const [cut, photo] = await Promise.all([
+        createImageBitmap(cutout, { imageOrientation: 'from-image' }),
+        createImageBitmap(original, { imageOrientation: 'from-image' }),
+    ]);
+    try {
+        if (cut.width === photo.width && cut.height === photo.height) return cutout;
+        const sameShape = Math.abs(cut.width / cut.height - photo.width / photo.height) <= ASPECT_TOLERANCE * (photo.width / photo.height);
+        if (!sameShape) {
+            throw new Error(`Cutout is ${cut.width}×${cut.height}, the photo ${photo.width}×${photo.height}: not the same frame.`);
         }
+        const canvas = new OffscreenCanvas(photo.width, photo.height);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Failed to get canvas context');
+        ctx.drawImage(cut, 0, 0, photo.width, photo.height);
+        return await canvas.convertToBlob({ type: 'image/png' });
+    } finally {
+        cut.close();
+        photo.close();
     }
-    return maxX === -1 ? null : { minX, minY, maxX, maxY };
 }
 
-/** Crop the transparent image down to its visible content plus a small margin,
- *  so the cutout fills the PDF image box instead of floating in dead space. */
-async function cropToContent(image: ImageBitmap): Promise<Blob | null> {
-    const canvas = new OffscreenCanvas(image.width, image.height);
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return null;
-    ctx.drawImage(image, 0, 0);
-
-    const bounds = findOpaqueBounds(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
-    if (!bounds) return null; // fully transparent — keep original
-
-    const minX = Math.max(0, bounds.minX - CROP_PADDING_PX);
-    const minY = Math.max(0, bounds.minY - CROP_PADDING_PX);
-    const maxX = Math.min(canvas.width - 1, bounds.maxX + CROP_PADDING_PX);
-    const maxY = Math.min(canvas.height - 1, bounds.maxY + CROP_PADDING_PX);
-
-    const w = maxX - minX + 1;
-    const h = maxY - minY + 1;
-    const cropped = new OffscreenCanvas(w, h);
-    const cctx = cropped.getContext('2d');
-    if (!cctx) return null;
-    cctx.drawImage(canvas, minX, minY, w, h, 0, 0, w, h);
-    return cropped.convertToBlob({ type: 'image/png' });
-}
-
-/** Remove the background from an image; returns the cropped transparent PNG. */
+/**
+ * Remove the background from an image; returns a transparent PNG with the
+ * photo's own dimensions and framing (nothing trimmed, nothing rescaled).
+ */
 export async function removeBackgroundToBlob(imgUrl: string, onProgress?: CutoutProgress): Promise<Blob> {
     const cached = cutoutCache.get(imgUrl);
     if (cached) return cached;
@@ -96,15 +87,15 @@ export async function removeBackgroundToBlob(imgUrl: string, onProgress?: Cutout
     // In a worker, location is the worker script's URL — same origin, so a
     // root-relative /api/files/… path still resolves to the right place.
     const absoluteUrl = new URL(imgUrl, globalThis.location.href).href;
+    const res = await fetch(absoluteUrl);
+    if (!res.ok) throw new Error(`Image request failed (${res.status})`);
+    const original = await res.blob();
 
     currentProgress = onProgress;
-    const transparentBlob = await removeBackground(absoluteUrl, { progress: forwardProgress });
+    const transparentBlob = await removeBackground(original, { progress: forwardProgress });
     onProgress?.('Removing background…');
 
-    const image = await createImageBitmap(transparentBlob);
-    const cropped = await cropToContent(image);
-    image.close();
-    const result = cropped ?? transparentBlob;
+    const result = await onOriginalCanvas(transparentBlob, original);
 
     if (cutoutCache.size >= MAX_CACHE) {
         const firstKey = cutoutCache.keys().next().value;

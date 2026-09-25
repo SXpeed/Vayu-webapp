@@ -40,6 +40,11 @@ export interface Catalog {
     source?: 'generated' | 'uploaded';
 }
 
+export type LogoPlacement =
+    | 'Top Left' | 'Top Center' | 'Top Right'
+    | 'Center'
+    | 'Bottom Left' | 'Bottom Center' | 'Bottom Right';
+
 export interface PdfOptions {
     showCatalogName: boolean;
     showTitle: boolean;
@@ -48,10 +53,19 @@ export interface PdfOptions {
     showPrice: boolean;
     showDescription: boolean;
     logoSelection: 'Select 1' | 'Select 2';
-    logoPlacement: 'Top Left' | 'Top Right';
+    logoPlacement: LogoPlacement;
+    /** Nudge from the placement, in millimetres (+ = right / down). */
+    logoOffsetX?: number;
+    logoOffsetY?: number;
+    /** Logo size: its longer side, in millimetres (default 32.4). */
+    logoSize?: number;
     pageOptions: string[];
     customLogo1?: string;
     customLogo2?: string;
+    /** Up to five reusable end-page designs (uploaded image URLs). */
+    endPageDesigns?: string[];
+    /** The design appended once after every other page; unset = no last page. */
+    lastPage?: string;
     removeBackground?: boolean;
     imageShadow?: boolean;
     /** 'Default' (follow theme), a hex color like '#0f172a', or a legacy named palette. */

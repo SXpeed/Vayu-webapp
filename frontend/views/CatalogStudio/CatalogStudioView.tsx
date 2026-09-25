@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import localforage from 'localforage';
-import { Catalog, Artwork, PdfOptions, CatalogTheme } from '../../types';
+import { Catalog, Artwork, PdfOptions, CatalogTheme, LogoPlacement } from '../../types';
 import {
     ChevronLeft, ChevronRight, Check, Upload, Eye, X, Loader2, FileText, Folder,
-    Type, Box, Tag, AlignLeft, Image as ImageIcon, TriangleAlert,
+    Type, Box, Tag, AlignLeft, Image as ImageIcon, TriangleAlert, Plus, Trash2, RotateCcw,
 } from 'lucide-react';
 import { THEME_INFO } from '../CatalogsView';
 import storageService, { getThumbUrl } from '../../services/storageService';
@@ -12,6 +12,8 @@ import { ToggleRow } from '../../components/ui';
 import {
     planCatalogPages, pageBackgroundCss, pageHasText, rgbCss, pctW, pctH, cqw, ptToMm,
     PAGE_H_MM, PlannedPage, getThemePalette, ThemePalette,
+    LOGO_DEFAULT_SIZE_MM, LOGO_MIN_SIZE_MM, LOGO_MAX_SIZE_MM, LOGO_MAX_OFFSET_MM,
+    logoBox, logoSizeMm, letterMark,
 } from './catalogLayout';
 import toast from 'react-hot-toast';
 
@@ -26,6 +28,11 @@ const MAIN_HUES = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
 const DEFAULT_INTENSITY = 58;
 
 const GRADIENT_STYLES = ['Solid', 'Linear', 'Radial', 'Diagonal', 'Vignette', 'Spotlight'] as const;
+
+/** Reusable end-page designs a workspace can keep. */
+const MAX_END_PAGES = 5;
+/** Press-and-hold this long on a design to see it enlarged. */
+const HOLD_PREVIEW_MS = 350;
 
 const hslToHex = (h: number, s: number, l: number): string => {
     const sat = s / 100;
@@ -122,6 +129,23 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
 
             try {
                 const globalSettings = await settingsService.getSettings();
+                // End-page designs are shared like the logos; the local copy
+                // only fills in while offline. A selection whose design is
+                // gone is dropped.
+                if (Array.isArray(globalSettings.endPageDesigns)) {
+                    const designs = (globalSettings.endPageDesigns as unknown[])
+                        .filter((u): u is string => typeof u === 'string' && !!u)
+                        .slice(0, MAX_END_PAGES);
+                    setOptions(prev => {
+                        const next = {
+                            ...prev,
+                            endPageDesigns: designs,
+                            lastPage: prev.lastPage && designs.includes(prev.lastPage) ? prev.lastPage : undefined,
+                        };
+                        localforage.setItem('vayu-pdf-options', next);
+                        return next;
+                    });
+                }
                 if (globalSettings.customLogo1 || globalSettings.customLogo2) {
                     setOptions(prev => {
                         const next = {
@@ -229,6 +253,68 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
         }
     };
 
+    // ── Last page designs ─────────────────────────────────────────────────
+    const endPageDesigns = options.endPageDesigns ?? [];
+    /** Slot being uploaded into: an index to replace, or 'new'. */
+    const [uploadingEndPage, setUploadingEndPage] = useState<number | 'new' | null>(null);
+
+    /** Save the design list (here and for the whole workspace) and the selection. */
+    const saveEndPages = (designs: string[], lastPage: string | undefined) => {
+        setOptions(prev => {
+            const next = { ...prev, endPageDesigns: designs, lastPage };
+            localforage.setItem('vayu-pdf-options', next).catch(console.error);
+            return next;
+        });
+        settingsService.updateSettings({ endPageDesigns: designs }).catch(console.error);
+    };
+
+    const handleEndPageUpload = async (e: React.ChangeEvent<HTMLInputElement>, replaceIndex: number | null) => {
+        const file = e.target.files?.[0];
+        e.target.value = ''; // allow re-picking the same file
+        if (!file) return;
+        if (!file.type.startsWith('image/')) {
+            toast.error('Choose an image (JPG, PNG or WebP) for the last page.');
+            return;
+        }
+        if (replaceIndex === null && endPageDesigns.length >= MAX_END_PAGES) return;
+        setUploadingEndPage(replaceIndex ?? 'new');
+        try {
+            const { url } = await storageService.upload(file);
+            const designs = [...endPageDesigns];
+            let lastPage = options.lastPage;
+            if (replaceIndex === null) {
+                designs.push(url);
+                lastPage = url; // a new design is usually meant for this catalog
+            } else {
+                if (lastPage === designs[replaceIndex]) lastPage = url;
+                designs[replaceIndex] = url;
+            }
+            saveEndPages(designs, lastPage);
+            toast.success(replaceIndex === null ? 'Last page design saved' : 'Design replaced');
+        } catch (err) {
+            console.error('Failed to upload the last page design:', err);
+            toast.error('Failed to upload the design. Please try again.');
+        } finally {
+            setUploadingEndPage(null);
+        }
+    };
+
+    const handleEndPageDelete = (index: number) => {
+        const removed = endPageDesigns[index];
+        const designs = endPageDesigns.filter((_, i) => i !== index);
+        saveEndPages(designs, options.lastPage === removed ? undefined : options.lastPage);
+        toast.success('Design deleted');
+    };
+
+    /** Enlarged design: held open by a press ('hold') or opened from the keyboard ('dialog'). */
+    const [endPagePreview, setEndPagePreview] = useState<{ url: string; mode: 'hold' | 'dialog' } | null>(null);
+
+    // ── Logo geometry ─────────────────────────────────────────────────────
+    const logoSize = logoSizeMm(options);
+    const logoOffsetX = options.logoOffsetX ?? 0;
+    const logoOffsetY = options.logoOffsetY ?? 0;
+    const logoTuned = logoSize !== LOGO_DEFAULT_SIZE_MM || logoOffsetX !== 0 || logoOffsetY !== 0;
+
     // ── What the PDF will contain ─────────────────────────────────────────
     // Same palette, background and page plan the generator uses, so the
     // preview and the page count are the real thing, not a mock.
@@ -240,7 +326,13 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
         // eslint-disable-next-line react-hooks/exhaustive-deps
         [catalogArtworks, options.pageOptions],
     );
-    const pageCount = pages.length;
+    const artPageCount = pages.length;
+    // The chosen end-page design follows every artwork page, once.
+    const previewPages = useMemo<PreviewPage[]>(() => [
+        ...pages.map(page => ({ kind: 'art' as const, page })),
+        ...(options.lastPage ? [{ kind: 'end' as const, url: options.lastPage }] : []),
+    ], [pages, options.lastPage]);
+    const pageCount = previewPages.length;
 
     /** How many pages each page option contributes, shown beside it. */
     const pageContribution = useMemo(() => ({
@@ -252,6 +344,19 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
     const selectedLogo = options.logoSelection === 'Select 1' ? options.customLogo1 : options.customLogo2;
     // The generator falls back to the catalog cover, then to a letter mark.
     const logoUrl = selectedLogo || catalog?.coverImageUrl || undefined;
+
+    // The logo's natural size: the preview sizes and places it from this with
+    // the same function the generator uses. Only the aspect ratio matters.
+    const [logoNatural, setLogoNatural] = useState<{ url: string; w: number; h: number } | null>(null);
+    useEffect(() => {
+        if (!logoUrl) return;
+        let live = true;
+        const probe = new Image();
+        probe.onload = () => { if (live) setLogoNatural({ url: logoUrl, w: probe.naturalWidth, h: probe.naturalHeight }); };
+        probe.src = getThumbUrl(logoUrl);
+        return () => { live = false; };
+    }, [logoUrl]);
+    const logoSizePx = logoNatural && logoNatural.url === logoUrl ? logoNatural : null;
 
     // ── Page navigation in the preview ────────────────────────────────────
     const [pageIdx, setPageIdx] = useState(0);
@@ -305,14 +410,14 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
         root.scrollTo({ top: el.offsetTop - 8, behavior: 'smooth' });
     };
 
-    const currentPage: PlannedPage | undefined = pages[pageIdx];
+    const currentPage: PreviewPage | undefined = previewPages[pageIdx];
     const catalogName = catalog?.name || 'Catalog';
     const artworkCountLabel = `${catalogArtworks.length} artwork${catalogArtworks.length === 1 ? '' : 's'}`;
     const pageCountLabel = `${pageCount} page${pageCount === 1 ? '' : 's'}`;
     const descriptionHidden = !!options.showDescription && !(options.pageOptions || []).includes('2nd Image');
 
     const previewProps = {
-        palette, pageBg, options, logoUrl, catalogName, imageShadow, themeId: selectedTheme,
+        palette, pageBg, options, logoUrl, logoSizePx, catalogName, imageShadow, themeId: selectedTheme,
     };
 
     return (
@@ -600,32 +705,88 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                             </div>
                         </StudioSection>
 
-                        <StudioSection title="Placement">
-                            <div className="grid grid-cols-2 gap-3">
-                                {(['Top Left', 'Top Right'] as const).map(opt => {
-                                    const selected = options.logoPlacement === opt;
-                                    return (
-                                        <button
-                                            key={opt}
-                                            type="button"
-                                            onClick={() => updateOption('logoPlacement', opt)}
-                                            aria-pressed={selected}
-                                            className={`rounded-xl p-2.5 flex items-center gap-3 active-scale ${selected ? 'neu-inset ring-1 ring-gold-500/60' : 'neu-raised-sm'}`}
-                                        >
-                                            {/* Mini page: logo square in the chosen corner */}
-                                            <span className="relative w-8 aspect-[210/297] rounded-[3px] neu-inset shrink-0">
+                        <StudioSection
+                            title="Placement"
+                            hint={`${options.logoPlacement ?? 'Top Right'} · ${formatMm(logoSize)} mm${logoTuned ? ' · adjusted' : ''}`}
+                        >
+                            <div className="flex gap-4">
+                                {/* Mini page: tap where the logo goes */}
+                                <div
+                                    role="radiogroup"
+                                    aria-label="Logo placement"
+                                    className="relative w-[4.75rem] aspect-[210/297] rounded-md neu-inset shrink-0 grid grid-cols-3 grid-rows-3 p-1.5 gap-1"
+                                >
+                                    {PLACEMENT_GRID.map((cell, idx) => {
+                                        if (!cell) return <span key={`gap-${idx}`} aria-hidden="true" />;
+                                        const selected = (options.logoPlacement ?? 'Top Right') === cell;
+                                        return (
+                                            <button
+                                                key={cell}
+                                                type="button"
+                                                role="radio"
+                                                aria-checked={selected}
+                                                aria-label={cell}
+                                                title={cell}
+                                                onClick={() => setOptions(prev => {
+                                                    // A new spot starts without the old spot's nudge.
+                                                    const next = { ...prev, logoPlacement: cell, logoOffsetX: 0, logoOffsetY: 0 };
+                                                    localforage.setItem('vayu-pdf-options', next).catch(console.error);
+                                                    return next;
+                                                })}
+                                                className="flex items-center justify-center rounded-[3px] active-scale"
+                                            >
                                                 <span
-                                                    className={`absolute top-[8%] w-[34%] aspect-square rounded-[1px] ${opt === 'Top Left' ? 'left-[10%]' : 'right-[10%]'}`}
-                                                    style={{ background: rgbCss(palette.gold) }}
+                                                    className={`w-full aspect-square rounded-[2px] transition-colors ${selected ? '' : 'bg-gray-400/35 dark:bg-white/15'}`}
+                                                    style={selected ? { background: rgbCss(palette.gold) } : undefined}
                                                 />
-                                                <span className="absolute left-[12%] right-[12%] bottom-[14%] h-[5%] rounded-full bg-gray-400/50" />
-                                            </span>
-                                            <span className={`text-xs ${selected ? 'font-semibold text-gold-700 dark:text-gold-300' : 'text-gray-700 dark:text-gray-300'}`}>
-                                                {opt}
-                                            </span>
-                                        </button>
-                                    );
-                                })}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+
+                                <div className="flex-1 min-w-0 space-y-2.5">
+                                    <MmSlider
+                                        id="logo-size"
+                                        label="Size"
+                                        value={logoSize}
+                                        min={LOGO_MIN_SIZE_MM}
+                                        max={LOGO_MAX_SIZE_MM}
+                                        onChange={v => updateOption('logoSize', v)}
+                                    />
+                                    <MmSlider
+                                        id="logo-offset-x"
+                                        label="Left – right"
+                                        value={logoOffsetX}
+                                        min={-LOGO_MAX_OFFSET_MM}
+                                        max={LOGO_MAX_OFFSET_MM}
+                                        onChange={v => updateOption('logoOffsetX', v)}
+                                    />
+                                    <MmSlider
+                                        id="logo-offset-y"
+                                        label="Up – down"
+                                        value={logoOffsetY}
+                                        min={-LOGO_MAX_OFFSET_MM}
+                                        max={LOGO_MAX_OFFSET_MM}
+                                        onChange={v => updateOption('logoOffsetY', v)}
+                                    />
+                                </div>
+                            </div>
+                            <div className="mt-3 flex items-center justify-between gap-3">
+                                <p className="text-[11px] text-gray-600 dark:text-gray-400 font-light">
+                                    Keeps its proportions and stays inside the page border.
+                                </p>
+                                <button
+                                    type="button"
+                                    disabled={!logoTuned}
+                                    onClick={() => setOptions(prev => {
+                                        const next = { ...prev, logoSize: LOGO_DEFAULT_SIZE_MM, logoOffsetX: 0, logoOffsetY: 0 };
+                                        localforage.setItem('vayu-pdf-options', next).catch(console.error);
+                                        return next;
+                                    })}
+                                    className="shrink-0 inline-flex items-center gap-1 text-[11px] font-medium text-gold-700 dark:text-gold-300 disabled:opacity-40 active-scale"
+                                >
+                                    <RotateCcw size={11} /> Reset
+                                </button>
                             </div>
                         </StudioSection>
                     </div>
@@ -694,6 +855,17 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                                 })}
                             </div>
                         </StudioSection>
+
+                        <LastPageSection
+                            designs={endPageDesigns}
+                            selected={options.lastPage}
+                            pageBg={pageBg}
+                            uploading={uploadingEndPage}
+                            onSelect={url => updateOption('lastPage', url)}
+                            onUpload={handleEndPageUpload}
+                            onDelete={handleEndPageDelete}
+                            onPreview={setEndPagePreview}
+                        />
                     </div>
                 </div>
 
@@ -701,7 +873,7 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                     home-indicator strip like the dock does; clearing the whole
                     strip (on the page root) left a band of dead space under it. */}
                 <div className="shrink-0 border-t border-gray-200/70 dark:border-white/5 px-4 pt-3 pb-[calc(0.75rem+var(--safe-bottom-tucked))] bg-[var(--neu-bg)]">
-                    {pageCount === 0 && (
+                    {artPageCount === 0 && (
                         <p className="mb-2 flex items-center gap-1.5 text-[11px] text-amber-700 dark:text-amber-400">
                             <TriangleAlert size={12} className="shrink-0" />
                             These page options produce no pages for this catalog.
@@ -717,7 +889,7 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                         </button>
                         <button
                             onClick={() => onGeneratePDF(options, selectedTheme)}
-                            disabled={isGeneratingPDF || pageCount === 0}
+                            disabled={isGeneratingPDF || artPageCount === 0}
                             className="neu-button neu-button-primary flex-1 py-3 text-sm tracking-wide active-scale disabled:opacity-60"
                         >
                             {isGeneratingPDF ? (
@@ -751,7 +923,7 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                 <div className="flex-1 min-h-0 px-8 pb-8 pt-2" style={{ containerType: 'size' }}>
                     <div className="w-full h-full flex items-center justify-center">
                         {currentPage
-                            ? <PagePreview page={currentPage} hiRes {...previewProps} />
+                            ? <AnyPagePreview page={currentPage} hiRes {...previewProps} />
                             : <EmptyPreview />}
                     </div>
                 </div>
@@ -771,7 +943,7 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                     <div className="flex-1 min-h-0 px-4" style={{ containerType: 'size' }}>
                         <div className="w-full h-full flex items-center justify-center">
                             {currentPage
-                                ? <PagePreview page={currentPage} {...previewProps} />
+                                ? <AnyPagePreview page={currentPage} {...previewProps} />
                                 : <EmptyPreview dark />}
                         </div>
                     </div>
@@ -787,6 +959,16 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                         </div>
                     )}
                 </div>
+            )}
+
+            {/* Enlarged end-page design (press-and-hold, or the preview button) */}
+            {endPagePreview && (
+                <EndPagePreviewOverlay
+                    url={endPagePreview.url}
+                    dialog={endPagePreview.mode === 'dialog'}
+                    pageBg={pageBg}
+                    onClose={() => setEndPagePreview(null)}
+                />
             )}
         </div>
     );
@@ -805,6 +987,292 @@ const StudioSection: React.FC<{ title: string; hint?: string; children?: React.R
         {children}
     </section>
 );
+
+/** The seven logo spots, laid out as a 3×3 page (no middle-left / middle-right). */
+const PLACEMENT_GRID: (LogoPlacement | null)[] = [
+    'Top Left', 'Top Center', 'Top Right',
+    null, 'Center', null,
+    'Bottom Left', 'Bottom Center', 'Bottom Right',
+];
+
+const formatMm = (v: number): string => (Number.isInteger(v) ? String(v) : v.toFixed(1));
+
+/** A millimetre value: slider plus a number box, kept in step. */
+const MmSlider: React.FC<{
+    id: string; label: string; value: number; min: number; max: number; step?: number;
+    onChange: (value: number) => void;
+}> = ({ id, label, value, min, max, step = 0.5, onChange }) => {
+    // What is being typed; committed on Enter or when the box loses focus.
+    const [draft, setDraft] = useState<string | null>(null);
+    const commit = (raw: string) => {
+        setDraft(null);
+        const n = Number(raw);
+        if (raw.trim() === '' || !Number.isFinite(n)) return;
+        onChange(Math.min(max, Math.max(min, Math.round(n / step) * step)));
+    };
+    return (
+        <div className="flex items-center gap-2">
+            <label htmlFor={`${id}-range`} className="text-[10px] uppercase tracking-[0.1em] leading-tight text-gray-600 dark:text-gray-400 w-[4.25rem] shrink-0">
+                {label}
+            </label>
+            <input
+                id={`${id}-range`}
+                type="range"
+                min={min}
+                max={max}
+                step={step}
+                value={value}
+                onChange={e => onChange(Number(e.target.value))}
+                className="flex-1 min-w-0 accent-[var(--neu-gold)]"
+            />
+            <input
+                type="number"
+                inputMode="decimal"
+                min={min}
+                max={max}
+                step={step}
+                value={draft ?? formatMm(value)}
+                onChange={e => setDraft(e.target.value)}
+                onBlur={e => commit(e.target.value)}
+                onKeyDown={e => {
+                    if (e.key !== 'Enter') return;
+                    commit(e.currentTarget.value);
+                    e.currentTarget.blur();
+                }}
+                aria-label={`${label}, millimetres`}
+                className="neu-field w-16 shrink-0 py-1 px-1 text-xs text-center rounded-lg tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+            />
+        </div>
+    );
+};
+
+type EndPagePreviewRequest = { url: string; mode: 'hold' | 'dialog' } | null;
+
+/** "Last page": up to five saved end-page designs, one of them (or none) chosen. */
+const LastPageSection: React.FC<{
+    designs: string[];
+    selected?: string;
+    pageBg: string;
+    uploading: number | 'new' | null;
+    onSelect: (url: string | undefined) => void;
+    onUpload: (e: React.ChangeEvent<HTMLInputElement>, replaceIndex: number | null) => void;
+    onDelete: (index: number) => void;
+    onPreview: (request: EndPagePreviewRequest) => void;
+}> = ({ designs, selected, pageBg, uploading, onSelect, onUpload, onDelete, onPreview }) => {
+    // Delete asks for a second tap; the question lapses after a few seconds.
+    const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+    useEffect(() => {
+        if (confirmDelete === null) return;
+        const timer = setTimeout(() => setConfirmDelete(null), 4000);
+        return () => clearTimeout(timer);
+    }, [confirmDelete]);
+
+    const none = !selected;
+    return (
+        <StudioSection title="Last page" hint={selected ? 'Added once, after every other page' : 'The catalog ends with its last artwork'}>
+            <div className="grid grid-cols-3 gap-3">
+                <div className="flex flex-col items-center gap-1.5 min-w-0">
+                    <button
+                        type="button"
+                        onClick={() => onSelect(undefined)}
+                        aria-pressed={none}
+                        aria-label="No last page"
+                        className={`w-full aspect-[210/297] rounded-md flex items-center justify-center active-scale text-gray-500 dark:text-gray-400 ${none ? 'neu-inset ring-2 ring-gold-500 ring-offset-2 ring-offset-[var(--neu-bg)]' : 'neu-raised-sm'}`}
+                    >
+                        <X size={16} strokeWidth={1.6} />
+                    </button>
+                    <span className={`text-[10px] leading-tight text-center ${none ? 'font-semibold text-gold-700 dark:text-gold-300' : 'text-gray-600 dark:text-gray-400'}`}>No last page</span>
+                </div>
+
+                {designs.map((url, index) => (
+                    <EndPageTile
+                        key={url}
+                        url={url}
+                        index={index}
+                        selected={selected === url}
+                        pageBg={pageBg}
+                        busy={uploading === index}
+                        disabled={uploading !== null}
+                        confirmingDelete={confirmDelete === index}
+                        onSelect={() => onSelect(url)}
+                        onReplace={e => onUpload(e, index)}
+                        onDeleteTap={() => {
+                            if (confirmDelete === index) {
+                                setConfirmDelete(null);
+                                onDelete(index);
+                            } else {
+                                setConfirmDelete(index);
+                            }
+                        }}
+                        onPreview={onPreview}
+                    />
+                ))}
+
+                {designs.length < MAX_END_PAGES && (
+                    <div className="flex flex-col items-center gap-1.5 min-w-0">
+                        <label className="w-full aspect-[210/297] rounded-md neu-inset flex items-center justify-center cursor-pointer active-scale text-gray-500 dark:text-gray-400 focus-within:ring-2 focus-within:ring-gold-500">
+                            {uploading === 'new' ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} strokeWidth={1.8} />}
+                            <span className="sr-only">Add a last page design</span>
+                            <input type="file" accept="image/*" className="sr-only" disabled={uploading !== null} onChange={e => onUpload(e, null)} />
+                        </label>
+                        <span className="text-[10px] leading-tight text-center text-gray-600 dark:text-gray-400">Add design</span>
+                    </div>
+                )}
+            </div>
+            <p className="mt-3 text-[11px] text-gray-600 dark:text-gray-400 font-light">
+                {designs.length} of {MAX_END_PAGES} saved · press and hold a design to see it larger
+            </p>
+        </StudioSection>
+    );
+};
+
+/** One saved design: tap to choose, press and hold to enlarge; preview, replace and delete below. */
+const EndPageTile: React.FC<{
+    url: string;
+    index: number;
+    selected: boolean;
+    pageBg: string;
+    busy: boolean;
+    disabled: boolean;
+    confirmingDelete: boolean;
+    onSelect: () => void;
+    onReplace: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    onDeleteTap: () => void;
+    onPreview: (request: EndPagePreviewRequest) => void;
+}> = ({ url, index, selected, pageBg, busy, disabled, confirmingDelete, onSelect, onReplace, onDeleteTap, onPreview }) => {
+    const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    /** A hold opened the preview: the click that follows the release must not select. */
+    const held = useRef(false);
+    const showing = useRef(false);
+
+    const endHold = () => {
+        if (holdTimer.current) {
+            clearTimeout(holdTimer.current);
+            holdTimer.current = null;
+        }
+        if (showing.current) {
+            showing.current = false;
+            onPreview(null);
+        }
+    };
+    const endHoldRef = useRef(endHold);
+    endHoldRef.current = endHold;
+    useEffect(() => () => endHoldRef.current(), []);
+
+    const name = `Design ${index + 1}`;
+    return (
+        <div className="flex flex-col items-center gap-1.5 min-w-0">
+            <button
+                type="button"
+                aria-pressed={selected}
+                aria-label={`${name}: use as the last page`}
+                onClick={() => {
+                    if (held.current) {
+                        held.current = false;
+                        return;
+                    }
+                    onSelect();
+                }}
+                onPointerDown={e => {
+                    held.current = false;
+                    if (e.pointerType === 'mouse' && e.button !== 0) return;
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                    holdTimer.current = setTimeout(() => {
+                        holdTimer.current = null;
+                        held.current = true;
+                        showing.current = true;
+                        onPreview({ url, mode: 'hold' });
+                    }, HOLD_PREVIEW_MS);
+                }}
+                onPointerUp={endHold}
+                onPointerCancel={endHold}
+                onLostPointerCapture={endHold}
+                onContextMenu={e => e.preventDefault()}
+                className={`relative w-full aspect-[210/297] rounded-md overflow-hidden select-none active-scale ${selected ? 'ring-2 ring-gold-500 ring-offset-2 ring-offset-[var(--neu-bg)]' : 'neu-raised-sm'}`}
+                style={{ background: pageBg, WebkitTouchCallout: 'none' }}
+            >
+                <img src={getThumbUrl(url)} alt="" draggable={false} className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
+                {selected && (
+                    <span className="absolute top-1 right-1 w-4 h-4 rounded-full neu-check-on flex items-center justify-center">
+                        <Check size={9} strokeWidth={3.5} />
+                    </span>
+                )}
+            </button>
+            <div className="flex items-center gap-1">
+                <button
+                    type="button"
+                    onClick={() => onPreview({ url, mode: 'dialog' })}
+                    aria-label={`Preview ${name.toLowerCase()}`}
+                    title="Preview"
+                    className="neu-icon-btn-sm text-gray-600 dark:text-gray-300 active-scale"
+                >
+                    <Eye size={11} />
+                </button>
+                <label
+                    title="Replace"
+                    className="neu-icon-btn-sm text-gray-600 dark:text-gray-300 cursor-pointer active-scale focus-within:ring-2 focus-within:ring-gold-500"
+                >
+                    {busy ? <Loader2 size={11} className="animate-spin" /> : <Upload size={11} />}
+                    <span className="sr-only">Replace {name.toLowerCase()}</span>
+                    <input type="file" accept="image/*" className="sr-only" disabled={disabled} onChange={onReplace} />
+                </label>
+                <button
+                    type="button"
+                    onClick={onDeleteTap}
+                    aria-label={confirmingDelete ? `Tap again to delete ${name.toLowerCase()}` : `Delete ${name.toLowerCase()}`}
+                    title={confirmingDelete ? 'Tap again to delete' : 'Delete'}
+                    className={`neu-icon-btn-sm active-scale ${confirmingDelete ? 'text-red-600 dark:text-red-400 ring-1 ring-red-500/60' : 'text-gray-600 dark:text-gray-300'}`}
+                >
+                    <Trash2 size={11} />
+                </button>
+            </div>
+        </div>
+    );
+};
+
+/** A saved design, enlarged: held open by a press, or a dialog from the preview button. */
+const EndPagePreviewOverlay: React.FC<{ url: string; dialog: boolean; pageBg: string; onClose: () => void }> = ({ url, dialog, pageBg, onClose }) => {
+    const closeRef = useRef<HTMLButtonElement>(null);
+    useEffect(() => {
+        if (!dialog) return;
+        closeRef.current?.focus();
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key !== 'Escape') return;
+            e.stopPropagation();
+            onClose();
+        };
+        // Capture: ahead of the studio's own Escape handling.
+        globalThis.addEventListener('keydown', onKey, true);
+        return () => globalThis.removeEventListener('keydown', onKey, true);
+    }, [dialog, onClose]);
+
+    return (
+        <div
+            className={`absolute inset-0 z-[90] bg-black/70 backdrop-blur-sm flex flex-col animate-fade-in ${dialog ? '' : 'pointer-events-none'}`}
+            role={dialog ? 'dialog' : undefined}
+            aria-modal={dialog || undefined}
+            aria-label="Last page design"
+        >
+            {dialog && (
+                <button type="button" tabIndex={-1} aria-hidden="true" className="absolute inset-0 cursor-default" onClick={onClose} />
+            )}
+            <div className="relative flex justify-end px-3 pt-[calc(0.75rem+var(--safe-top))] pb-2 min-h-12">
+                {dialog && (
+                    <button ref={closeRef} type="button" className="w-9 h-9 rounded-full bg-white/10 text-white flex items-center justify-center active-scale" aria-label="Close preview" onClick={onClose}>
+                        <X size={18} />
+                    </button>
+                )}
+            </div>
+            <div className="relative flex-1 min-h-0 px-6 pb-[calc(1.5rem+var(--safe-bottom-ui))] pointer-events-none" style={{ containerType: 'size' }}>
+                <div className="w-full h-full flex items-center justify-center">
+                    <div className="relative overflow-hidden shrink-0" style={{ ...PAGE_FRAME_STYLE, background: pageBg }}>
+                        <img src={url} alt="Last page design" draggable={false} className="absolute inset-0 w-full h-full object-contain" />
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 /** Miniature of a theme's default page — its real background, palette ink and
  *  gold, and the catalog's own first image — so the choice is visual. */
@@ -835,16 +1303,25 @@ const ThemeThumb: React.FC<{ themeId: CatalogTheme; selected: boolean; sample?: 
 /*  Preview                                                            */
 /* ------------------------------------------------------------------ */
 
+/** A page of the preview: an artwork page, or the chosen end-page design. */
+type PreviewPage = { kind: 'art'; page: PlannedPage } | { kind: 'end'; url: string };
+
 const pageLabel = (page: PlannedPage): string => {
     if (page.pageIndex === 0) return 'Main image';
     if (page.pageIndex === 1) return 'Second image';
     return `Image ${page.pageIndex + 1}`;
 };
 
+/** What the toolbar says about the page on screen. */
+const describePage = (page: PreviewPage): React.ReactNode => {
+    if (page.kind === 'end') return <span className="font-normal">Last page</span>;
+    return <><span className="font-normal">{page.page.art.title || 'Untitled'}</span> — {pageLabel(page.page).toLowerCase()}</>;
+};
+
 const PreviewToolbar: React.FC<{
     themeName: string;
     pageCountLabel: string;
-    page?: PlannedPage;
+    page?: PreviewPage;
     pageIdx: number;
     pageCount: number;
     removeBackground: boolean;
@@ -856,7 +1333,7 @@ const PreviewToolbar: React.FC<{
             <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-700 dark:text-gray-200">Live preview</p>
             <p className="text-[11px] text-gray-600 dark:text-gray-400 font-light truncate">
                 {themeName} · A4 portrait · {pageCountLabel}
-                {page && <> · <span className="font-normal">{page.art.title || 'Untitled'}</span> — {pageLabel(page).toLowerCase()}</>}
+                {page && <> · {describePage(page)}</>}
             </p>
         </div>
         <div className="flex items-center gap-3 shrink-0">
@@ -893,17 +1370,28 @@ const EmptyPreview: React.FC<{ dark?: boolean }> = ({ dark = false }) => (
 
 const TIMES = "'Times New Roman', Times, serif";
 
+/** A preview page, fitted to its stage: as wide as it allows, unless the height runs out first. */
+const PAGE_FRAME_STYLE: React.CSSProperties = {
+    width: 'min(100cqw, calc(100cqh * 210 / 297))',
+    aspectRatio: '210 / 297',
+    boxShadow: '0 30px 60px -18px rgba(0,0,0,0.38), 0 2px 6px rgba(0,0,0,0.08)',
+};
+
+/** How far a text box shifts left to put its `align` point on x (as jsPDF aligns). */
+const ALIGN_SHIFT = { left: '0%', center: '-50%', right: '-100%' } as const;
+
 /** Absolutely-placed text whose *baseline* sits at (xMm, yMm), as jsPDF draws it. */
 const PdfText: React.FC<{
     x: number; y: number; pt: number; color: string;
-    italic?: boolean; spacingMm?: number; align?: 'left' | 'right'; children?: React.ReactNode;
+    italic?: boolean; spacingMm?: number; align?: 'left' | 'center' | 'right'; children?: React.ReactNode;
 }> = ({ x, y, pt, color, italic = false, spacingMm = 0, align = 'left', children }) => (
     <span
         className="absolute whitespace-nowrap leading-none"
         style={{
-            [align === 'right' ? 'right' : 'left']: pctW(x),
+            left: pctW(x),
             top: pctH(y),
-            transform: 'translateY(-80%)', // Times: baseline ≈ 0.8em below the top of a 1em line box
+            // Times: baseline ≈ 0.8em below the top of a 1em line box.
+            transform: `translate(${ALIGN_SHIFT[align]}, -80%)`,
             fontSize: cqw(ptToMm(pt)),
             letterSpacing: spacingMm ? cqw(spacingMm) : undefined,
             fontStyle: italic ? 'italic' : undefined,
@@ -927,19 +1415,22 @@ const PagePreview: React.FC<{
     pageBg: string;
     options: PdfOptions;
     logoUrl?: string;
+    /** The logo's natural size, once known; the logo is placed from it. */
+    logoSizePx: { w: number; h: number } | null;
     catalogName: string;
     imageShadow: boolean;
     themeId: CatalogTheme;
     /** Full-size image on desktop; the phone overlay uses the thumbnail. */
     hiRes?: boolean;
-}> = ({ page, palette, pageBg, options, logoUrl, catalogName, imageShadow, themeId, hiRes = false }) => {
+}> = ({ page, palette, pageBg, options, logoUrl, logoSizePx, catalogName, imageShadow, themeId, hiRes = false }) => {
     const { art } = page;
     const hasText = pageHasText(page, options);
     const imgBoxH = hasText ? 250 : PAGE_H_MM - 4;
     const ink = rgbCss(palette.ink);
     const gold = rgbCss(palette.gold);
     const line = rgbCss(palette.lineColor);
-    const rightLogo = options.logoPlacement === 'Top Right';
+    const logo = logoUrl && logoSizePx ? logoBox(options, logoSizePx.w, logoSizePx.h) : null;
+    const mark = letterMark(options);
     const rounded = !(themeId === 1 || (options.removeBackground ?? themeId === 5));
 
     // Page 0 text rows, stepping y exactly as drawPage0Text does.
@@ -992,15 +1483,7 @@ const PagePreview: React.FC<{
     return (
         <div
             className="relative overflow-hidden shrink-0 transition-[background] duration-300"
-            style={{
-                // Fit the stage: as wide as it allows, unless the height runs out first.
-                width: 'min(100cqw, calc(100cqh * 210 / 297))',
-                aspectRatio: '210 / 297',
-                background: pageBg,
-                containerType: 'inline-size',
-                fontFamily: TIMES,
-                boxShadow: '0 30px 60px -18px rgba(0,0,0,0.38), 0 2px 6px rgba(0,0,0,0.08)',
-            }}
+            style={{ ...PAGE_FRAME_STYLE, background: pageBg, containerType: 'inline-size', fontFamily: TIMES }}
         >
             {/* Image box — x 2mm, y 2mm, 206mm wide, 250mm (or full) tall */}
             <div
@@ -1026,22 +1509,17 @@ const PagePreview: React.FC<{
                 )}
             </div>
 
-            {/* Logo — 32.4mm box, 5mm in from the chosen corner; letter mark as fallback */}
-            {logoUrl ? (
+            {/* Logo — the generator's own box (placement, offsets, size); letter mark as fallback */}
+            {logoUrl && logo && (
                 <img
                     src={getThumbUrl(logoUrl)}
                     alt=""
-                    className="absolute object-contain"
-                    style={{
-                        top: pctH(5),
-                        [rightLogo ? 'right' : 'left']: pctW(5),
-                        maxWidth: pctW(32.4),
-                        maxHeight: pctH(32.4),
-                        objectPosition: rightLogo ? 'right top' : 'left top',
-                    }}
+                    className="absolute"
+                    style={{ left: pctW(logo.x), top: pctH(logo.y), width: pctW(logo.w), height: pctH(logo.h) }}
                 />
-            ) : (
-                <PdfText x={5} y={9} pt={24} color={gold} align={rightLogo ? 'right' : 'left'}>
+            )}
+            {!logoUrl && (
+                <PdfText x={mark.x} y={mark.y} pt={mark.pt} color={gold} align={mark.align}>
                     {`${String.fromCodePoint(65 + page.artIndex)}.`}
                 </PdfText>
             )}
@@ -1077,6 +1555,18 @@ const PagePreview: React.FC<{
                     )}
                 </>
             )}
+        </div>
+    );
+};
+
+type PagePreviewProps = React.ComponentProps<typeof PagePreview>;
+
+/** An artwork page, or the end-page design fitted inside the page as the PDF draws it. */
+const AnyPagePreview: React.FC<Omit<PagePreviewProps, 'page'> & { page: PreviewPage }> = ({ page, ...rest }) => {
+    if (page.kind === 'art') return <PagePreview page={page.page} {...rest} />;
+    return (
+        <div className="relative overflow-hidden shrink-0" style={{ ...PAGE_FRAME_STYLE, background: rest.pageBg }}>
+            <img src={rest.hiRes ? page.url : getThumbUrl(page.url)} alt="Last page design" className="absolute inset-0 w-full h-full object-contain" />
         </div>
     );
 };

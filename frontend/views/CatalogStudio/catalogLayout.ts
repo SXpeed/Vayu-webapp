@@ -1,4 +1,4 @@
-import type { Artwork, CatalogTheme, PdfOptions } from '../../types';
+import type { Artwork, CatalogTheme, LogoPlacement, PdfOptions } from '../../types';
 
 /* ------------------------------------------------------------------ */
 /*  Catalog PDF page layout, shared by the generator and the preview.  */
@@ -142,6 +142,115 @@ export const cqw = (mm: number): string => `${(mm / PAGE_W_MM) * 100}cqw`;
 
 /** jsPDF font sizes are points; 1pt = 0.3528mm. */
 export const ptToMm = (pt: number): number => pt * 0.3528;
+
+/* ------------------------------- Logo ------------------------------- */
+/*  Where the logo sits, in millimetres. The generator draws exactly     */
+/*  this box and the preview positions the image from it, so the two     */
+/*  cannot disagree. Defaults reproduce the original layout: a 32.4mm    */
+/*  box 5mm in from the top corner.                                      */
+
+export const LOGO_DEFAULT_SIZE_MM = 32.4;
+export const LOGO_MIN_SIZE_MM = 10;
+export const LOGO_MAX_SIZE_MM = 90;
+/** Offsets reach far enough to move the logo anywhere on the page. */
+export const LOGO_MAX_OFFSET_MM = 150;
+const LOGO_MARGIN_MM = 5;
+/** The page border sits 2mm in; the logo never crosses it. */
+const LOGO_BOUND_MM = 2;
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+/** The saved size, or the default; always within the allowed range. */
+export const logoSizeMm = (options: Pick<PdfOptions, 'logoSize'>): number =>
+    clamp(Number.isFinite(options.logoSize) ? Number(options.logoSize) : LOGO_DEFAULT_SIZE_MM, LOGO_MIN_SIZE_MM, LOGO_MAX_SIZE_MM);
+
+const offsetMm = (value: number | undefined): number =>
+    clamp(Number.isFinite(value) ? Number(value) : 0, -LOGO_MAX_OFFSET_MM, LOGO_MAX_OFFSET_MM);
+
+type Axis = 'start' | 'center' | 'end';
+
+/** Horizontal and vertical anchor of each placement. */
+const PLACEMENT_AXES: Record<LogoPlacement, { h: Axis; v: Axis }> = {
+    'Top Left': { h: 'start', v: 'start' },
+    'Top Center': { h: 'center', v: 'start' },
+    'Top Right': { h: 'end', v: 'start' },
+    'Center': { h: 'center', v: 'center' },
+    'Bottom Left': { h: 'start', v: 'end' },
+    'Bottom Center': { h: 'center', v: 'end' },
+    'Bottom Right': { h: 'end', v: 'end' },
+};
+
+/** Anchors of a placement; unknown or unset = the original Top Right. */
+export const logoAxes = (placement: LogoPlacement | undefined): { h: Axis; v: Axis } =>
+    PLACEMENT_AXES[placement ?? 'Top Right'] ?? PLACEMENT_AXES['Top Right'];
+
+/** Where an item of `sizeMm` starts on an axis of `pageMm`, before the offset. */
+const anchorStart = (axis: Axis, pageMm: number, sizeMm: number): number => {
+    if (axis === 'center') return (pageMm - sizeMm) / 2;
+    if (axis === 'end') return pageMm - LOGO_MARGIN_MM - sizeMm;
+    return LOGO_MARGIN_MM;
+};
+
+/** Keep an item of `sizeMm` starting at `pos` inside the page border. */
+const withinBorder = (pos: number, pageMm: number, sizeMm: number): number =>
+    clamp(pos, LOGO_BOUND_MM, Math.max(LOGO_BOUND_MM, pageMm - LOGO_BOUND_MM - sizeMm));
+
+type LogoGeometryOptions = Pick<PdfOptions, 'logoPlacement' | 'logoOffsetX' | 'logoOffsetY' | 'logoSize'>;
+
+/**
+ * The logo's box on the page for an image of the given natural size: its
+ * longer side is the chosen size, the aspect ratio is kept, and the box stays
+ * inside the page border.
+ */
+export const logoBox = (
+    options: LogoGeometryOptions,
+    naturalW: number,
+    naturalH: number,
+): { x: number; y: number; w: number; h: number } => {
+    const size = logoSizeMm(options);
+    const ratio = naturalW > 0 && naturalH > 0 ? Math.min(size / naturalW, size / naturalH) : 0;
+    const w = naturalW * ratio;
+    const h = naturalH * ratio;
+    const axes = logoAxes(options.logoPlacement);
+    return {
+        x: withinBorder(anchorStart(axes.h, PAGE_W_MM, w) + offsetMm(options.logoOffsetX), PAGE_W_MM, w),
+        y: withinBorder(anchorStart(axes.v, PAGE_H_MM, h) + offsetMm(options.logoOffsetY), PAGE_H_MM, h),
+        w,
+        h,
+    };
+};
+
+const TEXT_ALIGN: Record<Axis, 'left' | 'center' | 'right'> = { start: 'left', center: 'center', end: 'right' };
+/** Times: cap height ≈ 0.66em; "A." ≈ 0.9em wide. */
+const CAP_EM = 0.66;
+const MARK_EM = 0.9;
+/** The original letter mark: 24pt with its baseline 9mm from the top. */
+const MARK_DEFAULT_PT = 24;
+const MARK_TOP_BASELINE_MM = 9;
+
+/**
+ * The letter mark used when there is no logo ("A.", "B." …): Times, sized
+ * with the logo (24pt at the default size) and placed like a logo of the
+ * mark's own size would be. `x` is the anchor for `align`; `y` is the text
+ * baseline. At the defaults this is the original 5mm / 9mm position.
+ */
+export const letterMark = (options: LogoGeometryOptions) => {
+    const pt = MARK_DEFAULT_PT * (logoSizeMm(options) / LOGO_DEFAULT_SIZE_MM);
+    const capMm = ptToMm(pt) * CAP_EM;
+    const widthMm = ptToMm(pt) * MARK_EM;
+    const axes = logoAxes(options.logoPlacement);
+
+    // The mark's box (left edge / cap top), placed and bounded like the logo.
+    const left = withinBorder(anchorStart(axes.h, PAGE_W_MM, widthMm) + offsetMm(options.logoOffsetX), PAGE_W_MM, widthMm);
+    const topAnchor = axes.v === 'start'
+        ? MARK_TOP_BASELINE_MM - ptToMm(MARK_DEFAULT_PT) * CAP_EM // keeps the original baseline
+        : anchorStart(axes.v, PAGE_H_MM, capMm);
+    const top = withinBorder(topAnchor + offsetMm(options.logoOffsetY), PAGE_H_MM, capMm);
+
+    const align = TEXT_ALIGN[axes.h];
+    const anchorX: Record<Axis, number> = { start: left, center: left + widthMm / 2, end: left + widthMm };
+    return { x: anchorX[axes.h], y: top + capMm, pt, align };
+};
 
 /** Whether this page carries a text block under the image. */
 export const pageHasText = (page: Pick<PlannedPage, 'pageIndex' | 'art'>, options: Pick<PdfOptions, 'showDescription'>): boolean =>

@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import type { Artwork, CatalogTheme, PdfOptions } from '../../types';
-import { planArtworkPages, getThemePalette, ThemePalette } from './catalogLayout';
+import { planArtworkPages, getThemePalette, ThemePalette, logoBox, letterMark } from './catalogLayout';
 
 /* ------------------------------------------------------------------ */
 /*  Catalog PDF generator.                                             */
@@ -334,14 +334,12 @@ const drawProductImage = (doc: jsPDF, imgInfo: PdfImageInfo | null, imgBoxH: num
 };
 
 const drawFallbackLetter = (doc: jsPDF, options: PdfOptions, i: number, gold: [number, number, number]) => {
+    // Position and size come from catalogLayout, shared with the preview.
+    const mark = letterMark(options);
     doc.setFont("times", "normal");
-    doc.setFontSize(24);
+    doc.setFontSize(mark.pt);
     doc.setTextColor(...gold);
-    const marginX = 5;
-    const marginY = 9;
-    const letterX = options.logoPlacement === 'Top Right' ? PAGE_W - marginX : marginX;
-    doc.text(`${String.fromCodePoint(65 + i)}.`, letterX, marginY,
-        options.logoPlacement === 'Top Right' ? { align: 'right' } : undefined);
+    doc.text(`${String.fromCodePoint(65 + i)}.`, mark.x, mark.y, mark.align === 'left' ? undefined : { align: mark.align });
 };
 
 /**
@@ -364,22 +362,10 @@ const drawLogo = (doc: jsPDF, logoInfo: PdfImageInfo | null, options: PdfOptions
         drawFallbackLetter(doc, options, i, gold);
         return;
     }
-    const logoSize = 32.4; // Maximum bounding box dimension (reduced by 10% from 36)
-    const marginX = 5;
-    const marginY = 5;
-
-    let lw = logoInfo.width, lh = logoInfo.height;
-    const lr = Math.min(logoSize / lw, logoSize / lh);
-    lw *= lr;
-    lh *= lr;
-
-    let lxOff = marginX;
-    if (options.logoPlacement === 'Top Right') {
-        lxOff = PAGE_W - marginX - lw;
-    }
-    const lyOff = marginY;
-
-    doc.addImage(logoInfo.data, logoInfo.format, lxOff, lyOff, lw, lh, logoInfo.alias, 'FAST');
+    // Placement, offsets and size (aspect ratio kept, inside the page border)
+    // come from catalogLayout, which the studio preview uses too.
+    const box = logoBox(options, logoInfo.width, logoInfo.height);
+    doc.addImage(logoInfo.data, logoInfo.format, box.x, box.y, box.w, box.h, logoInfo.alias, 'FAST');
 };
 
 const drawPageBorder = (doc: jsPDF, pageH: number) => {
@@ -551,6 +537,36 @@ const drawArtworkPages = async (pageCtx: PageDrawContext): Promise<void> => {
     }
 };
 
+/**
+ * The chosen end-page design, once, after every other page: fitted inside the
+ * page at its own aspect ratio (never cropped or stretched), centred on the
+ * page background. No logo or border — it is a finished design.
+ */
+const drawLastPage = async (
+    doc: jsPDF,
+    url: string,
+    background: PageBackground | null,
+    palette: ThemePalette,
+    pageCount: { value: number },
+    onWarning: (message: string) => void,
+): Promise<void> => {
+    let info: PdfImageInfo;
+    try {
+        info = await prepareImage(url, urlLooksPng(url), `lastpage|${url}`, 0, false, false);
+    } catch (e) {
+        console.error('Failed to load the last page design', e);
+        onWarning("Couldn't load the last page design — the catalog ends without it.");
+        return;
+    }
+    if (pageCount.value > 0) doc.addPage();
+    pageCount.value += 1;
+    drawPageBackground(doc, background, palette, PAGE_H);
+    const scale = Math.min(PAGE_W / info.width, PAGE_H / info.height);
+    const w = info.width * scale;
+    const h = info.height * scale;
+    doc.addImage(info.data, info.format, (PAGE_W - w) / 2, (PAGE_H - h) / 2, w, h, info.alias, info.format === 'PNG' ? undefined : 'FAST');
+};
+
 /** Everything the generator needs, all of it structured-clone safe. */
 export interface CatalogPdfJob {
     artworks: Artwork[];
@@ -582,6 +598,11 @@ export const buildCatalogPdf = async (job: CatalogPdfJob, callbacks: CatalogPdfC
             onProgress: (message) => callbacks.onProgress(`${prefix} — ${message}`),
             onWarning: callbacks.onWarning,
         });
+    }
+
+    if (options.lastPage) {
+        callbacks.onProgress('Last page');
+        await drawLastPage(doc, options.lastPage, background, palette, pageCount, callbacks.onWarning);
     }
 
     callbacks.onProgress('Assembling PDF…');
