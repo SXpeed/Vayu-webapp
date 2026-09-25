@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { UserProfile } from '../types';
-import { Moon, Sun, LogOut, Check, Bell, BellOff, Pencil, X } from 'lucide-react';
+import { Moon, Sun, LogOut, Check, Bell, BellOff, Pencil, X, Type } from 'lucide-react';
 import { pushService } from '../services/pushService';
 import { MyDevicesCard } from '../components/MyDevicesCard';
 import { PasswordCard, WorkspaceCard } from '../components/AccountCards';
+import { getUiSize, setUiSize, type UiSize } from '../uiSize';
 import {
     PageRoot, PageHeader, PageBody, Card, SectionTitle, Field, Input, Textarea,
-    ReadOnlyValue, ToggleRow, Button, Divider,
+    ReadOnlyValue, ToggleRow, Button, Divider, Pill,
 } from '../components/ui';
 
 interface ProfileViewProps {
@@ -127,6 +128,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ profile, onUpdateProfi
 
                     <Divider />
 
+                    <UiSizeRow />
+
+                    <Divider />
+
                     <ToggleRow
                         icon={pushEnabled ? <Bell size={18} /> : <BellOff size={18} />}
                         title="Notifications"
@@ -166,5 +171,36 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ profile, onUpdateProfi
                 </Button>
             </PageBody>
         </PageRoot>
+    );
+};
+
+const UI_SIZES: { value: UiSize; label: string }[] = [
+    { value: 'small', label: 'Small' },
+    { value: 'default', label: 'Default' },
+    { value: 'large', label: 'Large' },
+];
+
+/** Small (90%), Default (95%) or Large (100%) — this device only, like the theme. */
+const UiSizeRow: React.FC = () => {
+    const [size, setSize] = useState<UiSize>(getUiSize);
+    const choose = (next: UiSize) => {
+        setUiSize(next);
+        setSize(next);
+    };
+    return (
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-1.5">
+            <div className="flex items-center gap-3 min-w-0 text-gray-700 dark:text-gray-200">
+                <Type size={18} className="shrink-0" />
+                <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">UI Size</p>
+                    <p className="text-[11px] text-gray-600 dark:text-gray-400 font-light">On this device</p>
+                </div>
+            </div>
+            <div role="group" aria-label="UI size" className="flex gap-2 shrink-0">
+                {UI_SIZES.map(o => (
+                    <Pill key={o.value} active={size === o.value} onClick={() => choose(o.value)}>{o.label}</Pill>
+                ))}
+            </div>
+        </div>
     );
 };

@@ -113,7 +113,7 @@ export const ViewingRoomsPanel: React.FC<{ artworks: Artwork[]; onClose: () => v
 
     return (
         <div className="neu-sheet z-[70] animate-fade-in-up">
-            <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+env(safe-area-inset-top,0px))]">
+            <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+var(--safe-top))]">
                 <button onClick={onClose} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale" aria-label="Close"><X size={20} /></button>
                 <h2 className="flex-1 text-center text-base font-serif text-gray-900 dark:text-white">Private rooms</h2>
                 <IfCan section="catalogs" level="edit">
@@ -288,7 +288,7 @@ const RoomForm: React.FC<{ artworks: Artwork[]; initial: StaffRoom | null; onClo
 
     return (
         <div className="neu-sheet z-[70] animate-fade-in-up">
-            <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+env(safe-area-inset-top,0px))]">
+            <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+var(--safe-top))]">
                 <button onClick={onClose} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale" aria-label="Back"><X size={20} /></button>
                 <h2 className="flex-1 text-center text-base font-serif text-gray-900 dark:text-white">{initial ? 'Edit private room' : 'New private room'}</h2>
                 <button onClick={() => void save()} disabled={busy} className="text-gold-700 dark:text-gold-300 font-medium px-2 py-2 uppercase tracking-wider text-xs active-scale">

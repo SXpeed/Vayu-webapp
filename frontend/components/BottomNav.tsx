@@ -36,7 +36,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ currentView, onChangeView,
     return (
         <nav
             aria-label="Primary"
-            className="neu-dock-scrim absolute bottom-0 inset-x-0 z-40 px-3 pt-5 pb-[calc(max(var(--safe-bottom,env(safe-area-inset-bottom,0px))-18px,0px)+6px)] pointer-events-none"
+            className="neu-dock-scrim absolute bottom-0 inset-x-0 z-40 px-3 pt-5 pb-[calc(max(var(--safe-bottom-ui)-18px,0px)+6px)] pointer-events-none"
         >
             <div
                 className="neu-dock pointer-events-auto mx-auto max-w-md flex p-[5px]"

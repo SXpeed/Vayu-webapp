@@ -112,7 +112,7 @@ export const PhotoAttachments: React.FC<PhotoAttachmentsProps> = ({ urls, onAdd,
                         <button
                             type="button"
                             onClick={() => setPreviewUrl(null)}
-                            className="absolute top-[calc(1rem+env(safe-area-inset-top,0px))] right-4 w-10 h-10 rounded-full bg-white/10 text-white flex items-center justify-center active-scale"
+                            className="absolute top-[calc(1rem+var(--safe-top))] right-4 w-10 h-10 rounded-full bg-white/10 text-white flex items-center justify-center active-scale"
                             aria-label="Close photo"
                         >
                             <X size={20} />

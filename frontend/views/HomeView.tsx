@@ -8,6 +8,7 @@ import { Clock, Receipt, TrendingUp, Palette, ArrowRight, IndianRupee, CalendarD
 import { PageRoot, PageHeader, PageBody, GhostIconButton } from '../components/ui';
 import { useAppChrome } from '../components/Layout';
 import { useBranding } from '../useBranding';
+import type { SectionId } from '../permissions';
 
 /** One dashboard metric — raised tile, gold glyph, serif figure. */
 const StatTile: React.FC<{ icon: React.ReactNode; label: string; children?: React.ReactNode }> = ({ icon, label, children }) => (
@@ -33,6 +34,13 @@ interface HomeViewProps {
     onUpdateEvent: (event: CalendarEvent) => void;
     onDeleteEvent: (id: string) => void;
 }
+
+const QUICK_ACTIONS: { section: SectionId; view: ViewState; label: string; Icon: React.ElementType }[] = [
+    { section: 'payments', view: 'payments', label: 'Payments', Icon: IndianRupee },
+    { section: 'contacts', view: 'contacts', label: 'Contacts', Icon: Users },
+    { section: 'invoices', view: 'invoice', label: 'Proforma Invoice', Icon: Receipt },
+    { section: 'attendance', view: 'attendance', label: 'Attendance', Icon: Clock },
+];
 
 const MONTHS_SHORT = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 
@@ -241,51 +249,23 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                 {(['payments', 'contacts', 'invoices', 'attendance'] as const).some(sec => can(sec)) && (
                 <section className="animate-fade-in-up" style={{ animationDelay: '200ms' }}>
                     <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-3">Quick Actions</h2>
-                    <div className="grid grid-cols-4 gap-3">
-                        {can('payments') && (
+                    {/* Four across when there is room; two by two, icon beside
+                        the label, in narrow columns so no label spills out. */}
+                    <div className="@container">
+                    <div className="grid grid-cols-2 @[22rem]:grid-cols-4 gap-3">
+                        {QUICK_ACTIONS.filter(a => can(a.section)).map(({ section, view, label, Icon }) => (
                         <button
-                            onClick={() => onNavigate('payments')}
-                            className="neu-card p-3 flex flex-col items-center justify-center gap-2 hover:border-gold-500 dark:hover:border-gold-500 transition-colors active-scale"
+                            key={section}
+                            onClick={() => onNavigate(view)}
+                            className="neu-card min-w-0 px-2.5 py-3 @[22rem]:px-1 flex @[22rem]:flex-col items-center justify-start @[22rem]:justify-center gap-2 hover:border-gold-500 dark:hover:border-gold-500 transition-colors active-scale"
                         >
-                            <div className="text-brand-900 dark:text-gold-400">
-                                <IndianRupee size={22} strokeWidth={1.5} />
+                            <div className="shrink-0 text-brand-900 dark:text-gold-400">
+                                <Icon size={22} strokeWidth={1.5} />
                             </div>
-                            <span className="text-[11px] font-medium text-gray-600 dark:text-gray-300 uppercase tracking-wider">Payments</span>
+                            <span className="min-w-0 max-w-full text-[11px] @[22rem]:text-[10px] @[26rem]:text-[11px] font-medium text-gray-600 dark:text-gray-300 uppercase tracking-normal @[26rem]:tracking-wider text-left @[22rem]:text-center leading-tight [overflow-wrap:anywhere]">{label}</span>
                         </button>
-                        )}
-                        {can('contacts') && (
-                        <button
-                            onClick={() => onNavigate('contacts')}
-                            className="neu-card p-3 flex flex-col items-center justify-center gap-2 hover:border-gold-500 dark:hover:border-gold-500 transition-colors active-scale"
-                        >
-                            <div className="text-brand-900 dark:text-gold-400">
-                                <Users size={22} strokeWidth={1.5} />
-                            </div>
-                            <span className="text-[11px] font-medium text-gray-600 dark:text-gray-300 uppercase tracking-wider">Contacts</span>
-                        </button>
-                        )}
-                        {can('invoices') && (
-                        <button 
-                            onClick={() => onNavigate('invoice')}
-                            className="neu-card p-3 flex flex-col items-center justify-center gap-2 hover:border-gold-500 dark:hover:border-gold-500 transition-colors active-scale"
-                        >
-                            <div className="text-brand-900 dark:text-gold-400">
-                                <Receipt size={22} strokeWidth={1.5} />
-                            </div>
-                            <span className="text-[11px] font-medium text-gray-600 dark:text-gray-300 uppercase tracking-wider text-center leading-tight">Proforma<br />Invoice</span>
-                        </button>
-                        )}
-                        {can('attendance') && (
-                        <button 
-                            onClick={() => onNavigate('attendance')}
-                            className="neu-card p-3 flex flex-col items-center justify-center gap-2 hover:border-gold-500 dark:hover:border-gold-500 transition-colors active-scale"
-                        >
-                            <div className="text-brand-900 dark:text-gold-400">
-                                <Clock size={22} strokeWidth={1.5} />
-                            </div>
-                            <span className="text-[11px] font-medium text-gray-600 dark:text-gray-300 uppercase tracking-wider">Attendance</span>
-                        </button>
-                        )}
+                        ))}
+                    </div>
                     </div>
                 </section>
                 )}
@@ -490,7 +470,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
             {showEventModal && (
                 <FullScreenPortal>
                     <div className="neu-sheet z-50 animate-fade-in-up">
-                        <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] z-10">
+                        <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+var(--safe-top))] z-10">
                             <button
                                 onClick={() => setShowEventModal(false)}
                                 className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale"

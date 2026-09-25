@@ -43,6 +43,13 @@
         } catch (e) {
             console.warn('Failed to apply theme', e);
         }
+        // UI size, before first paint (see "UI size" in index.css and uiSize.ts).
+        (function () {
+            let size = 'default';
+            try { size = localStorage.getItem('vayu_ui_size') || size; } catch { /* private mode */ }
+            const zoom = { small: 0.9, default: 0.95, large: 1 }[size] || 0.95;
+            document.documentElement.style.setProperty('--ui-zoom', String(zoom));
+        })();
     </script>
 
     <style>
@@ -88,10 +95,11 @@
             overscroll-behavior: contain;
             /* Prevent native pinch-zoom across the UI */
             touch-action: pan-x pan-y;
-            /* Keep the body inside the fixed html viewport */
+            /* Keep the body inside the fixed html viewport. Divided by the
+               UI-size zoom, which applies to body (index.css). */
             position: fixed;
             width: 100%;
-            height: var(--app-height, 100dvh);
+            height: calc(var(--app-height, 100dvh) / var(--ui-zoom, 1));
             overflow: hidden;
         }
 
@@ -137,12 +145,12 @@
 
                 /* Boost header padding for safe area on iPhone */
                 .pt-8 {
-                    padding-top: calc(2rem + env(safe-area-inset-top)) !important;
+                    padding-top: calc(2rem + var(--safe-top)) !important;
                 }
 
                 /* Ensure bottom nav doesn't overlap the home indicator */
                 .pb-safe-auto {
-                    padding-bottom: var(--safe-bottom, env(safe-area-inset-bottom, 0px)) !important;
+                    padding-bottom: var(--safe-bottom-ui) !important;
                 }
             }
         }
@@ -345,13 +353,39 @@
                 const shortBy = s - Math.max(globalThis.innerHeight, insets.dvh);
                 return shortBy > 0 && shortBy <= 120 ? shortBy : 0;
             }
-            function setAppHeight() {
-                const root = document.documentElement;
-                const vv = globalThis.visualViewport;
+            /** A field that brings up the on-screen keyboard. */
+            function typingInto(el) {
+                if (!el) return false;
+                if (el.isContentEditable || el.tagName === 'TEXTAREA') return true;
+                return el.tagName === 'INPUT'
+                    && !/^(button|checkbox|color|file|hidden|image|radio|range|reset|submit)$/i.test(el.type);
+            }
+            // Visible height with no keyboard, per viewport width (a rotation
+            // changes the width; the keyboard never does). Measured whenever
+            // nothing is being typed into.
+            const fullHeight = {};
+            /**
+             * Whether the on-screen keyboard is up. iOS normally leaves the
+             * layout viewport (innerHeight) full and shrinks only the visual
+             * one. But installed iPhone apps sometimes shrink innerHeight too,
+             * and Android resizes it by design (interactive-widget), so also
+             * compare with the full height seen before typing began.
+             */
+            function keyboardIsOpen(vv) {
                 // A pinch-zoom also shrinks the visual viewport, but with scale > 1.
                 // Treating that as the keyboard shrank the whole app to the
                 // zoomed height and left the rest of the page blank.
-                const keyboardOpen = !!vv && vv.scale < 1.01 && globalThis.innerHeight - vv.height > 120;
+                if (!vv || vv.scale >= 1.01) return false;
+                const key = Math.round(globalThis.innerWidth);
+                const typing = typingInto(document.activeElement);
+                if (!typing || !fullHeight[key]) fullHeight[key] = vv.height;
+                if (globalThis.innerHeight - vv.height > 120) return true;
+                return typing && fullHeight[key] - vv.height > 120;
+            }
+            function setAppHeight() {
+                const root = document.documentElement;
+                const vv = globalThis.visualViewport;
+                const keyboardOpen = keyboardIsOpen(vv);
                 const h = keyboardOpen ? vv.height : null;
                 if (h) {
                     root.style.setProperty('--app-height', h + 'px');
@@ -412,6 +446,13 @@
                 globalThis.visualViewport.addEventListener('scroll', setAppHeight);
             }
             globalThis.addEventListener('resize', setAppHeight);
+            // Leaving a field can close the keyboard before any resize says
+            // so; check again once focus has settled.
+            document.addEventListener('focusin', setAppHeight);
+            document.addEventListener('focusout', function () {
+                setTimeout(setAppHeight, 60);
+                setTimeout(setAppHeight, 350);
+            });
             globalThis.addEventListener('orientationchange', function () {
                 setTimeout(setAppHeight, 200);
             });

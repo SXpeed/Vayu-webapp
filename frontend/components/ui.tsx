@@ -273,7 +273,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
     return (
         <header
             data-collapsed={collapsed || undefined}
-            className={`shrink-0 w-full ${floating ? 'relative z-10' : ''} ${GUTTER} pt-[calc(0.375rem+env(safe-area-inset-top,0px))] pb-2 md:pt-[calc(1.25rem+env(safe-area-inset-top,0px))] md:pb-4 lg:pt-6 lg:pb-5 ${className}`}
+            className={`shrink-0 w-full ${floating ? 'relative z-10' : ''} ${GUTTER} pt-[calc(0.375rem+var(--safe-top))] pb-2 md:pt-[calc(1.25rem+var(--safe-top))] md:pb-4 lg:pt-6 lg:pb-5 ${className}`}
         >
             <div className={WIDTH_CLS[width]}>
                 {/* Title row — never folds. The phone keeps its title and
@@ -447,7 +447,7 @@ export const PageBody: React.FC<PageBodyProps> = ({
     // instead of shearing it on a hard line — header and body read as one
     // surface. The bottom padding clears the phone dock and the iOS home
     // indicator; lg:pb-10 takes it back on desktop, where the dock is hidden.
-    const base = `flex-1 min-h-0 w-full ${GUTTER} pt-[calc(0.75rem+var(--page-tools-h,0px))] pb-[calc(6rem+var(--safe-bottom,env(safe-area-inset-bottom,0px)))] lg:pb-10 no-scrollbar neu-scroll-fade overflow-y-auto`;
+    const base = `flex-1 min-h-0 w-full ${GUTTER} pt-[calc(0.75rem+var(--page-tools-h,0px))] pb-[calc(6rem+var(--safe-bottom-ui))] lg:pb-10 no-scrollbar neu-scroll-fade overflow-y-auto`;
     const inner = columns
         ? `${WIDTH_CLS[width]} ${COLS_CLS[columns]} gap-3 md:gap-4 lg:gap-5`
         : `${WIDTH_CLS[width]} ${SPACE_CLS[space]}`;

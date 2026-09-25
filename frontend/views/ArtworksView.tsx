@@ -214,7 +214,7 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
 
     return (
         <div className="neu-sheet z-50 animate-fade-in-up">
-            <div className="flex justify-between items-center p-3" style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}>
+            <div className="flex justify-between items-center p-3" style={{ paddingTop: 'calc(1rem + var(--safe-top))' }}>
                 <button onClick={onClose} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale">
                     <X size={20} />
                 </button>

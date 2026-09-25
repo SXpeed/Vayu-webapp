@@ -248,7 +248,7 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({ invoice,
 
     return (
         <div className="neu-sheet z-50 animate-fade-in-up">
-            <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] z-10">
+            <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+var(--safe-top))] z-10">
                 <button onClick={onClose} aria-label="Back" className="neu-icon-btn w-auto px-3 gap-2 text-gray-700 dark:text-gray-300 active-scale">
                     <ArrowLeft size={20} />
                 </button>
@@ -432,7 +432,7 @@ export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData,
 
     return (
         <div className="neu-sheet z-[70] animate-fade-in-up">
-            <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] z-10">
+            <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+var(--safe-top))] z-10">
                 <button onClick={onClose} aria-label="Close" className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale">
                     <X size={20} />
                 </button>

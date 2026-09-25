@@ -603,7 +603,7 @@ export const CatalogDetailModal: React.FC<CatalogDetailModalProps> = ({ catalog,
 
     return (
         <div className="neu-sheet z-50 animate-fade-in-up">
-            <div className="px-3 pb-2.5 z-10" style={{ paddingTop: 'calc(1.75rem + env(safe-area-inset-top, 0px))' }}>
+            <div className="px-3 pb-2.5 z-10" style={{ paddingTop: 'calc(1.75rem + var(--safe-top))' }}>
                 <div className="flex justify-between items-center mb-3">
                     <h2 className="text-xl font-serif text-gray-900 dark:text-white truncate px-1">{catalog.name}</h2>
                     <div className="flex items-center gap-2">
@@ -804,7 +804,7 @@ export const CatalogFormModal: React.FC<CatalogFormModalProps> = ({ initialData,
         <div className={inline
             ? 'h-full flex flex-col bg-[var(--neu-bg)]'
             : 'neu-sheet z-[70] animate-fade-in-up'}>
-            <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+env(safe-area-inset-top,0px))]">
+            <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+var(--safe-top))]">
                 <button onClick={onClose} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale">
                     <X size={20} />
                 </button>

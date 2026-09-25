@@ -417,7 +417,7 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
             {showArchived && (
                 <FullScreenPortal>
                     <div className="neu-sheet z-50 animate-fade-in-up">
-                        <div className="flex items-center gap-3 p-3 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] z-10">
+                        <div className="flex items-center gap-3 p-3 pt-[calc(1.75rem+var(--safe-top))] z-10">
                             <button onClick={() => setShowArchived(false)} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale">
                                 <ArrowLeft size={20} />
                             </button>
@@ -812,7 +812,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
             ? 'flex-1 min-w-0 h-full flex flex-col bg-[var(--neu-bg)]'
             : 'neu-sheet z-50 animate-fade-in-up'}>
             {/* Chat Header */}
-            <div className={`flex items-center gap-3 p-3 z-10 ${inline ? 'lg:px-5 lg:pt-5' : 'pt-[calc(1.75rem+env(safe-area-inset-top,0px))]'}`}>
+            <div className={`flex items-center gap-3 p-3 z-10 ${inline ? 'lg:px-5 lg:pt-5' : 'pt-[calc(1.75rem+var(--safe-top))]'}`}>
                 {/* The list stays on screen beside this pane on desktop, so
                     there is nothing to go "back" to. */}
                 {!inline && (
@@ -1027,7 +1027,7 @@ const EditGroupModal: React.FC<EditGroupModalProps> = ({ conversation, teamMembe
 
     return (
         <div className="neu-sheet z-[60] animate-fade-in-up">
-            <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] z-10">
+            <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+var(--safe-top))] z-10">
                 <button onClick={onClose} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale">
                     <X size={20} />
                 </button>
@@ -1180,7 +1180,7 @@ const NewChatModal: React.FC<NewChatModalProps> = ({ teamMembers, onClose, onSel
 
     return (
         <div className="neu-sheet z-[60] animate-fade-in-up">
-            <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+env(safe-area-inset-top,0px))] z-10">
+            <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+var(--safe-top))] z-10">
                 <button
                     onClick={onClose}
                     className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale"

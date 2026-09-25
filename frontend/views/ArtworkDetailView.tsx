@@ -117,7 +117,7 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
     return (
         <div className="absolute inset-0 bg-[var(--neu-bg)] z-[60] flex flex-col animate-fade-in-up">
             {/* Header — raised back / edit buttons */}
-            <div className="shrink-0 z-20 px-5 lg:px-10 pb-2" style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}>
+            <div className="shrink-0 z-20 px-5 lg:px-10 pb-2" style={{ paddingTop: 'calc(1rem + var(--safe-top))' }}>
                 <div className="max-w-6xl mx-auto flex justify-between items-center">
                     <button onClick={onClose} aria-label="Back" className="neu-icon-btn neu-btn active-scale">
                         <ArrowLeft size={18} />
@@ -255,7 +255,7 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                 </div>
 
                 {/* Clears the phone dock (it stays visible over this view) and the home indicator */}
-                <div className="h-[calc(6rem+var(--safe-bottom,env(safe-area-inset-bottom,0px)))] lg:h-10" />
+                <div className="h-[calc(6rem+var(--safe-bottom-ui))] lg:h-10" />
             </div>
 
             {/* Full Screen Image Viewer */}
@@ -267,7 +267,7 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                         style={{ background: `radial-gradient(circle at center, ${withAlpha(glowColor, 0.3)} 0%, transparent 80%)` }}
                     />
 
-                    <div className="px-3 pb-2 z-20 flex justify-between items-center" style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}>
+                    <div className="px-3 pb-2 z-20 flex justify-between items-center" style={{ paddingTop: 'calc(1rem + var(--safe-top))' }}>
                         <div className="w-9"></div>
                         {artwork.imageUrls.length > 1 ? (
                             <span className="neu-status px-3 py-1 text-[11px] font-medium tracking-widest text-[var(--neu-text-dim)]">
@@ -285,7 +285,7 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
 
                     <div
                         ref={fullScreenCarouselRef}
-                        className="flex-1 w-full h-full flex overflow-x-auto snap-x snap-mandatory no-scrollbar pb-[calc(72px+var(--safe-bottom,env(safe-area-inset-bottom,0px)))] lg:pb-4 relative z-10"
+                        className="flex-1 w-full h-full flex overflow-x-auto snap-x snap-mandatory no-scrollbar pb-[calc(72px+var(--safe-bottom-ui))] lg:pb-4 relative z-10"
                         onScroll={(e) => {
                             const scrollLeft = (e.target as HTMLElement).scrollLeft;
                             const width = (e.target as HTMLElement).clientWidth;

@@ -322,7 +322,7 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
             <div className="flex flex-col flex-1 min-w-0 min-h-0 lg:flex-none lg:w-[27rem] xl:w-[29rem] lg:shrink-0 lg:h-full lg:border-r lg:border-gray-200/60 dark:lg:border-white/5">
 
                 {/* Header */}
-                <div className="flex items-center gap-3 px-4 pb-3 pt-[calc(1rem+env(safe-area-inset-top,0px))] lg:pt-5">
+                <div className="flex items-center gap-3 px-4 pb-3 pt-[calc(1rem+var(--safe-top))] lg:pt-5">
                     <button onClick={onClose} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale" aria-label="Back to catalogs">
                         <ChevronLeft size={20} strokeWidth={1.8} />
                     </button>
@@ -760,7 +760,7 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
             {/* ═══════════════════ Preview (phone overlay) ═══════════════════ */}
             {showMobilePreview && (
                 <div className="absolute inset-0 z-[80] bg-black/70 backdrop-blur-sm lg:hidden flex flex-col animate-fade-in">
-                    <div className="flex justify-between items-center px-3 pt-[calc(0.75rem+env(safe-area-inset-top,0px))] pb-2">
+                    <div className="flex justify-between items-center px-3 pt-[calc(0.75rem+var(--safe-top))] pb-2">
                         <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/80 pl-2">
                             {activeThemeInfo.name} · {pageCountLabel}
                         </span>
@@ -776,7 +776,7 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                         </div>
                     </div>
                     {pageCount > 0 && (
-                        <div className="flex items-center justify-center gap-4 py-4 pb-[calc(1rem+var(--safe-bottom,env(safe-area-inset-bottom,0px)))]">
+                        <div className="flex items-center justify-center gap-4 py-4 pb-[calc(1rem+var(--safe-bottom-ui))]">
                             <button onClick={() => goPage(-1)} disabled={pageIdx === 0} className="w-10 h-10 rounded-full bg-white/10 text-white flex items-center justify-center disabled:opacity-30 active-scale" aria-label="Previous page">
                                 <ChevronLeft size={20} />
                             </button>

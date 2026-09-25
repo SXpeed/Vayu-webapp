@@ -63,6 +63,22 @@ body,
     padding: 0;
 }
 
+/* UI size (Profile → App Settings). The org app zooms <body> by --ui-zoom,
+   set in index.html from the saved choice: 0.9 Small, 0.95 Default, 1 Large.
+   Zoom scales every length inside body — viewport units, px custom
+   properties and safe-area insets included — so anything that must match
+   the physical screen is divided back by it (--app-h, --safe-top,
+   --safe-bottom-ui below). <html> itself is never zoomed. */
+body {
+    zoom: var(--ui-zoom, 1);
+}
+
+body,
+#root {
+    height: var(--app-h);
+    top: calc(var(--app-top, 0px) / var(--ui-zoom, 1));
+}
+
 /* Pages that scroll as a normal document — the control centre and the
    public site — opt out of the app-shell lock above with this class on
    <html>. Set in the HTML itself, so it applies before any script runs.
@@ -78,7 +94,7 @@ html.page-scroll #root {
 }
 
 .full-height {
-    height: 100dvh;
+    height: calc(100dvh / var(--ui-zoom, 1));
 }
 
 /* Hue slider for the Catalog Studio custom page color */
@@ -120,24 +136,24 @@ html.page-scroll #root {
 .h-app {
     /* --app-height is only set while the iOS keyboard is open (index.html);
        otherwise fill the fixed, full-screen body. */
-    height: var(--app-height, 100dvh);
+    height: var(--app-h);
 }
 
 /* min-height variant of .h-app — keeps the outer wrapper from being
    taller (100vh) than the inner app-shell on iOS Safari, which was
    the cause of the blank space appearing during top overscroll. */
 .min-h-app {
-    min-height: var(--app-height, 100dvh);
+    min-height: var(--app-h);
 }
 
 /* On desktop, use a fixed height instead of visualViewport tracking */
 @media (min-width: 768px) {
     .h-app {
-        height: 100dvh;
+        height: calc(100dvh / var(--ui-zoom, 1));
     }
 
     .min-h-app {
-        min-height: 100dvh;
+        min-height: calc(100dvh / var(--ui-zoom, 1));
     }
 }
 
@@ -146,12 +162,16 @@ html.page-scroll #root {
  * top-lit gradients on raised surfaces and a vibrant gold accent for
  * primary actions. Text/icon contrast targets WCAG AA. */
 :root {
+    /* Screen-true lengths for use inside the zoomed body (see "UI size"). */
+    --app-h: calc(var(--app-height, 100dvh) / var(--ui-zoom, 1));
+    --safe-top: calc(env(safe-area-inset-top, 0px) / var(--ui-zoom, 1));
+    --safe-bottom-ui: calc(var(--safe-bottom, env(safe-area-inset-bottom, 0px)) / var(--ui-zoom, 1));
     /* Bottom inset for bars pinned to the bottom edge (message bar, Catalog
        Studio footer) — the dock's rule: tuck 18px into the home-indicator
        strip instead of clearing all ~34px of it, which read as dead space
        under the bar. 0 while the keyboard is open (--safe-bottom is 0 then,
        see index.html). */
-    --safe-bottom-tucked: max(calc(var(--safe-bottom, env(safe-area-inset-bottom, 0px)) - 18px), 0px);
+    --safe-bottom-tucked: max(calc(var(--safe-bottom-ui) - 18px), 0px);
     --neu-bg: #e9edf4;
     /* hi/lo hug the page colour so surfaces merge into one continuous
        background — depth comes from the paired shadows, not the gradient. */
@@ -251,11 +271,11 @@ html.dark {
 }
 
 @utility pt-safe {
-    padding-top: env(safe-area-inset-top);
+    padding-top: var(--safe-top);
 }
 
 @utility pb-safe {
-    padding-bottom: var(--safe-bottom, env(safe-area-inset-bottom));
+    padding-bottom: var(--safe-bottom-ui);
 }
 
 /*
@@ -264,7 +284,7 @@ html.dark {
  * Works in both Safari browser AND standalone PWA mode.
  */
 @utility pt-safe-header {
-    padding-top: calc(1rem + env(safe-area-inset-top, 0px));
+    padding-top: calc(1rem + var(--safe-top));
 }
 
 /*
@@ -272,7 +292,7 @@ html.dark {
  * Adds 2rem base padding + the home indicator safe area inset.
  */
 @utility pb-safe-spacer {
-    padding-bottom: calc(2rem + var(--safe-bottom, env(safe-area-inset-bottom, 0px)));
+    padding-bottom: calc(2rem + var(--safe-bottom-ui));
 }
 
 /*
@@ -282,12 +302,13 @@ html.dark {
  * font-size below 16px receives focus. Force 16px on touch devices so
  * tapping "Type a message" and every other field never zooms the UI.
  * Desktop (fine pointer) keeps the original compact sizes.
+ * Safari measures the size after the UI-size zoom, so divide by it.
  */
 @media only screen and (pointer: coarse) {
     input,
     textarea,
     select {
-        font-size: 16px !important;
+        font-size: calc(16px / var(--ui-zoom, 1)) !important;
     }
 }
 

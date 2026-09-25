@@ -7,6 +7,7 @@ import {
 import { ViewState } from '../types';
 import { CanFn, canOpenView } from '../access';
 import { useBranding } from '../useBranding';
+import { toBodyPx } from '../uiSize';
 
 interface NavItem {
     id: ViewState;
@@ -86,7 +87,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const showTip = (label: string) => (e: React.SyntheticEvent<HTMLElement>) => {
         if (!collapsed) return;
         const r = e.currentTarget.getBoundingClientRect();
-        setTip({ label, top: r.top + r.height / 2, left: r.right + 12 });
+        setTip({ label, top: toBodyPx(r.top + r.height / 2), left: toBodyPx(r.right) + 12 });
     };
     const hideTip = () => setTip(null);
 
