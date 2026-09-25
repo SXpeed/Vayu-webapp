@@ -223,8 +223,10 @@ export async function updateAdmin(db: D1Database, userId: string, body: Record<s
 
 /** What is configured, as yes/no. Never a secret value. */
 export async function systemHealth(env: Env, db: D1Database) {
-  const checks: { name: string; ok: boolean; detail: string }[] = [];
-  const check = (name: string, ok: boolean, detail: string) => checks.push({ name, ok, detail });
+  // `fix` names the control-centre screen where a failing check is put right;
+  // checks without one are fixed in the deployment (secrets, bindings, vars).
+  const checks: { name: string; ok: boolean; detail: string; fix?: string }[] = [];
+  const check = (name: string, ok: boolean, detail: string, fix?: string) => checks.push({ name, ok, detail, ...(ok || !fix ? {} : { fix }) });
 
   check('Platform database', true, 'Connected');
   check('Organization databases', !!env.ORG_STORE, env.ORG_STORE ? 'Available' : 'ORG_STORE binding missing');
@@ -239,7 +241,7 @@ export async function systemHealth(env: Env, db: D1Database) {
     ? `Cloudflare Email Service, from ${env.EMAIL_FROM || 'no-reply@ateliersupport.com'}`
     : 'Not configured — notices wait in the outbox; no confirmation or reset emails');
   const { providerEmail } = await getNotificationSettings(db);
-  check('Provider notification address', !!providerEmail, providerEmail ?? 'Not set — new applications only appear in the queue');
+  check('Provider notification address', !!providerEmail, providerEmail ?? 'Not set — new applications only appear in the queue', 'notifications');
   check('Private file access', env.FILE_AUTH === 'on', env.FILE_AUTH === 'on' ? 'Files need a session' : 'OFF — files are reachable by URL');
 
   let migrations: string[] = [];

@@ -249,7 +249,7 @@ const ControlCentre: React.FC = () => {
                                     <AdminsPanel reauth={reauth} myRole={screen.role} myEmail={screen.email} />
                                 </div>
                             )}
-                            {tab === 'health' && <HealthPanel />}
+                            {tab === 'health' && <HealthPanel navigate={navigate} />}
                             {tab === 'audit' && <AuditPanel />}
                             {tab === 'profile' && (
                                 <ProfilePanel me={screen} reauth={reauth}

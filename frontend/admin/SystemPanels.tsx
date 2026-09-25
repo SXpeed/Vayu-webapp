@@ -2,9 +2,10 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Activity, CheckCircle2, Mail, RefreshCw, ShieldCheck, TriangleAlert, UserPlus } from 'lucide-react';
+import { Activity, ArrowRight, CheckCircle2, Mail, RefreshCw, ShieldCheck, TriangleAlert, UserPlus } from 'lucide-react';
 import { Button, Field, Input, Select } from '../components/ui';
 import { api, guarded, timeAgo, type ApiError, type Reauth } from './api';
+import type { Navigate } from './OverviewPanel';
 import { Avatar, Detail, EmptyState, STAT_TILE_H, Section, Segmented, Skeleton, SkeletonRows, StatTile, StatusPill, useDialogs } from './kit';
 
 /* -------------------------- Provider admins --------------------------- */
@@ -223,14 +224,14 @@ export const NotificationsPanel: React.FC<{ onChange?: () => void }> = ({ onChan
 
 interface Health {
     environment: string;
-    checks: { name: string; ok: boolean; detail: string }[];
+    checks: { name: string; ok: boolean; detail: string; fix?: string }[];
     migrations: string[];
     loginMethods: { emailPassword: { signIn: boolean; signUp: boolean }; google: { signIn: boolean; signUp: boolean } };
     authOrigins: string[];
     flags: Record<string, string>;
 }
 
-export const HealthPanel: React.FC = () => {
+export const HealthPanel: React.FC<{ navigate: Navigate }> = ({ navigate }) => {
     const [h, setH] = useState<Health | null>(null);
     const [at, setAt] = useState(0);
     const [loading, setLoading] = useState(false);
@@ -288,7 +289,15 @@ export const HealthPanel: React.FC = () => {
                                 ? <CheckCircle2 size={16} className="text-[var(--ac-ok)] mt-0.5 row-span-2 sm:row-span-1" aria-label="OK" />
                                 : <TriangleAlert size={16} className="text-[var(--ac-warn)] mt-0.5 row-span-2 sm:row-span-1" aria-label="Needs attention" />}
                             <span className="font-medium break-words">{c.name}</span>
-                            <span className="ac-muted break-words">{c.detail}</span>
+                            <span className="ac-muted break-words">
+                                {c.detail}
+                                {c.fix && (
+                                    <button type="button" onClick={() => navigate(c.fix!)}
+                                        className="ml-2 inline-flex items-center gap-1 font-medium text-[var(--ac-accent)] hover:underline">
+                                        Set it <ArrowRight size={13} />
+                                    </button>
+                                )}
+                            </span>
                         </li>
                     ))}
                 </ul>
