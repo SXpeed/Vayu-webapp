@@ -174,13 +174,12 @@ const PLACEMENT_AXES: Record<LogoPlacement, { h: Axis; v: Axis }> = {
     'Top Left': { h: 'start', v: 'start' },
     'Top Center': { h: 'center', v: 'start' },
     'Top Right': { h: 'end', v: 'start' },
-    'Center': { h: 'center', v: 'center' },
     'Bottom Left': { h: 'start', v: 'end' },
     'Bottom Center': { h: 'center', v: 'end' },
     'Bottom Right': { h: 'end', v: 'end' },
 };
 
-/** Anchors of a placement; unknown or unset = the original Top Right. */
+/** Anchors of a placement; unknown, retired ('Center') or unset = the original Top Right. */
 export const logoAxes = (placement: LogoPlacement | undefined): { h: Axis; v: Axis } =>
     PLACEMENT_AXES[placement ?? 'Top Right'] ?? PLACEMENT_AXES['Top Right'];
 

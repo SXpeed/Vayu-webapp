@@ -121,7 +121,9 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
         const loadInitialData = async () => {
             const savedOptions = await localforage.getItem<PdfOptions>('vayu-pdf-options');
             if (savedOptions) {
-                setOptions(prev => ({ ...prev, ...savedOptions }));
+                // A placement that no longer exists (the retired 'Center') falls back to the default.
+                const placement = PLACEMENT_GRID.includes(savedOptions.logoPlacement) ? savedOptions.logoPlacement : 'Top Right';
+                setOptions(prev => ({ ...prev, ...savedOptions, logoPlacement: placement }));
                 // Restore the saved hue + intensity so the pickers line up.
                 if (typeof savedOptions.colorHue === 'number') setHue(savedOptions.colorHue);
                 if (typeof savedOptions.colorIntensity === 'number') setIntensity(savedOptions.colorIntensity);
@@ -988,10 +990,10 @@ const StudioSection: React.FC<{ title: string; hint?: string; children?: React.R
     </section>
 );
 
-/** The seven logo spots, laid out as a 3×3 page (no middle-left / middle-right). */
+/** The six logo spots, laid out on a mini page: a top row and a bottom row. */
 const PLACEMENT_GRID: (LogoPlacement | null)[] = [
     'Top Left', 'Top Center', 'Top Right',
-    null, 'Center', null,
+    null, null, null,
     'Bottom Left', 'Bottom Center', 'Bottom Right',
 ];
 

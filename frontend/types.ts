@@ -42,7 +42,6 @@ export interface Catalog {
 
 export type LogoPlacement =
     | 'Top Left' | 'Top Center' | 'Top Right'
-    | 'Center'
     | 'Bottom Left' | 'Bottom Center' | 'Bottom Right';
 
 export interface PdfOptions {
