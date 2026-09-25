@@ -21,6 +21,7 @@ interface CatalogsViewProps {
 
 import { CatalogStudioView } from './CatalogStudio/CatalogStudioView';
 import { generateCatalogPdf } from './CatalogStudio/catalogPdfClient';
+import type { CatalogPdfProgress } from './CatalogStudio/catalogPdf';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { useIsDesktop } from '../hooks/useMediaQuery';
 import { IfCan } from '../components/Layout';
@@ -52,7 +53,7 @@ const downloadBlob = (blob: Blob, filename: string) => {
 export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, onAddCatalog, onUpdateCatalog, onDeleteCatalog }) => {
     const isDesktop = useIsDesktop();
     const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
-    const [pdfProgress, setPdfProgress] = useState<string | null>(null);
+    const [pdfProgress, setPdfProgress] = useState<CatalogPdfProgress | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [tab, setTab] = useState<'catalogs' | 'create'>('catalogs');
     const [isUploadingPdf, setIsUploadingPdf] = useState(false);
@@ -181,7 +182,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
     const handleGeneratePDF = async (options: PdfOptions, themeId: CatalogTheme) => {
         if (!catalogToDownload || isGeneratingPDF) return;
         setIsGeneratingPDF(true);
-        setPdfProgress('Preparing…');
+        setPdfProgress({ stage: 'preparing' });
 
         try {
             const catalogArtworks = artworks.filter(a => catalogToDownload.artworkIds.includes(a.id));
@@ -206,7 +207,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
             // old code serialised the whole document twice.
             const blob = new Blob([pdfBytes], { type: 'application/pdf' });
 
-            setPdfProgress('Saving to Catalogs…');
+            setPdfProgress({ stage: 'saving' });
             // Store the generated PDF so it lives in the Catalogs list.
             try {
                 const pdfFile = new File([blob], `${catalogToDownload.name.trim().replaceAll(/\s+/g, '_')}.pdf`, { type: 'application/pdf' });
@@ -220,7 +221,6 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                 toast.error('Generated PDF downloaded, but saving to Catalogs failed');
             }
 
-            setPdfProgress('Saving PDF…');
             downloadBlob(blob, `${catalogToDownload.name.replaceAll(/\s+/g, '_')}.pdf`);
         } catch (error) {
             console.error("Error generating PDF:", error);

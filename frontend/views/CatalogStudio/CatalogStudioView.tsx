@@ -16,6 +16,7 @@ import {
     logoBox, logoSizeMm, letterMark,
 } from './catalogLayout';
 import toast from 'react-hot-toast';
+import type { CatalogPdfProgress } from './catalogPdf';
 
 /** Stable keys for the six recent-color swatches (filled or empty). */
 const RECENT_COLOR_SLOTS = ['slot-1', 'slot-2', 'slot-3', 'slot-4', 'slot-5', 'slot-6'];
@@ -85,8 +86,8 @@ interface CatalogStudioViewProps {
     onClose: () => void;
     onGeneratePDF: (options: PdfOptions, themeId: CatalogTheme) => void;
     isGeneratingPDF: boolean;
-    /** Live status while the PDF is generating (e.g. "Image 2 of 5 — Downloading AI model 45%"). */
-    generationProgress?: string | null;
+    /** Where the PDF build is while it runs (stage, and how far within it). */
+    generationProgress?: CatalogPdfProgress | null;
 }
 
 export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
@@ -881,6 +882,9 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                             These page options produce no pages for this catalog.
                         </p>
                     )}
+                    {isGeneratingPDF && (
+                        <GenerationProgress progress={generationProgress ?? null} removeBackground={removeBackground} />
+                    )}
                     <div className="flex items-center gap-2">
                         <button
                             onClick={() => setShowMobilePreview(true)}
@@ -897,7 +901,7 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                             {isGeneratingPDF ? (
                                 <span className="flex items-center justify-center gap-2 min-w-0">
                                     <Loader2 size={15} className="animate-spin shrink-0" />
-                                    <span className="truncate">{generationProgress || 'Generating…'}</span>
+                                    <span className="truncate">Creating… {Math.round(overallProgress(generationProgress ?? null, removeBackground) * 100)}%</span>
                                 </span>
                             ) : (
                                 <span className="flex items-center justify-center gap-2">
@@ -972,6 +976,130 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                     onClose={() => setEndPagePreview(null)}
                 />
             )}
+        </div>
+    );
+};
+
+/* ------------------------------------------------------------------ */
+/*  Generation progress                                                */
+/* ------------------------------------------------------------------ */
+
+type ProgressStep = 'model' | 'pages' | 'assembling' | 'saving';
+
+/** How much of the whole job each step is, roughly by how long it takes. */
+const stepWeights = (removeBackground: boolean): Record<ProgressStep, number> => (removeBackground
+    ? { model: 0.25, pages: 0.65, assembling: 0.05, saving: 0.05 }
+    : { model: 0, pages: 0.86, assembling: 0.07, saving: 0.07 });
+
+const STEP_ORDER: ProgressStep[] = ['model', 'pages', 'assembling', 'saving'];
+
+/** How far through its own step the build is (0–1); steps without a count show some movement. */
+const stepFraction = (progress: CatalogPdfProgress): number => {
+    if (progress.stage === 'model') return progress.fraction;
+    if (progress.stage === 'pages') return progress.total ? progress.done / progress.total : 0;
+    return 0.4;
+};
+
+/** The whole job, 0–1: finished steps plus the part of the current one. */
+const overallProgress = (progress: CatalogPdfProgress | null, removeBackground: boolean): number => {
+    if (!progress || progress.stage === 'preparing') return 0;
+    const weights = stepWeights(removeBackground);
+    const current = STEP_ORDER.indexOf(progress.stage);
+    const done = STEP_ORDER.slice(0, current).reduce((sum, step) => sum + weights[step], 0);
+    return Math.min(1, done + weights[progress.stage] * stepFraction(progress));
+};
+
+/** What the current step is doing, in plain words. */
+const stepDetail = (progress: CatalogPdfProgress): string => {
+    switch (progress.stage) {
+        case 'model':
+            return progress.fraction < 1
+                ? `Downloading · ${Math.round(progress.fraction * 100)}% (first time on this device only)`
+                : 'Starting it up…';
+        case 'pages': {
+            const page = Math.min(progress.done + 1, progress.total);
+            return `Page ${page} of ${progress.total}${progress.title ? ` · ${progress.title}` : ''}`;
+        }
+        case 'assembling':
+            return 'Putting the pages together';
+        case 'saving':
+            return 'Uploading so it appears in Catalogs';
+        default:
+            return 'Getting started…';
+    }
+};
+
+type StepState = 'done' | 'current' | 'waiting';
+const STEP_TEXT: Record<StepState, string> = {
+    done: 'text-gray-700 dark:text-gray-300',
+    current: 'font-semibold text-gray-900 dark:text-gray-100',
+    waiting: 'text-gray-500 dark:text-gray-400',
+};
+const STEP_SPOKEN: Record<StepState, string> = { done: 'done', current: 'in progress', waiting: 'waiting' };
+
+const stepState = (i: number, currentIdx: number): StepState => {
+    if (i < currentIdx) return 'done';
+    return i === currentIdx ? 'current' : 'waiting';
+};
+
+/** Progress panel above the Generate button: one bar for the whole job, then the steps. */
+const GenerationProgress: React.FC<{ progress: CatalogPdfProgress | null; removeBackground: boolean }> = ({ progress, removeBackground }) => {
+    const steps: { id: ProgressStep; label: string }[] = [
+        ...(removeBackground ? [{ id: 'model' as const, label: 'Get the AI model ready' }] : []),
+        { id: 'pages', label: removeBackground ? 'Remove backgrounds and lay out pages' : 'Lay out pages' },
+        { id: 'assembling', label: 'Build the PDF' },
+        { id: 'saving', label: 'Save to Catalogs' },
+    ];
+    const stage = progress?.stage ?? 'preparing';
+    const currentIdx = stage === 'preparing' ? -1 : steps.findIndex(step => step.id === stage);
+    const pct = Math.round(overallProgress(progress, removeBackground) * 100);
+
+    return (
+        <div className="mb-3 rounded-2xl neu-inset p-3.5" aria-live="polite">
+            <div className="flex items-baseline justify-between gap-3">
+                <p className="text-xs font-semibold text-gray-800 dark:text-gray-100">Creating your catalog</p>
+                <p className="text-sm font-semibold tabular-nums text-gold-700 dark:text-gold-300">{pct}%</p>
+            </div>
+            <div
+                role="progressbar"
+                aria-label="Catalog PDF progress"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={pct}
+                className="mt-2 h-2 rounded-full bg-gray-300/50 dark:bg-white/10 overflow-hidden"
+            >
+                <div
+                    className="h-full rounded-full bg-gradient-to-r from-gold-400 to-gold-600 transition-[width] duration-500 ease-out"
+                    style={{ width: `${Math.max(pct, 3)}%` }}
+                />
+            </div>
+            <ol className="mt-3 space-y-1.5">
+                {steps.map((step, i) => {
+                    const state = stepState(i, currentIdx);
+                    return (
+                        <li key={step.id} className="flex items-start gap-2 min-w-0">
+                            <span className="mt-px w-4 h-4 shrink-0 flex items-center justify-center">
+                                {state === 'done' && (
+                                    <span className="w-4 h-4 rounded-full neu-check-on flex items-center justify-center">
+                                        <Check size={9} strokeWidth={3.5} />
+                                    </span>
+                                )}
+                                {state === 'current' && <Loader2 size={14} className="animate-spin text-gold-700 dark:text-gold-300" />}
+                                {state === 'waiting' && <span className="w-3 h-3 rounded-full border border-gray-400/70 dark:border-white/25" />}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                                <span className={`block text-[11px] leading-4 ${STEP_TEXT[state]}`}>
+                                    <span className="sr-only">{`Step ${i + 1}, ${STEP_SPOKEN[state]}: `}</span>
+                                    {step.label}
+                                </span>
+                                {state === 'current' && progress && (
+                                    <span className="block text-[11px] leading-4 text-gray-600 dark:text-gray-400 truncate">{stepDetail(progress)}</span>
+                                )}
+                            </span>
+                        </li>
+                    );
+                })}
+            </ol>
         </div>
     );
 };

@@ -33,7 +33,7 @@ export const generateCatalogPdf = (job: CatalogPdfJob, callbacks: CatalogPdfCall
             if (msg.id !== id) return;
             switch (msg.type) {
                 case 'progress':
-                    callbacks.onProgress(msg.message);
+                    callbacks.onProgress(msg.progress);
                     break;
                 case 'warning':
                     callbacks.onWarning(msg.message);

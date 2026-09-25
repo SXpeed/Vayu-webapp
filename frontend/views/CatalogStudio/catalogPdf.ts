@@ -266,9 +266,21 @@ const drawPageBackground = (doc: jsPDF, background: PageBackground | null, palet
 const shouldRemoveBackground = (options: PdfOptions, themeId: CatalogTheme): boolean =>
     options.removeBackground ?? themeId === 5;
 
+/**
+ * Where the build is, stage by stage, for the studio's progress panel:
+ * preparing → (AI model, only when removing backgrounds) → pages → assembling.
+ * 'saving' is added by the page after the worker is done.
+ */
+export type CatalogPdfProgress =
+    | { stage: 'preparing' }
+    | { stage: 'model'; fraction: number }
+    | { stage: 'pages'; done: number; total: number; title?: string }
+    | { stage: 'assembling' }
+    | { stage: 'saving' };
+
 /** Progress + non-fatal problems, relayed to the page by the worker. */
 export interface CatalogPdfCallbacks {
-    onProgress: (message: string) => void;
+    onProgress: (progress: CatalogPdfProgress) => void;
     /** Something went wrong but the PDF can still be produced. */
     onWarning: (message: string) => void;
 }
@@ -277,7 +289,6 @@ const loadImageInfo = async (
     imgUrl: string | undefined,
     themeId: CatalogTheme,
     options: PdfOptions,
-    onProgress: (message: string) => void,
     onWarning: (message: string) => void,
     artworkTitle: string,
 ): Promise<PdfImageInfo | null> => {
@@ -290,7 +301,7 @@ const loadImageInfo = async (
         if (shouldRemoveBackground(options, themeId)) {
             try {
                 const { removeBackgroundToBlob } = await import('../../services/imageCutoutService');
-                source = await removeBackgroundToBlob(imgUrl, onProgress);
+                source = await removeBackgroundToBlob(imgUrl);
                 isPng = true; // cutouts are transparent PNGs
                 isCutout = true;
             } catch (e) {
@@ -572,16 +583,33 @@ export interface CatalogPdfJob {
 
 /** Build the whole catalog and return the finished PDF's bytes. */
 export const buildCatalogPdf = async (job: CatalogPdfJob, callbacks: CatalogPdfCallbacks): Promise<ArrayBuffer> => {
-    const { artworks, options, themeId, catalogName, catalogCoverUrl } = job;
+    const { artworks, themeId, catalogName, catalogCoverUrl } = job;
+    let { options } = job;
     const doc = new jsPDF();
     const palette = getThemePalette(themeId, options);
 
-    callbacks.onProgress('Preparing…');
+    callbacks.onProgress({ stage: 'preparing' });
     const customLogo = options.logoSelection === 'Select 1' ? options.customLogo1 : options.customLogo2;
-    const [background, logo] = await Promise.all([
+    const shared = Promise.all([
         resolvePageBackground(themeId, palette, options),
         resolveLogo(customLogo || catalogCoverUrl),
     ]);
+
+    // Background removal: the AI model is downloaded and started first, as its
+    // own step, and only then are photos processed. If it can't be loaded the
+    // catalog is made with the original photos (one warning, not one per page).
+    if (shouldRemoveBackground(options, themeId)) {
+        callbacks.onProgress({ stage: 'model', fraction: 0 });
+        try {
+            const { preloadCutoutModel } = await import('../../services/imageCutoutService');
+            await preloadCutoutModel(fraction => callbacks.onProgress({ stage: 'model', fraction }));
+        } catch (e) {
+            console.error('Background removal model failed to load', e);
+            callbacks.onWarning("The background-removal model couldn't be loaded — using the original photos.");
+            options = { ...options, removeBackground: false };
+        }
+    }
+    const [background, logo] = await shared;
 
     // The end-page design loads alongside everything else.
     const lastPage = options.lastPage ? loadLastPage(options.lastPage, callbacks.onWarning) : null;
@@ -591,31 +619,24 @@ export const buildCatalogPdf = async (job: CatalogPdfJob, callbacks: CatalogPdfC
     // few pages are prepared while the current one is drawn; pages are still
     // added strictly in order.
     const pages = planCatalogPages(artworks, options);
-    const prefix = (page: PlannedPage) => `Image ${page.artIndex + 1} of ${artworks.length}`;
     const photos: (Promise<PdfImageInfo | null> | null)[] = [];
     const prepare = (k: number) => {
         const page = pages[k];
-        photos[k] ??= loadImageInfo(
-            page.imgUrl, themeId, options,
-            (message) => callbacks.onProgress(`${prefix(page)} — ${message}`),
-            callbacks.onWarning, page.art.title,
-        );
+        photos[k] ??= loadImageInfo(page.imgUrl, themeId, options, callbacks.onWarning, page.art.title);
     };
     const ctx: CatalogDrawContext = { doc, options, palette, background, logo, catalogName, pageCount: { value: 0 } };
     const depth = prefetchDepth();
     for (let k = 0; k < pages.length; k++) {
         for (let ahead = k; ahead < Math.min(pages.length, k + depth); ahead++) prepare(ahead);
-        callbacks.onProgress(prefix(pages[k]));
+        callbacks.onProgress({ stage: 'pages', done: k, total: pages.length, title: pages[k].art.title });
         const photo = await photos[k];
         photos[k] = null; // drawn: let its bytes go
         drawPlannedPage(ctx, pages[k], photo);
     }
 
-    if (lastPage) {
-        callbacks.onProgress('Last page');
-        drawLastPage(doc, await lastPage, background, palette, ctx.pageCount);
-    }
+    callbacks.onProgress({ stage: 'pages', done: pages.length, total: pages.length });
+    if (lastPage) drawLastPage(doc, await lastPage, background, palette, ctx.pageCount);
 
-    callbacks.onProgress('Assembling PDF…');
+    callbacks.onProgress({ stage: 'assembling' });
     return doc.output('arraybuffer');
 };

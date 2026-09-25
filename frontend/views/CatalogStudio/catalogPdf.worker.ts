@@ -1,4 +1,4 @@
-import { buildCatalogPdf, CatalogPdfJob } from './catalogPdf';
+import { buildCatalogPdf, CatalogPdfJob, CatalogPdfProgress } from './catalogPdf';
 
 /**
  * Web Worker entry for catalog PDF generation.
@@ -11,7 +11,7 @@ import { buildCatalogPdf, CatalogPdfJob } from './catalogPdf';
 export type CatalogPdfRequest = { type: 'generate'; id: number; job: CatalogPdfJob };
 
 export type CatalogPdfResponse =
-    | { type: 'progress'; id: number; message: string }
+    | { type: 'progress'; id: number; progress: CatalogPdfProgress }
     | { type: 'warning'; id: number; message: string }
     | { type: 'done'; id: number; buffer: ArrayBuffer }
     | { type: 'error'; id: number; message: string };
@@ -26,7 +26,7 @@ scope.onmessage = async (event) => {
     const { id, job } = event.data;
     try {
         const buffer = await buildCatalogPdf(job, {
-            onProgress: (message) => scope.postMessage({ type: 'progress', id, message }),
+            onProgress: (progress) => scope.postMessage({ type: 'progress', id, progress }),
             onWarning: (message) => scope.postMessage({ type: 'warning', id, message }),
         });
         scope.postMessage({ type: 'done', id, buffer }, [buffer]);

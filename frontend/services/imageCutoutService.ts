@@ -1,4 +1,4 @@
-import { removeBackground } from '@imgly/background-removal';
+import { preload, removeBackground } from '@imgly/background-removal';
 
 /**
  * Background removal for catalog PDFs.
@@ -12,6 +12,9 @@ import { removeBackground } from '@imgly/background-removal';
  * library falls back to the CPU by itself when it doesn't. On the CPU it
  * uses every core when the app is cross-origin isolated (see the app's
  * _headers in scripts/build-sites.mjs) and a single core otherwise.
+ *
+ * Order: the PDF generator calls preloadCutoutModel() first, so the model is
+ * downloaded and started before any photo is processed.
  */
 
 /** Progress messages ("Downloading AI model 45%", "Removing background…"). */
@@ -28,18 +31,45 @@ export type CutoutProgress = (message: string) => void;
  * image currently being processed. Images are processed one at a time.
  */
 let currentProgress: CutoutProgress | undefined;
+/** Download progress (0–1) while the model is being fetched by preloadCutoutModel. */
+let currentDownload: ((fraction: number) => void) | undefined;
+
+/**
+ * The model file is fetched first, then the runtime's own files; the model is
+ * by far the largest, so it counts for most of the bar. Everything seen so
+ * far is kept, so the fraction only goes up.
+ */
+const downloads = new Map<string, { current: number; total: number }>();
+const MODEL_SHARE = 0.85;
+const downloadFraction = (): number => {
+    let model = 0;
+    let rest = { current: 0, total: 0 };
+    for (const [key, d] of downloads) {
+        if (d.total <= 0) continue;
+        if (key.includes('/models/')) model = d.current / d.total;
+        else rest = { current: rest.current + d.current, total: rest.total + d.total };
+    }
+    return MODEL_SHARE * model + (1 - MODEL_SHARE) * (rest.total ? rest.current / rest.total : 0);
+};
+
 const forwardProgress = (key: string, current: number, total: number) => {
-    if (!currentProgress) return;
-    if (key.startsWith('fetch:') && total > 0) {
-        const pct = Math.round((current / total) * 100);
-        currentProgress(`Downloading AI model ${pct}%`);
+    if (key.startsWith('fetch:')) {
+        downloads.set(key, { current, total });
+        const fraction = downloadFraction();
+        currentDownload?.(fraction);
+        currentProgress?.(`Downloading AI model ${Math.round(fraction * 100)}%`);
     } else {
-        currentProgress('Removing background…');
+        currentProgress?.('Removing background…');
     }
 };
 
-/** Try the GPU until a GPU run fails once; then stay on the CPU for this session. */
-let gpuUsable = true;
+/**
+ * Try the GPU until a GPU run fails once; then stay on the CPU for this
+ * session. Never on Android: its phone GPUs gave visibly worse cutouts than
+ * the CPU (reported 2026-09-26), while iPhone and computer GPUs match it.
+ * Android still gets every CPU core (cross-origin isolation).
+ */
+let gpuUsable = !/Android/i.test(globalThis.navigator?.userAgent ?? '');
 
 /**
  * One model run at a time. Each run already uses the whole GPU (or every CPU
@@ -64,6 +94,30 @@ const runModel = async (image: Blob, onProgress?: CutoutProgress): Promise<Blob>
         }
     }
     return removeBackground(image, { progress: forwardProgress, device: 'cpu' });
+});
+
+/**
+ * Download and start the model before any photo is processed. Resolves when
+ * it is ready (at once if it already is); `onFraction` gets 0–1 while the
+ * files download. Throws if the model can't be loaded on either device.
+ */
+export const preloadCutoutModel = (onFraction?: (fraction: number) => void): Promise<void> => exclusive(async () => {
+    currentDownload = onFraction;
+    try {
+        if (gpuUsable) {
+            try {
+                await preload({ progress: forwardProgress, device: 'gpu' });
+                return;
+            } catch (e) {
+                gpuUsable = false;
+                console.warn('Starting background removal on the GPU failed; using the CPU from now on.', e);
+            }
+        }
+        await preload({ progress: forwardProgress, device: 'cpu' });
+    } finally {
+        onFraction?.(1);
+        currentDownload = undefined;
+    }
 });
 
 /** Cutouts, kept for the worker's lifetime so regenerating is quick. */
