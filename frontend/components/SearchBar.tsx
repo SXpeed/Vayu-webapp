@@ -38,7 +38,10 @@ export const SearchBar: React.FC<SearchBarProps> = ({ value, onChange, placehold
             </div>
             <input
                 ref={inputRef}
-                type="text"
+                // type="search": Chrome on Android leaves its autofill bar
+                // (passwords, cards, addresses) off search fields.
+                type="search"
+                enterKeyHint="search"
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
                 placeholder={placeholder}

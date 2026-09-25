@@ -667,17 +667,21 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                     </button>
                     <input type="file" multiple accept="image/*,.pdf,.doc,.docx,.txt" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
                     {camera.inputs}
-                    <input
+                    {/* A one-line textarea, not an input: Chrome on Android never puts
+                        its autofill bar (passwords, cards, addresses) over a textarea. */}
+                    <textarea
+                        rows={1}
                         value={text}
                         onChange={(e) => setText(e.target.value)}
                         onKeyDown={handleKeyDown}
                         placeholder="Type a message..."
+                        enterKeyHint="send"
                         autoComplete="off"
                         autoCorrect="off"
                         spellCheck={false}
                         data-form-type="other"
                         data-1p-ignore
-                        className="neu-field flex-1 min-w-0 text-xs"
+                        className="neu-field flex-1 min-w-0 text-xs [field-sizing:content] max-h-28 overflow-y-auto no-scrollbar"
                     />
                     <button
                         onClick={handleSend}
