@@ -2,9 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { Artwork, CalendarEvent, Catalog, EventTodo, Invoice, ViewState, UserProfile } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
-import { getThumbUrl } from '../services/storageService';
 import { EVENT_COLORS, eventColor } from '../services/eventService';
-import { Clock, Receipt, TrendingUp, Palette, ArrowRight, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronDown, Edit2, BookOpen, ShieldCheck, User } from 'lucide-react';
+import { Clock, Receipt, TrendingUp, Palette, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronDown, Edit2, BookOpen, ShieldCheck, User } from 'lucide-react';
 import { PageRoot, PageHeader, PageBody, GhostIconButton } from '../components/ui';
 import { useAppChrome } from '../components/Layout';
 import { useBranding } from '../useBranding';
@@ -29,7 +28,6 @@ interface HomeViewProps {
     teamMembers: UserProfile[];
     userProfile: UserProfile;
     onNavigate: (view: ViewState) => void;
-    onCatalogClick: (catalog: Catalog) => void;
     onAddEvent: (event: Omit<CalendarEvent, 'id' | 'createdAt' | 'createdBy' | 'createdByName'>) => Promise<void>;
     onUpdateEvent: (event: CalendarEvent) => void;
     onDeleteEvent: (id: string) => void;
@@ -61,7 +59,7 @@ const toInputValue = (ms?: number): string => {
 
 const EMPTY_EVENT_FORM = { title: '', dateTime: '', endDateTime: '', notes: '', color: '', todos: [] as EventTodo[] };
 
-export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices, events, teamMembers, onNavigate, onCatalogClick, onAddEvent, onUpdateEvent, onDeleteEvent }) => {
+export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices, events, teamMembers, onNavigate, onAddEvent, onUpdateEvent, onDeleteEvent }) => {
     // Admin entry + role come from the shell; on desktop the sidebar shows them
     // instead, so the header only renders these buttons on phones.
     const { isAdmin, openAdmin, can } = useAppChrome();
@@ -72,7 +70,6 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
     const availableArtworks = useMemo(() => artworks.filter(a => a.status === 'Available').length, [artworks]);
     // Proforma invoices are quotations; only paid ones count as revenue.
     const totalRevenue = useMemo(() => invoices.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + inv.total, 0), [invoices]);
-    const recentCatalogs = useMemo(() => [...catalogs].sort((a, b) => b.createdAt - a.createdAt).slice(0, 2), [catalogs]);
 
     // ── Upcoming events (calendar) ────────────────────────────────────────
     const [showEventModal, setShowEventModal] = useState(false);
@@ -430,38 +427,6 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                         )}
                     </div>
                 </section>
-                )}
-
-                {/* Recent Catalogs */}
-                {can('catalogs') && recentCatalogs.length > 0 && (
-                    <section className="animate-fade-in-up" style={{ animationDelay: '350ms' }}>
-                        <div className="flex justify-between items-end mb-3 px-3">
-                            <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest">Latest Catalogs</h2>
-                            <button onClick={() => onNavigate('catalogs')} className="text-[11px] font-medium text-gold-700 dark:text-gold-300 uppercase tracking-wider flex items-center gap-1 active-scale">
-                                View All <ArrowRight size={10} />
-                            </button>
-                        </div>
-                        <div className="space-y-2.5 px-0">
-                            {recentCatalogs.map((catalog, index) => (
-                                <button 
-                                    type="button"
-                                    key={catalog.id} 
-                                    onClick={() => onCatalogClick(catalog)}
-                                    className="w-full text-left neu-raised rounded-2xl overflow-hidden flex h-24 animate-scale-in cursor-pointer active-scale" 
-                                    style={{ animationDelay: `${400 + index * 50}ms` }}
-                                >
-                                    <img loading="lazy" decoding="async" src={getThumbUrl(catalog.coverImageUrl)} alt={catalog.name} className="w-24 h-full object-cover" />
-                                    <div className="p-3 flex flex-col justify-center flex-1">
-                                        <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm line-clamp-1">{catalog.name}</h3>
-                                        <p className="text-[11px] text-gray-700 dark:text-gray-300 mt-1 line-clamp-1 font-light">{catalog.description}</p>
-                                        <p className="text-[11px] font-medium text-gold-700 dark:text-gold-300 mt-2 uppercase tracking-widest">
-                                            {catalog.artworkIds.length} Items
-                                        </p>
-                                    </div>
-                                </button>
-                            ))}
-                        </div>
-                    </section>
                 )}
             </div>
             </PageBody>

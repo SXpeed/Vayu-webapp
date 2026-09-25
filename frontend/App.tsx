@@ -332,7 +332,7 @@ const App: React.FC = () => {
             case 'login':
                 return <LoginView onLogin={handleLogin} />;
             case 'home':
-                return userProfile ? <HomeView artworks={artworks} catalogs={catalogs} invoices={invoices} events={events} teamMembers={teamMembers} onNavigate={navigateTo} userProfile={userProfile} onCatalogClick={() => navigateTo('catalogs')} onAddEvent={handlers.handleAddEvent} onUpdateEvent={handlers.handleUpdateEvent} onDeleteEvent={handlers.handleDeleteEvent} /> : null;
+                return userProfile ? <HomeView artworks={artworks} catalogs={catalogs} invoices={invoices} events={events} teamMembers={teamMembers} onNavigate={navigateTo} userProfile={userProfile} onAddEvent={handlers.handleAddEvent} onUpdateEvent={handlers.handleUpdateEvent} onDeleteEvent={handlers.handleDeleteEvent} /> : null;
             case 'artworks':
                 return <ArtworksView artworks={artworks} onAddArtwork={handlers.handleAddArtwork} onArtworkClick={handleArtworkClick} />;
             case 'collections':
