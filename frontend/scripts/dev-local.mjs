@@ -181,8 +181,9 @@ process.on('SIGTERM', () => stop());
 
 start('Local API', [wranglerBin, 'dev', '-c', 'wrangler.json', '--local', '--persist-to', state, '--port', String(API_PORT),
     '--var', `AUTH_ORIGINS:http://localhost:${APP_PORT}`, '--var', 'PLATFORM_ENV:development', '--var', 'ADMIN_REQUIRE_2FA:off',
-    // As in production: files need the app's sign-in or its file cookie.
-    '--var', 'FILE_AUTH:on',
+    // As in production: files need the app's sign-in or its file cookie,
+    // and screens stay current through delta sync and realtime.
+    '--var', 'FILE_AUTH:on', '--var', 'DELTA_SYNC_ENABLED:on', '--var', 'REALTIME_ENABLED:on',
     '--var', `BETTER_AUTH_SECRET:${secrets.BETTER_AUTH_SECRET}`, '--var', `PAYMENT_SECRETS_KEY:${secrets.PAYMENT_SECRETS_KEY}`]);
 
 async function waitFor(url, what) {

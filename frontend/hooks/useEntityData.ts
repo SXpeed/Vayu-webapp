@@ -52,6 +52,8 @@ const HELD_ENTITIES: ReadonlySet<string> = new Set([
 /** While a realtime socket delivers change signals, polling is only a
  *  safety net against a lost signal. */
 const SAFETY_SYNC_MS = 10 * 60_000;
+/** Without a realtime socket, a screen switch syncs only data older than this. */
+const SWITCH_STALE_MS = 30_000;
 
 /** GET /sync; null when the server has delta sync switched off (404). */
 async function fetchSyncPage(cursor: number | null): Promise<SyncPage | null> {
@@ -259,6 +261,9 @@ export function useEntityData(
         }
     }, []);
 
+    /** When everything was last brought up to date (delta pass or full load). */
+    const lastSyncAtRef = useRef(0);
+
     // One delta-sync engine per signed-in user (per tab: see memoryCursor).
     const engineRef = useRef<{ userId: string; engine: ReturnType<typeof createDeltaSync> } | null>(null);
     const getEngine = useCallback(() => {
@@ -288,12 +293,15 @@ export function useEntityData(
         const engine = getEngine();
         if (engine) {
             try {
-                if (await engine.run() !== 'unavailable') return;
+                const outcome = await engine.run();
+                if (outcome === 'synced') lastSyncAtRef.current = Date.now();
+                if (outcome !== 'unavailable') return;
             } catch (err) {
                 console.warn('Delta sync failed; reloading everything.', err);
             }
         }
         await loadData(true);
+        lastSyncAtRef.current = Date.now();
     }, [getEngine, loadData]);
 
     const loadTeamMembers = useCallback(async () => {
@@ -409,12 +417,20 @@ export function useEntityData(
             // just this screen's lists.
             run: async () => {
                 const engine = getEngine();
-                if (engine?.available && await engine.run() !== 'unavailable') return;
+                const outcome = engine?.available ? await engine.run() : 'unavailable';
+                if (outcome === 'synced') lastSyncAtRef.current = Date.now();
+                if (outcome !== 'unavailable') return;
+                // Only this screen's lists: not "everything is current".
                 await loadData(true, selected);
             },
             intervalMs: () => (realtimeService.connected ? SAFETY_SYNC_MS : pollMs),
-            // The initial bootstrap already loads Home's data.
-            initialDelayMs: currentView === 'home' ? 120_000 : 0,
+            // The initial bootstrap already loads Home's data. Other screens
+            // sync on arrival only when the data may be stale: while the
+            // realtime socket is up, every change already triggers a delta
+            // pass, so switching screens must not cost a request each time.
+            initialDelayMs: currentView === 'home'
+                ? 120_000
+                : Math.max(0, (realtimeService.connected ? SAFETY_SYNC_MS : SWITCH_STALE_MS) - (Date.now() - lastSyncAtRef.current)),
             enabled: () => document.visibilityState === 'visible' && navigator.onLine,
         });
         const refresh = () => { void scheduler.request(); };
@@ -447,7 +463,11 @@ export function useEntityData(
             if (!pending || document.visibilityState !== 'visible') return;
             pending = false;
             const engine = getEngine();
-            if (engine?.available) void engine.run().catch(err => console.warn('Delta sync failed', err));
+            if (engine?.available) {
+                void engine.run()
+                    .then(outcome => { if (outcome === 'synced') lastSyncAtRef.current = Date.now(); })
+                    .catch(err => console.warn('Delta sync failed', err));
+            }
         };
         const unsubscribe = realtimeService.subscribe(event => {
             if (event.type === 'invalidate') {
