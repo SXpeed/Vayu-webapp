@@ -42,6 +42,7 @@ import {
 } from './viewingRooms';
 import { handlePlatformRequest } from './platform/routes';
 import { getAppPaymentsOrg, razorpayApiBase, razorpayCredentials, verifiedRazorpayKeys } from './platform/payments';
+import { planAndUsage } from './planUsage';
 import { OrgStore } from './platform/orgStore';
 import { deliverOutbox } from './platform/notify';
 import { emailConfigured } from './platform/email';
@@ -508,6 +509,70 @@ interface StoredPaymentLink {
   expiresAt?: number;
   /** Last time the app asked Razorpay for this link's status (see reconcilePaymentLinks). */
   checkedAt?: number;
+  /** What Razorpay recorded for each payment on the link, as last fetched (see /details). */
+  payments?: PaymentDetail[];
+}
+
+/**
+ * One payment as Razorpay recorded it: references, when, how, and what the
+ * customer entered at checkout. Only what the team needs to see; nothing a
+ * customer didn't give Razorpay themselves.
+ */
+interface PaymentDetail {
+  id: string;
+  amount: number; // paise
+  currency: string;
+  status: string; // captured | authorized | failed | refunded …
+  method: string;
+  createdAt: number;
+  email?: string;
+  contact?: string;
+  vpa?: string;
+  bank?: string;
+  wallet?: string;
+  card?: { name?: string; network?: string; last4?: string; type?: string; issuer?: string; international?: boolean };
+  fee?: number;
+  tax?: number;
+  rrn?: string;
+  upiTransactionId?: string;
+  bankTransactionId?: string;
+  authCode?: string;
+  errorDescription?: string;
+  refundStatus?: string;
+  amountRefunded?: number;
+}
+
+/** Keep the fields worth showing; drop empties. */
+function toPaymentDetail(p: any): PaymentDetail {
+  const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+  const card = p?.card && typeof p.card === 'object' ? {
+    name: text(p.card.name), network: text(p.card.network), last4: text(p.card.last4),
+    type: text(p.card.type), issuer: text(p.card.issuer), international: !!p.card.international || undefined,
+  } : undefined;
+  const acquirer = p?.acquirer_data ?? {};
+  return Object.fromEntries(Object.entries({
+    id: String(p?.id ?? ''),
+    amount: Number(p?.amount) || 0,
+    currency: text(p?.currency) ?? 'INR',
+    status: text(p?.status) ?? 'unknown',
+    method: text(p?.method) ?? '',
+    createdAt: Number(p?.created_at) > 0 ? Number(p.created_at) * 1000 : 0,
+    email: text(p?.email),
+    contact: text(p?.contact),
+    vpa: text(p?.vpa) ?? text(p?.upi?.vpa),
+    bank: text(p?.bank),
+    wallet: text(p?.wallet),
+    card: card && Object.values(card).some(v => v !== undefined) ? card : undefined,
+    fee: Number.isFinite(Number(p?.fee)) && p?.fee !== null ? Number(p.fee) : undefined,
+    tax: Number.isFinite(Number(p?.tax)) && p?.tax !== null ? Number(p.tax) : undefined,
+    rrn: text(acquirer.rrn),
+    upiTransactionId: text(acquirer.upi_transaction_id),
+    bankTransactionId: text(acquirer.bank_transaction_id),
+    authCode: text(acquirer.auth_code),
+    errorDescription: text(p?.error_description),
+    refundStatus: text(p?.refund_status),
+    amountRefunded: Number(p?.amount_refunded) > 0 ? Number(p.amount_refunded) : undefined,
+  }).filter(([, v]) => v !== undefined)) as unknown as PaymentDetail;
 }
 
 /** Links that can still be paid. */
@@ -540,6 +605,14 @@ async function linkAccountKeys(env: Env, account: string | undefined): Promise<{
   } catch {
     return null;
   }
+}
+
+/** One payment, from Razorpay's Payments API, with the given account's keys. */
+async function razorpayPayment(env: Env, keys: { keyId: string; keySecret: string }, paymentId: string): Promise<any | null> {
+  const res = await fetch(`${razorpayApiBase(env)}/v1/payments/${encodeURIComponent(paymentId)}`, {
+    headers: { 'Authorization': basicAuthHeader(keys.keyId, keys.keySecret) },
+  });
+  return res.ok ? res.json().catch(() => null) : null;
 }
 
 /** One Razorpay Payment Links API call with the given account's keys. */
@@ -604,6 +677,16 @@ function formatRupees(paise: number): string {
 function basicAuthHeader(username: string, password: string): string {
   const credentials = btoa(`${username}:${password}`);
   return `Basic ${credentials}`;
+}
+
+/** GET /plan — the organization's plan and its usage of each limit (admins; Admin → Plan). */
+async function handlePlanUsage(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  if (session.role !== ADMIN_ROLE_ID) return err('Forbidden', 403);
+  // The original app on its own (no organization) has no plan.
+  if (ctx.env.ORG_ID) await ensureInvoicesTable(ctx.env.VAYU_DB).catch(() => undefined);
+  return json((await planAndUsage(ctx.env)) ?? { plan: null, usage: [] });
 }
 
 async function handlePaymentLinkCreate(ctx: Ctx): Promise<Response> {
@@ -792,6 +875,49 @@ async function handlePaymentLinkDelete(ctx: Ctx): Promise<Response> {
     `Deleted the payment link of ${formatRupees(link.amount)} for "${link.customerName}"${link.status === 'paid' ? ' (paid; the payment stays in Razorpay)' : ''}`);
   queueHubNotify(ctx, [{ entity: 'payments', id: link.id, op: 'delete' }]);
   return json({ deleted: true });
+}
+
+/**
+ * GET /payments/links/:id/details — ask Razorpay afresh about one link: its
+ * status, and every payment made on it (transaction references, when, how,
+ * and what the customer entered at checkout). Also the "Recheck" button: a
+ * link found paid here is marked paid and announced like a webhook would.
+ * Falls back to the last copy when Razorpay can't be reached.
+ */
+async function handlePaymentLinkDetails(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const id = /^\/payments\/links\/(plink_[A-Za-z0-9_]{6,40})\/details$/.exec(ctx.path)?.[1];
+  if (!id) return err('Payment link not found', 404);
+  const raw = await ctx.env.VAYU_KV.get(`payment:link:${id}`);
+  if (!raw) return err('Payment link not found', 404);
+  const link = JSON.parse(raw) as StoredPaymentLink;
+
+  const keys = await linkAccountKeys(ctx.env, link.account);
+  if (!keys) return json({ link, checked: false, reason: "The Razorpay account this link was made in isn't connected." });
+  const res = await razorpayLinkCall(ctx.env, keys, 'GET', `/${encodeURIComponent(link.id)}`).catch(() => null);
+  if (!res?.ok) return json({ link, checked: false, reason: "Couldn't reach Razorpay. Showing what was last recorded." });
+
+  const nowPaid = applyRazorpayLinkState(link, res.data);
+  const paymentIds: string[] = (Array.isArray(res.data?.payments) ? res.data.payments : [])
+    .map((p: any) => p?.payment_id).filter((v: unknown): v is string => typeof v === 'string' && !!v).slice(0, 10);
+  const fetched = await Promise.all(paymentIds.map(pid => razorpayPayment(ctx.env, keys, pid).catch(() => null)));
+  const payments = fetched.filter(Boolean).map(toPaymentDetail);
+  if (payments.length) link.payments = payments;
+  // The payment that settled it: its own time and method, not our record's guess.
+  const settled = payments.find(p => p.status === 'captured');
+  if (link.status === 'paid' && settled) {
+    link.paidAt = settled.createdAt || link.paidAt;
+    link.paymentId = settled.id;
+    link.paymentMethod = settled.method;
+  }
+  link.checkedAt = Date.now();
+  await ctx.env.VAYU_KV.put(`payment:link:${link.id}`, JSON.stringify(link));
+  if (nowPaid) {
+    ctx.execCtx.waitUntil(announcePaymentReceived(ctx, link));
+    queueHubNotify(ctx, [{ entity: 'payments', id: link.id, op: 'put' }]);
+  }
+  return json({ link, checked: true, checkedAt: link.checkedAt });
 }
 
 /** PATCH /payments/links/:id { expiresAt } — change how long an unpaid link stays valid. */
@@ -4020,6 +4146,8 @@ const routes: Route[] = [
   // Razorpay payment links
   { method: 'POST', match: isExact('/payments/link'), handler: handlePaymentLinkCreate },
   { method: 'GET', match: isExact('/payments/links'), handler: handlePaymentLinksList },
+  { method: 'GET', match: isExact('/plan'), handler: handlePlanUsage },
+  { method: 'GET', match: (p) => /^\/payments\/links\/plink_[A-Za-z0-9_]{6,40}\/details$/.test(p), handler: handlePaymentLinkDetails },
   { method: 'DELETE', match: (p) => PAYMENT_LINK_PATH.test(p), handler: handlePaymentLinkDelete },
   { method: 'PATCH', match: (p) => PAYMENT_LINK_PATH.test(p), handler: handlePaymentLinkUpdate },
   { method: 'POST', match: isExact('/payments/webhook'), handler: handlePaymentWebhook },

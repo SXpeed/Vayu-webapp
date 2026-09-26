@@ -317,4 +317,33 @@ export interface PaymentLink {
     paymentMethod?: string;
     /** When the link stops accepting payment; unset on older links (Razorpay's default). */
     expiresAt?: number;
+    /** Last time the app asked Razorpay about this link. */
+    checkedAt?: number;
+    /** Each payment on the link as Razorpay recorded it (filled in by "details"). */
+    payments?: PaymentDetail[];
+}
+
+/** One payment as Razorpay recorded it: references, when, how, and what the customer entered at checkout. */
+export interface PaymentDetail {
+    id: string;
+    amount: number; // paise
+    currency: string;
+    status: string;
+    method: string;
+    createdAt: number;
+    email?: string;
+    contact?: string;
+    vpa?: string;
+    bank?: string;
+    wallet?: string;
+    card?: { name?: string; network?: string; last4?: string; type?: string; issuer?: string; international?: boolean };
+    fee?: number;
+    tax?: number;
+    rrn?: string;
+    upiTransactionId?: string;
+    bankTransactionId?: string;
+    authCode?: string;
+    errorDescription?: string;
+    refundStatus?: string;
+    amountRefunded?: number;
 }

@@ -22,6 +22,7 @@ let worker, razorpay, admin, appToken, orgA, orgB;
 const calls = [];           // what the stand-in Razorpay received
 let razorpayDown = false;   // make the stand-in reject keys
 const plinks = new Map();   // the stand-in's payment links: id -> entity
+const rzPayments = new Map(); // the stand-in's payments: id -> entity
 
 /** A local stand-in for api.razorpay.com: records which key id called it. */
 function startRazorpay() {
@@ -34,6 +35,13 @@ function startRazorpay() {
             calls.push({ method: req.method, path: req.url, keyId });
             res.setHeader('Content-Type', 'application/json');
             if (razorpayDown) { res.statusCode = 401; res.end('{"error":{"description":"bad keys"}}'); return; }
+            const payment = /^\/v1\/payments\/(pay_[A-Za-z0-9_]+)$/.exec(req.url);
+            if (payment) {
+                const entity = rzPayments.get(payment[1]);
+                if (!entity) { res.statusCode = 404; res.end('{"error":{"description":"not found"}}'); return; }
+                res.end(JSON.stringify(entity));
+                return;
+            }
             if (req.url.startsWith('/v1/payments')) { res.end('{"items":[]}'); return; }
             if (req.url === '/v1/payment_links' && req.method === 'POST') {
                 n += 1;
@@ -272,4 +280,40 @@ test('a link past its expiry shows as expired', async () => {
         await new Promise(r => setTimeout(r, 250));
     }
     assert.equal(seen?.status, 'expired');
+});
+
+test('payment details: references, time, method and what the customer entered, fetched from Razorpay', async () => {
+    const link = (await createLink()).body;
+    const paidAtSec = Math.floor(Date.now() / 1000) - 600;
+    rzPayments.set('pay_rich01', {
+        id: 'pay_rich01', entity: 'payment', amount: 250000, currency: 'INR', status: 'captured', method: 'upi',
+        vpa: 'mehta@okhdfc', email: 'mehta@example.com', contact: '+919820000000', created_at: paidAtSec,
+        fee: 5900, tax: 900, acquirer_data: { rrn: '425612345678', upi_transaction_id: 'HDFC00012345' },
+    });
+    // A failed attempt first, then the successful one.
+    rzPayments.set('pay_fail01', { id: 'pay_fail01', amount: 250000, currency: 'INR', status: 'failed', method: 'card', created_at: paidAtSec - 300, card: { network: 'Visa', last4: '4242', type: 'credit', name: 'R Mehta' }, error_description: 'Payment was declined by the bank.' });
+    payAt(link.id, { status: 'paid', payments: [{ payment_id: 'pay_fail01', status: 'failed' }, { payment_id: 'pay_rich01', status: 'captured' }] });
+
+    const res = await app(`/payments/links/${link.id}/details`);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.checked, true);
+    assert.equal(res.body.link.status, 'paid', 'recheck confirms the payment');
+    const ok = res.body.link.payments.find(p => p.id === 'pay_rich01');
+    assert.equal(ok.vpa, 'mehta@okhdfc');
+    assert.equal(ok.email, 'mehta@example.com');
+    assert.equal(ok.contact, '+919820000000');
+    assert.equal(ok.rrn, '425612345678');
+    assert.equal(ok.upiTransactionId, 'HDFC00012345');
+    assert.equal(ok.fee, 5900);
+    assert.equal(ok.createdAt, paidAtSec * 1000);
+    const failed = res.body.link.payments.find(p => p.id === 'pay_fail01');
+    assert.equal(failed.card.last4, '4242');
+    assert.match(failed.errorDescription, /declined/);
+    // Kept on the record: the time and transaction are the real ones.
+    const listed = (await links()).find(l => l.id === link.id);
+    assert.equal(listed.paymentId, 'pay_rich01');
+    assert.equal(listed.paidAt, paidAtSec * 1000);
+    assert.equal(listed.paymentMethod, 'upi');
+    assert.equal(listed.payments.length, 2);
+    assert.equal((await app('/payments/links/plink_nosuch01/details')).status, 404);
 });

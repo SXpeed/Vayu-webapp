@@ -3,10 +3,12 @@ import { FullScreenPortal } from './FullScreenPortal';
 import { TypeDeleteDialog } from './TypeDeleteDialog';
 import UserManagementPanel from './UserManagementPanel';
 import { RolesPanel } from './RolesPanel';
+import { PlanPanel } from './PlanPanel';
+import { isPlatformSession } from '../services/workspace';
 import { apiCall } from '../services/apiClient';
 import { DeletedItem } from '../types';
 import { PageRoot, PageHeader } from './ui';
-import { Archive, History, KeyRound, Users as UsersIcon, Trash2, Loader2, FileText, CalendarDays, Phone, MessageCircle, User as UserIcon, FolderOpen, BookOpen, Undo2 } from 'lucide-react';
+import { Archive, Gauge, History, KeyRound, Users as UsersIcon, Trash2, Loader2, FileText, CalendarDays, Phone, MessageCircle, User as UserIcon, FolderOpen, BookOpen, Undo2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const ActivityLogView = React.lazy(() => import('../views/ActivityLogView').then(m => ({ default: m.ActivityLogView })));
@@ -16,7 +18,7 @@ interface AdminPanelProps {
     onClose: () => void;
 }
 
-type AdminTab = 'deleted' | 'users' | 'roles' | 'activity';
+type AdminTab = 'deleted' | 'users' | 'roles' | 'activity' | 'plan';
 
 const ENTITY_META: Record<string, { label: string; Icon: React.FC<{ size?: number; className?: string }> }> = {
     artwork: { label: 'Artwork', Icon: FileText },
@@ -43,6 +45,8 @@ const TABS: Array<{ id: AdminTab; label: string; Icon: React.FC<{ size?: number;
     { id: 'roles', label: 'Roles', Icon: KeyRound },
     { id: 'activity', label: 'Activity', Icon: History },
 ];
+/** A workspace (an organization) has a plan; the original app on its own doesn't. */
+const PLAN_TAB = { id: 'plan' as const, label: 'Plan', Icon: Gauge };
 
 /** Admin hub — deleted-items archive, user management and activity logs
  *  behind a single shield button on the home header (admins only). */
@@ -106,6 +110,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUserId, onClose }
         users: 'Team members',
         roles: 'Who can see and change what',
         activity: 'Everything that changed',
+        plan: 'Your plan and what you use of it',
     }[tab];
 
     return (
@@ -116,7 +121,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUserId, onClose }
                 <PageRoot width="default">
                     <PageHeader title="Admin" subtitle={subtitle} onBack={onClose}>
                         <div className="flex gap-2 lg:w-fit">
-                            {TABS.map(({ id, label, Icon }) => (
+                            {(isPlatformSession() ? [...TABS, PLAN_TAB] : TABS).map(({ id, label, Icon }) => (
                                 <button
                                     key={id}
                                     type="button"
@@ -219,6 +224,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUserId, onClose }
                             )}
 
                             {tab === 'roles' && <RolesPanel />}
+
+                            {tab === 'plan' && <PlanPanel />}
 
                             {tab === 'activity' && (
                                 <React.Suspense fallback={

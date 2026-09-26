@@ -38,6 +38,7 @@
     "viewingRooms.ts",
     "fileAuth.ts",
     "deviceSessions.ts",
+    "planUsage.ts",
     "orgApp.ts",
     "orgAppDb.ts",
     "orgStorage.ts",

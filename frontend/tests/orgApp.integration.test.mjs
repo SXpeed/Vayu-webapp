@@ -107,6 +107,20 @@ test('one organization never sees another\'s data', async () => {
     assert.equal(again.body[0].title, 'Monsoon Study');
 });
 
+test('admins see their plan and what they use of it; staff cannot', async () => {
+    const res = await ownerA.call(app(orgA.id, '/plan'));
+    assert.equal(res.status, 200, res.text);
+    const row = key => res.body.usage.find(r => r.key === key);
+    assert.ok(row('maxItems').used >= 1, 'the artwork made above counts');
+    assert.ok(row('maxMembers').used >= 2, 'owner and staff hold seats');
+    assert.equal(row('maxMembers').enforced, true);
+    assert.ok('limit' in row('maxItems'), 'each row carries its limit (null = unlimited)');
+    assert.equal(row('pdfGenerationsPerMonth').used, null, 'not recorded yet, shown as such');
+    assert.equal(row('invoicesPerMonth').period, 'month');
+    assert.ok(Array.isArray(res.body.modules) && res.body.modules.includes('Inventory'));
+    assert.equal((await staffA.call(app(orgA.id, '/plan'))).status, 403, 'staff do not see the plan');
+});
+
 test('the address alone opens nothing: non-members, strangers and made-up ids get the same answer', async () => {
     for (const [who, b] of [['owner of B', ownerB], ['signed-in outsider', outsider]]) {
         const res = await b.call(app(orgA.id, '/artworks'));

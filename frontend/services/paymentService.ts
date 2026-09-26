@@ -30,6 +30,11 @@ export const paymentService = {
         await call(`/payments/links/${encodeURIComponent(id)}`, { method: 'DELETE' });
     },
 
+    /** Ask Razorpay afresh about one link: its status and every payment on it (also "Recheck"). */
+    async getPaymentLinkDetails(id: string): Promise<{ link: PaymentLink; checked: boolean; reason?: string; checkedAt?: number }> {
+        return call(`/payments/links/${encodeURIComponent(id)}/details`);
+    },
+
     /** How long an unpaid link stays valid. */
     async setPaymentLinkExpiry(id: string, expiresAt: number): Promise<PaymentLink> {
         return call<PaymentLink>(`/payments/links/${encodeURIComponent(id)}`, {

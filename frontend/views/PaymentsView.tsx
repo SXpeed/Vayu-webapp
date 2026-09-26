@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
-import { PaymentLink } from '../types';
+import { PaymentDetail, PaymentLink } from '../types';
 import { paymentService } from '../services/paymentService';
 import { createRefreshScheduler } from '../services/refreshScheduler';
 import { realtimeService } from '../services/realtimeService';
-import { IndianRupee, Copy, Check, RefreshCw, Link as LinkIcon, MessageCircle, Trash2, CalendarClock } from 'lucide-react';
+import { IndianRupee, Copy, Check, RefreshCw, Link as LinkIcon, MessageCircle, Trash2, CalendarClock, Info, Loader2 } from 'lucide-react';
 import {
     PageRoot, PageHeader, PageBody, Card, SectionTitle, Field, Input, Select,
     Button, GhostIconButton, Badge, EmptyState, ToggleRow,
@@ -114,6 +114,8 @@ export const PaymentsView: React.FC = () => {
     /** Link whose delete button asked "tap again"; the question lapses. */
     const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
     const [busyId, setBusyId] = useState<string | null>(null);
+    /** Link whose payment details are open. */
+    const [detailsId, setDetailsId] = useState<string | null>(null);
     /** Link whose validity is being changed, and the choice so far. */
     const [editingValidity, setEditingValidity] = useState<{ id: string; choice: string; date: string } | null>(null);
 
@@ -386,7 +388,10 @@ export const PaymentsView: React.FC = () => {
                             <div className="space-y-2.5 lg:grid lg:grid-cols-2 lg:gap-4 lg:space-y-0 2xl:grid-cols-3">
                                 {links.map(link => (
                                     <Card key={link.id}>
-                                        <div className="flex justify-between items-start gap-2">
+                                        <div
+                                            className={`flex justify-between items-start gap-2 ${link.status === 'paid' || link.status === 'partially_paid' ? 'cursor-pointer' : ''}`}
+                                            onClick={() => { if (link.status === 'paid' || link.status === 'partially_paid') setDetailsId(id => (id === link.id ? null : link.id)); }}
+                                        >
                                             <div className="min-w-0">
                                                 <p className="font-serif text-base text-gray-900 dark:text-white truncate">{link.customerName}</p>
                                                 {link.description && (
@@ -408,6 +413,15 @@ export const PaymentsView: React.FC = () => {
                                                 {validityText(link) ?? ''}
                                             </span>
                                             <div className="flex items-center gap-2 shrink-0">
+                                                <button
+                                                    onClick={() => setDetailsId(id => (id === link.id ? null : link.id))}
+                                                    className={`neu-icon-btn-sm active-scale ${detailsId === link.id ? 'text-gold-700 dark:text-gold-300' : ''}`}
+                                                    title="Payment details"
+                                                    aria-label="Payment details"
+                                                    aria-expanded={detailsId === link.id}
+                                                >
+                                                    <Info size={14} />
+                                                </button>
                                                 {isOpen(link) && (
                                                     <>
                                                         <button onClick={() => copyLink(link)} className="neu-icon-btn-sm active-scale" title="Copy link" aria-label="Copy link">
@@ -448,6 +462,12 @@ export const PaymentsView: React.FC = () => {
                                                     ? 'Tap the bin again: the link is cancelled so it can no longer be paid, then removed.'
                                                     : `Tap the bin again to remove it from the list.${link.status === 'paid' ? ' The payment stays in Razorpay.' : ''}`}
                                             </p>
+                                        )}
+                                        {detailsId === link.id && (
+                                            <PaymentDetailsPanel
+                                                link={link}
+                                                onUpdated={updated => setLinks(prev => prev.map(l => (l.id === updated.id ? updated : l)))}
+                                            />
                                         )}
                                         {editingValidity?.id === link.id && (
                                             <div className="mt-3 pt-3 border-t border-gray-200/70 dark:border-white/10 space-y-2.5">
@@ -508,3 +528,142 @@ const ValidityPicker: React.FC<{
         )}
     </div>
 );
+
+const dateTime = (ts: number) => new Date(ts).toLocaleString('en-IN', {
+    day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit',
+});
+
+const METHOD_LABELS: Record<string, string> = { upi: 'UPI', card: 'Card', netbanking: 'Net banking', wallet: 'Wallet', emi: 'EMI', bank_transfer: 'Bank transfer', paylater: 'Pay later' };
+const PAYMENT_STATUS: Record<string, { label: string; tone: string }> = {
+    captured: { label: 'Successful', tone: 'text-green-700 dark:text-green-400' },
+    authorized: { label: 'Authorised (not yet captured)', tone: 'text-blue-700 dark:text-blue-400' },
+    failed: { label: 'Failed', tone: 'text-red-600 dark:text-red-400' },
+    refunded: { label: 'Refunded', tone: 'text-gray-600 dark:text-gray-400' },
+};
+
+/** A label and a value, with an optional copy button for references. */
+const DetailRow: React.FC<{ label: string; value?: React.ReactNode; copy?: string }> = ({ label, value, copy }) => {
+    const [copied, setCopied] = useState(false);
+    if (value === undefined || value === null || value === '') return null;
+    return (
+        <div className="py-1">
+            <dt className="text-[10px] uppercase tracking-wider text-gray-600 dark:text-gray-400">{label}</dt>
+            <dd className="mt-0.5 text-[12.5px] text-gray-900 dark:text-gray-100 min-w-0 flex items-start gap-1.5">
+                <span className="min-w-0 [overflow-wrap:anywhere]">{value}</span>
+                {copy && (
+                    <button
+                        type="button"
+                        onClick={async () => {
+                            try { await navigator.clipboard.writeText(copy); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* no clipboard */ }
+                        }}
+                        className="shrink-0 mt-0.5 text-gray-500 hover:text-gold-700 dark:hover:text-gold-300"
+                        aria-label={`Copy ${label}`}
+                        title="Copy"
+                    >
+                        {copied ? <Check size={12} className="text-green-600" /> : <Copy size={12} />}
+                    </button>
+                )}
+            </dd>
+        </div>
+    );
+};
+
+/** How it was paid, in words: "UPI · name@okbank", "Visa •••• 4242 (credit, HDFC)". */
+const paidWith = (p: PaymentDetail): string => {
+    const method = METHOD_LABELS[p.method] ?? p.method;
+    if (p.vpa) return `${method} · ${p.vpa}`;
+    if (p.card) {
+        const card = [p.card.network, p.card.last4 ? `•••• ${p.card.last4}` : ''].filter(Boolean).join(' ');
+        const extra = [p.card.type, p.card.issuer, p.card.international ? 'international' : ''].filter(Boolean).join(', ');
+        return `${card || method}${extra ? ` (${extra})` : ''}`;
+    }
+    if (p.bank) return `${method} · ${p.bank}`;
+    if (p.wallet) return `${method} · ${p.wallet}`;
+    return method;
+};
+
+/**
+ * Everything about one link's payment: asked of Razorpay when opened, and
+ * again with "Recheck". Shows each payment's references, time, method and
+ * what the customer entered at checkout, and the link's own details.
+ */
+const PaymentDetailsPanel: React.FC<{ link: PaymentLink; onUpdated: (link: PaymentLink) => void }> = ({ link, onUpdated }) => {
+    const [checking, setChecking] = useState(false);
+    const [note, setNote] = useState<string | null>(null);
+
+    const recheck = useCallback(async (announce: boolean) => {
+        setChecking(true);
+        try {
+            const res = await paymentService.getPaymentLinkDetails(link.id);
+            onUpdated(res.link);
+            setNote(res.checked ? `Checked with Razorpay at ${new Date(res.checkedAt ?? Date.now()).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })}` : res.reason ?? null);
+            if (announce) {
+                if (!res.checked) toast.error(res.reason ?? "Couldn't reach Razorpay");
+                else if (res.link.status === 'paid') toast.success('Payment confirmed by Razorpay');
+                else toast(`Razorpay says: ${STATUS_LABELS[res.link.status] ?? res.link.status}`);
+            }
+        } catch (e) {
+            setNote((e as Error).message || "Couldn't check with Razorpay");
+            if (announce) toast.error((e as Error).message || "Couldn't check with Razorpay");
+        } finally {
+            setChecking(false);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [link.id]);
+
+    // Fresh from Razorpay whenever the panel opens.
+    useEffect(() => { void recheck(false); }, [recheck]);
+
+    const payments = [...(link.payments ?? [])].sort((a, b) => (a.status === 'captured' ? -1 : 0) - (b.status === 'captured' ? -1 : 0) || b.createdAt - a.createdAt);
+    return (
+        <div className="mt-3 pt-3 border-t border-gray-200/70 dark:border-white/10 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+                <p className="text-[11px] text-gray-600 dark:text-gray-400 min-w-0">
+                    {checking ? 'Checking with Razorpay…' : note}
+                </p>
+                <Button onClick={() => void recheck(true)} disabled={checking} icon={checking ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} className="shrink-0 text-[11px] uppercase tracking-wider">
+                    Recheck
+                </Button>
+            </div>
+
+            {payments.length === 0 && !checking && (
+                <p className="text-[12px] text-gray-700 dark:text-gray-300">No payment has been made on this link yet.</p>
+            )}
+
+            {payments.map(p => {
+                const status = PAYMENT_STATUS[p.status] ?? { label: p.status, tone: 'text-gray-700 dark:text-gray-300' };
+                return (
+                    <div key={p.id} className="rounded-xl neu-inset p-3">
+                        <div className="flex items-baseline justify-between gap-2 mb-1">
+                            <span className={`text-[11px] font-semibold uppercase tracking-wider ${status.tone}`}>{status.label}</span>
+                            <span className="font-serif text-base text-gray-900 dark:text-white">{formatRupees(p.amount)}</span>
+                        </div>
+                        <dl>
+                            <DetailRow label={p.status === 'failed' ? 'Tried at' : 'Paid at'} value={p.createdAt ? dateTime(p.createdAt) : undefined} />
+                            <DetailRow label="Transaction ID" value={p.id} copy={p.id} />
+                            <DetailRow label="Paid with" value={paidWith(p)} />
+                            <DetailRow label="Name on card" value={p.card?.name} />
+                            <DetailRow label="Customer email" value={p.email} />
+                            <DetailRow label="Customer phone" value={p.contact} />
+                            <DetailRow label="Bank reference (RRN)" value={p.rrn} copy={p.rrn} />
+                            <DetailRow label="UPI transaction ID" value={p.upiTransactionId} copy={p.upiTransactionId} />
+                            <DetailRow label="Bank transaction ID" value={p.bankTransactionId} copy={p.bankTransactionId} />
+                            <DetailRow label="Authorisation code" value={p.authCode} />
+                            <DetailRow label="Razorpay fee" value={p.fee !== undefined ? `${formatRupees(p.fee)}${p.tax ? ` (incl. ${formatRupees(p.tax)} tax)` : ''}` : undefined} />
+                            <DetailRow label="Refunded" value={p.amountRefunded ? `${formatRupees(p.amountRefunded)}${p.refundStatus ? ` · ${p.refundStatus}` : ''}` : undefined} />
+                            <DetailRow label="Reason" value={p.errorDescription} />
+                        </dl>
+                    </div>
+                );
+            })}
+
+            <dl className="px-1">
+                <DetailRow label="Link" value={link.shortUrl} copy={link.shortUrl} />
+                <DetailRow label="Link ID" value={link.id} copy={link.id} />
+                <DetailRow label="Made by" value={link.createdByName ? `${link.createdByName}, ${dateTime(link.createdAt)}` : dateTime(link.createdAt)} />
+                <DetailRow label="Valid until" value={link.expiresAt ? dateTime(link.expiresAt) : undefined} />
+                <DetailRow label="Customer (as entered)" value={[link.customerName, link.customerPhone, link.customerEmail].filter(Boolean).join(' · ')} />
+            </dl>
+        </div>
+    );
+};
