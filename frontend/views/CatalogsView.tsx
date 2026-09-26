@@ -29,10 +29,10 @@ import { ViewingRoomsPanel } from './ViewingRoomsPanel';
 
 export const THEME_INFO: { id: CatalogTheme; name: string; desc: string; bg: string; fg: string; accent: string }[] = [
     { id: 1, name: 'Classic', desc: 'White & gradient', bg: '#ffffff', fg: '#1a1a1a', accent: '#e0e0e0' },
-    { id: 2, name: 'Warm Grey', desc: 'Light grey gradient', bg: '#e0e0e0', fg: '#1a1a1a', accent: '#e0e0e0' },
-    { id: 3, name: 'Edge Gradient', desc: 'White background', bg: '#ffffff', fg: '#1a1a1a', accent: '#8e44ad' },
-    { id: 4, name: 'Dark & Gold', desc: 'Premium dark', bg: '#2a2a2a', fg: '#C9A84C', accent: '#C9A84C' },
-    { id: 5, name: 'Gradient Cutout', desc: 'Grey gradient & cutout', bg: '#e0e0e0', fg: '#1a1a1a', accent: '#8e44ad' },
+    { id: 2, name: 'Linen', desc: 'Warm paper, soft rounded photos and a shadow', bg: '#eee6da', fg: '#342c26', accent: '#a0522d' },
+    { id: 3, name: 'Gallery', desc: 'Museum white, framed photos, quiet grey labels', bg: '#ffffff', fg: '#141414', accent: '#707070' },
+    { id: 4, name: 'Noir', desc: 'Near-black with a soft light and champagne gold', bg: '#18181b', fg: '#d4b26a', accent: '#d4b26a' },
+    { id: 5, name: 'Studio Cutout', desc: 'Studio backdrop, products cut out with a shadow', bg: '#e8e8e6', fg: '#1c1c1e', accent: '#806446' },
 ];
 
 

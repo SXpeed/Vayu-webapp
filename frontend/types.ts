@@ -69,9 +69,10 @@ export interface PdfOptions {
     imageShadow?: boolean;
     /** 'Default' (follow theme), a hex color like '#0f172a', or a legacy named palette. */
     colorPalette?: string;
-    /** Hue (0–330) of the last main color picked in the studio. */
+    /** The main colour whose shades the studio shows ('blue', 'grey' …). */
+    colorFamily?: string;
+    /** Retired (hue wheel + depth slider); read by nothing, kept so old saves load. */
     colorHue?: number;
-    /** Intensity (0–100) of the color intensity slider. */
     colorIntensity?: number;
     /** Up to 6 most recently used page colors. */
     recentColors?: string[];

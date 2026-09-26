@@ -13,20 +13,13 @@ import {
     planCatalogPages, pageBackgroundCss, pageHasText, rgbCss, pctW, pctH, cqw, ptToMm,
     PAGE_H_MM, PlannedPage, getThemePalette, ThemePalette,
     LOGO_DEFAULT_SIZE_MM, LOGO_MIN_SIZE_MM, LOGO_MAX_SIZE_MM, LOGO_MAX_OFFSET_MM,
-    logoBox, logoSizeMm, letterMark,
+    logoBox, logoSizeMm, letterMark, THEME_STYLES, effectiveCutout, effectiveShadow,
 } from './catalogLayout';
 import toast from 'react-hot-toast';
 import type { CatalogPdfProgress } from './catalogPdf';
 
 /** Stable keys for the six recent-color swatches (filled or empty). */
 const RECENT_COLOR_SLOTS = ['slot-1', 'slot-2', 'slot-3', 'slot-4', 'slot-5', 'slot-6'];
-
-/** The 12 main color-wheel hues (every 30°), applied at the chosen intensity. */
-const MAIN_HUES = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
-
-// At the default intensity the applied color matches the vivid main color shown
-// in the swatch row (s≈75, l≈50).
-const DEFAULT_INTENSITY = 58;
 
 const GRADIENT_STYLES = ['Solid', 'Linear', 'Radial', 'Diagonal', 'Vignette', 'Spotlight'] as const;
 
@@ -45,16 +38,34 @@ const hslToHex = (h: number, s: number, l: number): string => {
     return `#${toHex(f(0))}${toHex(f(8))}${toHex(f(4))}`;
 };
 
-/** Map a hue + intensity (0–100) to a page color: low intensity = soft pastel,
- *  high intensity = deep dark. The default intensity lands on the vivid color. */
-const hueToHex = (hue: number, intensity: number): string => {
-    const s = 60 + intensity * 0.25; // 60..85
-    const l = 92 - intensity * 0.72; // 92..20
-    return hslToHex(hue, s, l);
-};
+/**
+ * Page colours: ten main colours, each with eight shades from lightest to
+ * deepest. Saturation is tuned per colour so every shade reads as a page,
+ * not a highlighter; text on the page picks light or dark ink by itself.
+ */
+interface ColourFamily { id: string; name: string; hue: number; sat: number; swatchL: number }
+const COLOUR_FAMILIES: ColourFamily[] = [
+    { id: 'red', name: 'Red', hue: 0, sat: 62, swatchL: 50 },
+    { id: 'orange', name: 'Orange', hue: 26, sat: 78, swatchL: 52 },
+    { id: 'yellow', name: 'Yellow', hue: 46, sat: 82, swatchL: 54 },
+    { id: 'green', name: 'Green', hue: 140, sat: 38, swatchL: 42 },
+    { id: 'teal', name: 'Teal', hue: 178, sat: 42, swatchL: 40 },
+    { id: 'blue', name: 'Blue', hue: 214, sat: 55, swatchL: 48 },
+    { id: 'purple', name: 'Purple', hue: 268, sat: 40, swatchL: 48 },
+    { id: 'pink', name: 'Pink', hue: 334, sat: 58, swatchL: 60 },
+    { id: 'brown', name: 'Brown', hue: 26, sat: 32, swatchL: 36 },
+    { id: 'grey', name: 'Grey', hue: 220, sat: 6, swatchL: 55 },
+];
+const SHADE_LIGHTNESS = [95, 88, 78, 66, 54, 42, 30, 18];
+const SHADE_NAMES = ['Lightest', 'Very light', 'Light', 'Soft', 'Medium', 'Rich', 'Deep', 'Deepest'];
+/** Picking a main colour applies this shade first: light enough to be a page. */
+const FIRST_SHADE = 1;
 
-/** The true vivid main color for a hue — what the swatch row displays. */
-const mainColorHex = (hue: number): string => hslToHex(hue, 85, 50);
+const shadesOf = (f: ColourFamily): string[] => SHADE_LIGHTNESS.map(l => hslToHex(f.hue, f.sat, l));
+const familySwatch = (f: ColourFamily): string => hslToHex(f.hue, f.sat, f.swatchL);
+/** The family a saved colour belongs to, if it is one of the shades. */
+const familyOfColour = (hex: string | undefined): ColourFamily | undefined =>
+    hex ? COLOUR_FAMILIES.find(f => shadesOf(f).includes(hex.toLowerCase())) : undefined;
 
 /** Whether a hex color is light (to pick a readable check-mark color on top). */
 const isLightHex = (hex: string): boolean => {
@@ -111,10 +122,8 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
         logoPlacement: 'Top Right',
         pageOptions: ['Main Image'],
     });
-    // Custom page color state: hue picked from the 12 main colors, intensity
-    // from the slider. Both are persisted with the rest of the PDF options.
-    const [hue, setHue] = useState(30);
-    const [intensity, setIntensity] = useState(DEFAULT_INTENSITY);
+    // The main colour whose shades are showing (saved as colorFamily).
+    const [familyId, setFamilyId] = useState<string | null>(null);
     const [hexInput, setHexInput] = useState('');
     const [uploadingLogo, setUploadingLogo] = useState<'Select 1' | 'Select 2' | null>(null);
 
@@ -125,9 +134,8 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                 // A placement that no longer exists (the retired 'Center') falls back to the default.
                 const placement = PLACEMENT_GRID.includes(savedOptions.logoPlacement) ? savedOptions.logoPlacement : 'Top Right';
                 setOptions(prev => ({ ...prev, ...savedOptions, logoPlacement: placement }));
-                // Restore the saved hue + intensity so the pickers line up.
-                if (typeof savedOptions.colorHue === 'number') setHue(savedOptions.colorHue);
-                if (typeof savedOptions.colorIntensity === 'number') setIntensity(savedOptions.colorIntensity);
+                // Reopen the shades of the colour in use.
+                setFamilyId(familyOfColour(savedOptions.colorPalette)?.id ?? savedOptions.colorFamily ?? null);
             }
 
             try {
@@ -203,9 +211,10 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
         });
     };
 
-    // Unset = follow the theme default: theme 5 (Gradient Cutout) removes by default.
-    const removeBackground = options.removeBackground ?? selectedTheme === 5;
-    const imageShadow = options.imageShadow ?? false;
+    // Unset = follow the theme's default (Studio Cutout removes backgrounds;
+    // Linen, Noir and Studio Cutout add a shadow).
+    const removeBackground = effectiveCutout(selectedTheme, options);
+    const imageShadow = effectiveShadow(selectedTheme, options);
     const colorPalette = options.colorPalette ?? 'Default';
     const gradientStyle = options.gradientStyle ?? 'Solid';
 
@@ -499,66 +508,83 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                             title="Page colour"
                             hint={colorPalette === 'Default' ? 'Using the theme colour' : colorPalette}
                         >
-                            {/* Theme default + 12 main colours */}
-                            <div className="grid grid-cols-[repeat(13,minmax(0,1fr))] gap-1.5 mb-4">
+                            {/* Theme colour + ten main colours */}
+                            <div className="grid grid-cols-[repeat(11,minmax(0,1fr))] gap-1.5 mb-3">
                                 <button
                                     type="button"
-                                    onClick={() => updateOption('colorPalette', 'Default')}
+                                    onClick={() => { setFamilyId(null); updateOption('colorPalette', 'Default'); }}
                                     aria-label="Use the theme colour"
                                     title="Theme colour"
                                     aria-pressed={colorPalette === 'Default'}
                                     className={`aspect-square rounded-full overflow-hidden active-scale ${colorPalette === 'Default' ? 'ring-2 ring-gold-500 ring-offset-2 ring-offset-[var(--neu-bg)]' : 'neu-raised-sm'}`}
                                     style={{ background: `linear-gradient(135deg, ${activeThemeInfo.bg} 50%, ${activeThemeInfo.fg} 50%)` }}
                                 />
-                                {MAIN_HUES.map(h => {
-                                    const displayHex = mainColorHex(h);
-                                    const appliedHex = hueToHex(h, intensity);
-                                    const selected = hue === h && colorPalette === appliedHex;
+                                {COLOUR_FAMILIES.map(f => {
+                                    const swatch = familySwatch(f);
+                                    const open = familyId === f.id;
                                     return (
                                         <button
                                             type="button"
-                                            key={h}
+                                            key={f.id}
                                             onClick={() => {
-                                                setHue(h);
-                                                applyColor(appliedHex, { colorHue: h, colorIntensity: intensity });
+                                                setFamilyId(f.id);
+                                                // Already on one of its shades: just show them.
+                                                if (familyOfColour(colorPalette)?.id !== f.id) {
+                                                    applyColor(shadesOf(f)[FIRST_SHADE], { colorFamily: f.id });
+                                                }
                                             }}
-                                            aria-label={`Page colour ${displayHex}`}
-                                            aria-pressed={selected}
-                                            className={`aspect-square rounded-full flex items-center justify-center active-scale ${selected ? 'ring-2 ring-gold-500 ring-offset-2 ring-offset-[var(--neu-bg)]' : 'neu-raised-sm'}`}
-                                            style={{ background: displayHex }}
-                                        >
-                                            {selected && (
-                                                <Check size={10} strokeWidth={3} className={isLightHex(displayHex) ? 'text-gray-800' : 'text-white'} />
-                                            )}
-                                        </button>
+                                            aria-label={`${f.name} — show its shades`}
+                                            aria-expanded={open}
+                                            title={f.name}
+                                            className={`aspect-square rounded-full flex items-center justify-center active-scale ${open ? 'ring-2 ring-gold-500 ring-offset-2 ring-offset-[var(--neu-bg)]' : 'neu-raised-sm'}`}
+                                            style={{ background: swatch }}
+                                        />
                                     );
                                 })}
                             </div>
 
-                            {/* Intensity */}
-                            <div className="flex items-center gap-3 mb-4">
-                                <span className="text-[10px] uppercase tracking-[0.12em] text-gray-600 dark:text-gray-400 w-14 shrink-0">Depth</span>
-                                <input
-                                    type="range"
-                                    min={0}
-                                    max={100}
-                                    value={intensity}
-                                    onChange={(e) => {
-                                        const i = Number(e.target.value);
-                                        setIntensity(i);
-                                        applyColor(hueToHex(hue, i), { colorHue: hue, colorIntensity: i });
-                                    }}
-                                    aria-label="Colour depth"
-                                    className="hue-slider flex-1"
-                                    style={{
-                                        background: `linear-gradient(to right, ${hueToHex(hue, 0)}, ${hueToHex(hue, 50)}, ${hueToHex(hue, 100)})`,
-                                    }}
-                                />
-                                <span
-                                    className="w-6 h-6 rounded-full shrink-0 neu-raised-sm"
-                                    style={{ background: colorPalette.startsWith('#') ? colorPalette : hueToHex(hue, intensity) }}
-                                />
-                            </div>
+                            {/* Shades of the chosen colour, lightest to deepest */}
+                            {(() => {
+                                const family = COLOUR_FAMILIES.find(f => f.id === familyId);
+                                if (!family) {
+                                    return (
+                                        <p className="mb-4 text-[11px] text-gray-600 dark:text-gray-400 font-light">
+                                            Pick a colour to see its shades.
+                                        </p>
+                                    );
+                                }
+                                return (
+                                    <div className="mb-4">
+                                        <p className="mb-1.5 text-[10px] uppercase tracking-[0.12em] text-gray-600 dark:text-gray-400">
+                                            Shades of {family.name.toLowerCase()}
+                                        </p>
+                                        <div className="flex gap-1.5" role="group" aria-label={`Shades of ${family.name}`}>
+                                            {shadesOf(family).map((hex, i) => {
+                                                const selected = colorPalette === hex;
+                                                return (
+                                                    <button
+                                                        type="button"
+                                                        key={hex}
+                                                        onClick={() => applyColor(hex, { colorFamily: family.id })}
+                                                        aria-label={`${SHADE_NAMES[i]} ${family.name.toLowerCase()} (${hex})`}
+                                                        aria-pressed={selected}
+                                                        title={`${SHADE_NAMES[i]} · ${hex}`}
+                                                        className={`flex-1 h-9 rounded-lg flex items-center justify-center active-scale ${selected ? 'ring-2 ring-gold-500 ring-offset-2 ring-offset-[var(--neu-bg)]' : 'neu-raised-sm'}`}
+                                                        style={{ background: hex }}
+                                                    >
+                                                        {selected && (
+                                                            <Check size={12} strokeWidth={3} className={isLightHex(hex) ? 'text-gray-800' : 'text-white'} />
+                                                        )}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                        <div className="mt-1 flex justify-between text-[10px] text-gray-500 dark:text-gray-400">
+                                            <span>Lightest</span><span>Deepest</span>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
 
                             {/* Recent colours + hex entry */}
                             <div className="flex items-center gap-3">
@@ -642,7 +668,7 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                             <div className="space-y-1">
                                 <ToggleRow
                                     title="Remove background"
-                                    description={selectedTheme === 5 ? 'On by default for Gradient Cutout' : 'Cuts each artwork out of its photo'}
+                                    description={THEME_STYLES[selectedTheme].cutout ? `On by default for ${activeThemeInfo.name}` : 'Cuts each artwork out of its photo'}
                                     checked={removeBackground}
                                     onChange={() => updateOption('removeBackground', !removeBackground)}
                                 />
@@ -1417,7 +1443,13 @@ const ThemeThumb: React.FC<{ themeId: CatalogTheme; selected: boolean; sample?: 
         >
             <span className="absolute inset-x-[8%] top-[6%] h-[64%] flex items-center justify-center">
                 {img ? (
-                    <img src={getThumbUrl(img)} alt="" loading="lazy" className={`max-w-full max-h-full object-contain ${themeId === 1 ? '' : 'rounded-[2px]'}`} />
+                    <img
+                        src={getThumbUrl(img)}
+                        alt=""
+                        loading="lazy"
+                        className={`max-w-full max-h-full object-contain ${THEME_STYLES[themeId].roundedImages ? 'rounded-[2px]' : ''}`}
+                        style={THEME_STYLES[themeId].framedImages ? { outline: `1px solid ${rgbCss(pal.lineColor)}` } : undefined}
+                    />
                 ) : (
                     <span className="w-full h-full rounded-[2px]" style={{ background: rgbCss(pal.lineColor), opacity: 0.25 }} />
                 )}
@@ -1561,7 +1593,9 @@ const PagePreview: React.FC<{
     const line = rgbCss(palette.lineColor);
     const logo = logoUrl && logoSizePx ? logoBox(options, logoSizePx.w, logoSizePx.h) : null;
     const mark = letterMark(options);
-    const rounded = !(themeId === 1 || (options.removeBackground ?? themeId === 5));
+    const cutout = effectiveCutout(themeId, options);
+    const rounded = THEME_STYLES[themeId].roundedImages && !cutout;
+    const framed = THEME_STYLES[themeId].framedImages && !cutout;
 
     // Page 0 text rows, stepping y exactly as drawPage0Text does.
     const rows: React.ReactNode[] = [];
@@ -1628,6 +1662,8 @@ const PagePreview: React.FC<{
                         className="max-w-full max-h-full object-contain"
                         style={{
                             borderRadius: rounded ? cqw(3) : undefined,
+                            // Gallery's hairline frame (0.3mm in the PDF).
+                            outline: framed ? `max(1px, ${cqw(0.3)}) solid ${line}` : undefined,
                             filter: imageShadow ? 'drop-shadow(0 1.4cqw 2.2cqw rgba(0,0,0,0.32))' : undefined,
                         }}
                     />

@@ -78,25 +78,20 @@ const shift = ([r, g, b]: Rgb, d: number): string =>
         Math.max(0, Math.min(255, b + d)),
     ]);
 
+type GradientStyle = NonNullable<PdfOptions['gradientStyle']>;
+
 /**
- * CSS equivalent of the page background the generator paints.
- *
- * Mirrors `generateDynamicBackground` (canvas 840×1188) stop for stop. The
- * radial stops are re-expressed against `farthest-corner`, which is what CSS
- * measures percentages from: from the page centre that corner is ~727px on
- * the canvas, and from the Spotlight origin (420,120) it is ~1148px.
+ * CSS equivalent of one gradient the generator paints (canvas 840×1188),
+ * stop for stop. The radial stops are re-expressed against `farthest-corner`,
+ * which is what CSS measures percentages from: from the page centre that
+ * corner is ~727px on the canvas, and from the Spotlight origin (420,120) it
+ * is ~1148px.
  */
-export const pageBackgroundCss = (
-    themeId: CatalogTheme,
-    bg: Rgb,
-    options: Pick<PdfOptions, 'gradientStyle' | 'colorPalette'>,
-): string => {
-    const style = options.gradientStyle ?? 'Solid';
+const gradientCss = (style: GradientStyle, bg: Rgb): string => {
     const base = rgbCss(bg);
     const lighter = shift(bg, 30);
     const darker = shift(bg, -20);
     const deeper = shift(bg, -45);
-
     switch (style) {
         case 'Linear':
             return `linear-gradient(to bottom, ${lighter}, ${darker})`;
@@ -116,16 +111,34 @@ export const pageBackgroundCss = (
             // Origin (420,120) = 50% / 10%; r 0→1300 with stops at 0 / 0.45 / 1.
             return `radial-gradient(circle farthest-corner at 50% 10%, ${shift(bg, 50)} 0%, ${base} 51%, ${deeper} 113%)`;
         default:
-            break;
+            return base;
     }
+};
 
-    // Warm Grey and Gradient Cutout paint a fixed light-grey sweep when the
-    // page colour and gradient are both left on their defaults.
+/**
+ * Which gradient the page gets: the one chosen under Background, or — with
+ * Background on Solid and the page colour on the theme's own — the theme's
+ * default backdrop (Linen's warm sweep, Noir's spotlight …). Null = a plain
+ * colour. The generator and the preview both decide through here.
+ */
+export const effectiveGradient = (
+    themeId: CatalogTheme,
+    options: Pick<PdfOptions, 'gradientStyle' | 'colorPalette'>,
+): GradientStyle | null => {
+    const style = options.gradientStyle ?? 'Solid';
+    if (style !== 'Solid') return style;
     const isDefaultColour = !options.colorPalette || options.colorPalette === 'Default';
-    if ((themeId === 2 || themeId === 5) && isDefaultColour) {
-        return 'linear-gradient(to bottom, #fcfcfc, #e0e0e0)';
-    }
-    return base;
+    return isDefaultColour ? THEME_STYLES[themeId].defaultGradient : null;
+};
+
+/** CSS for the page background the generator paints. */
+export const pageBackgroundCss = (
+    themeId: CatalogTheme,
+    bg: Rgb,
+    options: Pick<PdfOptions, 'gradientStyle' | 'colorPalette'>,
+): string => {
+    const gradient = effectiveGradient(themeId, options);
+    return gradient ? gradientCss(gradient, bg) : rgbCss(bg);
 };
 
 /* ----------------------------- Geometry ----------------------------- */
@@ -302,13 +315,64 @@ const buildPaletteFromHex = (hex: string): ThemePalette | null => {
     };
 };
 
-const THEME_BACKGROUNDS: Record<CatalogTheme, [number, number, number]> = {
-    1: [250, 248, 244],
-    2: [224, 224, 224],
-    3: [255, 255, 255],
-    4: [42, 42, 42],
-    5: [224, 224, 224],
+/* ------------------------------ Themes ------------------------------ */
+/*  Everything a theme decides, in one place, read by the generator and  */
+/*  the preview. Classic is the original design, unchanged; the others   */
+/*  were redesigned 2026-09-26. Ids are kept, so a saved theme choice    */
+/*  opens as the new design of the same number.                          */
+
+export interface ThemeStyle {
+    /** Page and type colours when the page colour is left on the theme's own. */
+    palette: ThemePalette;
+    /** Backdrop painted with Background on Solid and the theme's own colour. */
+    defaultGradient: GradientStyle | null;
+    /** Photos get softly rounded corners. */
+    roundedImages: boolean;
+    /** A hairline frame round each photo (not round cutouts). */
+    framedImages: boolean;
+    /** Default for "Drop shadow" until it is switched either way. */
+    shadow: boolean;
+    /** Default for "Remove background" until it is switched either way. */
+    cutout: boolean;
+}
+
+const lightInk = { ink: [38, 32, 27] as Rgb, softInk: [90, 82, 74] as Rgb };
+
+export const THEME_STYLES: Record<CatalogTheme, ThemeStyle> = {
+    // Classic — the original: warm white, gold labels, square photos.
+    1: {
+        palette: { bg: [250, 248, 244], isDark: false, ...lightInk, gold: [156, 96, 48], lineColor: [135, 126, 116] },
+        defaultGradient: null, roundedImages: false, framedImages: false, shadow: false, cutout: false,
+    },
+    // Linen — warm paper falling off to sand, charcoal type, terracotta labels.
+    2: {
+        palette: { bg: [238, 230, 218], isDark: false, ink: [52, 44, 38], softInk: [104, 92, 80], gold: [160, 82, 45], lineColor: [190, 176, 158] },
+        defaultGradient: 'Linear', roundedImages: true, framedImages: false, shadow: true, cutout: false,
+    },
+    // Gallery — museum white, near-black type, grey labels, framed photos.
+    3: {
+        palette: { bg: [255, 255, 255], isDark: false, ink: [20, 20, 20], softInk: [95, 95, 95], gold: [112, 112, 112], lineColor: [205, 205, 205] },
+        defaultGradient: null, roundedImages: false, framedImages: true, shadow: false, cutout: false,
+    },
+    // Noir — near-black with a soft light from above, champagne-gold labels.
+    4: {
+        palette: { bg: [24, 24, 27], isDark: true, ink: [238, 234, 226], softInk: [165, 160, 152], gold: [212, 178, 106], lineColor: [72, 68, 62] },
+        defaultGradient: 'Spotlight', roundedImages: false, framedImages: false, shadow: true, cutout: false,
+    },
+    // Studio Cutout — a white-to-grey studio sweep, products cut out with a shadow.
+    5: {
+        palette: { bg: [232, 232, 230], isDark: false, ink: [28, 28, 30], softInk: [96, 96, 98], gold: [128, 100, 70], lineColor: [192, 192, 190] },
+        defaultGradient: 'Linear', roundedImages: false, framedImages: false, shadow: true, cutout: true,
+    },
 };
+
+/** Remove background, as switched in the studio or the theme's default. */
+export const effectiveCutout = (themeId: CatalogTheme, options: Pick<PdfOptions, 'removeBackground'>): boolean =>
+    options.removeBackground ?? THEME_STYLES[themeId].cutout;
+
+/** Drop shadow, as switched in the studio or the theme's default. */
+export const effectiveShadow = (themeId: CatalogTheme, options: Pick<PdfOptions, 'imageShadow'>): boolean =>
+    options.imageShadow ?? THEME_STYLES[themeId].shadow;
 
 export const getThemePalette = (themeId: CatalogTheme, options?: PdfOptions): ThemePalette => {
     // 1. Custom hex color takes precedence over everything else.
@@ -323,17 +387,6 @@ export const getThemePalette = (themeId: CatalogTheme, options?: PdfOptions): Th
         if (fromPreset) return fromPreset;
     }
 
-    // 3. Fall back to the built-in theme defaults.
-    const bg = THEME_BACKGROUNDS[themeId];
-
-    const isDark = themeId === 4;
-
-    return {
-        bg,
-        isDark,
-        ink: isDark ? [250, 250, 250] : [38, 32, 27],
-        softInk: isDark ? [180, 180, 180] : [90, 82, 74],
-        gold: isDark ? [201, 168, 76] : [156, 96, 48],
-        lineColor: isDark ? [80, 80, 80] : [135, 126, 116],
-    };
+    // 3. The theme's own colours.
+    return THEME_STYLES[themeId].palette;
 };
