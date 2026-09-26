@@ -42,28 +42,38 @@ const VALIDITY_OPTIONS: { value: string; label: string; days?: number }[] = [
     { value: '30', label: '30 days', days: 30 },
     { value: '90', label: '3 months', days: 90 },
     { value: '180', label: '6 months (longest)', days: 180 },
-    { value: 'date', label: 'Until a date…' },
+    { value: 'date', label: 'Pick date & time…' },
 ];
 const DEFAULT_VALIDITY = '7';
 const DAY_MS = 86_400_000;
 
-/** yyyy-mm-dd for a date input, in local time. */
-const dateInputValue = (ts: number) => {
+/** Razorpay needs the expiry at least 15 minutes away; the app asks for 30. */
+const MIN_AHEAD_MS = 30 * 60_000;
+const MAX_AHEAD_MS = 180 * DAY_MS;
+
+/** yyyy-mm-ddThh:mm for a date-and-time input, in local time. */
+const dateTimeInputValue = (ts: number) => {
     const d = new Date(ts);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const two = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}T${two(d.getHours())}:${two(d.getMinutes())}`;
 };
 
-/** The chosen validity as an expiry time; null when the date is missing or out of range. */
-const expiryFor = (choice: string, date: string): number | null => {
+/** A date-and-time input's value as a timestamp (local time); NaN when incomplete. */
+const parseDateTime = (value: string): number => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value);
+    return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime() : Number.NaN;
+};
+
+/** The chosen validity as an expiry time; null when the date and time are missing or out of range. */
+const expiryFor = (choice: string, dateTime: string): number | null => {
     const option = VALIDITY_OPTIONS.find(o => o.value === choice);
     if (option?.days) return Date.now() + option.days * DAY_MS;
-    if (!date) return null;
-    // The end of the chosen day, local time.
-    const [y, m, d] = date.split('-').map(Number);
-    const at = new Date(y, m - 1, d, 23, 59).getTime();
+    const at = parseDateTime(dateTime);
     const ahead = at - Date.now();
-    return ahead >= 30 * 60_000 && ahead <= 180 * DAY_MS ? at : null;
+    return Number.isFinite(at) && ahead >= MIN_AHEAD_MS && ahead <= MAX_AHEAD_MS ? at : null;
 };
+
+const EXPIRY_RANGE_MESSAGE = 'Pick a date and time between 30 minutes and 6 months from now';
 
 /** "Valid till 3 Oct, 11:59 pm" / "Expires in 5 h" / "Expired 2 Oct". */
 const validityText = (link: PaymentLink): string | null => {
@@ -94,7 +104,7 @@ export const PaymentsView: React.FC = () => {
     const [description, setDescription] = useState('');
     const [notifySms, setNotifySms] = useState(true);
     const [validity, setValidity] = useState(DEFAULT_VALIDITY);
-    const [validUntil, setValidUntil] = useState(() => dateInputValue(Date.now() + 7 * DAY_MS));
+    const [validUntil, setValidUntil] = useState(() => dateTimeInputValue(Date.now() + 7 * DAY_MS));
     const [isCreating, setIsCreating] = useState(false);
     const [createdLink, setCreatedLink] = useState<PaymentLink | null>(null);
 
@@ -169,7 +179,7 @@ export const PaymentsView: React.FC = () => {
         }
         const expiresAt = expiryFor(validity, validUntil);
         if (!expiresAt) {
-            toast.error('Pick a date between tomorrow and 6 months from now');
+            toast.error(EXPIRY_RANGE_MESSAGE);
             return;
         }
         setIsCreating(true);
@@ -235,7 +245,7 @@ export const PaymentsView: React.FC = () => {
     const saveValidity = async () => {
         if (!editingValidity) return;
         const expiresAt = expiryFor(editingValidity.choice, editingValidity.date);
-        if (!expiresAt) { toast.error('Pick a date between tomorrow and 6 months from now'); return; }
+        if (!expiresAt) { toast.error(EXPIRY_RANGE_MESSAGE); return; }
         setBusyId(editingValidity.id);
         try {
             const updated = await paymentService.setPaymentLinkExpiry(editingValidity.id, expiresAt);
@@ -408,7 +418,7 @@ export const PaymentsView: React.FC = () => {
                                                         </button>
                                                         <IfCan section="payments">
                                                             <button
-                                                                onClick={() => setEditingValidity(v => (v?.id === link.id ? null : { id: link.id, choice: DEFAULT_VALIDITY, date: dateInputValue((link.expiresAt ?? Date.now()) + 7 * DAY_MS) }))}
+                                                                onClick={() => setEditingValidity(v => (v?.id === link.id ? null : { id: link.id, choice: DEFAULT_VALIDITY, date: dateTimeInputValue(Math.max(link.expiresAt ?? 0, Date.now()) + 7 * DAY_MS) }))}
                                                                 className="neu-icon-btn-sm active-scale"
                                                                 title="Change validity"
                                                                 aria-label="Change validity"
@@ -468,7 +478,7 @@ export const PaymentsView: React.FC = () => {
     );
 };
 
-/** How long a link stays valid: a preset, or until the end of a chosen day. */
+/** How long a link stays valid: a preset, or until a chosen date and time. */
 const ValidityPicker: React.FC<{
     id: string;
     choice: string;
@@ -478,7 +488,7 @@ const ValidityPicker: React.FC<{
     /** Changing an existing link: presets count from now. */
     fromNow?: boolean;
 }> = ({ id, choice, date, onChoice, onDate, fromNow = false }) => (
-    <div className="flex gap-2">
+    <div className="flex flex-col gap-2">
         <Select id={id} value={choice} onChange={e => onChoice(e.target.value)} className="flex-1 min-w-0" aria-label="Valid for">
             {VALIDITY_OPTIONS.map(o => (
                 <option key={o.value} value={o.value}>{o.days && fromNow ? `${o.label} from now` : o.label}</option>
@@ -486,11 +496,12 @@ const ValidityPicker: React.FC<{
         </Select>
         {choice === 'date' && (
             <Input
-                type="date"
-                aria-label="Valid until"
+                type="datetime-local"
+                aria-label="Valid until (date and time)"
                 value={date}
-                min={dateInputValue(Date.now() + DAY_MS)}
-                max={dateInputValue(Date.now() + 180 * DAY_MS)}
+                min={dateTimeInputValue(Date.now() + MIN_AHEAD_MS)}
+                max={dateTimeInputValue(Date.now() + MAX_AHEAD_MS)}
+                step={60}
                 onChange={e => onDate(e.target.value)}
                 className="flex-1 min-w-0"
             />
