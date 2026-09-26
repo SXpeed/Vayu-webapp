@@ -21,6 +21,7 @@ interface CatalogsViewProps {
 
 import { CatalogStudioView } from './CatalogStudio/CatalogStudioView';
 import { generateCatalogPdf } from './CatalogStudio/catalogPdfClient';
+import { CatalogCover, uploadedCover } from '../components/CatalogCover';
 import type { CatalogPdfProgress } from './CatalogStudio/catalogPdf';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { useIsDesktop } from '../hooks/useMediaQuery';
@@ -199,7 +200,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
             const pdfBytes = await generateCatalogPdf(
                 {
                     artworks: catalogArtworks, options, themeId,
-                    catalogName: catalogToDownload.name, catalogCoverUrl: catalogToDownload.coverImageUrl,
+                    catalogName: catalogToDownload.name, catalogCoverUrl: uploadedCover(catalogToDownload) ?? '',
                 },
                 { onProgress: setPdfProgress, onWarning: (message) => toast.error(message) },
             );
@@ -308,7 +309,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                                 className="absolute inset-0 z-[1] w-full h-full rounded-[1.4rem] cursor-pointer"
                             />
                             <div className="neu-picture-well neu-picture-well-sm w-full aspect-[4/3] rounded-[1rem]">
-                                <img loading="lazy" decoding="async" src={getThumbUrl(catalog.coverImageUrl)} alt={catalog.name} className="w-full h-full object-cover" />
+                                <CatalogCover catalog={catalog} artworks={artworks} />
                                 {catalog.pdfUrl && (
                                     <span className="neu-chip-float top-2 left-2 text-[var(--neu-gold)]">
                                         <FileText size={11} /> PDF saved
@@ -361,14 +362,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                             className="absolute inset-0 z-[1] w-full h-full rounded-[1.4rem] cursor-pointer"
                         />
                         <div className="neu-picture-well neu-picture-well-sm w-full aspect-[4/3] rounded-[1rem]">
-                            {catalog.source === 'uploaded' ? (
-                                <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 text-[var(--neu-gold)]">
-                                    <FileText size={34} strokeWidth={1.25} />
-                                    <span className="text-[10px] font-bold uppercase tracking-widest">Uploaded PDF</span>
-                                </div>
-                            ) : (
-                                <img loading="lazy" decoding="async" src={getThumbUrl(catalog.coverImageUrl)} alt={catalog.name} className="w-full h-full object-cover" />
-                            )}
+                            <CatalogCover catalog={catalog} artworks={artworks} />
                             <span className="neu-chip-float top-2 left-2 text-[var(--neu-gold)]">
                                 <FileText size={11} /> PDF
                             </span>
@@ -627,8 +621,7 @@ export const CatalogDetailModal: React.FC<CatalogDetailModalProps> = ({ catalog,
 
             <div className="flex-1 overflow-y-auto no-scrollbar pb-20 lg:pb-8">
                 <div className="w-full aspect-[21/9] relative animate-fade-in group">
-                    <img loading="lazy" decoding="async" src={getThumbUrl(catalog.coverImageUrl)} alt={catalog.name} className="w-full h-full object-cover" />
-                    {/* Gradient removed as per user request */}
+                    <CatalogCover catalog={catalog} artworks={artworks} />
 
                     <button
                         onClick={() => fileInputRef.current?.click()}
@@ -782,7 +775,9 @@ export const CatalogFormModal: React.FC<CatalogFormModalProps> = ({ initialData,
             name,
             description,
             artworkIds: Array.from(selectedArtworks),
-            coverImageUrl: initialData?.coverImageUrl || `https://picsum.photos/seed/${name}/800/600`
+            // No stand-in photo: without an uploaded cover the tile shows the
+            // catalog's PDF page or first artwork (CatalogCover).
+            coverImageUrl: initialData?.coverImageUrl || ''
         };
     };
 

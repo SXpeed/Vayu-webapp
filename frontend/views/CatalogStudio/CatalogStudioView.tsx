@@ -9,6 +9,7 @@ import { THEME_INFO } from '../CatalogsView';
 import storageService, { getThumbUrl } from '../../services/storageService';
 import { settingsService } from '../../services/settingsService';
 import { ToggleRow } from '../../components/ui';
+import { uploadedCover } from '../../components/CatalogCover';
 import {
     planCatalogPages, pageBackgroundCss, pageHasText, rgbCss, pctW, pctH, cqw, ptToMm,
     PAGE_H_MM, PlannedPage, getThemePalette, ThemePalette,
@@ -28,44 +29,33 @@ const MAX_END_PAGES = 5;
 /** Press-and-hold this long on a design to see it enlarged. */
 const HOLD_PREVIEW_MS = 350;
 
-const hslToHex = (h: number, s: number, l: number): string => {
-    const sat = s / 100;
-    const lig = l / 100;
-    const k = (n: number) => (n + h / 30) % 12;
-    const a = sat * Math.min(lig, 1 - lig);
-    const f = (n: number) => lig - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
-    const toHex = (v: number) => Math.round(v * 255).toString(16).padStart(2, '0');
-    return `#${toHex(f(0))}${toHex(f(8))}${toHex(f(4))}`;
+/** Hue (0–360), saturation and brightness (0–1): what the colour picker moves in. */
+interface Hsv { h: number; s: number; v: number }
+
+const hsvToHex = ({ h, s, v }: Hsv): string => {
+    const f = (n: number) => {
+        const k = (n + h / 60) % 6;
+        return v - v * s * Math.max(0, Math.min(k, 4 - k, 1));
+    };
+    const toHex = (x: number) => Math.round(x * 255).toString(16).padStart(2, '0');
+    return `#${toHex(f(5))}${toHex(f(3))}${toHex(f(1))}`;
 };
 
-/**
- * Page colours: ten main colours, each with eight shades from lightest to
- * deepest. Saturation is tuned per colour so every shade reads as a page,
- * not a highlighter; text on the page picks light or dark ink by itself.
- */
-interface ColourFamily { id: string; name: string; hue: number; sat: number; swatchL: number }
-const COLOUR_FAMILIES: ColourFamily[] = [
-    { id: 'red', name: 'Red', hue: 0, sat: 62, swatchL: 50 },
-    { id: 'orange', name: 'Orange', hue: 26, sat: 78, swatchL: 52 },
-    { id: 'yellow', name: 'Yellow', hue: 46, sat: 82, swatchL: 54 },
-    { id: 'green', name: 'Green', hue: 140, sat: 38, swatchL: 42 },
-    { id: 'teal', name: 'Teal', hue: 178, sat: 42, swatchL: 40 },
-    { id: 'blue', name: 'Blue', hue: 214, sat: 55, swatchL: 48 },
-    { id: 'purple', name: 'Purple', hue: 268, sat: 40, swatchL: 48 },
-    { id: 'pink', name: 'Pink', hue: 334, sat: 58, swatchL: 60 },
-    { id: 'brown', name: 'Brown', hue: 26, sat: 32, swatchL: 36 },
-    { id: 'grey', name: 'Grey', hue: 220, sat: 6, swatchL: 55 },
-];
-const SHADE_LIGHTNESS = [95, 88, 78, 66, 54, 42, 30, 18];
-const SHADE_NAMES = ['Lightest', 'Very light', 'Light', 'Soft', 'Medium', 'Rich', 'Deep', 'Deepest'];
-/** Picking a main colour applies this shade first: light enough to be a page. */
-const FIRST_SHADE = 1;
+/** Hex → HSV; `keepHue` stands in when the colour is a grey (no hue of its own). */
+const hexToHsv = (hex: string, keepHue = 0): Hsv => {
+    const n = Number.parseInt(hex.slice(1), 16);
+    const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+    let h = keepHue;
+    if (d > 0) {
+        if (max === r) h = 60 * (((g - b) / d) % 6);
+        else if (max === g) h = 60 * ((b - r) / d + 2);
+        else h = 60 * ((r - g) / d + 4);
+    }
+    return { h: (h + 360) % 360, s: max === 0 ? 0 : d / max, v: max };
+};
 
-const shadesOf = (f: ColourFamily): string[] => SHADE_LIGHTNESS.map(l => hslToHex(f.hue, f.sat, l));
-const familySwatch = (f: ColourFamily): string => hslToHex(f.hue, f.sat, f.swatchL);
-/** The family a saved colour belongs to, if it is one of the shades. */
-const familyOfColour = (hex: string | undefined): ColourFamily | undefined =>
-    hex ? COLOUR_FAMILIES.find(f => shadesOf(f).includes(hex.toLowerCase())) : undefined;
+const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 
 /** Whether a hex color is light (to pick a readable check-mark color on top). */
 const isLightHex = (hex: string): boolean => {
@@ -122,8 +112,6 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
         logoPlacement: 'Top Right',
         pageOptions: ['Main Image'],
     });
-    // The main colour whose shades are showing (saved as colorFamily).
-    const [familyId, setFamilyId] = useState<string | null>(null);
     const [hexInput, setHexInput] = useState('');
     const [uploadingLogo, setUploadingLogo] = useState<'Select 1' | 'Select 2' | null>(null);
 
@@ -134,8 +122,6 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                 // A placement that no longer exists (the retired 'Center') falls back to the default.
                 const placement = PLACEMENT_GRID.includes(savedOptions.logoPlacement) ? savedOptions.logoPlacement : 'Top Right';
                 setOptions(prev => ({ ...prev, ...savedOptions, logoPlacement: placement }));
-                // Reopen the shades of the colour in use.
-                setFamilyId(familyOfColour(savedOptions.colorPalette)?.id ?? savedOptions.colorFamily ?? null);
             }
 
             try {
@@ -200,6 +186,9 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
             return next;
         });
     };
+
+    /** Show a colour on the page while the picker is being dragged; not saved yet. */
+    const previewColour = (hex: string) => setOptions(prev => ({ ...prev, colorPalette: hex }));
 
     /** Remember a color in the 6-slot recently-used row. */
     const addRecentColor = (hex: string) => {
@@ -355,7 +344,8 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
 
     const selectedLogo = options.logoSelection === 'Select 1' ? options.customLogo1 : options.customLogo2;
     // The generator falls back to the catalog cover, then to a letter mark.
-    const logoUrl = selectedLogo || catalog?.coverImageUrl || undefined;
+    const coverUrl = uploadedCover(catalog);
+    const logoUrl = selectedLogo || coverUrl;
 
     // The logo's natural size: the preview sizes and places it from this with
     // the same function the generator uses. Only the aspect ratio matters.
@@ -508,83 +498,13 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                             title="Page colour"
                             hint={colorPalette === 'Default' ? 'Using the theme colour' : colorPalette}
                         >
-                            {/* Theme colour + ten main colours */}
-                            <div className="grid grid-cols-[repeat(11,minmax(0,1fr))] gap-1.5 mb-3">
-                                <button
-                                    type="button"
-                                    onClick={() => { setFamilyId(null); updateOption('colorPalette', 'Default'); }}
-                                    aria-label="Use the theme colour"
-                                    title="Theme colour"
-                                    aria-pressed={colorPalette === 'Default'}
-                                    className={`aspect-square rounded-full overflow-hidden active-scale ${colorPalette === 'Default' ? 'ring-2 ring-gold-500 ring-offset-2 ring-offset-[var(--neu-bg)]' : 'neu-raised-sm'}`}
-                                    style={{ background: `linear-gradient(135deg, ${activeThemeInfo.bg} 50%, ${activeThemeInfo.fg} 50%)` }}
-                                />
-                                {COLOUR_FAMILIES.map(f => {
-                                    const swatch = familySwatch(f);
-                                    const open = familyId === f.id;
-                                    return (
-                                        <button
-                                            type="button"
-                                            key={f.id}
-                                            onClick={() => {
-                                                setFamilyId(f.id);
-                                                // Already on one of its shades: just show them.
-                                                if (familyOfColour(colorPalette)?.id !== f.id) {
-                                                    applyColor(shadesOf(f)[FIRST_SHADE], { colorFamily: f.id });
-                                                }
-                                            }}
-                                            aria-label={`${f.name} — show its shades`}
-                                            aria-expanded={open}
-                                            title={f.name}
-                                            className={`aspect-square rounded-full flex items-center justify-center active-scale ${open ? 'ring-2 ring-gold-500 ring-offset-2 ring-offset-[var(--neu-bg)]' : 'neu-raised-sm'}`}
-                                            style={{ background: swatch }}
-                                        />
-                                    );
-                                })}
-                            </div>
-
-                            {/* Shades of the chosen colour, lightest to deepest */}
-                            {(() => {
-                                const family = COLOUR_FAMILIES.find(f => f.id === familyId);
-                                if (!family) {
-                                    return (
-                                        <p className="mb-4 text-[11px] text-gray-600 dark:text-gray-400 font-light">
-                                            Pick a colour to see its shades.
-                                        </p>
-                                    );
-                                }
-                                return (
-                                    <div className="mb-4">
-                                        <p className="mb-1.5 text-[10px] uppercase tracking-[0.12em] text-gray-600 dark:text-gray-400">
-                                            Shades of {family.name.toLowerCase()}
-                                        </p>
-                                        <div className="flex gap-1.5" role="group" aria-label={`Shades of ${family.name}`}>
-                                            {shadesOf(family).map((hex, i) => {
-                                                const selected = colorPalette === hex;
-                                                return (
-                                                    <button
-                                                        type="button"
-                                                        key={hex}
-                                                        onClick={() => applyColor(hex, { colorFamily: family.id })}
-                                                        aria-label={`${SHADE_NAMES[i]} ${family.name.toLowerCase()} (${hex})`}
-                                                        aria-pressed={selected}
-                                                        title={`${SHADE_NAMES[i]} · ${hex}`}
-                                                        className={`flex-1 h-9 rounded-lg flex items-center justify-center active-scale ${selected ? 'ring-2 ring-gold-500 ring-offset-2 ring-offset-[var(--neu-bg)]' : 'neu-raised-sm'}`}
-                                                        style={{ background: hex }}
-                                                    >
-                                                        {selected && (
-                                                            <Check size={12} strokeWidth={3} className={isLightHex(hex) ? 'text-gray-800' : 'text-white'} />
-                                                        )}
-                                                    </button>
-                                                );
-                                            })}
-                                        </div>
-                                        <div className="mt-1 flex justify-between text-[10px] text-gray-500 dark:text-gray-400">
-                                            <span>Lightest</span><span>Deepest</span>
-                                        </div>
-                                    </div>
-                                );
-                            })()}
+                            <ColourPicker
+                                colour={colorPalette.startsWith('#') ? colorPalette : null}
+                                themeSwatch={`linear-gradient(135deg, ${activeThemeInfo.bg} 50%, ${activeThemeInfo.fg} 50%)`}
+                                onThemeColour={() => updateOption('colorPalette', 'Default')}
+                                onPreview={previewColour}
+                                onCommit={hex => { applyColor(hex); addRecentColor(hex); }}
+                            />
 
                             {/* Recent colours + hex entry */}
                             <div className="flex items-center gap-3">
@@ -689,10 +609,10 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                                 {(['Select 1', 'Select 2'] as const).map((opt, i) => {
                                     const custom = opt === 'Select 1' ? options.customLogo1 : options.customLogo2;
                                     const selected = options.logoSelection === opt;
-                                    const shown = custom || catalog?.coverImageUrl;
+                                    const shown = custom || coverUrl;
                                     let caption = 'Letter mark';
                                     if (custom) caption = `Logo ${i + 1}`;
-                                    else if (catalog?.coverImageUrl) caption = 'Catalog cover';
+                                    else if (coverUrl) caption = 'Catalog cover';
                                     return (
                                         <div key={opt} className="relative">
                                             <button
@@ -1126,6 +1046,157 @@ const GenerationProgress: React.FC<{ progress: CatalogPdfProgress | null; remove
                     );
                 })}
             </ol>
+        </div>
+    );
+};
+
+/* ------------------------------------------------------------------ */
+/*  Page colour picker                                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Every colour: a saturation × brightness area for the current hue, and a hue
+ * bar. Dragging shows the colour on the page straight away; letting go saves
+ * it (and adds it to Recent). Arrow keys work on both; Shift moves further.
+ */
+const ColourPicker: React.FC<{
+    /** The page colour in use, or null when the theme's own colour is. */
+    colour: string | null;
+    themeSwatch: string;
+    onThemeColour: () => void;
+    onPreview: (hex: string) => void;
+    onCommit: (hex: string) => void;
+}> = ({ colour, themeSwatch, onThemeColour, onPreview, onCommit }) => {
+    const [hsv, setHsv] = useState<Hsv>(() => (colour ? hexToHsv(colour, 30) : { h: 30, s: 0.35, v: 0.95 }));
+    // A colour chosen elsewhere (Recent, the hex box) moves the picker to it.
+    useEffect(() => {
+        if (colour && colour !== hsvToHex(hsv)) setHsv(prev => hexToHsv(colour, prev.h));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [colour]);
+
+    const areaRef = useRef<HTMLDivElement>(null);
+    const hueRef = useRef<HTMLDivElement>(null);
+    const dragging = useRef<'area' | 'hue' | null>(null);
+    const latest = useRef(hsv);
+
+    const move = (next: Hsv) => {
+        latest.current = next;
+        setHsv(next);
+        onPreview(hsvToHex(next));
+    };
+    const fromPointer = (e: React.PointerEvent, what: 'area' | 'hue') => {
+        const el = (what === 'area' ? areaRef : hueRef).current;
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        const x = clamp01((e.clientX - r.left) / r.width);
+        if (what === 'hue') move({ ...latest.current, h: x * 360 });
+        else move({ ...latest.current, s: x, v: 1 - clamp01((e.clientY - r.top) / r.height) });
+    };
+    const start = (what: 'area' | 'hue') => (e: React.PointerEvent) => {
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        dragging.current = what;
+        latest.current = hsv;
+        fromPointer(e, what);
+    };
+    const drag = (what: 'area' | 'hue') => (e: React.PointerEvent) => {
+        if (dragging.current === what) fromPointer(e, what);
+    };
+    const end = () => {
+        if (!dragging.current) return;
+        dragging.current = null;
+        onCommit(hsvToHex(latest.current));
+    };
+    const nudge = (e: React.KeyboardEvent, what: 'area' | 'hue') => {
+        const step = e.shiftKey ? 0.1 : 0.02;
+        const next = { ...hsv };
+        if (what === 'hue') {
+            if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next.h = (hsv.h + step * 360 + 360) % 360;
+            else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') next.h = (hsv.h - step * 360 + 360) % 360;
+            else return;
+        } else if (e.key === 'ArrowRight') next.s = clamp01(hsv.s + step);
+        else if (e.key === 'ArrowLeft') next.s = clamp01(hsv.s - step);
+        else if (e.key === 'ArrowUp') next.v = clamp01(hsv.v + step);
+        else if (e.key === 'ArrowDown') next.v = clamp01(hsv.v - step);
+        else return;
+        e.preventDefault();
+        latest.current = next;
+        setHsv(next);
+        onCommit(hsvToHex(next));
+    };
+
+    const hex = hsvToHex(hsv);
+    const pureHue = hsvToHex({ h: hsv.h, s: 1, v: 1 });
+    const usingTheme = colour === null;
+    return (
+        <div className="mb-4 space-y-3">
+            {/* Saturation (across) × brightness (up) for the current hue */}
+            <div
+                ref={areaRef}
+                role="slider"
+                tabIndex={0}
+                aria-label="Colour: vividness across, brightness up and down"
+                aria-valuetext={`${hex}, vividness ${Math.round(hsv.s * 100)}%, brightness ${Math.round(hsv.v * 100)}%`}
+                onPointerDown={start('area')}
+                onPointerMove={drag('area')}
+                onPointerUp={end}
+                onPointerCancel={end}
+                onKeyDown={e => nudge(e, 'area')}
+                className="relative h-36 rounded-xl cursor-crosshair touch-none select-none focus-visible:ring-2 focus-visible:ring-gold-500"
+                style={{ background: `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, ${pureHue})` }}
+            >
+                <span
+                    className="absolute w-5 h-5 -ml-2.5 -mt-2.5 rounded-full border-2 border-white pointer-events-none"
+                    style={{
+                        left: `${hsv.s * 100}%`, top: `${(1 - hsv.v) * 100}%`, background: hex,
+                        boxShadow: '0 0 0 1px rgba(0,0,0,0.35), 0 2px 6px rgba(0,0,0,0.35)',
+                        opacity: usingTheme ? 0.6 : 1,
+                    }}
+                />
+            </div>
+
+            {/* Hue */}
+            <div
+                ref={hueRef}
+                role="slider"
+                tabIndex={0}
+                aria-label="Hue"
+                aria-valuemin={0}
+                aria-valuemax={360}
+                aria-valuenow={Math.round(hsv.h)}
+                onPointerDown={start('hue')}
+                onPointerMove={drag('hue')}
+                onPointerUp={end}
+                onPointerCancel={end}
+                onKeyDown={e => nudge(e, 'hue')}
+                className="relative h-4 rounded-full cursor-pointer touch-none select-none focus-visible:ring-2 focus-visible:ring-gold-500"
+                style={{ background: 'linear-gradient(to right, #f00, #ff0 16.7%, #0f0 33.3%, #0ff 50%, #00f 66.7%, #f0f 83.3%, #f00)' }}
+            >
+                <span
+                    className="absolute top-1/2 w-5 h-5 -ml-2.5 -mt-2.5 rounded-full border-2 border-white pointer-events-none"
+                    style={{ left: `${(hsv.h / 360) * 100}%`, background: pureHue, boxShadow: '0 0 0 1px rgba(0,0,0,0.35), 0 2px 6px rgba(0,0,0,0.35)' }}
+                />
+            </div>
+
+            {/* Result, and the theme's own colour */}
+            <div className="flex items-center gap-2.5">
+                <span className="w-9 h-9 rounded-lg shrink-0 neu-raised-sm" style={{ background: usingTheme ? themeSwatch : hex }} />
+                <span className="flex-1 min-w-0">
+                    <span className="block text-xs font-medium text-gray-800 dark:text-gray-200 tabular-nums">{usingTheme ? 'Theme colour' : hex.toUpperCase()}</span>
+                    <span className="block text-[11px] text-gray-600 dark:text-gray-400 font-light">
+                        {usingTheme ? 'Drag in the colour area to choose your own' : 'Drag to change; saved when you let go'}
+                    </span>
+                </span>
+                <button
+                    type="button"
+                    onClick={onThemeColour}
+                    aria-pressed={usingTheme}
+                    className={`shrink-0 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-medium active-scale ${usingTheme ? 'neu-inset text-gold-700 dark:text-gold-300' : 'neu-raised-sm text-gray-700 dark:text-gray-300'}`}
+                >
+                    <span className="w-3.5 h-3.5 rounded-full" style={{ background: themeSwatch }} />
+                    Theme colour
+                </button>
+            </div>
         </div>
     );
 };
