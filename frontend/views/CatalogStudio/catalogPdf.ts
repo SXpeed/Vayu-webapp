@@ -1,6 +1,9 @@
 import { jsPDF } from 'jspdf';
 import type { Artwork, CatalogTheme, PdfOptions } from '../../types';
-import { planCatalogPages, getThemePalette, ThemePalette, logoBox, letterMark, type PlannedPage } from './catalogLayout';
+import {
+    planCatalogPages, getThemePalette, ThemePalette, logoBox, letterMark, type PlannedPage,
+    THEME_STYLES, effectiveGradient, effectiveCutout, effectiveShadow,
+} from './catalogLayout';
 
 /* ------------------------------------------------------------------ */
 /*  Catalog PDF generator.                                             */
@@ -32,26 +35,13 @@ const applyRoundedCorners = (ctx: Ctx2D, width: number, height: number) => {
     ctx.clip();
 };
 
-/** For non-logos, scale down large images to max 2500px to save PDF size while keeping extreme detail. */
-const scaleDownIfNeeded = (canvas: OffscreenCanvas, isPng = false): OffscreenCanvas => {
-    let scale = 1;
-    if (canvas.width > 2500 || canvas.height > 2500) {
-        scale = Math.min(2500 / canvas.width, 2500 / canvas.height);
-    }
-
-    // Truncate like assigning to <canvas>.width did.
-    const tempCanvas = new OffscreenCanvas(Math.trunc(canvas.width * scale), Math.trunc(canvas.height * scale));
-    const tCtx = tempCanvas.getContext('2d');
-    if (tCtx) {
-        if (!isPng) {
-            tCtx.fillStyle = '#ffffff'; // White bg for JPEG
-            tCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
-        }
-        tCtx.drawImage(canvas, 0, 0, tempCanvas.width, tempCanvas.height);
-        return tempCanvas;
-    }
-    return canvas;
-};
+/**
+ * Photos go into the PDF at no more than this on their longest side (about
+ * 300 dpi across the 206mm image box). They are scaled once, right after
+ * decoding: drawing a 12-megapixel photo at full size first held several
+ * full-size copies at a time and crashed phones on longer catalogs.
+ */
+const PHOTO_MAX_EDGE_PX = 2500;
 
 /** Same test the generator always used to decide PNG vs JPEG output. */
 const urlLooksPng = (url: string): boolean =>
@@ -70,6 +60,8 @@ export interface PdfImageInfo {
      * image used twice is still embedded once.
      */
     alias: string;
+    /** A background-removed cutout (never framed). */
+    isCutout?: boolean;
 }
 
 /**
@@ -103,6 +95,43 @@ const decode = async (source: string | Blob): Promise<ImageBitmap> => {
 const encode = async (canvas: OffscreenCanvas, type: 'image/png' | 'image/jpeg'): Promise<Uint8Array> =>
     new Uint8Array(await (await canvas.convertToBlob({ type, quality: 0.95 })).arrayBuffer());
 
+/** Where a photo of this shape sits in the image box: fitted, centred. Millimetres. */
+const fitImageBox = (imgW: number, imgH: number, imgBoxH: number) => {
+    const imgX = 2, imgY = 2, imgBoxW = PAGE_W - 4;
+    const imgRatio = imgW / imgH;
+    const w = imgRatio > imgBoxW / imgBoxH ? imgBoxW : imgBoxH * imgRatio;
+    const h = imgRatio > imgBoxW / imgBoxH ? imgBoxW / imgRatio : imgBoxH;
+    return { x: imgX + (imgBoxW - w) / 2, y: imgY + (imgBoxH - h) / 2, w, h };
+};
+
+/**
+ * What a cutout is laid onto: the plain page colour, or — on a gradient page
+ * — the exact strip of the page's backdrop that lies behind the photo, so the
+ * result is the same picture as a transparent PNG over the page, at a
+ * fraction of the size.
+ */
+type Matte =
+    | { kind: 'colour'; rgb: [number, number, number] }
+    | { kind: 'backdrop'; bitmap: ImageBitmap; imgBoxH: number };
+
+const paintMatte = (ctx: Ctx2D, matte: Matte | null, width: number, height: number) => {
+    if (matte?.kind === 'backdrop') {
+        // The backdrop image covers (-0.5, -0.5)–(210.5, 297.5)mm; see drawPageBackground.
+        const box = fitImageBox(width, height, matte.imgBoxH);
+        const pxPerMmX = matte.bitmap.width / (PAGE_W + 1);
+        const pxPerMmY = matte.bitmap.height / (PAGE_H + 1);
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(
+            matte.bitmap,
+            (box.x + 0.5) * pxPerMmX, (box.y + 0.5) * pxPerMmY, box.w * pxPerMmX, box.h * pxPerMmY,
+            0, 0, width, height,
+        );
+        return;
+    }
+    ctx.fillStyle = matte ? `rgb(${matte.rgb[0]}, ${matte.rgb[1]}, ${matte.rgb[2]})` : '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+};
+
 /**
  * Decode an image, optionally round its corners / add a drop shadow, scale it
  * down for the page, and re-encode it — PNG for logos and transparent images,
@@ -115,41 +144,47 @@ const prepareImage = async (
     radiusPx = 0,
     isLogo = false,
     addShadow = false,
+    /** What a transparent image is laid onto, so it can be a small JPEG. */
+    matte: Matte | null = null,
 ): Promise<PdfImageInfo> => {
     const bitmap = await decode(source);
-    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    // Logos keep their own size; photos are scaled down once, here.
+    const scale = isLogo ? 1 : Math.min(1, PHOTO_MAX_EDGE_PX / Math.max(bitmap.width, bitmap.height));
+    // Truncate like assigning to <canvas>.width did.
+    const width = Math.max(1, Math.trunc(bitmap.width * scale));
+    const height = Math.max(1, Math.trunc(bitmap.height * scale));
+    const canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext('2d');
     if (!ctx) {
         bitmap.close();
         throw new Error('Failed to get canvas context');
     }
 
+    const usePng = isLogo || (isPng && !matte);
+    if (!usePng) {
+        // JPEG has no transparency: what shows through is what the page has
+        // behind the photo (a cutout), or white (rounded-off corners).
+        paintMatte(ctx, matte, width, height);
+    }
     if (radiusPx > 0) {
-        applyRoundedCorners(ctx, bitmap.width, bitmap.height);
+        applyRoundedCorners(ctx, width, height);
     }
     if (addShadow) {
+        // Sized for the photo's own pixels, as before it was scaled.
         ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
-        ctx.shadowBlur = 15;
+        ctx.shadowBlur = 15 * scale;
         ctx.shadowOffsetX = 0;
-        ctx.shadowOffsetY = 8;
+        ctx.shadowOffsetY = 8 * scale;
     }
 
-    ctx.drawImage(bitmap, 0, 0);
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(bitmap, 0, 0, width, height);
     bitmap.close();
 
-    if (addShadow) {
-        // Reset shadow so it doesn't affect subsequent drawings if any
-        ctx.shadowColor = 'transparent';
-        ctx.shadowBlur = 0;
-    }
-
-    const usePng = isLogo || isPng;
-    const finalCanvas = isLogo ? canvas : scaleDownIfNeeded(canvas, isPng);
-
     return {
-        data: await encode(finalCanvas, usePng ? 'image/png' : 'image/jpeg'),
-        width: finalCanvas.width,
-        height: finalCanvas.height,
+        data: await encode(canvas, usePng ? 'image/png' : 'image/jpeg'),
+        width,
+        height,
         format: usePng ? 'PNG' : 'JPEG',
         alias,
     };
@@ -170,14 +205,6 @@ const paintBackground = async (paint: (ctx: Ctx2D) => void): Promise<Uint8Array 
     paint(ctx);
     return encode(canvas, 'image/jpeg');
 };
-
-const generateTheme2Background = (): Promise<Uint8Array | null> => paintBackground(ctx => {
-    const grad = ctx.createLinearGradient(0, 0, 0, 1188);
-    grad.addColorStop(0, '#fcfcfc');
-    grad.addColorStop(1, '#e0e0e0');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 840, 1188);
-});
 
 const generateDynamicBackground = async (bg: [number, number, number], style: NonNullable<PdfOptions['gradientStyle']>): Promise<Uint8Array | null> => {
     if (style === 'Solid') return null;
@@ -238,15 +265,12 @@ interface PageBackground {
  * uses the same one.
  */
 const resolvePageBackground = async (themeId: CatalogTheme, palette: ThemePalette, options: PdfOptions): Promise<PageBackground | null> => {
-    if (options.gradientStyle && options.gradientStyle !== 'Solid') {
-        const data = await generateDynamicBackground(palette.bg, options.gradientStyle);
-        return data ? { data, alias: `bg_${options.gradientStyle}_${palette.bg.join('')}_${Math.round(PAGE_H)}` } : null;
-    }
-    if ((themeId === 2 || themeId === 5) && (!options.colorPalette || options.colorPalette === 'Default')) {
-        const data = await generateTheme2Background();
-        return data ? { data, alias: 'theme2bg' } : null;
-    }
-    return null;
+    // The chosen gradient, or the theme's own backdrop (catalogLayout decides,
+    // for the preview too).
+    const style = effectiveGradient(themeId, options);
+    if (!style) return null;
+    const data = await generateDynamicBackground(palette.bg, style);
+    return data ? { data, alias: `bg_${style}_${palette.bg.join('')}_${Math.round(PAGE_H)}` } : null;
 };
 
 const drawPageBackground = (doc: jsPDF, background: PageBackground | null, palette: ThemePalette, pageH: number) => {
@@ -264,7 +288,7 @@ const drawPageBackground = (doc: jsPDF, background: PageBackground | null, palet
 /** Cutout is on by default for theme 5 (Gradient Cutout); the studio checkbox
  *  overrides in either direction for any theme. */
 const shouldRemoveBackground = (options: PdfOptions, themeId: CatalogTheme): boolean =>
-    options.removeBackground ?? themeId === 5;
+    effectiveCutout(themeId, options);
 
 /**
  * Where the build is, stage by stage, for the studio's progress panel:
@@ -291,6 +315,8 @@ const loadImageInfo = async (
     options: PdfOptions,
     onWarning: (message: string) => void,
     artworkTitle: string,
+    /** What lies behind the photo on this page, for laying a cutout onto it. */
+    page: { colour: [number, number, number]; backdrop: ImageBitmap | null; imgBoxH: number },
 ): Promise<PdfImageInfo | null> => {
     if (!imgUrl) return null;
     try {
@@ -311,9 +337,21 @@ const loadImageInfo = async (
         }
 
         // Pass to canvas logic to add rounded corners or shadow if needed
-        const cornerRadius = isCutout || themeId === 1 ? 0 : 20;
-        const alias = `img|${isCutout ? 'cutout' : 'photo'}|r${cornerRadius}|s${options.imageShadow ? 1 : 0}|${imgUrl}`;
-        return await prepareImage(source, isPng, alias, cornerRadius, false, options.imageShadow);
+        const cornerRadius = isCutout || !THEME_STYLES[themeId].roundedImages ? 0 : 20;
+        const shadow = effectiveShadow(themeId, options);
+        // A cutout on a plain page is laid onto the page colour and stored as a
+        // JPEG — it looks the same, and a transparent PNG per page made PDFs
+        // several times larger (and ran phones out of memory).
+        let matte: Matte | null = null;
+        if (isCutout) {
+            matte = page.backdrop
+                ? { kind: 'backdrop', bitmap: page.backdrop, imgBoxH: page.imgBoxH }
+                : { kind: 'colour', rgb: page.colour };
+        }
+        const matteKey = matte?.kind === 'backdrop' ? `bd${page.imgBoxH}` : page.colour.join('.');
+        const alias = `img|${isCutout ? 'cutout' : 'photo'}|r${cornerRadius}|s${shadow ? 1 : 0}|m${matte ? matteKey : '-'}|${imgUrl}`;
+        const info = await prepareImage(source, isPng, alias, cornerRadius, false, shadow, matte);
+        return { ...info, isCutout };
     } catch (e) {
         console.error("Failed to load image for PDF", e);
         onWarning(`Couldn't load a photo of “${artworkTitle || 'Untitled'}” — that page has no image.`);
@@ -323,25 +361,20 @@ const loadImageInfo = async (
 
 // Fit the image inside the page's image box at its natural aspect ratio,
 // centered — pages are uniform A4.
-const drawProductImage = (doc: jsPDF, imgInfo: PdfImageInfo | null, imgBoxH: number) => {
+const drawProductImage = (doc: jsPDF, imgInfo: PdfImageInfo | null, imgBoxH: number, frame: [number, number, number] | null) => {
     if (!imgInfo) return;
-    const imgX = 2, imgY = 2, imgBoxW = PAGE_W - 4;
-    const imgRatio = imgInfo.width / imgInfo.height;
-    const boxRatio = imgBoxW / imgBoxH;
-    let drawW: number, drawH: number;
-    if (imgRatio > boxRatio) {
-        drawW = imgBoxW;
-        drawH = imgBoxW / imgRatio;
-    } else {
-        drawH = imgBoxH;
-        drawW = imgBoxH * imgRatio;
-    }
-    const drawX = imgX + (imgBoxW - drawW) / 2;
-    const drawY = imgY + (imgBoxH - drawH) / 2;
+    const { x: drawX, y: drawY, w: drawW, h: drawH } = fitImageBox(imgInfo.width, imgInfo.height, imgBoxH);
 
     const compression = imgInfo.format === 'PNG' ? undefined : 'FAST';
 
     doc.addImage(imgInfo.data, imgInfo.format, drawX, drawY, drawW, drawH, imgInfo.alias, compression);
+
+    // Gallery: a hairline frame hugging the photo (a cutout has no edge to frame).
+    if (frame && !imgInfo.isCutout) {
+        doc.setDrawColor(...frame);
+        doc.setLineWidth(0.3);
+        doc.rect(drawX, drawY, drawW, drawH);
+    }
 };
 
 const drawFallbackLetter = (doc: jsPDF, options: PdfOptions, i: number, gold: [number, number, number]) => {
@@ -498,15 +531,22 @@ interface CatalogDrawContext {
     background: PageBackground | null;
     logo: PdfImageInfo | null;
     catalogName: string;
+    /** The theme frames its photos (Gallery). */
+    framed: boolean;
     /** Pages already in the document. */
     pageCount: { value: number };
 }
 
+/** The image box's height: above the text zone, or the whole page when there is no text. */
+const imageBoxHeight = (page: PlannedPage, options: PdfOptions): number => {
+    const hasBottomText = page.pageIndex === 0 || (page.pageIndex === 1 && options.showDescription && page.art.description);
+    return hasBottomText ? 250 : PAGE_H - 4;
+};
+
 /** Draw one planned page with its (already prepared) photo. */
 const drawPlannedPage = (ctx: CatalogDrawContext, page: PlannedPage, imgInfo: PdfImageInfo | null): void => {
-    const { doc, options, palette, background, logo, catalogName, pageCount } = ctx;
+    const { doc, options, palette, background, logo, catalogName, framed, pageCount } = ctx;
     const { art, artIndex, pageIndex } = page;
-    const hasBottomText = pageIndex === 0 || (pageIndex === 1 && options.showDescription && art.description);
 
     // Uniform A4 pages; the image fits inside the image box above the text zone.
     // jsPDF starts with one empty page, so only later pages need adding. This
@@ -517,8 +557,8 @@ const drawPlannedPage = (ctx: CatalogDrawContext, page: PlannedPage, imgInfo: Pd
 
     drawPageBackground(doc, background, palette, PAGE_H);
 
-    const imgBoxH = hasBottomText ? 250 : PAGE_H - 4;
-    drawProductImage(doc, imgInfo, imgBoxH);
+    const imgBoxH = imageBoxHeight(page, options);
+    drawProductImage(doc, imgInfo, imgBoxH, framed ? palette.lineColor : null);
 
     drawLogo(doc, logo, options, artIndex, palette.gold);
 
@@ -537,7 +577,14 @@ const drawPlannedPage = (ctx: CatalogDrawContext, page: PlannedPage, imgInfo: Pd
  * once use several cores; background removal still takes one image at a time
  * (imageCutoutService), since each run already uses the GPU or every core.
  */
-const prefetchDepth = (): number => Math.max(2, Math.min(4, (globalThis.navigator?.hardwareConcurrency ?? 4) - 1));
+const prefetchDepth = (): number => {
+    const nav = globalThis.navigator as (Navigator & { deviceMemory?: number }) | undefined;
+    // Phones (and anything reporting little memory): the page being drawn plus
+    // one ahead. Several full photos at once is what ran them out of memory.
+    const phone = /Android|iPhone|iPad|Mobile/i.test(nav?.userAgent ?? '') || (nav?.deviceMemory ?? 8) <= 4;
+    if (phone) return 2;
+    return Math.max(2, Math.min(3, (nav?.hardwareConcurrency ?? 4) - 1));
+};
 
 /**
  * The chosen end-page design, once, after every other page: fitted inside the
@@ -610,6 +657,10 @@ export const buildCatalogPdf = async (job: CatalogPdfJob, callbacks: CatalogPdfC
         }
     }
     const [background, logo] = await shared;
+    // The backdrop, decoded once, for laying cutouts onto (see Matte).
+    const backdrop = background && shouldRemoveBackground(options, themeId)
+        ? await createImageBitmap(new Blob([background.data as BlobPart], { type: 'image/jpeg' }))
+        : null;
 
     // The end-page design loads alongside everything else.
     const lastPage = options.lastPage ? loadLastPage(options.lastPage, callbacks.onWarning) : null;
@@ -622,9 +673,13 @@ export const buildCatalogPdf = async (job: CatalogPdfJob, callbacks: CatalogPdfC
     const photos: (Promise<PdfImageInfo | null> | null)[] = [];
     const prepare = (k: number) => {
         const page = pages[k];
-        photos[k] ??= loadImageInfo(page.imgUrl, themeId, options, callbacks.onWarning, page.art.title);
+        photos[k] ??= loadImageInfo(page.imgUrl, themeId, options, callbacks.onWarning, page.art.title,
+            { colour: palette.bg, backdrop, imgBoxH: imageBoxHeight(page, options) });
     };
-    const ctx: CatalogDrawContext = { doc, options, palette, background, logo, catalogName, pageCount: { value: 0 } };
+    const ctx: CatalogDrawContext = {
+        doc, options, palette, background, logo, catalogName, pageCount: { value: 0 },
+        framed: THEME_STYLES[themeId].framedImages,
+    };
     const depth = prefetchDepth();
     for (let k = 0; k < pages.length; k++) {
         for (let ahead = k; ahead < Math.min(pages.length, k + depth); ahead++) prepare(ahead);
@@ -637,6 +692,7 @@ export const buildCatalogPdf = async (job: CatalogPdfJob, callbacks: CatalogPdfC
     callbacks.onProgress({ stage: 'pages', done: pages.length, total: pages.length });
     if (lastPage) drawLastPage(doc, await lastPage, background, palette, ctx.pageCount);
 
+    backdrop?.close();
     callbacks.onProgress({ stage: 'assembling' });
     return doc.output('arraybuffer');
 };

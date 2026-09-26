@@ -65,11 +65,14 @@ const forwardProgress = (key: string, current: number, total: number) => {
 
 /**
  * Try the GPU until a GPU run fails once; then stay on the CPU for this
- * session. Never on Android: its phone GPUs gave visibly worse cutouts than
- * the CPU (reported 2026-09-26), while iPhone and computer GPUs match it.
- * Android still gets every CPU core (cross-origin isolation).
+ * session. Computers only: on phones and tablets the GPU shares the phone's
+ * memory, and the GPU model needed well over a gigabyte, which got the app
+ * killed after a few pages (reported 2026-09-26); Android's GPUs also gave
+ * worse cutouts. Phones use the CPU on every core (cross-origin isolation).
  */
-let gpuUsable = !/Android/i.test(globalThis.navigator?.userAgent ?? '');
+let gpuUsable = !/Android|iPhone|iPad|Mobile/i.test(globalThis.navigator?.userAgent ?? '')
+    // iPadOS reports itself as a Mac; a touch screen gives it away.
+    && !((globalThis.navigator?.maxTouchPoints ?? 0) > 1 && /Macintosh/.test(globalThis.navigator?.userAgent ?? ''));
 
 /**
  * One model run at a time. Each run already uses the whole GPU (or every CPU
@@ -120,9 +123,40 @@ export const preloadCutoutModel = (onFraction?: (fraction: number) => void): Pro
     }
 });
 
-/** Cutouts, kept for the worker's lifetime so regenerating is quick. */
+/** Cutouts, kept for the worker's lifetime so regenerating is quick. Few: each is a large PNG held in memory. */
 const cutoutCache = new Map<string, Blob>();
-const MAX_CACHE = 20;
+const MAX_CACHE = 6;
+
+/**
+ * The longest side a cutout is made at. A cutout fills at most the 206mm
+ * image box, so 2000px is still over 240 dpi. Working on the full photo
+ * (12 megapixels and up from a phone camera) held several copies of 48MB+
+ * each and was what crashed phones on catalogs of more than a few pages.
+ */
+export const CUTOUT_MAX_EDGE_PX = 2000;
+
+/**
+ * The photo at no more than `maxEdge` on its longest side, EXIF rotation
+ * applied, as a JPEG the model can read. Smaller photos are returned as
+ * they are. Same picture, only smaller: the product keeps its framing.
+ */
+async function withinSize(photo: Blob, maxEdge: number): Promise<Blob> {
+    const bitmap = await createImageBitmap(photo, { imageOrientation: 'from-image' });
+    try {
+        const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+        if (scale === 1) return photo;
+        const w = Math.max(1, Math.round(bitmap.width * scale));
+        const h = Math.max(1, Math.round(bitmap.height * scale));
+        const canvas = new OffscreenCanvas(w, h);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Failed to get canvas context');
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(bitmap, 0, 0, w, h);
+        return await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.95 });
+    } finally {
+        bitmap.close();
+    }
+}
 
 /** How far apart two aspect ratios may be and still count as the same frame. */
 const ASPECT_TOLERANCE = 0.01;
@@ -165,7 +199,8 @@ async function onOriginalCanvas(cutout: Blob, original: Blob): Promise<Blob> {
 
 /**
  * Remove the background from an image; returns a transparent PNG with the
- * photo's own dimensions and framing (nothing trimmed, nothing rescaled).
+ * photo's own framing and proportions (nothing trimmed), at most
+ * CUTOUT_MAX_EDGE_PX on its longest side.
  */
 export async function removeBackgroundToBlob(imgUrl: string, onProgress?: CutoutProgress): Promise<Blob> {
     const cached = cutoutCache.get(imgUrl);
@@ -176,7 +211,8 @@ export async function removeBackgroundToBlob(imgUrl: string, onProgress?: Cutout
     const absoluteUrl = new URL(imgUrl, globalThis.location.href).href;
     const res = await fetch(absoluteUrl);
     if (!res.ok) throw new Error(`Image request failed (${res.status})`);
-    const original = await res.blob();
+    // The model and everything after it work on a page-sized copy.
+    const original = await withinSize(await res.blob(), CUTOUT_MAX_EDGE_PX);
 
     const transparentBlob = await runModel(original, onProgress);
     onProgress?.('Removing background…');

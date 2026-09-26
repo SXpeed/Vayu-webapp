@@ -31,14 +31,16 @@ rmSync(dist('admin', 'sw.js'), { force: true });
 
 // The app is cross-origin isolated, so the catalog generator's background
 // removal can run on every CPU core (WebAssembly threads need
-// SharedArrayBuffer) when the device has no usable GPU. The app loads nothing
-// from other sites except the model itself, fetched with CORS; `credentialless`
-// would still let a public image from elsewhere load, just without cookies.
-// Browsers that don't support it (Safari) ignore it and use one core.
+// SharedArrayBuffer) — which phones rely on, as they don't use the GPU for
+// it. `require-corp` rather than `credentialless`: Safari (every iPhone
+// browser) supports only this one. It is safe because the app loads nothing
+// from other sites but the model itself, which is fetched with CORS; every
+// image it shows is a stored file served from its own address. Anything
+// embedded from another site in future must send CORP/CORS headers.
 appendFileSync(dist('app', '_headers'), `
 # Cross-origin isolation: multi-core background removal (scripts/build-sites.mjs).
 /*
   Cross-Origin-Opener-Policy: same-origin
-  Cross-Origin-Embedder-Policy: credentialless
+  Cross-Origin-Embedder-Policy: require-corp
 `);
 copyFileSync(join(frontend, 'hosts', 'welcome', 'sw.js'), dist('welcome', 'sw.js'));
