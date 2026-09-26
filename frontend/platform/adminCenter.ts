@@ -13,6 +13,7 @@ import { googleConfigured, getEffectiveLoginMethods } from './settings';
 import { OrgError, type Actor } from './orgs';
 import { secretsConfigured } from './secrets';
 import { getNotificationSettings } from './notify';
+import { getAppPaymentsOrg } from './payments';
 import { emailConfigured } from './email';
 
 // ── Overview ──────────────────────────────────────────────────────────────
@@ -242,6 +243,20 @@ export async function systemHealth(env: Env, db: D1Database) {
     : 'Not configured — notices wait in the outbox; no confirmation or reset emails');
   const { providerEmail } = await getNotificationSettings(db);
   check('Provider notification address', !!providerEmail, providerEmail ?? 'Not set — new applications only appear in the queue', 'notifications');
+  // Which Razorpay account the app's payment links use, and whether payments
+  // on it can reach the app at once (webhook) or only via its status check.
+  const appPaymentsOrg = await getAppPaymentsOrg(db);
+  if (appPaymentsOrg) {
+    const org = await db.prepare('SELECT name FROM organizations WHERE id = ?').bind(appPaymentsOrg).first<{ name: string }>();
+    check('App payment links', true, `${org?.name ?? 'An organization'}'s own Razorpay account (see its Customer payments card)`);
+  } else {
+    const keys = !!env.RAZORPAY_KEY_ID && !!env.RAZORPAY_KEY_SECRET;
+    const webhook = !!env.RAZORPAY_WEBHOOK_SECRET;
+    let detail = 'Shared account: keys and webhook secret set';
+    if (!keys) detail = 'RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET not set: the app cannot create payment links';
+    else if (!webhook) detail = 'Shared account: RAZORPAY_WEBHOOK_SECRET not set, so payments show as paid only when the app next checks Razorpay (a few minutes), with no instant notice';
+    check('App payment links', keys && webhook, detail);
+  }
   check('Private file access', env.FILE_AUTH === 'on', env.FILE_AUTH === 'on' ? 'Files need a session' : 'OFF — files are reachable by URL');
 
   let migrations: string[] = [];

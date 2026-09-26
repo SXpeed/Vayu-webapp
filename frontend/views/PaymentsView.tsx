@@ -4,11 +4,12 @@ import { PaymentLink } from '../types';
 import { paymentService } from '../services/paymentService';
 import { createRefreshScheduler } from '../services/refreshScheduler';
 import { realtimeService } from '../services/realtimeService';
-import { IndianRupee, Copy, Check, RefreshCw, Link as LinkIcon, MessageCircle } from 'lucide-react';
+import { IndianRupee, Copy, Check, RefreshCw, Link as LinkIcon, MessageCircle, Trash2, CalendarClock } from 'lucide-react';
 import {
-    PageRoot, PageHeader, PageBody, Card, SectionTitle, Field, Input,
+    PageRoot, PageHeader, PageBody, Card, SectionTitle, Field, Input, Select,
     Button, GhostIconButton, Badge, EmptyState, ToggleRow,
 } from '../components/ui';
+import { IfCan } from '../components/Layout';
 
 const formatRupees = (paise: number) =>
     `₹${(paise / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
@@ -32,6 +33,51 @@ const STATUS_STYLES: Record<string, string> = {
     cancelled: 'text-red-600 dark:text-red-400',
 };
 
+/** How long a new link stays valid. Razorpay allows up to six months. */
+const VALIDITY_OPTIONS: { value: string; label: string; days?: number }[] = [
+    { value: '1', label: '1 day', days: 1 },
+    { value: '3', label: '3 days', days: 3 },
+    { value: '7', label: '7 days', days: 7 },
+    { value: '15', label: '15 days', days: 15 },
+    { value: '30', label: '30 days', days: 30 },
+    { value: '90', label: '3 months', days: 90 },
+    { value: '180', label: '6 months (longest)', days: 180 },
+    { value: 'date', label: 'Until a date…' },
+];
+const DEFAULT_VALIDITY = '7';
+const DAY_MS = 86_400_000;
+
+/** yyyy-mm-dd for a date input, in local time. */
+const dateInputValue = (ts: number) => {
+    const d = new Date(ts);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+/** The chosen validity as an expiry time; null when the date is missing or out of range. */
+const expiryFor = (choice: string, date: string): number | null => {
+    const option = VALIDITY_OPTIONS.find(o => o.value === choice);
+    if (option?.days) return Date.now() + option.days * DAY_MS;
+    if (!date) return null;
+    // The end of the chosen day, local time.
+    const [y, m, d] = date.split('-').map(Number);
+    const at = new Date(y, m - 1, d, 23, 59).getTime();
+    const ahead = at - Date.now();
+    return ahead >= 30 * 60_000 && ahead <= 180 * DAY_MS ? at : null;
+};
+
+/** "Valid till 3 Oct, 11:59 pm" / "Expires in 5 h" / "Expired 2 Oct". */
+const validityText = (link: PaymentLink): string | null => {
+    if (!link.expiresAt) return null;
+    const left = link.expiresAt - Date.now();
+    const when = new Date(link.expiresAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+    if (link.status === 'expired' || left <= 0) return `Expired ${new Date(link.expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`;
+    if (link.status !== 'created' && link.status !== 'partially_paid') return null;
+    if (left < DAY_MS) return `Expires in ${Math.max(1, Math.round(left / 3_600_000))} h`;
+    return `Valid till ${when}`;
+};
+
+const isOpen = (link: PaymentLink) => link.status === 'created' || link.status === 'partially_paid';
+
 const STATUS_LABELS: Record<string, string> = {
     paid: 'Paid',
     created: 'Awaiting',
@@ -47,12 +93,25 @@ export const PaymentsView: React.FC = () => {
     const [customerEmail, setCustomerEmail] = useState('');
     const [description, setDescription] = useState('');
     const [notifySms, setNotifySms] = useState(true);
+    const [validity, setValidity] = useState(DEFAULT_VALIDITY);
+    const [validUntil, setValidUntil] = useState(() => dateInputValue(Date.now() + 7 * DAY_MS));
     const [isCreating, setIsCreating] = useState(false);
     const [createdLink, setCreatedLink] = useState<PaymentLink | null>(null);
 
     const [links, setLinks] = useState<PaymentLink[]>([]);
     const [isLoadingLinks, setIsLoadingLinks] = useState(true);
     const [copiedId, setCopiedId] = useState<string | null>(null);
+    /** Link whose delete button asked "tap again"; the question lapses. */
+    const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+    const [busyId, setBusyId] = useState<string | null>(null);
+    /** Link whose validity is being changed, and the choice so far. */
+    const [editingValidity, setEditingValidity] = useState<{ id: string; choice: string; date: string } | null>(null);
+
+    useEffect(() => {
+        if (!confirmDeleteId) return;
+        const timer = setTimeout(() => setConfirmDeleteId(null), 4000);
+        return () => clearTimeout(timer);
+    }, [confirmDeleteId]);
 
     const loadLinks = useCallback(async (silent = false) => {
         if (!silent) setIsLoadingLinks(true);
@@ -108,6 +167,11 @@ export const PaymentsView: React.FC = () => {
             toast.error('Customer name is required');
             return;
         }
+        const expiresAt = expiryFor(validity, validUntil);
+        if (!expiresAt) {
+            toast.error('Pick a date between tomorrow and 6 months from now');
+            return;
+        }
         setIsCreating(true);
         try {
             const link = await paymentService.createPaymentLink({
@@ -118,6 +182,7 @@ export const PaymentsView: React.FC = () => {
                 customerEmail: customerEmail.trim() || undefined,
                 notifySms,
                 notifyEmail: !!customerEmail.trim(),
+                expiresAt,
             });
             setCreatedLink(link);
             setLinks(prev => [link, ...prev]);
@@ -148,6 +213,40 @@ export const PaymentsView: React.FC = () => {
         const phone = link.customerPhone.replaceAll(/[^\d]/g, '');
         const url = phone ? `https://wa.me/${phone}?text=${text}` : `https://wa.me/?text=${text}`;
         globalThis.open(url, '_blank', 'noopener');
+    };
+
+    const deleteLink = async (link: PaymentLink) => {
+        if (confirmDeleteId !== link.id) { setConfirmDeleteId(link.id); return; }
+        setConfirmDeleteId(null);
+        setBusyId(link.id);
+        try {
+            await paymentService.deletePaymentLink(link.id);
+            setLinks(prev => prev.filter(l => l.id !== link.id));
+            if (createdLink?.id === link.id) setCreatedLink(null);
+            toast.success(isOpen(link) ? 'Link cancelled and deleted' : 'Removed from the list');
+        } catch (e) {
+            toast.error((e as Error).message || 'Could not delete the link');
+            void loadLinks(true).catch(() => undefined); // e.g. it was just paid
+        } finally {
+            setBusyId(null);
+        }
+    };
+
+    const saveValidity = async () => {
+        if (!editingValidity) return;
+        const expiresAt = expiryFor(editingValidity.choice, editingValidity.date);
+        if (!expiresAt) { toast.error('Pick a date between tomorrow and 6 months from now'); return; }
+        setBusyId(editingValidity.id);
+        try {
+            const updated = await paymentService.setPaymentLinkExpiry(editingValidity.id, expiresAt);
+            setLinks(prev => prev.map(l => (l.id === updated.id ? updated : l)));
+            setEditingValidity(null);
+            toast.success('Validity changed');
+        } catch (e) {
+            toast.error((e as Error).message || 'Could not change the validity');
+        } finally {
+            setBusyId(null);
+        }
     };
 
     const linkCount = links.length === 1 ? '1 link' : `${links.length} links`;
@@ -201,6 +300,16 @@ export const PaymentsView: React.FC = () => {
 
                             <Field label="Description" htmlFor="pay-desc">
                                 <Input id="pay-desc" value={description} onChange={e => setDescription(e.target.value)} placeholder='e.g. "Golden Hour" — oil on canvas' />
+                            </Field>
+
+                            <Field label="Valid for" htmlFor="pay-validity">
+                                <ValidityPicker
+                                    id="pay-validity"
+                                    choice={validity}
+                                    date={validUntil}
+                                    onChoice={setValidity}
+                                    onDate={setValidUntil}
+                                />
                             </Field>
 
                             <ToggleRow
@@ -280,11 +389,16 @@ export const PaymentsView: React.FC = () => {
                                         </div>
                                         <div className="flex justify-between items-center mt-3 pt-2.5 gap-2">
                                             <span className="font-serif text-lg text-gray-900 dark:text-white">{formatRupees(link.amount)}</span>
-                                            <div className="flex items-center gap-2">
-                                                <span className="text-[11px] text-gray-600 dark:text-gray-300 uppercase tracking-wider">
-                                                    {link.status === 'paid' && link.paidAt ? `Paid ${formatDate(link.paidAt)}` : formatDate(link.createdAt)}
-                                                </span>
-                                                {link.status !== 'paid' && (
+                                            <span className="text-[11px] text-gray-600 dark:text-gray-300 uppercase tracking-wider">
+                                                {link.status === 'paid' && link.paidAt ? `Paid ${formatDate(link.paidAt)}` : formatDate(link.createdAt)}
+                                            </span>
+                                        </div>
+                                        <div className="flex justify-between items-center mt-2 gap-2">
+                                            <span className={`text-[11px] leading-tight min-w-0 ${link.status === 'expired' ? 'text-gray-500 dark:text-gray-400' : 'text-gray-700 dark:text-gray-300'}`}>
+                                                {validityText(link) ?? ''}
+                                            </span>
+                                            <div className="flex items-center gap-2 shrink-0">
+                                                {isOpen(link) && (
                                                     <>
                                                         <button onClick={() => copyLink(link)} className="neu-icon-btn-sm active-scale" title="Copy link" aria-label="Copy link">
                                                             {copiedId === link.id ? <Check size={14} className="text-green-600" /> : <Copy size={14} />}
@@ -292,10 +406,57 @@ export const PaymentsView: React.FC = () => {
                                                         <button onClick={() => shareOnWhatsApp(link)} className="neu-icon-btn-sm active-scale" title="Share on WhatsApp" aria-label="Share on WhatsApp">
                                                             <MessageCircle size={14} />
                                                         </button>
+                                                        <IfCan section="payments">
+                                                            <button
+                                                                onClick={() => setEditingValidity(v => (v?.id === link.id ? null : { id: link.id, choice: DEFAULT_VALIDITY, date: dateInputValue((link.expiresAt ?? Date.now()) + 7 * DAY_MS) }))}
+                                                                className="neu-icon-btn-sm active-scale"
+                                                                title="Change validity"
+                                                                aria-label="Change validity"
+                                                                aria-expanded={editingValidity?.id === link.id}
+                                                            >
+                                                                <CalendarClock size={14} />
+                                                            </button>
+                                                        </IfCan>
                                                     </>
                                                 )}
+                                                <IfCan section="payments">
+                                                    <button
+                                                        onClick={() => void deleteLink(link)}
+                                                        disabled={busyId === link.id}
+                                                        className={`neu-icon-btn-sm active-scale disabled:opacity-50 ${confirmDeleteId === link.id ? 'text-red-600 dark:text-red-400 ring-1 ring-red-500/60' : ''}`}
+                                                        title={confirmDeleteId === link.id ? (isOpen(link) ? 'Tap again to cancel and delete' : 'Tap again to remove') : (isOpen(link) ? 'Cancel and delete' : 'Remove from the list')}
+                                                        aria-label={confirmDeleteId === link.id ? 'Tap again to confirm' : (isOpen(link) ? 'Cancel and delete link' : 'Remove from the list')}
+                                                    >
+                                                        <Trash2 size={14} />
+                                                    </button>
+                                                </IfCan>
                                             </div>
                                         </div>
+                                        {confirmDeleteId === link.id && (
+                                            <p className="mt-2 text-[11px] text-red-600 dark:text-red-400">
+                                                {isOpen(link)
+                                                    ? 'Tap the bin again: the link is cancelled so it can no longer be paid, then removed.'
+                                                    : `Tap the bin again to remove it from the list.${link.status === 'paid' ? ' The payment stays in Razorpay.' : ''}`}
+                                            </p>
+                                        )}
+                                        {editingValidity?.id === link.id && (
+                                            <div className="mt-3 pt-3 border-t border-gray-200/70 dark:border-white/10 space-y-2.5">
+                                                <ValidityPicker
+                                                    id={`validity-${link.id}`}
+                                                    choice={editingValidity.choice}
+                                                    date={editingValidity.date}
+                                                    onChoice={choice => setEditingValidity(v => (v ? { ...v, choice } : v))}
+                                                    onDate={date => setEditingValidity(v => (v ? { ...v, date } : v))}
+                                                    fromNow
+                                                />
+                                                <div className="flex gap-2">
+                                                    <Button variant="primary" onClick={() => void saveValidity()} disabled={busyId === link.id} className="flex-1">
+                                                        {busyId === link.id ? 'Saving…' : 'Save'}
+                                                    </Button>
+                                                    <Button onClick={() => setEditingValidity(null)} className="flex-1">Cancel</Button>
+                                                </div>
+                                            </div>
+                                        )}
                                     </Card>
                                 ))}
                             </div>
@@ -306,3 +467,33 @@ export const PaymentsView: React.FC = () => {
         </PageRoot>
     );
 };
+
+/** How long a link stays valid: a preset, or until the end of a chosen day. */
+const ValidityPicker: React.FC<{
+    id: string;
+    choice: string;
+    date: string;
+    onChoice: (choice: string) => void;
+    onDate: (date: string) => void;
+    /** Changing an existing link: presets count from now. */
+    fromNow?: boolean;
+}> = ({ id, choice, date, onChoice, onDate, fromNow = false }) => (
+    <div className="flex gap-2">
+        <Select id={id} value={choice} onChange={e => onChoice(e.target.value)} className="flex-1 min-w-0" aria-label="Valid for">
+            {VALIDITY_OPTIONS.map(o => (
+                <option key={o.value} value={o.value}>{o.days && fromNow ? `${o.label} from now` : o.label}</option>
+            ))}
+        </Select>
+        {choice === 'date' && (
+            <Input
+                type="date"
+                aria-label="Valid until"
+                value={date}
+                min={dateInputValue(Date.now() + DAY_MS)}
+                max={dateInputValue(Date.now() + 180 * DAY_MS)}
+                onChange={e => onDate(e.target.value)}
+                className="flex-1 min-w-0"
+            />
+        )}
+    </div>
+);

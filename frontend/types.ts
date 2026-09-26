@@ -315,4 +315,6 @@ export interface PaymentLink {
     paidAt?: number;
     paymentId?: string;
     paymentMethod?: string;
+    /** When the link stops accepting payment; unset on older links (Razorpay's default). */
+    expiresAt?: number;
 }

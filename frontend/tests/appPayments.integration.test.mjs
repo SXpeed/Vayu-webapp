@@ -21,6 +21,7 @@ const WEBHOOK_SECRET_B = 'org-b-webhook-secret';
 let worker, razorpay, admin, appToken, orgA, orgB;
 const calls = [];           // what the stand-in Razorpay received
 let razorpayDown = false;   // make the stand-in reject keys
+const plinks = new Map();   // the stand-in's payment links: id -> entity
 
 /** A local stand-in for api.razorpay.com: records which key id called it. */
 function startRazorpay() {
@@ -36,7 +37,26 @@ function startRazorpay() {
             if (req.url.startsWith('/v1/payments')) { res.end('{"items":[]}'); return; }
             if (req.url === '/v1/payment_links' && req.method === 'POST') {
                 n += 1;
-                res.end(JSON.stringify({ id: `plink_test_${n}`, short_url: `https://rzp.io/i/test${n}`, status: 'created' }));
+                const sent = JSON.parse(body || '{}');
+                const entity = { id: `plink_test_${n}`, short_url: `https://rzp.io/i/test${n}`, status: 'created', expire_by: sent.expire_by ?? 0, payments: [] };
+                plinks.set(entity.id, entity);
+                calls.at(-1).body = sent;
+                res.end(JSON.stringify(entity));
+                return;
+            }
+            // One link: read it, cancel it, or change it (Razorpay's real API shapes).
+            const one = /^\/v1\/payment_links\/(plink_[A-Za-z0-9_]+)(\/cancel)?$/.exec(req.url);
+            if (one) {
+                const entity = plinks.get(one[1]);
+                if (!entity) { res.statusCode = 404; res.end('{"error":{"description":"not found"}}'); return; }
+                if (one[2] && req.method === 'POST') {
+                    if (entity.status !== 'created') { res.statusCode = 400; res.end(`{"error":{"description":"Payment link cannot be cancelled in ${entity.status} state"}}`); return; }
+                    entity.status = 'cancelled';
+                } else if (req.method === 'PATCH') {
+                    calls.at(-1).body = JSON.parse(body || '{}');
+                    entity.expire_by = calls.at(-1).body.expire_by ?? entity.expire_by;
+                }
+                res.end(JSON.stringify(entity));
                 return;
             }
             res.statusCode = 404; res.end('{}');
@@ -167,4 +187,89 @@ test('disconnecting the chosen account puts the app back on the shared account',
     assert.equal(res.body.account, 'shared');
     const audit = await admin.call('/admin/audit');
     assert.ok(JSON.stringify(audit.body).includes('payments.app_account.set'), 'choosing the account is audited');
+});
+
+// ── Delete and validity ────────────────────────────────────────────────────
+
+const DAY = 86_400_000;
+const payAt = (id, entity) => Object.assign(plinks.get(id), entity);
+
+test('a new link can be given a validity, sent to Razorpay as expire_by', async () => {
+    calls.length = 0;
+    const expiresAt = Date.now() + 3 * DAY;
+    const res = await app('/payments/link', { method: 'POST', body: { amount: 1200, customerName: 'Mr. Rao', expiresAt } });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.equal(calls.at(-1).body.expire_by, Math.floor(expiresAt / 1000));
+    assert.equal(Math.floor(res.body.expiresAt / 1000), Math.floor(expiresAt / 1000));
+    // Too soon, or longer than six months, is refused before Razorpay is called.
+    calls.length = 0;
+    assert.equal((await app('/payments/link', { method: 'POST', body: { amount: 1200, customerName: 'Mr. Rao', expiresAt: Date.now() + 5 * 60_000 } })).status, 400);
+    assert.equal((await app('/payments/link', { method: 'POST', body: { amount: 1200, customerName: 'Mr. Rao', expiresAt: Date.now() + 200 * DAY } })).status, 400);
+    assert.equal(calls.length, 0);
+});
+
+test("an unpaid link's validity can be changed, within Razorpay's limits", async () => {
+    const link = (await createLink()).body;
+    const until = Date.now() + 10 * DAY;
+    calls.length = 0;
+    const res = await app(`/payments/links/${link.id}`, { method: 'PATCH', body: { expiresAt: until } });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(calls.at(-1).method, 'PATCH');
+    assert.equal(calls.at(-1).body.expire_by, Math.floor(until / 1000));
+    assert.equal(calls.at(-1).keyId, SHARED_KEY, "the link's own account");
+    assert.equal(Math.floor((await links()).find(l => l.id === link.id).expiresAt / 1000), Math.floor(until / 1000));
+    assert.equal((await app(`/payments/links/${link.id}`, { method: 'PATCH', body: { expiresAt: Date.now() + 60_000 } })).status, 400);
+});
+
+test('deleting an unpaid link cancels it at Razorpay first, then removes it', async () => {
+    const link = (await createLink()).body;
+    calls.length = 0;
+    const res = await app(`/payments/links/${link.id}`, { method: 'DELETE' });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.ok(calls.some(c => c.method === 'POST' && c.path === `/v1/payment_links/${link.id}/cancel` && c.keyId === SHARED_KEY));
+    assert.equal(plinks.get(link.id).status, 'cancelled', 'the customer can no longer pay it');
+    assert.equal((await links()).some(l => l.id === link.id), false);
+    assert.equal((await app(`/payments/links/${link.id}`, { method: 'DELETE' })).status, 404);
+});
+
+test('a link paid just before it was deleted is kept, and shows as paid', async () => {
+    const link = (await createLink()).body;
+    payAt(link.id, { status: 'paid', payments: [{ payment_id: 'pay_late', method: 'card', status: 'captured', created_at: Math.floor(Date.now() / 1000) }] });
+    const res = await app(`/payments/links/${link.id}`, { method: 'DELETE' });
+    assert.equal(res.status, 409, JSON.stringify(res.body));
+    const kept = (await links()).find(l => l.id === link.id);
+    assert.equal(kept?.status, 'paid');
+    assert.equal(kept.paymentId, 'pay_late');
+    // A paid link can then be removed from the list; Razorpay isn't asked to cancel it.
+    calls.length = 0;
+    assert.equal((await app(`/payments/links/${link.id}`, { method: 'DELETE' })).status, 200);
+    assert.equal(calls.filter(c => c.path.endsWith('/cancel')).length, 0);
+    assert.equal((await links()).some(l => l.id === link.id), false);
+});
+
+test('without a webhook, the app picks up a payment by asking Razorpay', async () => {
+    const link = (await createLink()).body;
+    // Paid at Razorpay; no webhook arrives (the shared account has none set).
+    payAt(link.id, { status: 'paid', payments: [{ payment_id: 'pay_quiet', method: 'upi', status: 'captured', created_at: Math.floor(Date.now() / 1000) }] });
+    await links(); // the list asks Razorpay in the background
+    let seen;
+    for (let i = 0; i < 20 && seen?.status !== 'paid'; i++) {
+        await new Promise(r => setTimeout(r, 250));
+        seen = (await links()).find(l => l.id === link.id);
+    }
+    assert.equal(seen?.status, 'paid');
+    assert.equal(seen.paymentId, 'pay_quiet');
+    assert.equal(seen.paymentMethod, 'upi');
+});
+
+test('a link past its expiry shows as expired', async () => {
+    const link = (await createLink()).body;
+    payAt(link.id, { status: 'expired' });
+    // The background check only runs every few minutes per link; a fresh link is due at once.
+    let seen;
+    for (let i = 0; i < 20 && seen?.status !== 'expired'; i++) {
+        seen = (await links()).find(l => l.id === link.id);
+        await new Promise(r => setTimeout(r, 250));
+    }
+    assert.equal(seen?.status, 'expired');
 });

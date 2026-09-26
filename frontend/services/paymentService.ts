@@ -9,6 +9,8 @@ export interface CreatePaymentLinkInput {
     customerEmail?: string;
     notifySms?: boolean;
     notifyEmail?: boolean;
+    /** When the link stops accepting payment (ms since epoch). */
+    expiresAt?: number;
 }
 
 export const paymentService = {
@@ -21,5 +23,18 @@ export const paymentService = {
 
     async getPaymentLinks(): Promise<PaymentLink[]> {
         return call<PaymentLink[]>('/payments/links');
+    },
+
+    /** Cancels it at Razorpay first when it could still be paid; then removes it. */
+    async deletePaymentLink(id: string): Promise<void> {
+        await call(`/payments/links/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    },
+
+    /** How long an unpaid link stays valid. */
+    async setPaymentLinkExpiry(id: string, expiresAt: number): Promise<PaymentLink> {
+        return call<PaymentLink>(`/payments/links/${encodeURIComponent(id)}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ expiresAt }),
+        });
     },
 };

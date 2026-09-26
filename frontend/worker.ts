@@ -41,7 +41,7 @@ import {
   looksLikeEmail, roomImageKeys, roomStatus, staffRoom,
 } from './viewingRooms';
 import { handlePlatformRequest } from './platform/routes';
-import { getAppPaymentsOrg, razorpayApiBase, verifiedRazorpayKeys } from './platform/payments';
+import { getAppPaymentsOrg, razorpayApiBase, razorpayCredentials, verifiedRazorpayKeys } from './platform/payments';
 import { OrgStore } from './platform/orgStore';
 import { deliverOutbox } from './platform/notify';
 import { emailConfigured } from './platform/email';
@@ -504,6 +504,69 @@ interface StoredPaymentLink {
   paymentMethod?: string;
   /** The Razorpay account it was created in: an organization id, or 'shared'. */
   account?: string;
+  /** When the link stops accepting payment (Razorpay's expire_by); unset: Razorpay's default. */
+  expiresAt?: number;
+  /** Last time the app asked Razorpay for this link's status (see reconcilePaymentLinks). */
+  checkedAt?: number;
+}
+
+/** Links that can still be paid. */
+const OPEN_LINK_STATUSES = new Set(['created', 'partially_paid']);
+/** Razorpay wants expire_by at least 15 minutes ahead; the app offers up to six months. */
+const MIN_LINK_VALIDITY_MS = 20 * 60_000;
+const MAX_LINK_VALIDITY_MS = 180 * 86_400_000;
+
+/** A requested expiry: undefined when none was asked for, null when it is out of range. */
+function parseLinkExpiry(value: unknown): number | null | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const at = Number(value);
+  const ahead = at - Date.now();
+  if (!Number.isFinite(at) || ahead < MIN_LINK_VALIDITY_MS || ahead > MAX_LINK_VALIDITY_MS) return null;
+  return Math.floor(at);
+}
+
+/**
+ * The keys of the Razorpay account a link was made in — needed to cancel it,
+ * change it or read its status. Links from before accounts were recorded
+ * were all made in the shared account.
+ */
+async function linkAccountKeys(env: Env, account: string | undefined): Promise<{ keyId: string; keySecret: string } | null> {
+  if (!account || account === 'shared') {
+    return env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET ? { keyId: env.RAZORPAY_KEY_ID, keySecret: env.RAZORPAY_KEY_SECRET } : null;
+  }
+  if (!env.PLATFORM_DB) return null;
+  try {
+    return await razorpayCredentials(env, env.PLATFORM_DB, account);
+  } catch {
+    return null;
+  }
+}
+
+/** One Razorpay Payment Links API call with the given account's keys. */
+async function razorpayLinkCall(
+  env: Env, keys: { keyId: string; keySecret: string }, method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown,
+): Promise<{ ok: boolean; status: number; data: any }> {
+  const res = await fetch(`${razorpayApiBase(env)}/v1/payment_links${path}`, {
+    method,
+    headers: { 'Authorization': basicAuthHeader(keys.keyId, keys.keySecret), 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, data };
+}
+
+/** Copy Razorpay's view of a link onto the record; true when the status changed to paid. */
+function applyRazorpayLinkState(record: StoredPaymentLink, entity: any): boolean {
+  const wasPaid = record.status === 'paid';
+  if (typeof entity?.status === 'string') record.status = entity.status;
+  if (Number(entity?.expire_by) > 0) record.expiresAt = Number(entity.expire_by) * 1000;
+  const payment = Array.isArray(entity?.payments) ? entity.payments.find((p: any) => p?.status === 'captured') ?? entity.payments[0] : null;
+  if (record.status === 'paid' && payment) {
+    record.paidAt ??= Number(payment.created_at) > 0 ? Number(payment.created_at) * 1000 : Date.now();
+    record.paymentId ||= payment.payment_id || '';
+    record.paymentMethod ||= payment.method || '';
+  }
+  return !wasPaid && record.status === 'paid';
 }
 
 /**
@@ -550,12 +613,16 @@ async function handlePaymentLinkCreate(ctx: Ctx): Promise<Response> {
     amount?: number; description?: string;
     customerName?: string; customerPhone?: string; customerEmail?: string;
     notifySms?: boolean; notifyEmail?: boolean;
+    /** When the link stops accepting payment (ms); omitted: Razorpay's default. */
+    expiresAt?: number;
   }>();
   const amountPaise = Math.round(Number(body.amount) * 100);
   if (!Number.isFinite(amountPaise) || amountPaise < 100) {
     return err('A valid amount of at least ₹1 is required');
   }
   if (!body.customerName?.trim()) return err('Customer name is required');
+  const expiresAt = parseLinkExpiry(body.expiresAt);
+  if (expiresAt === null) return err('The link must stay valid for at least 20 minutes and at most 6 months');
 
   const razorpay = await appRazorpayAccount(ctx.env);
   if ('error' in razorpay) return err(razorpay.error, 503);
@@ -580,6 +647,7 @@ async function handlePaymentLinkCreate(ctx: Ctx): Promise<Response> {
         email: !!body.notifyEmail && !!customer.email,
       },
       reminder_enable: true,
+      ...(expiresAt ? { expire_by: Math.floor(expiresAt / 1000) } : {}),
       notes: { created_by: session.name, app: 'vayu-webapp' },
     }),
   });
@@ -603,6 +671,7 @@ async function handlePaymentLinkCreate(ctx: Ctx): Promise<Response> {
     createdBy: session.userId,
     createdByName: session.name,
     account: razorpay.account,
+    expiresAt: Number(data.expire_by) > 0 ? Number(data.expire_by) * 1000 : expiresAt,
   };
   await ctx.env.VAYU_KV.put(`payment:link:${record.id}`, JSON.stringify(record));
   await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'created', 'payment link', record.id,
@@ -620,7 +689,133 @@ async function handlePaymentLinksList(ctx: Ctx): Promise<Response> {
     if (raw) links.push(JSON.parse(raw));
   }
   links.sort((a, b) => b.createdAt - a.createdAt);
-  return json(links);
+  reconcilePaymentLinks(ctx, links);
+  // Past its expiry but not yet confirmed by Razorpay: show it as expired.
+  const now = Date.now();
+  return json(links.map(l => (OPEN_LINK_STATUSES.has(l.status) && l.expiresAt && l.expiresAt < now ? { ...l, status: 'expired' } : l)));
+}
+
+/** How often an unpaid link's status is asked of Razorpay, and how many per list. */
+const LINK_CHECK_INTERVAL_MS = 5 * 60_000;
+const LINK_CHECKS_PER_LIST = 10;
+
+/**
+ * Asks Razorpay for the status of unpaid links, in the background. Webhooks
+ * are the fast path, but the shared account's webhook secret was never set,
+ * so without this a paid link stayed "Awaiting" for good. A link that turns
+ * out paid is announced exactly as the webhook would; clients refetch.
+ */
+function reconcilePaymentLinks(ctx: Ctx, links: StoredPaymentLink[]): void {
+  const now = Date.now();
+  const due = links
+    .filter(l => OPEN_LINK_STATUSES.has(l.status) && now - (l.checkedAt ?? 0) > LINK_CHECK_INTERVAL_MS)
+    .slice(0, LINK_CHECKS_PER_LIST);
+  if (due.length === 0) return;
+  ctx.execCtx.waitUntil((async () => {
+    let changed = false;
+    await Promise.all(due.map(async link => {
+      const keys = await linkAccountKeys(ctx.env, link.account);
+      if (!keys) return;
+      const res = await razorpayLinkCall(ctx.env, keys, 'GET', `/${encodeURIComponent(link.id)}`).catch(() => null);
+      if (!res?.ok) return;
+      const before = `${link.status}|${link.expiresAt}`;
+      const nowPaid = applyRazorpayLinkState(link, res.data);
+      link.checkedAt = Date.now();
+      await ctx.env.VAYU_KV.put(`payment:link:${link.id}`, JSON.stringify(link));
+      if (before !== `${link.status}|${link.expiresAt}`) changed = true;
+      if (nowPaid) await announcePaymentReceived(ctx, link);
+    }));
+    if (changed) queueHubNotify(ctx, due.map(l => ({ entity: 'payments' as const, id: l.id, op: 'put' as const })));
+  })().catch(e => console.warn('payment link check failed', e)));
+}
+
+/** Push and activity entry for a payment, once (the caller knows it just turned paid). */
+async function announcePaymentReceived(ctx: Ctx, link: StoredPaymentLink): Promise<void> {
+  const name = link.customerName || 'customer';
+  const descriptionSuffix = link.description ? ` — ${link.description}` : '';
+  await Promise.all([
+    sendPushToAllExcept(ctx.env, '', {
+      title: 'Payment received ✓',
+      body: `${formatRupees(link.amount)} from ${name}${descriptionSuffix}`,
+      tag: `payment-${link.id}`,
+      data: { view: 'payments', paymentLinkId: link.id },
+    }),
+    logActivity(ctx.env.VAYU_DB, 'razorpay', 'Razorpay', 'received', 'payment', link.id,
+      `Payment of ${formatRupees(link.amount)} received from "${name}"`),
+  ]);
+}
+
+const PAYMENT_LINK_PATH = /^\/payments\/links\/(plink_[A-Za-z0-9_]{6,40})$/;
+
+async function loadPaymentLink(ctx: Ctx): Promise<StoredPaymentLink | Response> {
+  const id = PAYMENT_LINK_PATH.exec(ctx.path)?.[1];
+  if (!id) return err('Payment link not found', 404);
+  const raw = await ctx.env.VAYU_KV.get(`payment:link:${id}`);
+  return raw ? JSON.parse(raw) as StoredPaymentLink : err('Payment link not found', 404);
+}
+
+/**
+ * DELETE /payments/links/:id — remove a link from the app. One that can still
+ * be paid is cancelled at Razorpay first, so a customer can't pay a link the
+ * team no longer sees; if it was paid in the meantime it is kept. A paid
+ * link's payment stays in Razorpay; only the app's record goes.
+ */
+async function handlePaymentLinkDelete(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const link = await loadPaymentLink(ctx);
+  if (link instanceof Response) return link;
+
+  if (OPEN_LINK_STATUSES.has(link.status)) {
+    const keys = await linkAccountKeys(ctx.env, link.account);
+    if (!keys) return err("The Razorpay account this link was made in isn't connected, so it can't be cancelled. Nothing was deleted.", 503);
+    const cancel = await razorpayLinkCall(ctx.env, keys, 'POST', `/${encodeURIComponent(link.id)}/cancel`);
+    if (!cancel.ok) {
+      // Already paid, expired or cancelled at Razorpay? Then it can't be cancelled.
+      const current = await razorpayLinkCall(ctx.env, keys, 'GET', `/${encodeURIComponent(link.id)}`);
+      if (!current.ok) return err(cancel.data?.error?.description || `Razorpay couldn't cancel the link (${cancel.status}). Nothing was deleted.`, 502);
+      const nowPaid = applyRazorpayLinkState(link, current.data);
+      if (link.status === 'paid' || link.status === 'partially_paid') {
+        await ctx.env.VAYU_KV.put(`payment:link:${link.id}`, JSON.stringify(link));
+        if (nowPaid) await announcePaymentReceived(ctx, link);
+        queueHubNotify(ctx, [{ entity: 'payments', id: link.id, op: 'put' }]);
+        return err('This link has just been paid, so it was kept.', 409);
+      }
+      if (OPEN_LINK_STATUSES.has(link.status)) {
+        return err(cancel.data?.error?.description || "Razorpay couldn't cancel the link. Nothing was deleted.", 502);
+      }
+    }
+  }
+
+  await ctx.env.VAYU_KV.delete(`payment:link:${link.id}`);
+  await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'deleted', 'payment link', link.id,
+    `Deleted the payment link of ${formatRupees(link.amount)} for "${link.customerName}"${link.status === 'paid' ? ' (paid; the payment stays in Razorpay)' : ''}`);
+  queueHubNotify(ctx, [{ entity: 'payments', id: link.id, op: 'delete' }]);
+  return json({ deleted: true });
+}
+
+/** PATCH /payments/links/:id { expiresAt } — change how long an unpaid link stays valid. */
+async function handlePaymentLinkUpdate(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const link = await loadPaymentLink(ctx);
+  if (link instanceof Response) return link;
+  const body = await ctx.request.json<{ expiresAt?: unknown }>().catch(() => ({} as { expiresAt?: unknown }));
+  const expiresAt = parseLinkExpiry(body.expiresAt);
+  if (!expiresAt) return err('The link must stay valid for at least 20 minutes and at most 6 months');
+  if (!OPEN_LINK_STATUSES.has(link.status)) return err('Only a link that is still waiting for payment can be changed', 409);
+  const keys = await linkAccountKeys(ctx.env, link.account);
+  if (!keys) return err("The Razorpay account this link was made in isn't connected.", 503);
+  const res = await razorpayLinkCall(ctx.env, keys, 'PATCH', `/${encodeURIComponent(link.id)}`, { expire_by: Math.floor(expiresAt / 1000) });
+  if (!res.ok) return err(res.data?.error?.description || `Razorpay couldn't change the link (${res.status})`, 502);
+  applyRazorpayLinkState(link, res.data);
+  link.expiresAt = Number(res.data?.expire_by) > 0 ? Number(res.data.expire_by) * 1000 : expiresAt;
+  link.checkedAt = Date.now();
+  await ctx.env.VAYU_KV.put(`payment:link:${link.id}`, JSON.stringify(link));
+  await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'updated', 'payment link', link.id,
+    `Changed the payment link for "${link.customerName}" to stay valid until ${new Date(link.expiresAt).toISOString().slice(0, 16).replace('T', ' ')} UTC`);
+  queueHubNotify(ctx, [{ entity: 'payments', id: link.id, op: 'put' }]);
+  return json(link);
 }
 
 /** Constant-time hex string comparison. */
@@ -705,25 +900,13 @@ async function applyPaymentLinkEvent(ctx: Ctx, event: any): Promise<void> {
   }
   await ctx.env.VAYU_KV.put(kvKey, JSON.stringify(updated));
 
+  // Payment links live in KV, which cannot share a D1 transaction with the
+  // change log — so the webhook sends a signal-only hub event instead, and
+  // clients refetch /payments/links. A lost signal only delays the next
+  // scheduled refresh; the KV record is already committed.
+  queueHubNotify(ctx, [{ entity: 'payments', id: plink.id, op: 'put' }]);
   if (event.event === 'payment_link.paid' && !alreadyPaid) {
-    const amount = updated.amount;
-    const name = updated.customerName || 'customer';
-    const descriptionSuffix = record?.description ? ` — ${record.description}` : '';
-    // Payment links live in KV, which cannot share a D1 transaction with the
-    // change log — so the webhook sends a signal-only hub event instead, and
-    // clients refetch /payments/links. A lost signal only delays the next
-    // scheduled refresh; the KV record is already committed.
-    queueHubNotify(ctx, [{ entity: 'payments', id: plink.id, op: 'put' }]);
-    ctx.execCtx.waitUntil(Promise.all([
-      sendPushToAllExcept(ctx.env, '', {
-        title: 'Payment received ✓',
-        body: `${formatRupees(amount)} from ${name}${descriptionSuffix}`,
-        tag: `payment-${plink.id}`,
-        data: { view: 'payments', paymentLinkId: plink.id },
-      }),
-      logActivity(ctx.env.VAYU_DB, 'razorpay', 'Razorpay', 'received', 'payment', plink.id,
-        `Payment of ${formatRupees(amount)} received from "${name}"`),
-    ]));
+    ctx.execCtx.waitUntil(announcePaymentReceived(ctx, updated));
   }
 }
 
@@ -3837,6 +4020,8 @@ const routes: Route[] = [
   // Razorpay payment links
   { method: 'POST', match: isExact('/payments/link'), handler: handlePaymentLinkCreate },
   { method: 'GET', match: isExact('/payments/links'), handler: handlePaymentLinksList },
+  { method: 'DELETE', match: (p) => PAYMENT_LINK_PATH.test(p), handler: handlePaymentLinkDelete },
+  { method: 'PATCH', match: (p) => PAYMENT_LINK_PATH.test(p), handler: handlePaymentLinkUpdate },
   { method: 'POST', match: isExact('/payments/webhook'), handler: handlePaymentWebhook },
 
   // Delta sync + realtime hub
