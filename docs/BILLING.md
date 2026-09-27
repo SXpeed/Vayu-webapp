@@ -96,6 +96,14 @@ Everyone else is told an owner or admin needs to renew.
   last 30 days and all time (test-mode payments counted and labelled), and
   Recheck.
 
+## Offers and price changes
+
+A running offer on a plan (`plan_offers`, migration 0009) lowers the checkout
+price. `billing_payments` keeps `list_amount`, `discount_percent` and
+`offer_label`, which show on the payment in the app and the control centre.
+Renewing an organization's own plan charges its own version's price, so a
+price change never reaches existing customers (see `docs/PLANS.md`).
+
 ## Not done yet
 
 - Automatic renewal (Razorpay Subscriptions / e-mandate) and reminder emails

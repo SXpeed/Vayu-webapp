@@ -243,7 +243,7 @@ const ControlCentre: React.FC = () => {
                             {tab === 'applications' && <ApplicationsPanel reauth={reauth} routeId={route.id} go={navigate} onCountsChange={loadBadges} />}
                             {tab === 'orgs' && <OrgsPanel reauth={reauth} routeId={route.id} go={navigate} />}
                             {tab === 'accounts' && <AccountsPanel reauth={reauth} routeId={route.id} go={navigate} />}
-                            {tab === 'plans' && <PlansPanel routeId={route.id} go={navigate} />}
+                            {tab === 'plans' && <PlansPanel routeId={route.id} go={navigate} reauth={reauth} />}
                             {tab === 'billing' && <BillingPanel reauth={reauth} />}
                             {tab === 'notifications' && <NotificationsPanel onChange={loadBadges} />}
                             {tab === 'branding' && <BrandingPanel />}

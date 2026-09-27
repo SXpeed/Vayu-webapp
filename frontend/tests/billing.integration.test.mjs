@@ -261,3 +261,100 @@ test('a workspace whose plan needs payment is closed, except for paying', async 
     assert.equal(confirmed.body.applied, true, confirmed.text);
     assert.equal((await owner.call(app('/auth/me'))).status, 200, 'open again at once after paying');
 });
+
+// ── Changing plans for existing customers ─────────────────────────────────
+
+const subscription = async () => (await admin.call(`/admin/orgs/${org.id}/subscription`)).body.subscription;
+const planByKey = async (key) => {
+    const { plans } = (await admin.call('/admin/plans')).body;
+    return (await admin.call(`/admin/plans/${plans.find(p => p.key === key).id}`)).body;
+};
+
+test('a new price applies to new customers only; the subscribed organization renews at its old price', async () => {
+    const studio = await planByKey('studio');
+    const live = studio.versions.find(v => v.status === 'published');
+    const res = await post(admin, `/admin/plans/${studio.id}/versions/${live.id}/reprice`, { priceMonthly: 149900, priceAnnual: 1499000 });
+    assert.equal(res.status, 200, res.text);
+    const newLive = res.body.versions.find(v => v.status === 'published');
+    assert.equal(newLive.price_monthly, 149900);
+    assert.equal(res.body.versions.find(v => v.id === live.id).status, 'retired');
+    // The organization on the old version still sees and pays its own price.
+    const own = (await owner.call(app('/billing'))).body.plans.find(p => p.key === 'studio');
+    assert.equal(own.current, true);
+    assert.equal(own.priceMonthly, 99900);
+    // The public price list shows the new price.
+    const pub = (await fetch(`${worker.origin}/api/v2/public/plans`).then(r => r.json())).plans.find(p => p.key === 'studio');
+    assert.equal(pub.priceMonthly, 149900);
+});
+
+test('a limited-time offer lowers the checkout price and is kept with the payment', async () => {
+    const gallery = await publishPlan('Gallery', { billingType: 'paid', priceMonthly: 250000, priceAnnual: 2500000 });
+    const set = await admin.call(`/admin/plans/${gallery.id}/offer`, { method: 'PUT', body: { percentOff: 20, label: 'Diwali offer', endsAt: Date.now() + 7 * 86_400_000 } });
+    assert.equal(set.status, 200, set.text);
+    assert.equal(set.body.offer.percentOff, 20);
+    const option = (await owner.call(app('/billing'))).body.plans.find(p => p.key === 'gallery');
+    assert.equal(option.offer.priceMonthly, 200000);
+    const pub = (await fetch(`${worker.origin}/api/v2/public/plans`).then(r => r.json())).plans.find(p => p.key === 'gallery');
+    assert.equal(pub.offer.percentOff, 20);
+    const checkout = (await post(owner, app('/billing/checkout'), { planKey: 'gallery', period: 'monthly' })).body;
+    assert.equal(checkout.amount, 200000);
+    assert.equal(orders.get(checkout.orderId).entity.amount, 200000, 'Razorpay is asked for the offer price');
+    const listed = (await owner.call(app('/billing'))).body.payments.find(p => p.id === checkout.id);
+    assert.equal(listed.listAmount, 250000);
+    assert.equal(listed.discountPercent, 20);
+    assert.equal(listed.offerLabel, 'Diwali offer');
+    // The organization's own plan doesn't get it on renewal unless the offer says so.
+    const studio = await planByKey('studio');
+    await admin.call(`/admin/plans/${studio.id}/offer`, { method: 'PUT', body: { percentOff: 10, endsAt: Date.now() + 86_400_000 } });
+    assert.equal((await owner.call(app('/billing'))).body.plans.find(p => p.key === 'studio').offer, null);
+    await admin.call(`/admin/plans/${studio.id}/offer`, { method: 'PUT', body: { percentOff: 10, endsAt: Date.now() + 86_400_000, includeRenewals: true } });
+    assert.equal((await owner.call(app('/billing'))).body.plans.find(p => p.key === 'studio').offer.priceMonthly, 89900);
+    assert.equal((await admin.call(`/admin/plans/${studio.id}/offer`, { method: 'DELETE' })).body.offer, null);
+});
+
+test('moving an organization to another plan keeps its status and paid-up-to date', async () => {
+    const before = await subscription();
+    assert.equal(before.status, 'active');
+    const gallery = await planByKey('gallery');
+    const galleryLive = gallery.versions.find(v => v.status === 'published');
+    const moved = await post(admin, `/admin/orgs/${org.id}/subscription`, { planVersionId: galleryLive.id, keepPeriod: true, reason: 'Moved to Gallery' });
+    assert.equal(moved.status, 200, moved.text);
+    assert.equal(moved.body.plan.key, 'gallery');
+    assert.equal(moved.body.subscription.status, 'active', 'not sent back to waiting for payment');
+    assert.equal(moved.body.subscription.currentPeriodEnd, before.currentPeriodEnd);
+    // And everyone on a version at once, back to Studio's live version.
+    const studio = await planByKey('studio');
+    const studioLive = studio.versions.find(v => v.status === 'published');
+    const all = await post(admin, `/admin/plans/${gallery.id}/versions/${galleryLive.id}/move`, { toVersionId: studioLive.id, reason: 'Gallery withdrawn' });
+    assert.equal(all.status, 200, all.text);
+    assert.equal(all.body.moved, 1);
+    const after = await subscription();
+    assert.equal(after.status, 'active');
+    assert.equal(after.currentPeriodEnd, before.currentPeriodEnd);
+    assert.equal((await admin.call(`/admin/orgs/${org.id}/subscription`)).body.plan.version, studioLive.version);
+});
+
+test('extending a plan as goodwill adds days to its paid-up-to date', async () => {
+    const before = await subscription();
+    const res = await post(admin, `/admin/orgs/${org.id}/subscription/extend`, { days: 10, reason: 'Sorry for the outage' });
+    assert.equal(res.status, 200, res.text);
+    assert.equal(res.body.subscription.currentPeriodEnd - before.currentPeriodEnd, 10 * 86_400_000);
+    assert.equal((await post(admin, `/admin/orgs/${org.id}/subscription/extend`, { days: 10 })).status, 400, 'a reason is required');
+});
+
+test('only a plan nobody uses can be deleted', async () => {
+    const unused = await post(admin, '/admin/plans', { name: 'Never used' });
+    const del = await admin.call(`/admin/plans/${unused.body.id}`, { method: 'DELETE' });
+    assert.equal(del.status, 200, del.text);
+    assert.equal((await admin.call(`/admin/plans/${unused.body.id}`)).status, 404);
+    // Studio has an organization and payments: refused, nothing removed.
+    const studio = await planByKey('studio');
+    const refused = await admin.call(`/admin/plans/${studio.id}`, { method: 'DELETE' });
+    assert.equal(refused.status, 409);
+    assert.equal(refused.body.code, 'plan_in_use');
+    assert.match(refused.body.error, /1 organization is on it/);
+    assert.equal((await admin.call(`/admin/plans/${studio.id}`)).status, 200);
+    // The Free plan was never used: it goes.
+    const free = await planByKey('free');
+    assert.equal((await admin.call(`/admin/plans/${free.id}`, { method: 'DELETE' })).status, 200);
+});

@@ -15,6 +15,8 @@ export interface PlanOption {
     priceMonthly: number; // paise
     priceAnnual: number;
     current: boolean;
+    /** A limited-time offer on this plan for this workspace, with the prices after it. */
+    offer: { percentOff: number; label: string; endsAt: number; priceMonthly: number; priceAnnual: number } | null;
     highlights: { limits: Record<string, number | null>; modules: Record<string, boolean>; features: Record<string, boolean> };
 }
 
@@ -38,6 +40,10 @@ export interface PlanPayment {
     appliedAt: number | null;
     periodStart: number | null;
     periodEnd: number | null;
+    /** Bought with an offer: the price before it, the discount and the offer's name. */
+    listAmount: number | null;
+    discountPercent: number | null;
+    offerLabel: string | null;
     payments: PaymentDetail[];
 }
 

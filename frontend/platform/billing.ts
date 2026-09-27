@@ -21,6 +21,7 @@ import { auditStmt } from './audit';
 import { OrgError, type Actor } from './orgs';
 import { razorpayApiBase, signRazorpayBody } from './payments';
 import { parseLimits } from './plans';
+import { discounted, runningOffers, type Offer } from './offers';
 import { toPaymentDetail, type PaymentDetail } from './razorpayDetails';
 import { decryptSecret, encryptSecret, maskKeyId, secretsConfigured } from './secrets';
 
@@ -217,9 +218,12 @@ export interface PlanOption {
   /** The organization's plan now (its own version, so renewing keeps its price). */
   current: boolean;
   highlights: { limits: Record<string, number | null>; modules: Record<string, boolean>; features: Record<string, boolean> };
+  /** A limited-time offer this organization gets on this plan now, with the prices after it. */
+  offer: { percentOff: number; label: string; endsAt: number; priceMonthly: number; priceAnnual: number } | null;
 }
 
 interface VersionRow {
+  plan_id: string;
   version_id: string;
   key: string;
   name: string;
@@ -235,29 +239,41 @@ interface VersionRow {
 async function planOptions(db: D1Database, orgId: string): Promise<(PlanOption & { versionId: string })[]> {
   const [{ results: offered }, own] = await Promise.all([
     db.prepare(
-      `SELECT v.id AS version_id, p.key, p.name, p.description, v.currency, v.price_monthly, v.price_annual, v.billing_type, v.limits
+      `SELECT p.id AS plan_id, v.id AS version_id, p.key, p.name, p.description, v.currency, v.price_monthly, v.price_annual, v.billing_type, v.limits
        FROM plans p JOIN plan_versions v ON v.plan_id = p.id AND v.status = 'published'
        WHERE p.status = 'published' AND p.is_public = 1 AND v.billing_type = 'paid'
          AND v.version = (SELECT MAX(v2.version) FROM plan_versions v2 WHERE v2.plan_id = p.id AND v2.status = 'published')
        ORDER BY p.sort_order, p.name`,
     ).all<VersionRow>(),
     db.prepare(
-      `SELECT v.id AS version_id, p.key, p.name, p.description, v.currency, v.price_monthly, v.price_annual, v.billing_type, v.limits
+      `SELECT p.id AS plan_id, v.id AS version_id, p.key, p.name, p.description, v.currency, v.price_monthly, v.price_annual, v.billing_type, v.limits
        FROM subscriptions s JOIN plan_versions v ON v.id = s.plan_version_id JOIN plans p ON p.id = v.plan_id
        WHERE s.org_id = ?`,
     ).bind(orgId).first<VersionRow>(),
   ]);
+  const offers = await runningOffers(db);
   const toOption = (r: VersionRow, current: boolean) => {
     const limits = parseLimits(JSON.parse(r.limits || '{}'));
     return {
       versionId: r.version_id, key: r.key, name: r.name, description: r.description, currency: r.currency,
       priceMonthly: r.price_monthly, priceAnnual: r.price_annual, current,
       highlights: { limits: limits.limits, modules: limits.modules, features: limits.features },
+      offer: offerFor(offers.get(r.plan_id), current, r),
     };
   };
   const list = offered.map(r => (own?.key === r.key ? toOption(own, true) : toOption(r, false)));
   if (own?.billing_type === 'paid' && !list.some(o => o.key === own.key)) list.unshift(toOption(own, true));
   return list;
+}
+
+/** The offer this organization gets on a plan: renewals of its own plan only when the offer says so. */
+function offerFor(offer: Offer | undefined, current: boolean, r: VersionRow): PlanOption['offer'] {
+  if (!offer || (current && !offer.includeRenewals)) return null;
+  const price = (amount: number) => (amount >= 100 ? discounted(amount, offer.percentOff) : amount);
+  return {
+    percentOff: offer.percentOff, label: offer.label, endsAt: offer.endsAt,
+    priceMonthly: price(r.price_monthly), priceAnnual: price(r.price_annual),
+  };
 }
 
 /** GET /billing for the app: what can be paid for, and whether paying works yet. */
@@ -298,6 +314,9 @@ export interface BillingPaymentRow {
   applied_at: number | null;
   period_start: number | null;
   period_end: number | null;
+  list_amount: number | null;
+  discount_percent: number | null;
+  offer_label: string | null;
 }
 
 /** What Razorpay's checkout needs to open for one payment. */
@@ -325,12 +344,17 @@ export async function startCheckout(
   if (!period) throw new OrgError(400, 'invalid', 'Choose monthly or annual.');
   const option = (await planOptions(db, orgId)).find(o => o.key === planKey);
   if (!option) throw new OrgError(404, 'plan_unavailable', 'That plan is not available to buy. Refresh and choose again.');
-  const amount = period === 'annual' ? option.priceAnnual : option.priceMonthly;
-  if (amount < 100) throw new OrgError(400, 'invalid', `${option.name} has no ${period === 'annual' ? 'annual' : 'monthly'} price.`);
+  const listAmount = period === 'annual' ? option.priceAnnual : option.priceMonthly;
+  if (listAmount < 100) throw new OrgError(400, 'invalid', `${option.name} has no ${period === 'annual' ? 'annual' : 'monthly'} price.`);
   const keys = await payableKeys(env, db);
   if (!keys) throw new OrgError(503, 'billing_unavailable', "Online payment isn't set up yet. Contact us to change your plan.");
   const org = await db.prepare('SELECT name FROM organizations WHERE id = ?').bind(orgId).first<{ name: string }>();
   if (!org) throw new OrgError(404, 'org_not_found', 'Organization not found.');
+  // A running offer lowers the price; the list price and the offer are kept with the payment.
+  const offer = option.offer;
+  let amount = listAmount;
+  if (offer) amount = period === 'annual' ? offer.priceAnnual : offer.priceMonthly;
+  const offerLabel = offer?.label ? ` (${offer.label.slice(0, 60)})` : '';
 
   // Opening the checkout again (closed by mistake, a retry) reuses the order.
   const recent = await db.prepare(
@@ -346,7 +370,10 @@ export async function startCheckout(
     amount,
     currency: option.currency,
     receipt: id,
-    notes: { purpose: 'plan', org_id: orgId, organization: org.name.slice(0, 200), plan: option.key, period, payment_ref: id },
+    notes: {
+      purpose: 'plan', org_id: orgId, organization: org.name.slice(0, 200), plan: option.key, period, payment_ref: id,
+      ...(offer ? { offer: `${offer.percentOff}% off${offerLabel}`, list_amount: listAmount } : {}),
+    },
   }).catch(() => null);
   if (!order?.ok || typeof order.data.id !== 'string') {
     throw new OrgError(502, 'razorpay_error', order?.data?.error?.description || "Couldn't start the payment with Razorpay. Try again in a moment.");
@@ -355,13 +382,14 @@ export async function startCheckout(
   await db.batch([
     db.prepare(
       `INSERT INTO billing_payments (id, org_id, plan_version_id, plan_key, plan_name, period, amount, currency, mode, key_id,
-         razorpay_order_id, status, created_by, created_by_name, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?, ?)`,
+         razorpay_order_id, status, created_by, created_by_name, created_at, list_amount, discount_percent, offer_label)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?)`,
     ).bind(id, orgId, option.versionId, option.key, option.name, period, amount, option.currency, keys.mode, keys.keyId,
-      order.data.id, payer.userId, payer.name.slice(0, 200), now),
+      order.data.id, payer.userId, payer.name.slice(0, 200), now,
+      offer ? listAmount : null, offer?.percentOff ?? null, offer ? offer.label || null : null),
     auditStmt(db, {
       actorUserId: payer.userId, actorKind: 'user', action: 'billing.checkout.start', targetType: 'billing_payment', targetId: id, orgId,
-      details: { plan: option.key, period, amount, currency: option.currency, orderId: order.data.id }, ip: payer.ip,
+      details: { plan: option.key, period, amount, listAmount, offer, currency: option.currency, orderId: order.data.id }, ip: payer.ip,
     }),
   ]);
   const row = await db.prepare('SELECT * FROM billing_payments WHERE id = ?').bind(id).first<BillingPaymentRow>();
@@ -556,6 +584,9 @@ export function paymentView(row: BillingPaymentRow, audience: 'org' | 'provider'
     appliedAt: row.applied_at,
     periodStart: row.period_start,
     periodEnd: row.period_end,
+    listAmount: row.list_amount,
+    discountPercent: row.discount_percent,
+    offerLabel: row.offer_label,
     payments,
   };
 }

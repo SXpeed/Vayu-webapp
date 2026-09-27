@@ -23,6 +23,11 @@
 //   GET|PATCH       /api/v2/admin/plans/:id
 //   POST            /api/v2/admin/plans/:id/versions
 //   PATCH           /api/v2/admin/plans/:id/versions/:vid    edit a draft / publish / retire
+//   DELETE          /api/v2/admin/plans/:id                  delete a plan nobody uses
+//   PUT|DELETE      /api/v2/admin/plans/:id/offer            limited-time offer
+//   POST            /api/v2/admin/plans/:id/versions/:vid/reprice  new price for new customers
+//   POST            /api/v2/admin/plans/:id/versions/:vid/move     move its organizations to another version
+//   POST            /api/v2/admin/orgs/:id/subscription/extend     add days to its plan
 //   GET|POST        /api/v2/admin/orgs/:id/subscription      plan, trial, waiver
 //   POST            /api/v2/admin/orgs/:id/subscription/extend-trial
 //   POST|DELETE     /api/v2/admin/orgs/:id/entitlements      documented overrides
@@ -69,11 +74,12 @@ import {
   updateBranding, uploadLogo, uploadOrgLogo,
 } from './branding';
 import {
-  createPlan, createPlanVersion, extendTrial, getPlan, listPlans, publicPlans,
-  removeOverride, resolveEntitlements, seatUsage, setOverride, setSubscription,
+  createPlan, createPlanVersion, deletePlan, extendSubscription, extendTrial, getPlan, listPlans, moveVersionOrganizations,
+  publicPlans, removeOverride, repriceVersion, resolveEntitlements, seatUsage, setOverride, setSubscription,
   updatePlan, updatePlanVersion,
 } from './plans';
 import { SecretsUnavailable } from './secrets';
+import { removeOffer, setOffer } from './offers';
 import {
   connectBillingAccount, describeBillingAccount, disconnectBillingAccount, listAllPayments, paymentView,
   receiveBillingWebhook, recheckAnyPayment, verifyBillingAccount,
@@ -262,6 +268,8 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
     try {
       const planId = planRoute[1];
       const rest = planRoute[2] ?? '';
+      const versionAction = /^\/versions\/([A-Za-z0-9-]{1,64})\/(reprice|move)$/.exec(rest);
+      const planFresh = Date.now() - admin.sessionCreatedAt <= FRESH_SESSION_MS;
       if (planId === 'schema' && method === 'GET') {
         // Everything a plan can control, so the editor never drifts from the
         // server's validation.
@@ -274,6 +282,20 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
         return reply(await getPlan(db, planId));
       } else if (rest === '' && method === 'PATCH') {
         return reply(await updatePlan(db, planId, await planBody(), actor));
+      } else if (rest === '' && method === 'DELETE') {
+        if (!planFresh) return fail(403, 'reauth_required', 'Sign in again to do this.');
+        await deletePlan(db, planId, actor);
+        return reply({ deleted: true });
+      } else if (rest === '/offer' && method === 'PUT') {
+        await setOffer(db, planId, await planBody(), actor);
+        return reply(await getPlan(db, planId));
+      } else if (rest === '/offer' && method === 'DELETE') {
+        await removeOffer(db, planId, actor);
+        return reply(await getPlan(db, planId));
+      } else if (versionAction && method === 'POST') {
+        if (!planFresh) return fail(403, 'reauth_required', 'Sign in again to do this.');
+        if (versionAction[2] === 'reprice') return reply(await repriceVersion(db, planId, versionAction[1], await planBody(), actor));
+        return reply(await moveVersionOrganizations(db, planId, versionAction[1], await planBody(), actor));
       } else if (rest === '/versions' && method === 'POST') {
         return reply(await createPlanVersion(db, planId, await planBody(), actor), 201);
       } else if (rest.startsWith('/versions/') && method === 'PATCH') {
@@ -351,6 +373,8 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
       } else if (rest === '/subscription' && method === 'POST') {
         if (!fresh) return needFresh();
         return reply(await setSubscription(db, orgId, await body(), actor));
+      } else if (rest === '/subscription/extend' && method === 'POST') {
+        return reply(await extendSubscription(db, orgId, await body(), actor));
       } else if (rest === '/subscription/extend-trial' && method === 'POST') {
         return reply(await extendTrial(db, orgId, await body(), actor));
       } else if (rest === '/entitlements' && method === 'POST') {

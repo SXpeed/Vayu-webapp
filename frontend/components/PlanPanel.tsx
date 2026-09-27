@@ -341,7 +341,7 @@ function usePay(onDone: () => void) {
 const RenewButton: React.FC<{ option: PlanOption; payable: boolean; onDone: () => void }> = ({ option, payable, onDone }) => {
     const { pay, paying } = usePay(onDone);
     const period: BillingPeriod = option.priceMonthly >= 100 ? 'monthly' : 'annual';
-    const price = period === 'annual' ? option.priceAnnual : option.priceMonthly;
+    const { price } = optionPrice(option, period);
     return (
         <button
             type="button"
@@ -403,75 +403,99 @@ const PlanChooser: React.FC<{ billing: BillingInfo; usage: UsageRow[]; onClose: 
             )}
 
             <ul className="mt-4 grid gap-3 sm:grid-cols-2">
-                {billing.plans.map(option => {
-                    const price = period === 'annual' ? option.priceAnnual : option.priceMonthly;
-                    const available = price >= 100;
-                    const monthlyEquivalent = period === 'annual' && available ? Math.round(price / 12) : null;
-                    const saving = period === 'annual' && available && option.priceMonthly >= 100
-                        ? Math.round((1 - price / (option.priceMonthly * 12)) * 100) : 0;
-                    // Nothing is deleted on a smaller plan, but adding more is blocked.
-                    const over = rows.filter(r => {
-                        const limit = option.highlights.limits[r.key] ?? null;
-                        return r.used !== null && limit !== null && r.used > limit;
-                    });
-                    const busy = paying === `${option.key}:${period}`;
-                    return (
-                        <li key={option.key} className={`rounded-2xl p-4 flex flex-col ${option.current ? 'neu-inset' : 'neu-raised-sm'}`}>
-                            <div className="flex items-baseline justify-between gap-2">
-                                <h4 className="font-serif text-lg text-[var(--neu-text)] min-w-0 truncate">{option.name}</h4>
-                                {option.current && <span className="neu-badge text-[10px] shrink-0">Current</span>}
-                            </div>
-                            {option.description && <p className="mt-0.5 text-[12px] text-[var(--neu-text-dim)]">{option.description}</p>}
-                            <p className="mt-2">
-                                {available ? (
-                                    <>
-                                        <span className="font-serif text-2xl text-[var(--neu-text)]">{formatRupees(price)}</span>
-                                        <span className="text-[12px] text-[var(--neu-text-dim)]"> / {periodWord(period)}</span>
-                                    </>
-                                ) : (
-                                    <span className="text-[12px] text-[var(--neu-text-dim)]">Not offered {period === 'annual' ? 'yearly' : 'monthly'}</span>
-                                )}
-                            </p>
-                            {monthlyEquivalent !== null && (
-                                <p className="text-[11px] text-[var(--neu-text-dim)]">
-                                    {formatRupees(monthlyEquivalent)} a month{saving > 0 ? ` · save ${saving}%` : ''}
-                                </p>
-                            )}
-                            <ul className="mt-3 space-y-1 text-[12px] text-[var(--neu-text)]">
-                                {rows.map(r => {
-                                    const limit = option.highlights.limits[r.key] ?? null;
-                                    return (
-                                        <li key={r.key} className="flex justify-between gap-2">
-                                            <span className="text-[var(--neu-text-dim)] min-w-0 truncate">{r.label}</span>
-                                            <span className="tabular-nums shrink-0">{limit === null ? 'Unlimited' : fmtNumber(limit, r.unit)}</span>
-                                        </li>
-                                    );
-                                })}
-                            </ul>
-                            {over.length > 0 && (
-                                <p className="mt-2 text-[11px] text-amber-800 dark:text-amber-300">
-                                    You already use more {over.map(r => r.label.toLowerCase()).join(', ')} than this plan allows. Nothing is deleted, but adding more is blocked.
-                                </p>
-                            )}
-                            <div className="mt-auto pt-4">
-                                <button
-                                    type="button"
-                                    disabled={!available || !billing.payable || !!paying}
-                                    onClick={() => void pay(option, period)}
-                                    className={`neu-button ${option.current ? '' : 'neu-button-primary'} w-full inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold`}
-                                >
-                                    {busy ? <Loader2 size={13} className="animate-spin" /> : <CreditCard size={13} />}
-                                    {option.current ? 'Renew' : 'Pay'}{available ? ` ${formatRupees(price)}` : ''}
-                                </button>
-                            </div>
-                        </li>
-                    );
-                })}
+                {billing.plans.map(option => (
+                    <PlanOptionCard key={option.key} option={option} period={period} rows={rows} payable={billing.payable}
+                        paying={paying} onPay={() => void pay(option, period)} />
+                ))}
             </ul>
             <p className="mt-3 text-[11px] text-[var(--neu-text-dim)]">
                 A payment covers one {period === 'annual' ? 'year' : 'month'}; nothing renews by itself. Renewing the same plan adds the time on to the end of what you have. Changing plan starts the new one straight away.
             </p>
         </section>
+    );
+};
+
+const offerEnds = (ts: number) => new Date(ts).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+
+/** What the plan costs for the chosen period: the list price, and the offer price if one runs. */
+function optionPrice(option: PlanOption, period: BillingPeriod) {
+    const list = period === 'annual' ? option.priceAnnual : option.priceMonthly;
+    let price = list;
+    if (option.offer) price = period === 'annual' ? option.offer.priceAnnual : option.offer.priceMonthly;
+    return { list, price, available: list >= 100, discounted: price < list };
+}
+
+/** One plan in the chooser: price (with any offer), headline limits, and the pay button. */
+const PlanOptionCard: React.FC<{
+    option: PlanOption; period: BillingPeriod; rows: UsageRow[]; payable: boolean; paying: string | null; onPay: () => void;
+}> = ({ option, period, rows, payable, paying, onPay }) => {
+    const { list, price, available, discounted } = optionPrice(option, period);
+    const monthlyEquivalent = period === 'annual' && available ? Math.round(price / 12) : null;
+    const saving = period === 'annual' && available && option.priceMonthly >= 100
+        ? Math.round((1 - list / (option.priceMonthly * 12)) * 100) : 0;
+    // Nothing is deleted on a smaller plan, but adding more is blocked.
+    const over = rows.filter(r => {
+        const limit = option.highlights.limits[r.key] ?? null;
+        return r.used !== null && limit !== null && r.used > limit;
+    });
+    const busy = paying === `${option.key}:${period}`;
+    const offerName = option.offer?.label ? ` · ${option.offer.label}` : '';
+    const savingNote = saving > 0 ? ` · save ${saving}%` : '';
+    const payLabel = available ? ` ${formatRupees(price)}` : '';
+    return (
+        <li className={`rounded-2xl p-4 flex flex-col ${option.current ? 'neu-inset' : 'neu-raised-sm'}`}>
+            <div className="flex items-baseline justify-between gap-2">
+                <h4 className="font-serif text-lg text-[var(--neu-text)] min-w-0 truncate">{option.name}</h4>
+                {option.current && <span className="neu-badge text-[10px] shrink-0">Current</span>}
+            </div>
+            {option.description && <p className="mt-0.5 text-[12px] text-[var(--neu-text-dim)]">{option.description}</p>}
+            {option.offer && available && (
+                <p className="mt-2 text-[11px] font-semibold text-green-700 dark:text-green-400">
+                    {option.offer.percentOff}% off{offerName} · ends {offerEnds(option.offer.endsAt)}
+                </p>
+            )}
+            <p className="mt-2">
+                {available ? (
+                    <>
+                        {discounted && <span className="mr-1.5 text-[13px] line-through text-[var(--neu-text-dim)]">{formatRupees(list)}</span>}
+                        <span className="font-serif text-2xl text-[var(--neu-text)]">{formatRupees(price)}</span>
+                        <span className="text-[12px] text-[var(--neu-text-dim)]"> / {periodWord(period)}</span>
+                    </>
+                ) : (
+                    <span className="text-[12px] text-[var(--neu-text-dim)]">Not offered {period === 'annual' ? 'yearly' : 'monthly'}</span>
+                )}
+            </p>
+            {monthlyEquivalent !== null && (
+                <p className="text-[11px] text-[var(--neu-text-dim)]">{formatRupees(monthlyEquivalent)} a month{savingNote}</p>
+            )}
+            <ul className="mt-3 space-y-1 text-[12px] text-[var(--neu-text)]">
+                {rows.map(r => {
+                    const limit = option.highlights.limits[r.key] ?? null;
+                    return (
+                        <li key={r.key} className="flex justify-between gap-2">
+                            <span className="text-[var(--neu-text-dim)] min-w-0 truncate">{r.label}</span>
+                            <span className="tabular-nums shrink-0">{limit === null ? 'Unlimited' : fmtNumber(limit, r.unit)}</span>
+                        </li>
+                    );
+                })}
+            </ul>
+            {over.length > 0 && (
+                <p className="mt-2 text-[11px] text-amber-800 dark:text-amber-300">
+                    You already use more {over.map(r => r.label.toLowerCase()).join(', ')} than this plan allows. Nothing is deleted, but adding more is blocked.
+                </p>
+            )}
+            <div className="mt-auto pt-4">
+                <button
+                    type="button"
+                    disabled={!available || !payable || !!paying}
+                    onClick={onPay}
+                    className={`neu-button ${option.current ? '' : 'neu-button-primary'} w-full inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold`}
+                >
+                    {busy ? <Loader2 size={13} className="animate-spin" /> : <CreditCard size={13} />}
+                    {option.current ? 'Renew' : 'Pay'}{payLabel}
+                </button>
+            </div>
+        </li>
     );
 };
 
@@ -492,6 +516,14 @@ const PaymentHistory: React.FC<{ payments: PlanPayment[]; onChanged: () => void 
         </section>
     );
 };
+
+/** "20% off (Diwali offer) · list price ₹2,500" for a payment made with an offer. */
+function offerLine(p: PlanPayment): string | undefined {
+    if (!p.discountPercent) return undefined;
+    const name = p.offerLabel ? ` (${p.offerLabel})` : '';
+    const list = p.listAmount ? ` · list price ${formatRupees(p.listAmount)}` : '';
+    return `${p.discountPercent}% off${name}${list}`;
+}
 
 export const PlanPaymentRow: React.FC<{
     payment: PlanPayment; open: boolean; onToggle: () => void; onChanged: () => void;
@@ -557,6 +589,7 @@ export const PlanPaymentRow: React.FC<{
                     {sortPayments(p.payments).map(x => <PaymentAttemptCard key={x.id} payment={x} who="Payer" />)}
                     <dl className="px-1">
                         <DetailRow label="Plan" value={`${p.planName}, 1 ${periodWord(p.period)}`} />
+                        <DetailRow label="Offer" value={offerLine(p)} />
                         <DetailRow label="Covers" value={p.periodStart && p.periodEnd ? `${fmtDate(p.periodStart)} – ${fmtDate(p.periodEnd)}` : undefined} />
                         <DetailRow label="Plan changed" value={p.appliedAt ? dateTime(p.appliedAt) : undefined} />
                         <DetailRow label="Started by" value={p.createdByName ? `${p.createdByName}, ${dateTime(p.createdAt)}` : dateTime(p.createdAt)} />

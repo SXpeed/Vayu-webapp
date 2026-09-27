@@ -141,7 +141,9 @@ Seats and inventory items are enforced. Still to wire up (each is labelled
 - [x] Platform Razorpay account connected in the control centre (Billing); signed webhook, recheck, applied exactly once
 - [x] Full payment record in the app and the control centre (method, references, failures; fee for the provider only)
 - [x] A lapsed workspace opens on its plan screen so owners can pay; 7 days' grace after a period ends, then `past_due`
-- [ ] Owner: apply migration 0008, connect and verify the platform Razorpay account, add its webhook, publish public paid plans
+- [x] Migration 0008 applied to production (2026-09-27)
+- [ ] Owner: connect and verify the platform Razorpay account, add its webhook, publish public paid plans
+- [x] Plan management: change price for new customers only, move organizations keeping their dates, extend as goodwill, limited-time offers, delete unused plans (migration 0009)
 - [ ] Automatic renewal (Razorpay Subscriptions / e-mandate), reminder emails before a period ends
 - [ ] Proration when changing plan mid-period; GST invoices for plan payments; refunds from the control centre
 - [ ] Apply stored payment webhooks to business records (they are verified and stored, not yet applied)

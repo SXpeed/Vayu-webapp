@@ -97,6 +97,35 @@ trial length, headline limits). Internal ids, notes, draft and retired versions
 never appear. The response is cacheable for a minute so the marketing site stays
 mostly static.
 
+## Managing plans that organizations are on
+
+All from the control centre; nothing here changes what an organization has
+already paid for.
+
+- **Change price** (live version of a paid plan): publishes a copy of the
+  version with the new price and retires the old one. Organizations already on
+  it keep their price, including when they renew; new customers, and anyone
+  moving to this plan, pay the new one.
+- **Move organizations** (any version with organizations on it): moves them
+  all to another live version of this or another plan. Each keeps its status
+  and the date it has paid up to. On one organization's page, **Move** does the
+  same for that organization. Moving to a free plan removes the paid-up-to
+  date, since free never runs out.
+- **Extend plan** (organization page): adds days to its trial, or to the date
+  it has paid up to (from today if that has passed), with a reason. Use it,
+  for example, as an apology after an outage. A waived or free plan has no end
+  date, so there is nothing to extend.
+- **Limited-time offer** (plan page): a percentage off (1–90%) from a start
+  date to an end date. It is shown on the pricing page and in the app, and
+  charged in the app's checkout; each payment records the list price and the
+  offer. By default it applies to organizations choosing the plan, not to
+  those renewing it (**Also for renewals** turns that on). Prices after an
+  offer are rounded to whole rupees.
+- **Retire** a version or plan: it stops being offered; organizations on it
+  keep it and can renew it. A plan with no live version says so on its page.
+- **Delete plan**: only a plan nobody has ever been on, paid for or applied
+  for. Anything else is refused with the reason; archive it instead.
+
 ## Not done yet
 
 - **Automatic renewal** (Razorpay Subscriptions) and reminders before a paid

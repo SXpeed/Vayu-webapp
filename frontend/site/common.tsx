@@ -157,6 +157,8 @@ export const SiteFooter: React.FC = () => {
 export interface PublicPlan {
     key: string; name: string; description: string; billingType: string; currency: string;
     priceMonthly: number; priceAnnual: number; trialDays: number;
+    /** A limited-time offer running now. */
+    offer?: { percentOff: number; label: string; endsAt: number } | null;
     highlights: { limits: Record<string, number | null>; modules: Record<string, boolean>; features: Record<string, boolean> };
 }
 
@@ -208,8 +210,22 @@ export function planPrice(p: PublicPlan, cycle: 'monthly' | 'annual'): { amount:
         : { amount: money(p.priceMonthly, p.currency), per: '/ month' };
 }
 
+/** The offer price, as the checkout charges it: whole rupees, never below ₹1. */
+const offerPrice = (minor: number, percentOff: number) => Math.max(100, Math.round((minor * (100 - percentOff)) / 100 / 100) * 100);
+
+/** A paid plan's price after a running offer, and the list price to strike through. */
+function planOffer(p: PublicPlan, cycle: 'monthly' | 'annual'): { was: string; now: string; note: string } | null {
+    if (!p.offer || p.billingType !== 'paid') return null;
+    const list = cycle === 'annual' ? p.priceAnnual : p.priceMonthly;
+    if (list < 100) return null;
+    const ends = new Date(p.offer.endsAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+    const name = p.offer.label ? `${p.offer.label} · ` : '';
+    return { was: money(list, p.currency), now: money(offerPrice(list, p.offer.percentOff), p.currency), note: `${name}${p.offer.percentOff}% off until ${ends}` };
+}
+
 export const PlanCard: React.FC<{ plan: PublicPlan; cycle: 'monthly' | 'annual'; selected?: boolean; onChoose?: () => void; cta?: string; href?: string; className?: string }> = ({ plan, cycle, selected, onChoose, cta = 'Choose', href, className = '' }) => {
     const price = planPrice(plan, cycle);
+    const offer = planOffer(plan, cycle);
     const Action = href
         ? <a href={href} className="neu-button neu-button-primary w-full justify-center mt-6">{cta}</a>
         : <button type="button" onClick={onChoose} className={`neu-button w-full justify-center mt-6 ${selected ? 'neu-button-primary' : ''}`}>{selected ? 'Selected' : cta}</button>;
@@ -217,8 +233,10 @@ export const PlanCard: React.FC<{ plan: PublicPlan; cycle: 'monthly' | 'annual';
         <div className={`neu-card p-6 flex flex-col ${selected ? 'ring-2 ring-gold-500' : ''} ${className}`}>
             <p className="font-serif text-xl text-gray-900 dark:text-gray-100">{plan.name}</p>
             {plan.description && <p className="text-[13px] mt-1 text-gray-600 dark:text-gray-400">{plan.description}</p>}
-            <p className="mt-4">
-                <span className="font-serif text-3xl text-gray-900 dark:text-gray-100 tabular-nums">{price.amount}</span>
+            {offer && <p className="mt-3 text-[12px] font-semibold text-green-700 dark:text-green-400">{offer.note}</p>}
+            <p className={offer ? 'mt-1' : 'mt-4'}>
+                {offer && <span className="mr-2 text-base line-through text-gray-500 dark:text-gray-400 tabular-nums">{offer.was}</span>}
+                <span className="font-serif text-3xl text-gray-900 dark:text-gray-100 tabular-nums">{offer ? offer.now : price.amount}</span>
                 <span className="text-sm text-gray-600 dark:text-gray-400"> {price.per}</span>
             </p>
             {plan.billingType === 'paid' && plan.trialDays > 0 && (

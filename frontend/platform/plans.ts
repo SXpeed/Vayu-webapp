@@ -12,6 +12,7 @@
 import { auditStmt } from './audit';
 import { OrgError, type Actor } from './orgs';
 import { FEATURE_FIELDS, LIMIT_FIELDS, MODULE_FIELDS } from './planFields';
+import { getOffer, runningOffers } from './offers';
 
 /**
  * What a plan allows. Countable limits (null = unlimited), module switches and
@@ -98,8 +99,10 @@ export async function listPlans(db: D1Database) {
             (SELECT COUNT(*) FROM plan_versions v WHERE v.plan_id = p.id AND v.status = 'draft') AS drafts,
             (SELECT COUNT(*) FROM subscriptions s JOIN plan_versions v ON v.id = s.plan_version_id WHERE v.plan_id = p.id) AS organizations,
             cur.version AS published_version, cur.billing_type, cur.currency, cur.price_monthly, cur.price_annual,
-            cur.trial_days, cur.limits AS published_limits
+            cur.trial_days, cur.limits AS published_limits, cur.id AS published_version_id,
+            o.percent_off AS offer_percent, o.starts_at AS offer_starts_at, o.ends_at AS offer_ends_at
      FROM plans p
+     LEFT JOIN plan_offers o ON o.plan_id = p.id
      LEFT JOIN plan_versions cur ON cur.id = (
        SELECT v.id FROM plan_versions v WHERE v.plan_id = p.id AND v.status = 'published' ORDER BY v.version DESC LIMIT 1)
      ORDER BY p.sort_order, p.name`,
@@ -114,7 +117,7 @@ export async function getPlan(db: D1Database, planId: string) {
     `SELECT v.*, (SELECT COUNT(*) FROM subscriptions s WHERE s.plan_version_id = v.id) AS organizations
      FROM plan_versions v WHERE v.plan_id = ? ORDER BY v.version DESC`,
   ).bind(planId).all();
-  return { ...plan, versions };
+  return { ...plan, versions, offer: await getOffer(db, planId) };
 }
 
 export async function createPlan(db: D1Database, body: Record<string, unknown>, actor: Actor) {
@@ -234,20 +237,23 @@ export async function updatePlanVersion(db: D1Database, planId: string, versionI
 /** Plans the marketing site may show: published, public, with a published version. */
 export async function publicPlans(db: D1Database) {
   const { results } = await db.prepare(
-    `SELECT p.key, p.name, p.description, v.billing_type, v.currency, v.price_monthly, v.price_annual, v.trial_days, v.limits
+    `SELECT p.id, p.key, p.name, p.description, v.billing_type, v.currency, v.price_monthly, v.price_annual, v.trial_days, v.limits
      FROM plans p
      JOIN plan_versions v ON v.plan_id = p.id AND v.status = 'published'
      WHERE p.status = 'published' AND p.is_public = 1
        AND v.version = (SELECT MAX(v2.version) FROM plan_versions v2 WHERE v2.plan_id = p.id AND v2.status = 'published')
      ORDER BY p.sort_order, p.name`,
   ).all();
+  const offers = await runningOffers(db);
   // Only what a price card needs; internal ids and notes stay inside.
   return (results as Record<string, unknown>[]).map(r => {
+    const offer = offers.get(String(r.id));
     const limits = JSON.parse(String(r.limits)) as PlanLimits;
     return {
       key: r.key, name: r.name, description: r.description, billingType: r.billing_type,
       currency: r.currency, priceMonthly: r.price_monthly, priceAnnual: r.price_annual, trialDays: r.trial_days,
       highlights: { limits: limits.limits, modules: limits.modules, features: limits.features },
+      offer: offer ? { percentOff: offer.percentOff, label: offer.label, endsAt: offer.endsAt } : null,
     };
   });
 }
@@ -375,12 +381,20 @@ export async function setSubscription(db: D1Database, orgId: string, body: Recor
     if (version.status !== 'published') throw new OrgError(409, 'version_not_published', 'Only a published version can be assigned.');
   }
 
-  const before = await db.prepare('SELECT status, plan_version_id FROM subscriptions WHERE org_id = ?').bind(orgId).first();
-  const waive = body.waivePayment === true;
-  const reason = waive || body.status ? str(body.reason, 'Reason', 500, 3) : null;
+  const before = await db.prepare('SELECT status, plan_version_id, payment_waived, current_period_end FROM subscriptions WHERE org_id = ?')
+    .bind(orgId).first<{ status: string; plan_version_id: string | null; payment_waived: number; current_period_end: number | null }>();
+  // Moving an organization that already has a plan: it keeps its status, the
+  // date it has paid up to, its trial end and any waiver. Only the plan changes.
+  const keepPeriod = body.keepPeriod === true && !!version && !!before && before.status !== 'none';
+  const waive = body.waivePayment === true || (keepPeriod && before?.payment_waived === 1);
+  const given = typeof body.reason === 'string' ? body.reason.trim().slice(0, 500) : '';
+  const reason = body.waivePayment === true || body.status ? str(body.reason, 'Reason', 500, 3) : given || null;
+  // A free plan never runs out, so a paid-until date no longer applies.
+  const clearPeriod = keepPeriod && version?.billing_type === 'free';
 
   let status = typeof body.status === 'string' ? body.status : null;
   let trialEndsAt = typeof body.trialEndsAt === 'number' ? body.trialEndsAt : null;
+  if (!status && keepPeriod && before) status = clearPeriod ? 'active' : before.status;
   if (!status && version) {
     // Default by billing type: free and waived start active, trials start
     // their clock now, paid waits for payment.
@@ -403,10 +417,11 @@ export async function setSubscription(db: D1Database, orgId: string, body: Recor
          payment_waived = excluded.payment_waived, waiver_reason = COALESCE(excluded.waiver_reason, subscriptions.waiver_reason),
          updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
     ).bind(orgId, versionId, status, trialEndsAt, waive ? 1 : 0, reason, now, now, actor.userId),
+    ...(clearPeriod ? [db.prepare('UPDATE subscriptions SET current_period_end = NULL WHERE org_id = ?').bind(orgId)] : []),
     auditStmt(db, {
       actorUserId: actor.userId, actorKind: 'provider_admin', action: 'subscription.update',
       targetType: 'organization', targetId: orgId, orgId,
-      details: { before, after: { planVersionId: versionId, status, trialEndsAt, waivePayment: waive }, reason }, ip: actor.ip,
+      details: { before, after: { planVersionId: versionId, status, trialEndsAt, waivePayment: waive, keepPeriod }, reason }, ip: actor.ip,
     }),
   ]);
   return resolveEntitlements(db, orgId);
@@ -426,6 +441,138 @@ export async function extendTrial(db: D1Database, orgId: string, body: Record<st
     auditStmt(db, { actorUserId: actor.userId, actorKind: 'provider_admin', action: 'subscription.trial.extend', targetType: 'organization', targetId: orgId, orgId, details: { days, reason, trialEndsAt }, ip: actor.ip }),
   ]);
   return resolveEntitlements(db, orgId);
+}
+
+/**
+ * Adds days to an organization's plan, e.g. as an apology: to its trial if it
+ * is on one, otherwise to the date it has paid up to (from today if that has
+ * passed). Reopens a workspace that was waiting for payment.
+ */
+export async function extendSubscription(db: D1Database, orgId: string, body: Record<string, unknown>, actor: Actor) {
+  const days = num(body.days, 'Days', { min: 1, max: 365 }) as number;
+  const reason = str(body.reason, 'Reason', 500, 3);
+  const current = await db.prepare('SELECT status, current_period_end, payment_waived FROM subscriptions WHERE org_id = ?')
+    .bind(orgId).first<{ status: string; current_period_end: number | null; payment_waived: number }>();
+  if (!current || current.status === 'none') throw new OrgError(404, 'no_subscription', 'This organization has no plan yet. Assign one first.');
+  if (current.status === 'trialing') return extendTrial(db, orgId, body, actor);
+  if (current.payment_waived === 1 || (current.status === 'active' && !current.current_period_end)) {
+    throw new OrgError(409, 'no_end_date', "This organization's plan has no end date (waived or free), so there is nothing to extend.");
+  }
+  const now = Date.now();
+  const from = Math.max(current.current_period_end ?? 0, now);
+  const periodEnd = from + days * 86_400_000;
+  await db.batch([
+    db.prepare("UPDATE subscriptions SET current_period_end = ?, status = 'active', updated_at = ?, updated_by = ? WHERE org_id = ?")
+      .bind(periodEnd, now, actor.userId, orgId),
+    auditStmt(db, {
+      actorUserId: actor.userId, actorKind: 'provider_admin', action: 'subscription.extend', targetType: 'organization', targetId: orgId, orgId,
+      details: { days, reason, before: current, periodEnd }, ip: actor.ip,
+    }),
+  ]);
+  return resolveEntitlements(db, orgId);
+}
+
+/**
+ * Deletes a plan nobody uses: no organization on any of its versions, no
+ * payment ever made for it, no application waiting for it. A plan in use is
+ * refused (archive it instead), since deleting it would take away what those
+ * organizations have and paid for.
+ */
+export async function deletePlan(db: D1Database, planId: string, actor: Actor): Promise<void> {
+  const plan = await db.prepare('SELECT id, key, name FROM plans WHERE id = ?').bind(planId).first<{ id: string; key: string; name: string }>();
+  if (!plan) throw new OrgError(404, 'plan_not_found', 'Plan not found.');
+  const use = await db.prepare(
+    `SELECT
+       (SELECT COUNT(*) FROM subscriptions s JOIN plan_versions v ON v.id = s.plan_version_id WHERE v.plan_id = ?1) AS orgs,
+       (SELECT COUNT(*) FROM billing_payments b JOIN plan_versions v ON v.id = b.plan_version_id WHERE v.plan_id = ?1) AS payments,
+       (SELECT COUNT(*) FROM applications a
+         WHERE a.approved_plan_version_id IN (SELECT id FROM plan_versions WHERE plan_id = ?1)
+            OR (a.requested_plan_key = ?2 AND a.review_status IN ('draft', 'pending_review', 'needs_information'))) AS applications`,
+  ).bind(planId, plan.key).first<{ orgs: number; payments: number; applications: number }>();
+  const inUse: string[] = [];
+  if (use?.orgs) inUse.push(`${use.orgs} organization${use.orgs === 1 ? ' is' : 's are'} on it`);
+  if (use?.payments) inUse.push(`${use.payments} payment${use.payments === 1 ? ' was' : 's were'} made for it`);
+  if (use?.applications) inUse.push(`${use.applications} application${use.applications === 1 ? '' : 's'} asked for it`);
+  if (inUse.length) {
+    throw new OrgError(409, 'plan_in_use', `${plan.name} can't be deleted: ${inUse.join(', ')}. Archive it instead; nothing changes for them.`);
+  }
+  await db.batch([
+    db.prepare('DELETE FROM plan_offers WHERE plan_id = ?').bind(planId),
+    db.prepare('DELETE FROM plan_versions WHERE plan_id = ?').bind(planId),
+    db.prepare('DELETE FROM plans WHERE id = ?').bind(planId),
+    auditStmt(db, { actorUserId: actor.userId, actorKind: 'provider_admin', action: 'plan.delete', targetType: 'plan', targetId: planId, details: { key: plan.key, name: plan.name }, ip: actor.ip }),
+  ]);
+}
+
+async function publishedVersion(db: D1Database, planId: string, versionId: string) {
+  const v = await db.prepare('SELECT * FROM plan_versions WHERE id = ? AND plan_id = ?').bind(versionId, planId)
+    .first<{ id: string; version: number; status: string; billing_type: string; currency: string; trial_days: number; limits: string; price_monthly: number; price_annual: number }>();
+  if (!v) throw new OrgError(404, 'version_not_found', 'Plan version not found.');
+  return v;
+}
+
+/**
+ * A new price for new customers: publishes a copy of the version with the new
+ * prices (limits and features unchanged) and retires the old one. Everyone
+ * already on the old version keeps it, and renews at its price.
+ */
+export async function repriceVersion(db: D1Database, planId: string, versionId: string, body: Record<string, unknown>, actor: Actor) {
+  const v = await publishedVersion(db, planId, versionId);
+  if (v.status !== 'published') throw new OrgError(409, 'version_not_published', 'Only the live version can be repriced.');
+  if (v.billing_type !== 'paid') throw new OrgError(409, 'invalid', 'Only a paid plan has a price to change.');
+  const priceMonthly = num(body.priceMonthly ?? 0, 'Monthly price') as number;
+  const priceAnnual = num(body.priceAnnual ?? 0, 'Annual price') as number;
+  if (priceMonthly === 0 && priceAnnual === 0) throw new OrgError(400, 'invalid', 'A paid plan needs a monthly or annual price.');
+  if (priceMonthly === v.price_monthly && priceAnnual === v.price_annual) throw new OrgError(400, 'invalid', 'That is the current price.');
+  const last = await db.prepare('SELECT MAX(version) AS v FROM plan_versions WHERE plan_id = ?').bind(planId).first<{ v: number }>();
+  const version = (last?.v ?? v.version) + 1;
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  await db.batch([
+    db.prepare(`INSERT INTO plan_versions (id, plan_id, version, status, billing_type, currency, price_monthly, price_annual, trial_days, limits, notes, created_at, created_by, published_at)
+                VALUES (?, ?, ?, 'published', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(id, planId, version, v.billing_type, v.currency, priceMonthly, priceAnnual, v.trial_days, v.limits,
+        `New price; same as version ${v.version} otherwise`, now, actor.userId, now),
+    db.prepare("UPDATE plan_versions SET status = 'retired' WHERE id = ?").bind(v.id),
+    auditStmt(db, {
+      actorUserId: actor.userId, actorKind: 'provider_admin', action: 'plan.version.reprice', targetType: 'plan_version', targetId: id,
+      details: { planId, from: { version: v.version, priceMonthly: v.price_monthly, priceAnnual: v.price_annual }, to: { version, priceMonthly, priceAnnual } }, ip: actor.ip,
+    }),
+  ]);
+  return getPlan(db, planId);
+}
+
+/**
+ * Moves every organization on one version to another version (of this plan
+ * or any other). Each keeps its status and the date it has paid up to; the
+ * new limits apply at once, and renewals are charged at the new version's
+ * price. Moving to a free version drops the paid-up-to date (free never runs out).
+ */
+export async function moveVersionOrganizations(db: D1Database, planId: string, versionId: string, body: Record<string, unknown>, actor: Actor) {
+  const from = await publishedVersion(db, planId, versionId);
+  const toId = typeof body.toVersionId === 'string' ? body.toVersionId : '';
+  const to = await db.prepare('SELECT id, plan_id, version, status, billing_type FROM plan_versions WHERE id = ?').bind(toId)
+    .first<{ id: string; plan_id: string; version: number; status: string; billing_type: string }>();
+  if (!to) throw new OrgError(404, 'version_not_found', 'Choose the version to move them to.');
+  if (to.status !== 'published') throw new OrgError(409, 'version_not_published', 'Organizations can only be moved to a live (published) version.');
+  if (to.id === from.id) throw new OrgError(400, 'invalid', 'They are already on that version.');
+  const reason = str(body.reason, 'Reason', 500, 3);
+  const { results: orgs } = await db.prepare('SELECT org_id FROM subscriptions WHERE plan_version_id = ?').bind(from.id).all<{ org_id: string }>();
+  if (orgs.length === 0) throw new OrgError(409, 'nothing_to_move', 'No organization is on this version.');
+  const now = Date.now();
+  const toFree = to.billing_type === 'free';
+  await db.batch([
+    db.prepare(`UPDATE subscriptions SET plan_version_id = ?,
+                  status = CASE WHEN ? THEN 'active' ELSE status END,
+                  current_period_end = CASE WHEN ? THEN NULL ELSE current_period_end END,
+                  updated_at = ?, updated_by = ?
+                WHERE plan_version_id = ?`).bind(to.id, toFree ? 1 : 0, toFree ? 1 : 0, now, actor.userId, from.id),
+    auditStmt(db, {
+      actorUserId: actor.userId, actorKind: 'provider_admin', action: 'subscription.move', targetType: 'plan_version', targetId: from.id,
+      details: { from: { planId, version: from.version }, to: { planId: to.plan_id, version: to.version }, organizations: orgs.map(o => o.org_id), reason }, ip: actor.ip,
+    }),
+  ]);
+  return { moved: orgs.length, plan: await getPlan(db, planId) };
 }
 
 export async function setOverride(db: D1Database, orgId: string, body: Record<string, unknown>, actor: Actor) {

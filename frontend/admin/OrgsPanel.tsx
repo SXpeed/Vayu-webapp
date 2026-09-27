@@ -178,7 +178,7 @@ interface Entitlements {
         features: Record<string, boolean>;
     };
     plan: { key: string; name: string; version: number; billingType: string } | null;
-    subscription: { status: string; trialEndsAt: number | null; paymentWaived: boolean };
+    subscription: { status: string; trialEndsAt: number | null; paymentWaived: boolean; currentPeriodEnd?: number | null };
     overrides: Record<string, unknown>;
     active: boolean;
     seats: { used: number; limit: number | null; remaining: number | null; overLimit: boolean };
@@ -407,6 +407,16 @@ const MembersCard: React.FC<{ org: OrgDetail; onChange: (o: OrgDetail) => void }
     );
 };
 
+/** "Studio v2 · Paid · paid up to 27 Oct 2026", or that no plan is assigned. */
+function planSummary(info: Entitlements, paidUntil: string | null): string {
+    if (!info.plan) return 'No plan assigned; the default limits apply.';
+    const billing = BILLING_LABEL[info.plan.billingType] ?? info.plan.billingType;
+    const until = paidUntil ? ` · paid up to ${paidUntil}` : '';
+    return `${info.plan.name} v${info.plan.version} · ${billing}${until}`;
+}
+
+const fmtDay = (ts: number) => new Date(ts).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+
 const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; onChanged: () => void }> = ({ orgId, info, reauth, onChanged }) => {
     const dialogs = useDialogs();
     const [options, setOptions] = useState<PlanOption[] | null>(null);
@@ -441,21 +451,42 @@ const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; on
         if (next) { toast.success('Updated'); onChanged(); }
     };
 
+    // An organization that already has a plan keeps its status and dates when moved.
+    const sub = info.subscription;
+    const hasPlan = !!info.plan && sub.status !== 'none';
+    const paidUntil = sub.currentPeriodEnd ? fmtDay(sub.currentPeriodEnd) : null;
+    const stays = paidUntil ? ` and stays paid up to ${paidUntil}` : '';
+    const paidUpTo = paidUntil ? ` (${paidUntil})` : '';
+
     const assign = async (waive: boolean) => {
         if (!choice) { toast.error('Choose a plan version first'); return; }
-        const reason = waive
-            ? await dialogs.prompt({ title: 'Waive payment?', body: 'The organization is activated without paying. The reason is recorded.', label: 'Reason', multiline: true, minLength: 3, confirmLabel: 'Assign and waive' })
-            : (await dialogs.confirm({ title: 'Assign this plan version?', body: 'Its limits apply straight away. Nothing already stored is removed if it is smaller.', confirmLabel: 'Assign' })) ? 'Plan assigned from the control centre' : null;
+        const keep = hasPlan && !waive;
+        let reason: string | null;
+        if (waive) {
+            reason = await dialogs.prompt({ title: 'Waive payment?', body: 'The organization is activated without paying. The reason is recorded.', label: 'Reason', multiline: true, minLength: 3, confirmLabel: 'Assign and waive' });
+        } else {
+            const body = keep
+                ? `It keeps its status${stays}; nothing is charged now. The new limits apply straight away, and its next renewal is at the new plan's price. Nothing already stored is removed if the new plan is smaller.`
+                : 'Its limits apply straight away. A paid plan waits for payment before the workspace opens. Nothing already stored is removed if it is smaller.';
+            reason = (await dialogs.confirm({ title: keep ? 'Move to this plan?' : 'Assign this plan version?', body, confirmLabel: keep ? 'Move' : 'Assign' }))
+                ? 'Plan changed from the control centre' : null;
+        }
         if (!reason) return;
-        act('/subscription', { planVersionId: choice, waivePayment: waive, reason });
+        act('/subscription', { planVersionId: choice, waivePayment: waive, keepPeriod: keep, reason });
     };
 
+    /** Extra days on its trial or paid period, e.g. as an apology. */
     const extend = async () => {
-        const days = await dialogs.prompt({ title: 'Extend the trial', label: 'Extra days', defaultValue: '14', inputType: 'number', minLength: 1, confirmLabel: 'Next' });
+        const what = sub.status === 'trialing' ? 'trial' : 'plan';
+        const days = await dialogs.prompt({
+            title: `Extend the ${what}`,
+            body: what === 'trial' ? 'Days are added to the end of the trial.' : `Days are added to the date it has paid up to${paidUpTo}, or from today if that has passed. Nothing is charged.`,
+            label: 'Extra days', defaultValue: '7', inputType: 'number', minLength: 1, confirmLabel: 'Next',
+        });
         if (!days) return;
-        const reason = await dialogs.prompt({ title: 'Why extend it?', label: 'Reason', minLength: 3, confirmLabel: `Extend by ${days} days` });
+        const reason = await dialogs.prompt({ title: 'Why extend it?', label: 'Reason (kept in the audit log)', placeholder: 'e.g. Apology for the outage on 3 Oct', minLength: 3, confirmLabel: `Extend by ${days} days` });
         if (!reason) return;
-        act('/subscription/extend-trial', { days: Number(days), reason });
+        act('/subscription/extend', { days: Number(days), reason });
     };
 
     const override = async () => {
@@ -475,7 +506,7 @@ const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; on
 
     return (
         <Section title="Plan and limits"
-            description={info.plan ? `${info.plan.name} v${info.plan.version} · ${BILLING_LABEL[info.plan.billingType] ?? info.plan.billingType}` : 'No plan assigned; the default limits apply.'}
+            description={planSummary(info, paidUntil)}
             actions={<Gauge size={16} className="ac-faint" />}>
             {info.seats.overLimit && (
                 <p className="mb-4 rounded-xl px-3 py-2 text-[13px] bg-[var(--ac-warn-bg)] text-[var(--ac-warn)]">
@@ -505,11 +536,11 @@ const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; on
                             {(options ?? []).map(o => <option key={o.versionId} value={o.versionId}>{o.name} v{o.version} ({BILLING_LABEL[o.billingType] ?? o.billingType})</option>)}
                         </Select>
                     </Field>
-                    <Button variant="primary" onClick={() => assign(false)} disabled={busy || !choice}>Assign</Button>
+                    <Button variant="primary" onClick={() => assign(false)} disabled={busy || !choice}>{hasPlan ? 'Move' : 'Assign'}</Button>
                     <Button onClick={() => assign(true)} disabled={busy || !choice}>Assign &amp; waive payment</Button>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                    <Button onClick={extend} disabled={busy}>Extend trial</Button>
+                    <Button onClick={extend} disabled={busy || !hasPlan}>{sub.status === 'trialing' ? 'Extend trial' : 'Extend plan'}</Button>
                     <Button onClick={override} disabled={busy}>Override seat limit</Button>
                 </div>
             </div>

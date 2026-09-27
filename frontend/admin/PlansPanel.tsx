@@ -10,10 +10,11 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Check, ChevronDown, Copy, Layers, Lock, Pencil, Plus, Send, Archive } from 'lucide-react';
+import { ArrowRightLeft, Check, ChevronDown, Copy, IndianRupee, Layers, Lock, Pencil, Plus, Send, Archive } from 'lucide-react';
 import { Field, Input, Textarea, ToggleRow } from '../components/ui';
-import { api, type ApiError } from './api';
+import { api, type ApiError, type Reauth } from './api';
 import { Detail, Drawer, EmptyState, PageHeader, Section, Segmented, SkeletonCards, Skeleton, StatusPill, useDialogs } from './kit';
+import { DeletePlanButton, MoveOrgsForm, OfferSection, RepriceForm, type Offer } from './PlanTools';
 
 /* ─────────────────────────────── Types ──────────────────────────────── */
 
@@ -27,6 +28,8 @@ interface PlanRow {
     versions: number; drafts: number; organizations: number; published_version: number | null;
     billing_type: string | null; currency: string | null; price_monthly: number | null; price_annual: number | null;
     trial_days: number | null; published_limits: string | null;
+    published_version_id: string | null;
+    offer_percent: number | null; offer_starts_at: number | null; offer_ends_at: number | null;
 }
 
 export interface PlanVersion {
@@ -35,7 +38,7 @@ export interface PlanVersion {
     published_at: number | null; organizations: number;
 }
 
-type PlanDetail = Omit<PlanRow, 'versions'> & { versions: PlanVersion[] };
+export type PlanDetail = Omit<PlanRow, 'versions'> & { versions: PlanVersion[]; offer?: Offer | null };
 
 /* ────────────────────────────── Helpers ─────────────────────────────── */
 
@@ -68,11 +71,14 @@ function priceLine(type: string | null, monthly: number | null, annual: number |
 
 const HEADLINE = ['maxMembers', 'maxItems', 'maxCatalogs', 'storageMb'];
 
+const shortDay = (ts: number) => new Date(ts).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+const offerRunning = (p: PlanRow) => !!p.offer_percent && (p.offer_starts_at ?? 0) <= Date.now() && (p.offer_ends_at ?? 0) > Date.now();
+
 /* ─────────────────────────────── Panel ──────────────────────────────── */
 
-export const PlansPanel: React.FC<{ routeId?: string; go: (section: string, id?: string) => void }> = ({ routeId, go }) =>
+export const PlansPanel: React.FC<{ routeId?: string; go: (section: string, id?: string) => void; reauth: Reauth }> = ({ routeId, go, reauth }) =>
     routeId
-        ? <PlanDetailView key={routeId} planId={routeId} onBack={() => go('plans')} />
+        ? <PlanDetailView key={routeId} planId={routeId} reauth={reauth} onBack={() => go('plans')} />
         : <PlanList onOpen={id => go('plans', id)} />;
 
 /* ─────────────────────────────── List ───────────────────────────────── */
@@ -116,6 +122,7 @@ const PlanList: React.FC<{ onOpen: (id: string) => void }> = ({ onOpen }) => {
                     { value: 'published', label: 'Published', count: count('published') },
                     { value: 'draft', label: 'Draft', count: count('draft') },
                     { value: 'retired', label: 'Retired', count: count('retired') },
+                    { value: 'archived', label: 'Archived', count: count('archived') },
                 ]} />
             )}
 
@@ -143,7 +150,8 @@ const PlanList: React.FC<{ onOpen: (id: string) => void }> = ({ onOpen }) => {
                                         {!!p.is_public && <StatusPill tone="accent">Public</StatusPill>}
                                     </div>
                                 </div>
-                                <p className="mt-4 text-sm font-medium">{priceLine(p.billing_type, p.price_monthly, p.price_annual, p.trial_days, p.currency)}</p>
+                                <p className="mt-4 text-sm font-medium">{p.billing_type || p.versions === 0 ? priceLine(p.billing_type, p.price_monthly, p.price_annual, p.trial_days, p.currency) : 'No live version'}</p>
+                                {offerRunning(p) && <p className="mt-1"><StatusPill tone="accent">{p.offer_percent}% off until {shortDay(p.offer_ends_at ?? 0)}</StatusPill></p>}
                                 {p.description && <p className="mt-1 text-[13px] ac-muted line-clamp-2">{p.description}</p>}
                                 <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2">
                                     {HEADLINE.map(k => (
@@ -170,13 +178,27 @@ const PlanList: React.FC<{ onOpen: (id: string) => void }> = ({ onOpen }) => {
 /* ────────────────────────────── Detail ──────────────────────────────── */
 
 type EditorState = { mode: 'create'; base?: PlanVersion } | { mode: 'edit'; base: PlanVersion };
+/** An open tool on a version card: a new price, or moving its organizations. */
+type Tool = { kind: 'reprice' | 'move'; versionId: string } | null;
 
-const PlanDetailView: React.FC<{ planId: string; onBack: () => void }> = ({ planId, onBack }) => {
+const PlanDetailView: React.FC<{ planId: string; reauth: Reauth; onBack: () => void }> = ({ planId, reauth, onBack }) => {
     const dialogs = useDialogs();
     const schema = useSchema();
     const [plan, setPlan] = useState<PlanDetail | null>(null);
     const [editor, setEditor] = useState<EditorState | null>(null);
     const [showOlder, setShowOlder] = useState(false);
+    const [tool, setTool] = useState<Tool>(null);
+    const toolDone = (p: PlanDetail) => { setPlan(p); setTool(null); };
+    const toggleTool = (kind: 'reprice' | 'move', versionId: string) =>
+        setTool(t => (t?.kind === kind && t.versionId === versionId ? null : { kind, versionId }));
+    /** The price and move tools, shown inside a version's card when opened. */
+    const toolsFor = (v: PlanVersion) => {
+        if (tool?.versionId !== v.id || !plan) return null;
+        return tool.kind === 'reprice'
+            ? <RepriceForm planId={plan.id} version={v} reauth={reauth} onDone={toolDone} onCancel={() => setTool(null)} />
+            : <MoveOrgsForm planId={plan.id} version={v} reauth={reauth} onDone={toolDone} onCancel={() => setTool(null)} />;
+    };
+    const moveAction = (v: PlanVersion) => (v.organizations > 0 ? () => toggleTool('move', v.id) : undefined);
 
     useEffect(() => {
         api<PlanDetail>(`/admin/plans/${planId}`).then(setPlan).catch(e => toast.error((e as ApiError).message));
@@ -274,10 +296,20 @@ const PlanDetailView: React.FC<{ planId: string; onBack: () => void }> = ({ plan
                                 action={<button type="button" className="neu-button neu-button-primary" onClick={() => setEditor({ mode: 'create' })}><Plus size={16} /> Create version 1</button>} />
                         </Section>
                     )}
+                    {!current && plan.versions.length > 0 && (
+                        <Section>
+                            <EmptyState icon={<Layers size={20} />} title="No live version"
+                                body="New organizations can't be given this plan and it isn't on the pricing page. Organizations already on an earlier version keep it. Publish a draft or make a new version to offer it again, or retire the plan." />
+                        </Section>
+                    )}
                     {current && (
                         <VersionCard v={current} schema={schema} current
                             onDuplicate={() => setEditor({ mode: 'create', base: current })}
-                            onRetire={() => retireVersion(current)} />
+                            onReprice={current.billing_type === 'paid' ? () => toggleTool('reprice', current.id) : undefined}
+                            onMove={moveAction(current)}
+                            onRetire={() => retireVersion(current)}>
+                            {toolsFor(current)}
+                        </VersionCard>
                     )}
                     {drafts.map(v => (
                         <VersionCard key={v.id} v={v} schema={schema} compare={current}
@@ -295,7 +327,10 @@ const PlanDetailView: React.FC<{ planId: string; onBack: () => void }> = ({ plan
                                     {older.map(v => (
                                         <VersionCard key={v.id} v={v} schema={schema}
                                             onDuplicate={() => setEditor({ mode: 'create', base: v })}
-                                            onRetire={v.status === 'published' ? () => retireVersion(v) : undefined} />
+                                            onMove={moveAction(v)}
+                                            onRetire={v.status === 'published' ? () => retireVersion(v) : undefined}>
+                                            {toolsFor(v)}
+                                        </VersionCard>
                                     ))}
                                 </div>
                             )}
@@ -305,12 +340,14 @@ const PlanDetailView: React.FC<{ planId: string; onBack: () => void }> = ({ plan
 
                 <aside className="space-y-5 min-w-0 lg:sticky lg:top-6">
                     <PlanSettings plan={plan} onSave={patchPlan} />
+                    <OfferSection key={plan.offer ? `${plan.offer.startsAt}-${plan.offer.endsAt}-${plan.offer.percentOff}` : 'none'} plan={plan} onChange={setPlan} />
                     <Section title="Status" description="Where this plan can be used.">
                         <div className="flex flex-wrap gap-2">
                             {plan.status === 'published' && <button type="button" className="neu-button neu-button-danger" onClick={() => setPlanStatus('retired')}>Retire plan</button>}
                             {plan.status === 'retired' && <button type="button" className="neu-button" onClick={() => setPlanStatus('published')}>Offer again</button>}
                             {plan.status !== 'archived' && plan.status !== 'published' && <button type="button" className="neu-button" onClick={() => setPlanStatus('archived')}><Archive size={15} /> Archive</button>}
                             {plan.status === 'archived' && <button type="button" className="neu-button" onClick={() => setPlanStatus('draft')}>Restore as draft</button>}
+                            <DeletePlanButton plan={plan} reauth={reauth} onDeleted={onBack} />
                         </div>
                         <p className="mt-3 text-[12px] ac-muted">
                             {plan.versions.reduce((n, v) => n + (v.organizations ?? 0), 0)} organization(s) are on some version of this plan.
@@ -372,7 +409,10 @@ const PlanSettings: React.FC<{ plan: PlanDetail; onSave: (body: Record<string, u
 const VersionCard: React.FC<{
     v: PlanVersion; schema: PlanSchema | null; current?: boolean; compare?: PlanVersion | null;
     onEdit?: () => void; onPublish?: () => void; onDuplicate?: () => void; onRetire?: () => void;
-}> = ({ v, schema, current = false, compare, onEdit, onPublish, onDuplicate, onRetire }) => {
+    onReprice?: () => void; onMove?: () => void;
+    /** An open tool (new price, move organizations) shown at the foot of the card. */
+    children?: React.ReactNode;
+}> = ({ v, schema, current = false, compare, onEdit, onPublish, onDuplicate, onRetire, onReprice, onMove, children }) => {
     const limits = parse(v.limits);
     const was = compare ? parse(compare.limits) : null;
     const flags = schema ? [...schema.modules.map(f => ({ ...f, group: 'modules' as const })), ...schema.features.map(f => ({ ...f, group: 'features' as const }))] : [];
@@ -394,6 +434,8 @@ const VersionCard: React.FC<{
                 <div className="flex flex-wrap gap-2">
                     {onEdit && <button type="button" className="neu-button" onClick={onEdit}><Pencil size={15} /> Edit</button>}
                     {onPublish && <button type="button" className="neu-button neu-button-primary" onClick={onPublish}><Send size={15} /> Publish</button>}
+                    {onReprice && <button type="button" className="neu-button" onClick={onReprice}><IndianRupee size={15} /> Change price</button>}
+                    {onMove && <button type="button" className="neu-button" onClick={onMove}><ArrowRightLeft size={15} /> Move organizations</button>}
                     {onDuplicate && <button type="button" className="neu-button" onClick={onDuplicate}><Copy size={15} /> New version from this</button>}
                     {onRetire && <button type="button" className="neu-button neu-button-danger" onClick={onRetire}>Retire</button>}
                 </div>
@@ -426,6 +468,7 @@ const VersionCard: React.FC<{
                 {v.published_at ? ` · published ${new Date(v.published_at).toLocaleDateString()}` : ` · drafted ${new Date(v.created_at).toLocaleDateString()}`}
                 {v.notes ? ` · ${v.notes}` : ''}
             </p>
+            {children}
         </section>
     );
 };
