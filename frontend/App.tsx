@@ -23,7 +23,8 @@ import { useHandlers } from './hooks/useHandlers';
 import { pushService } from './services/pushService';
 import { syncService } from './services/syncService';
 import { canOpenView, makeCan, permissionsOf } from './access';
-import { SIGNED_OUT_EVENT } from './services/apiClient';
+import { PLAN_BLOCKED_EVENT, SIGNED_OUT_EVENT } from './services/apiClient';
+import { PlanBlockedView } from './views/PlanBlockedView';
 import { PageRoot, PageHeader, PageBody, EmptyState, Button } from './components/ui';
 import { APP_NAME } from './brand';
 import { useBranding } from './useBranding';
@@ -119,6 +120,13 @@ const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, m
 
 const App: React.FC = () => {
     const [isLoading, setIsLoading] = useState(true);
+    // The workspace's plan isn't active: the app shows only its plan, to pay.
+    const [planBlocked, setPlanBlocked] = useState(false);
+    useEffect(() => {
+        const onBlocked = () => setPlanBlocked(true);
+        window.addEventListener(PLAN_BLOCKED_EVENT, onBlocked);
+        return () => window.removeEventListener(PLAN_BLOCKED_EVENT, onBlocked);
+    }, []);
     // What start-up is waiting on — shown on the splash if it runs long, so a
     // stuck start says where it is stuck instead of pulsing forever.
     const [bootStep, setBootStep] = useState('Starting');
@@ -319,6 +327,15 @@ const App: React.FC = () => {
                     </div>
                 )}
             </div>
+        );
+    }
+
+    if (planBlocked && currentWorkspace()) {
+        return (
+            <>
+                <Toaster position="top-center" />
+                <PlanBlockedView />
+            </>
         );
     }
 

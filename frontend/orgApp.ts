@@ -104,6 +104,19 @@ const notFound = () => Response.json({ error: 'Not found' }, { status: 404 });
 // yet), remembered for a minute per organization: it changes rarely, and
 // every request asks.
 const planMemo = new Map<string, { at: number; active: boolean }>();
+
+/** After a plan payment, so this isolate lets the organization in at once (others within a minute). */
+export function forgetPlanActive(orgId: string): void {
+  planMemo.delete(orgId);
+}
+
+/**
+ * What a member can still reach while the plan isn't active: the plan, and
+ * paying for it (owners and admins), and signing out.
+ */
+function reachableWithoutPlan(rest: string): boolean {
+  return rest === '/plan' || rest === '/billing' || rest.startsWith('/billing/') || rest === '/auth/logout';
+}
 async function planActive(db: D1Database, orgId: string): Promise<boolean> {
   const hit = planMemo.get(orgId);
   if (hit && Date.now() - hit.at < 60_000) return hit.active;
@@ -155,7 +168,7 @@ export async function openOrgRequest(request: Request, env: Env, orgId: string, 
     return Response.json({ error: 'This workspace is paused. Contact support to restore it.', code: 'org_inactive' }, { status: 403 });
   }
 
-  if (member && !(await planActive(db, orgId))) {
+  if (member && !reachableWithoutPlan(rest) && !(await planActive(db, orgId))) {
     return Response.json({ error: 'This workspace opens once its plan is active (payment or renewal). Contact us if this is unexpected.', code: 'subscription_inactive' }, { status: 402 });
   }
 
@@ -165,7 +178,7 @@ export async function openOrgRequest(request: Request, env: Env, orgId: string, 
     const record = await ensureAppUser(orgEnv, { appUserId: row.app_user_id ?? user.id, name: user.name, email: user.email, role: member });
     session = {
       userId: record.id, email: record.email, name: record.name, role: record.role, expiresAt,
-      platformUserId: user.id, platformSessionId: sessionId,
+      platformUserId: user.id, platformSessionId: sessionId, orgRole: member,
     };
   }
   return { env: orgEnv, session, orgId };

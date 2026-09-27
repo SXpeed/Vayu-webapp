@@ -34,6 +34,11 @@
 //   GET|PATCH       /api/v2/admin/settings/branding          name, tagline, accent colour
 //   POST            /api/v2/admin/settings/branding/logo     upload a logo (raw image body)
 //   POST            /api/v2/webhooks/razorpay/:orgId         signed, per organization
+//   POST            /api/v2/webhooks/billing/razorpay        signed, the platform's own account (plan payments)
+//   GET|PUT|DELETE  /api/v2/admin/billing/razorpay           the account organizations pay their plans into
+//   POST            /api/v2/admin/billing/razorpay/verify
+//   GET             /api/v2/admin/billing/payments?status=&org=  every plan payment, with details
+//   POST            /api/v2/admin/billing/payments/:id/recheck   ask Razorpay again
 //   GET             /api/v2/me/orgs                          my organizations
 //   GET             /api/v2/me/sessions                      my signed-in devices
 //   POST            /api/v2/me/sessions/signout { id? }      sign out one other device, or all of them
@@ -69,6 +74,10 @@ import {
   updatePlan, updatePlanVersion,
 } from './plans';
 import { SecretsUnavailable } from './secrets';
+import {
+  connectBillingAccount, describeBillingAccount, disconnectBillingAccount, listAllPayments, paymentView,
+  receiveBillingWebhook, recheckAnyPayment, verifyBillingAccount,
+} from './billing';
 import { OrgAccessError, handleOrgRequest, listMyOrganizations, resolveOrgContext } from './orgApi';
 
 import { fail, jsonBody, reply } from './http';
@@ -209,6 +218,38 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
        ORDER BY a.at DESC LIMIT ?`,
     ).bind(limit).all();
     return reply({ entries: results });
+  }
+
+  if (path.startsWith('/admin/billing/')) {
+    const actor: Actor = { userId: admin.userId, ip: request.headers.get('cf-connecting-ip') };
+    const fresh = Date.now() - admin.sessionCreatedAt <= FRESH_SESSION_MS;
+    const webhookUrl = `${env.API_ORIGIN || resolveAuthOrigin(env, url)}/api/v2/webhooks/billing/razorpay`;
+    try {
+      if (path === '/admin/billing/razorpay') {
+        if (method === 'GET') return reply(await describeBillingAccount(env, db, webhookUrl));
+        if (!fresh) return fail(403, 'reauth_required', 'Sign in again to do this.');
+        if (method === 'PUT') await connectBillingAccount(env, db, await jsonBody(request), actor);
+        else if (method === 'DELETE') await disconnectBillingAccount(db, actor);
+        else return fail(405, 'method_not_allowed', 'Not allowed');
+        return reply(await describeBillingAccount(env, db, webhookUrl));
+      }
+      if (path === '/admin/billing/razorpay/verify' && method === 'POST') {
+        return reply(await verifyBillingAccount(env, db, actor));
+      }
+      if (path === '/admin/billing/payments' && method === 'GET') {
+        return reply(await listAllPayments(db, url.searchParams));
+      }
+      const recheck = /^\/admin\/billing\/payments\/([A-Za-z0-9-]{1,64})\/recheck$/.exec(path);
+      if (recheck && method === 'POST') {
+        const out = await recheckAnyPayment(env, db, recheck[1]);
+        return reply({ payment: paymentView(out.payment, 'provider'), checked: out.checked, applied: out.applied, reason: out.reason ?? null });
+      }
+    } catch (e) {
+      if (e instanceof OrgError) return fail(e.status, e.code, e.message);
+      if (e instanceof SecretsUnavailable) return fail(503, 'secrets_unavailable', 'Payment credential storage is not configured.');
+      throw e;
+    }
+    return fail(404, 'not_found', 'Not found');
   }
 
   const planRoute = /^\/admin\/plans(?:\/([A-Za-z0-9-]{1,64})(\/.*)?)?$/.exec(path);
@@ -396,6 +437,19 @@ async function routePlatformRequest(request: Request, env: Env, hooks: PlatformH
   const db = env.PLATFORM_DB;
   if (!db || !env.BETTER_AUTH_SECRET || env.BETTER_AUTH_SECRET.length < 32) {
     return fail(503, 'platform_unavailable', 'The platform is not configured in this environment.');
+  }
+
+  // Plan payments into the platform's own account (billing.ts).
+  if (path === '/webhooks/billing/razorpay') {
+    if (request.method !== 'POST') return fail(405, 'method_not_allowed', 'Use POST');
+    try {
+      const out = await receiveBillingWebhook(env, db, request);
+      return reply(out.body, out.status);
+    } catch (e) {
+      // 500: Razorpay retries, and the retry finishes the work.
+      console.error('billing webhook failed', e);
+      return fail(500, 'internal', 'Something went wrong.');
+    }
   }
 
   // Payment-provider webhooks: authenticated by the organization's own

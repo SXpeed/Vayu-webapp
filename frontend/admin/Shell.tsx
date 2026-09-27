@@ -11,7 +11,7 @@ import { api } from './api';
 import { Avatar, IconButton, Kbd } from './kit';
 
 export type Tab =
-    | 'overview' | 'applications' | 'orgs' | 'accounts' | 'plans'
+    | 'overview' | 'applications' | 'orgs' | 'accounts' | 'plans' | 'billing'
     | 'notifications' | 'branding' | 'security' | 'health' | 'audit' | 'profile';
 
 export interface NavItem { tab: Tab; label: string; short: string; icon: React.ElementType; badge?: number }

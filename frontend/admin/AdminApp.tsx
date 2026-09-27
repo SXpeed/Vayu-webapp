@@ -7,12 +7,13 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import toast from 'react-hot-toast';
 import {
-    Activity, Building2, ClipboardList, History, Image as ImageIcon, KeyRound,
+    Activity, Building2, ClipboardList, CreditCard, History, Image as ImageIcon, KeyRound,
     LayoutDashboard, Layers, Mail, Search, ShieldCheck, User as UserIcon, Users,
 } from 'lucide-react';
 import { api, authClient, guarded, timeAgo, type ApiError, type Reauth } from './api';
 import { OrgsPanel } from './OrgsPanel';
 import { PlansPanel } from './PlansPanel';
+import { BillingPanel } from './BillingPanel';
 import { BrandingPanel } from './BrandingPanel';
 import { OverviewPanel } from './OverviewPanel';
 import { ApplicationsPanel } from './ApplicationsPanel';
@@ -59,6 +60,7 @@ type Screen =
 /** Titles for sections whose panel does not render its own page header. */
 const HEADERS: Partial<Record<Tab, { title: string; description: string }>> = {
     orgs: { title: 'Organizations', description: 'Every business on the platform' },
+    billing: { title: 'Billing', description: 'What organizations pay for their plans' },
     notifications: { title: 'Notifications', description: 'Where notices go and what is queued' },
     branding: { title: 'Branding', description: 'Platform name, logo and colour' },
     security: { title: 'Login & security', description: 'Sign-in methods and administrators' },
@@ -66,7 +68,7 @@ const HEADERS: Partial<Record<Tab, { title: string; description: string }>> = {
     audit: { title: 'Audit log', description: 'Every administrative action' },
 };
 
-const TABS: Tab[] = ['overview', 'applications', 'orgs', 'accounts', 'plans', 'notifications', 'branding', 'security', 'health', 'audit', 'profile'];
+const TABS: Tab[] = ['overview', 'applications', 'orgs', 'accounts', 'plans', 'billing', 'notifications', 'branding', 'security', 'health', 'audit', 'profile'];
 
 const SIDEBAR_KEY = 'ac.sidebar.collapsed';
 const readCollapsed = () => { try { return localStorage.getItem(SIDEBAR_KEY) === '1'; } catch { return false; } };
@@ -200,6 +202,7 @@ const ControlCentre: React.FC = () => {
             { tab: 'orgs', label: 'Organizations', short: 'Orgs', icon: Building2 },
             { tab: 'accounts', label: 'Accounts', short: 'Accounts', icon: Users },
             { tab: 'plans', label: 'Plans', short: 'Plans', icon: Layers },
+            { tab: 'billing', label: 'Billing', short: 'Billing', icon: CreditCard },
         ] },
         { title: 'Platform', items: [
             { tab: 'notifications', label: 'Notifications', short: 'Notices', icon: Mail, badge: badges.notifications },
@@ -241,6 +244,7 @@ const ControlCentre: React.FC = () => {
                             {tab === 'orgs' && <OrgsPanel reauth={reauth} routeId={route.id} go={navigate} />}
                             {tab === 'accounts' && <AccountsPanel reauth={reauth} routeId={route.id} go={navigate} />}
                             {tab === 'plans' && <PlansPanel routeId={route.id} go={navigate} />}
+                            {tab === 'billing' && <BillingPanel reauth={reauth} />}
                             {tab === 'notifications' && <NotificationsPanel onChange={loadBadges} />}
                             {tab === 'branding' && <BrandingPanel />}
                             {tab === 'security' && (
@@ -550,6 +554,7 @@ const AUDIT_AREAS: { value: string; label: string; match: (a: string) => boolean
     { value: 'orgs', label: 'Organizations', match: a => /^(org\.|membership\.|subscription\.|entitlement\.|payments\.)/.test(a) },
     { value: 'accounts', label: 'Accounts', match: a => /^(user\.|provider_admin\.)/.test(a) },
     { value: 'plans', label: 'Plans', match: a => a.startsWith('plan.') },
+    { value: 'billing', label: 'Billing', match: a => a.startsWith('billing.') },
     { value: 'settings', label: 'Settings', match: a => /^(settings\.|branding\.|notification\.)/.test(a) },
 ];
 

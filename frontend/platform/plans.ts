@@ -257,11 +257,18 @@ export async function publicPlans(db: D1Database) {
 export interface Entitlements {
   limits: PlanLimits;
   plan: { key: string; name: string; version: number; billingType: string } | null;
-  subscription: { status: string; trialEndsAt: number | null; currentPeriodEnd: number | null; paymentWaived: boolean };
+  subscription: {
+    status: string; trialEndsAt: number | null; currentPeriodEnd: number | null; paymentWaived: boolean;
+    /** A paid period that has ended keeps working until this moment (RENEWAL_GRACE_MS). */
+    graceEndsAt: number | null;
+  };
   overrides: Record<string, unknown>;
   /** True when the organization may add things (not expired, not blocked). */
   active: boolean;
 }
+
+/** After a paid period ends, the organization keeps working this long while it renews. */
+export const RENEWAL_GRACE_MS = 7 * 86_400_000;
 
 /**
  * The limits actually in force: the plan version's, with any documented
@@ -298,16 +305,25 @@ export async function resolveEntitlements(db: D1Database, orgId: string): Promis
   const status = (row?.status as string) ?? 'none';
   const trialEndsAt = (row?.trial_ends_at as number) ?? null;
   const trialExpired = status === 'trialing' && !!trialEndsAt && trialEndsAt < Date.now();
-  const active = !trialExpired && ['active', 'trialing', 'none'].includes(status);
+  // A period bought through billing.ts that ran out, grace included. A
+  // waived plan never lapses; nothing else sets a period end.
+  const periodEnd = (row?.current_period_end as number) ?? null;
+  const graceEndsAt = status === 'active' && row?.payment_waived !== 1 && periodEnd ? periodEnd + RENEWAL_GRACE_MS : null;
+  const lapsed = graceEndsAt !== null && graceEndsAt < Date.now();
+  const active = !trialExpired && !lapsed && ['active', 'trialing', 'none'].includes(status);
+  let shownStatus = status;
+  if (trialExpired) shownStatus = 'trial_expired';
+  else if (lapsed) shownStatus = 'past_due';
 
   return {
     limits,
     plan: row?.key ? { key: String(row.key), name: String(row.name), version: Number(row.version), billingType: String(row.billing_type) } : null,
     subscription: {
-      status: trialExpired ? 'trial_expired' : status,
+      status: shownStatus,
       trialEndsAt,
-      currentPeriodEnd: (row?.current_period_end as number) ?? null,
+      currentPeriodEnd: periodEnd,
       paymentWaived: row?.payment_waived === 1,
+      graceEndsAt,
     },
     overrides,
     active,

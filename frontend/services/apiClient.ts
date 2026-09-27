@@ -16,6 +16,9 @@ export function authHeaders(): Record<string, string> {
 /** Fired on window when the server says this device was signed out. */
 export const SIGNED_OUT_EVENT = 'vayu:signed-out';
 
+/** Fired on window when the workspace's plan isn't active (it opens only the plan, to pay). */
+export const PLAN_BLOCKED_EVENT = 'vayu:plan-blocked';
+
 /**
  * Parse an API response without assuming the body is JSON. When the backend
  * is briefly unavailable (dev proxy down, deploy in progress, Cloudflare
@@ -40,6 +43,9 @@ export async function parseApiResponse<T>(res: Response): Promise<T> {
         const reason = (data as { reason?: string } | null)?.reason;
         if (res.status === 401 && reason && typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent(SIGNED_OUT_EVENT, { detail: { reason } }));
+        }
+        if (res.status === 402 && (data as { code?: string } | null)?.code === 'subscription_inactive' && typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent(PLAN_BLOCKED_EVENT));
         }
         const error = new Error((data as { error?: string } | null)?.error ?? `Request failed (${res.status})`) as Error & { status?: number; code?: string };
         error.status = res.status;

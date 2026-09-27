@@ -66,9 +66,12 @@ as each part of the app moves onto the organization databases.
 
 - **Free** plans activate as soon as they are assigned.
 - **Trials** start their clock when assigned, and can be extended with a reason.
-- **Paid** plans sit at `payment_required` until payment is confirmed. (Taking
-  the payment comes with the billing work; today a provider admin can **waive
-  payment** with a recorded reason, which activates the organization.)
+- **Paid** plans sit at `payment_required` until payment is confirmed. The
+  organization's owner or admin pays in the app (Admin → Plan), which activates
+  it for a month or a year (`docs/BILLING.md`). A provider admin can also
+  **waive payment** with a recorded reason, which activates the organization.
+- A paid period that ended more than 7 days ago reads as `past_due` and the
+  organization is no longer `active` until it renews.
 - An expired trial shows as `trial_expired` and the organization is no longer
   `active` for adding things.
 
@@ -96,14 +99,14 @@ mostly static.
 
 ## Not done yet
 
-- **Taking payment** (Razorpay subscriptions for the platform's own billing) and
-  what happens on failed renewals — `past_due` exists as a state but nothing
-  sets it yet.
+- **Automatic renewal** (Razorpay Subscriptions) and reminders before a paid
+  period ends. Paying for a month or a year from the app is built (`docs/BILLING.md`).
 - **Most limits are defined but not yet enforced** at write time; seats and
   inventory items are. Enforcing the rest needs usage counters fed from each
   organization's database (see the list above).
 - **Custom roles** as a plan feature: the flag exists, the feature does not.
-- **Self-serve plan choice** during sign-up comes with the onboarding flow.
+- **Self-serve plan choice** during sign-up comes with the onboarding flow;
+  after approval, owners choose and pay for a plan in the app.
 
 ## Platform branding
 

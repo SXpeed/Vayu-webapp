@@ -17,7 +17,7 @@ import {
   bearerToken, getSession, getRoles, permissionsFor, primeSession, saveRoles, SESSION_TTL_DAYS,
   type StoredUser,
 } from './workerRoles';
-import { ORG_PATH, openOrgRequest, orgMemberDevices, orgMemberRecords, orgStorageEnv, signOutOrgMemberDevices } from './orgApp';
+import { ORG_PATH, forgetPlanActive, openOrgRequest, orgMemberDevices, orgMemberRecords, orgStorageEnv, signOutOrgMemberDevices } from './orgApp';
 import { orgAccountRoutes } from './orgTeam';
 import { OrgAppDb } from './orgAppDb';
 import {
@@ -42,6 +42,11 @@ import {
 } from './viewingRooms';
 import { handlePlatformRequest } from './platform/routes';
 import { getAppPaymentsOrg, razorpayApiBase, razorpayCredentials, verifiedRazorpayKeys } from './platform/payments';
+import { toPaymentDetail, type PaymentDetail } from './platform/razorpayDetails';
+import {
+  billingOptions, confirmCheckout, listOrgPayments, orgNameOf, paymentView, recheckOrgPayment, startCheckout, type Reconciled,
+} from './platform/billing';
+import { OrgError } from './platform/orgs';
 import { planAndUsage } from './planUsage';
 import { OrgStore } from './platform/orgStore';
 import { deliverOutbox } from './platform/notify';
@@ -513,68 +518,6 @@ interface StoredPaymentLink {
   payments?: PaymentDetail[];
 }
 
-/**
- * One payment as Razorpay recorded it: references, when, how, and what the
- * customer entered at checkout. Only what the team needs to see; nothing a
- * customer didn't give Razorpay themselves.
- */
-interface PaymentDetail {
-  id: string;
-  amount: number; // paise
-  currency: string;
-  status: string; // captured | authorized | failed | refunded …
-  method: string;
-  createdAt: number;
-  email?: string;
-  contact?: string;
-  vpa?: string;
-  bank?: string;
-  wallet?: string;
-  card?: { name?: string; network?: string; last4?: string; type?: string; issuer?: string; international?: boolean };
-  fee?: number;
-  tax?: number;
-  rrn?: string;
-  upiTransactionId?: string;
-  bankTransactionId?: string;
-  authCode?: string;
-  errorDescription?: string;
-  refundStatus?: string;
-  amountRefunded?: number;
-}
-
-/** Keep the fields worth showing; drop empties. */
-function toPaymentDetail(p: any): PaymentDetail {
-  const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
-  const card = p?.card && typeof p.card === 'object' ? {
-    name: text(p.card.name), network: text(p.card.network), last4: text(p.card.last4),
-    type: text(p.card.type), issuer: text(p.card.issuer), international: !!p.card.international || undefined,
-  } : undefined;
-  const acquirer = p?.acquirer_data ?? {};
-  return Object.fromEntries(Object.entries({
-    id: String(p?.id ?? ''),
-    amount: Number(p?.amount) || 0,
-    currency: text(p?.currency) ?? 'INR',
-    status: text(p?.status) ?? 'unknown',
-    method: text(p?.method) ?? '',
-    createdAt: Number(p?.created_at) > 0 ? Number(p.created_at) * 1000 : 0,
-    email: text(p?.email),
-    contact: text(p?.contact),
-    vpa: text(p?.vpa) ?? text(p?.upi?.vpa),
-    bank: text(p?.bank),
-    wallet: text(p?.wallet),
-    card: card && Object.values(card).some(v => v !== undefined) ? card : undefined,
-    fee: Number.isFinite(Number(p?.fee)) && p?.fee !== null ? Number(p.fee) : undefined,
-    tax: Number.isFinite(Number(p?.tax)) && p?.tax !== null ? Number(p.tax) : undefined,
-    rrn: text(acquirer.rrn),
-    upiTransactionId: text(acquirer.upi_transaction_id),
-    bankTransactionId: text(acquirer.bank_transaction_id),
-    authCode: text(acquirer.auth_code),
-    errorDescription: text(p?.error_description),
-    refundStatus: text(p?.refund_status),
-    amountRefunded: Number(p?.amount_refunded) > 0 ? Number(p.amount_refunded) : undefined,
-  }).filter(([, v]) => v !== undefined)) as unknown as PaymentDetail;
-}
-
 /** Links that can still be paid. */
 const OPEN_LINK_STATUSES = new Set(['created', 'partially_paid']);
 /** Razorpay wants expire_by at least 15 minutes ahead; the app offers up to six months. */
@@ -687,6 +630,77 @@ async function handlePlanUsage(ctx: Ctx): Promise<Response> {
   // The original app on its own (no organization) has no plan.
   if (ctx.env.ORG_ID) await ensureInvoicesTable(ctx.env.VAYU_DB).catch(() => undefined);
   return json((await planAndUsage(ctx.env)) ?? { plan: null, usage: [] });
+}
+
+// ── Plan payments (Admin → Plan → Upgrade) ─────────────────────────────────
+// The organization pays the platform for its plan, into the platform's own
+// Razorpay account (platform/billing.ts). Owners and admins only; reachable
+// even when the plan has lapsed, so a blocked workspace can pay to reopen.
+
+async function billingCaller(ctx: Ctx): Promise<{ session: SessionData; db: D1Database; orgId: string } | Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  if (!ctx.env.ORG_ID || !ctx.env.PLATFORM_DB) return err('This workspace has no plan to pay for.', 404);
+  if (session.orgRole !== 'owner' && session.orgRole !== 'admin') {
+    return json({ error: "Only the workspace's owners and admins can change or pay for the plan.", code: 'billing_forbidden' }, 403);
+  }
+  return { session, db: ctx.env.PLATFORM_DB, orgId: ctx.env.ORG_ID };
+}
+
+/** Runs a billing call, turning its refusals into the app's error shape. */
+async function billingReply(work: () => Promise<unknown>, status = 200): Promise<Response> {
+  try {
+    return json(await work(), status);
+  } catch (e) {
+    if (e instanceof OrgError) return json({ error: e.message, code: e.code }, e.status);
+    throw e;
+  }
+}
+
+function reconciledReply(out: Reconciled) {
+  if (out.applied) forgetPlanActive(out.payment.org_id);
+  return { payment: paymentView(out.payment, 'org'), checked: out.checked, applied: out.applied, reason: out.reason ?? null };
+}
+
+/** GET /billing — plans that can be paid for, and this workspace's plan payments. */
+async function handleBillingGet(ctx: Ctx): Promise<Response> {
+  const caller = await billingCaller(ctx);
+  if (caller instanceof Response) return caller;
+  return billingReply(async () => ({
+    ...await billingOptions(ctx.env, caller.db, caller.orgId),
+    orgName: await orgNameOf(caller.db, caller.orgId),
+    payments: await listOrgPayments(caller.db, caller.orgId),
+  }));
+}
+
+/** POST /billing/checkout { planKey, period } — a Razorpay order to open the checkout with. */
+async function handleBillingCheckout(ctx: Ctx): Promise<Response> {
+  const caller = await billingCaller(ctx);
+  if (caller instanceof Response) return caller;
+  const body = await ctx.request.json<Record<string, unknown>>().catch(() => ({}));
+  const { session } = caller;
+  return billingReply(() => startCheckout(ctx.env, caller.db, caller.orgId, body, {
+    userId: session.platformUserId ?? session.userId, name: session.name, email: session.email,
+    ip: ctx.request.headers.get('cf-connecting-ip'),
+  }), 201);
+}
+
+/** POST /billing/confirm — Razorpay checkout's signed result; the plan changes once Razorpay agrees. */
+async function handleBillingConfirm(ctx: Ctx): Promise<Response> {
+  const caller = await billingCaller(ctx);
+  if (caller instanceof Response) return caller;
+  const body = await ctx.request.json<Record<string, unknown>>().catch(() => ({}));
+  return billingReply(async () => reconciledReply(await confirmCheckout(ctx.env, caller.db, caller.orgId, body)));
+}
+
+const BILLING_RECHECK_PATH = /^\/billing\/payments\/([A-Za-z0-9-]{1,64})\/recheck$/;
+
+/** POST /billing/payments/:id/recheck — ask Razorpay again about one plan payment. */
+async function handleBillingRecheck(ctx: Ctx): Promise<Response> {
+  const caller = await billingCaller(ctx);
+  if (caller instanceof Response) return caller;
+  const id = BILLING_RECHECK_PATH.exec(ctx.path)?.[1] ?? '';
+  return billingReply(async () => reconciledReply(await recheckOrgPayment(ctx.env, caller.db, caller.orgId, id)));
 }
 
 async function handlePaymentLinkCreate(ctx: Ctx): Promise<Response> {
@@ -4147,6 +4161,10 @@ const routes: Route[] = [
   { method: 'POST', match: isExact('/payments/link'), handler: handlePaymentLinkCreate },
   { method: 'GET', match: isExact('/payments/links'), handler: handlePaymentLinksList },
   { method: 'GET', match: isExact('/plan'), handler: handlePlanUsage },
+  { method: 'GET', match: isExact('/billing'), handler: handleBillingGet },
+  { method: 'POST', match: isExact('/billing/checkout'), handler: handleBillingCheckout },
+  { method: 'POST', match: isExact('/billing/confirm'), handler: handleBillingConfirm },
+  { method: 'POST', match: (p) => BILLING_RECHECK_PATH.test(p), handler: handleBillingRecheck },
   { method: 'GET', match: (p) => /^\/payments\/links\/plink_[A-Za-z0-9_]{6,40}\/details$/.test(p), handler: handlePaymentLinkDetails },
   { method: 'DELETE', match: (p) => PAYMENT_LINK_PATH.test(p), handler: handlePaymentLinkDelete },
   { method: 'PATCH', match: (p) => PAYMENT_LINK_PATH.test(p), handler: handlePaymentLinkUpdate },

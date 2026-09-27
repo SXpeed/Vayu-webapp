@@ -225,6 +225,8 @@ export interface SessionData {
   platformUserId?: string;
   /** Inside an organization: the platform sign-in (device) making the request. */
   platformSessionId?: string;
+  /** Inside an organization: the member's role there (owner, admin, manager, staff). */
+  orgRole?: string;
 }
 
 /** One committed change, as announced to the hub and to clients. */

@@ -9,7 +9,8 @@
 #   plugins, and forms posting to another site.
 # - nosniff: the declared type is the type; no guessing.
 # - Permissions-Policy: location (attendance) and the camera for this site
-#   only; nothing else.
+#   only; the browser's payment API for Razorpay's checkout frame only (plan
+#   payments, Admin → Plan); nothing else.
 #
 # Deliberately not here yet: a script-src policy. The app has inline theme
 # scripts and third-party libraries (PDF, background removal) that need
@@ -20,4 +21,4 @@
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
-  Permissions-Policy: camera=(self), geolocation=(self), microphone=(), payment=(), usb=(), serial=(), bluetooth=()
+  Permissions-Policy: camera=(self), geolocation=(self), microphone=(), payment=(self "https://api.razorpay.com"), usb=(), serial=(), bluetooth=()

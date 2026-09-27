@@ -162,8 +162,9 @@ export const authService = {
     try {
       return await call<AuthUser>('/auth/me');
     } catch (e) {
-      setWorkspace(null);
       const status = (e as { status?: number }).status;
+      // Plan not active: stay in the workspace, which opens on its plan screen.
+      if (status !== 402) setWorkspace(null);
       if (status === 404) throw new Error(`You're no longer a member of ${workspace.name}.`);
       throw e;
     }

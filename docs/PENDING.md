@@ -136,10 +136,14 @@ Seats and inventory items are enforced. Still to wire up (each is labelled
 - [ ] Feature flags the app does not yet check (exports, bulk CSV import, custom roles, API access, branding)
 - [ ] Guest accounts (the feature itself does not exist)
 
-### 3.6 Billing (Phase F)
-- [ ] Razorpay subscriptions for what organizations pay the platform
-- [ ] Hosted checkout, signed webhooks, idempotent handling
-- [ ] Failed renewals → `past_due`, dunning, cancellation
+### 3.6 Billing (Phase F) — plan payments built (`docs/BILLING.md`)
+- [x] Organizations pay the platform in the app (Admin → Plan): Razorpay checkout, a month or a year, plan changes at once
+- [x] Platform Razorpay account connected in the control centre (Billing); signed webhook, recheck, applied exactly once
+- [x] Full payment record in the app and the control centre (method, references, failures; fee for the provider only)
+- [x] A lapsed workspace opens on its plan screen so owners can pay; 7 days' grace after a period ends, then `past_due`
+- [ ] Owner: apply migration 0008, connect and verify the platform Razorpay account, add its webhook, publish public paid plans
+- [ ] Automatic renewal (Razorpay Subscriptions / e-mandate), reminder emails before a period ends
+- [ ] Proration when changing plan mid-period; GST invoices for plan payments; refunds from the control centre
 - [ ] Apply stored payment webhooks to business records (they are verified and stored, not yet applied)
 - [x] Wire the app's payment links to an organization's own connected account (control centre: "Use for the app's payment links"; its webhook marks links paid)
 - [ ] Mark the linked invoice paid too, per organization (with §3.1)
