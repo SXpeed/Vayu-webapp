@@ -172,7 +172,7 @@ const RoomCard: React.FC<{
                 <div className="flex -space-x-3 shrink-0">
                     {covers.length === 0 && <div className="w-11 h-11 rounded-lg neu-inset flex items-center justify-center text-gray-500"><ImageIcon size={16} /></div>}
                     {covers.map(a => a.imageUrls?.[0]
-                        ? <img key={a.id} src={getThumbUrl(a.imageUrls[0])} alt="" className="w-11 h-11 rounded-lg object-cover ring-2 ring-[var(--neu-bg)]" loading="lazy" />
+                        ? <img key={a.id} src={getThumbUrl(a.imageUrls[0])} alt="" className="w-11 h-11 rounded-lg object-contain p-0.5 roster-backdrop-studio ring-2 ring-[var(--neu-bg)]" loading="lazy" />
                         : <div key={a.id} className="w-11 h-11 rounded-lg neu-inset ring-2 ring-[var(--neu-bg)]" />)}
                 </div>
                 <div className="min-w-0 flex-1">

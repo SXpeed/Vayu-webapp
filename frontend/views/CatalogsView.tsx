@@ -1,13 +1,14 @@
 import React, { useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
-import { Plus, X, Edit2, Trash2, Download, Image as ImageIcon, Loader2, Camera, Upload, FileText, FileDown, BookOpen, Lock } from 'lucide-react';
+import { Plus, X, Edit2, Trash2, Download, Loader2, Camera, Upload, FileText, FileDown, BookOpen, Lock } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
+import { ArtworkTile, ARTWORK_TILE_GRID } from '../components/ArtworkTile';
 import { ArtworkPicker } from '../components/ArtworkPicker';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton, GhostIconButton, EmptyState } from '../components/ui';
 import { toast } from 'react-hot-toast';
 import { Catalog, Artwork, PdfOptions, CatalogTheme } from '../types';
-import storageService, { getThumbUrl } from '../services/storageService';
+import storageService from '../services/storageService';
 import { ArtworkFormModal } from './ArtworksView';
 
 interface CatalogsViewProps {
@@ -646,44 +647,11 @@ export const CatalogDetailModal: React.FC<CatalogDetailModalProps> = ({ catalog,
                             <Plus size={16} />
                         </button>
                     </div>
-                    {filteredCatalogArtworks.map((artwork, index) => (
-                        <button
-                            type="button"
-                            key={artwork.id}
-                            onClick={() => onArtworkClick(artwork)}
-                            className="w-full text-left neu-raised rounded-2xl overflow-hidden flex h-28 animate-fade-in-up cursor-pointer active-scale"
-                            style={{ animationDelay: `${index * 45}ms` }}
-                        >
-                            <div className="w-28 h-full relative shrink-0 neu-inset">
-                                {artwork.imageUrls.length > 0 ? (
-                                    <img loading="lazy" decoding="async" src={getThumbUrl(artwork.imageUrls[0])} alt={artwork.title} className="w-full h-full object-cover" />
-                                ) : (
-                                    <div className="w-full h-full flex items-center justify-center text-gray-600 dark:text-gray-300">
-                                        <ImageIcon size={28} strokeWidth={1} />
-                                    </div>
-                                )}
-                            </div>
-                            <div className="p-3 flex flex-col justify-between flex-1">
-                                <div>
-                                    <h3 className="font-serif text-gray-900 dark:text-gray-100 line-clamp-1 text-sm">{artwork.title}</h3>
-                                    <p className="text-[11px] text-gray-700 dark:text-gray-300 mt-1 uppercase tracking-wider line-clamp-1">
-                                        {artwork.artist && (
-                                            <>
-                                                {artwork.artist}
-                                                {artwork.artworkYear ? `, ${artwork.artworkYear}` : ''}
-                                                {' • '}
-                                            </>
-                                        )}
-                                        {artwork.customId} • {artwork.medium}
-                                    </p>
-                                </div>
-                                <div className="flex justify-between items-end">
-                                    <p className="text-[11px] text-gray-600 dark:text-gray-300 font-light">{artwork.dimensions}</p>
-                                    <p className="font-medium text-brand-900 dark:text-gold-400 text-sm">₹{artwork.price.toLocaleString('en-IN')}{artwork.plusGst ? ' + GST' : ''}</p>
-                                </div>
-                            </div>
-                        </button>
-                    ))}
+                    <div className={ARTWORK_TILE_GRID}>
+                        {filteredCatalogArtworks.map((artwork, index) => (
+                            <ArtworkTile key={artwork.id} art={artwork} index={index} onOpen={() => onArtworkClick(artwork)} />
+                        ))}
+                    </div>
                 </div>
             </div>
 

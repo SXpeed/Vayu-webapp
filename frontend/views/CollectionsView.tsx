@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Plus, X, Image as ImageIcon, Edit2, Trash2, Camera, Loader2 } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
+import { ArtworkTile, ARTWORK_TILE_GRID } from '../components/ArtworkTile';
 import { ArtworkPicker } from '../components/ArtworkPicker';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton, EmptyState } from '../components/ui';
 import { Collection, Artwork } from '../types';
@@ -87,15 +88,15 @@ export const CollectionsView: React.FC<CollectionsViewProps> = ({ collections, a
                             className="neu-tile neu-tile-interactive w-full animate-fade-in-up cursor-pointer active-scale"
                             style={{ animationDelay: `${Math.min(index, 12) * 45}ms` }}
                         >
-                            {/* Cover mosaic, set into the card — the well shows through the seams */}
-                            <div className="neu-picture-well neu-picture-well-sm w-full aspect-[4/3] rounded-[1rem]">
+                            {/* Cover mosaic, set into the card — whole photos on the studio backdrop */}
+                            <div className="neu-picture-well neu-picture-well-sm roster-backdrop-studio w-full aspect-[4/3] rounded-[1rem]">
                                 {images.length === 0 && (
                                     <div className="w-full h-full flex items-center justify-center text-[var(--neu-text-dim)]">
                                         <ImageIcon size={28} strokeWidth={1} />
                                     </div>
                                 )}
                                 {images.length > 0 && images.length < 3 && (
-                                    <img loading="lazy" decoding="async" src={getThumbUrl(images[0])} alt={collection.name} className="w-full h-full object-cover" />
+                                    <img loading="lazy" decoding="async" src={getThumbUrl(images[0])} alt={collection.name} className="w-full h-full object-contain p-2" />
                                 )}
                                 {images.length >= 3 && (
                                     <div className="w-full h-full grid grid-cols-3 grid-rows-2 gap-[3px]">
@@ -106,7 +107,7 @@ export const CollectionsView: React.FC<CollectionsViewProps> = ({ collections, a
                                                 decoding="async"
                                                 src={getThumbUrl(url)}
                                                 alt={i === 0 ? collection.name : ''}
-                                                className={`w-full h-full object-cover ${i === 0 ? 'col-span-2 row-span-2' : ''}`}
+                                                className={`w-full h-full min-h-0 object-contain p-1 ${i === 0 ? 'col-span-2 row-span-2' : ''}`}
                                             />
                                         ))}
                                     </div>
@@ -135,6 +136,21 @@ export const CollectionsView: React.FC<CollectionsViewProps> = ({ collections, a
                     />
                 )}
 
+        </PageBody>
+
+            {/* Outside PageBody: its scroll-fade mask is a stacking context, so a
+                sheet inside it sat under the page header, which covered its top.
+                Desktop shows the sheet as a centred dialog; this backdrop hides the
+                list behind it (its own search bar showed either side) and closes it. */}
+            {(isAdding || selectedCollection) && (
+                <button
+                    type="button"
+                    tabIndex={-1}
+                    aria-label="Close"
+                    onClick={() => (isAdding ? setIsAdding(false) : handleCloseModal())}
+                    className="hidden lg:block absolute inset-0 z-40 w-full h-full cursor-default neu-portal-scrim animate-fade-in"
+                />
+            )}
             {isAdding && (
                 <CollectionFormModal
                     artworks={artworks}
@@ -163,7 +179,6 @@ export const CollectionsView: React.FC<CollectionsViewProps> = ({ collections, a
                     onAddArtwork={onAddArtwork}
                 />
             )}
-        </PageBody>
         </PageRoot>
     );
 };
@@ -178,7 +193,7 @@ export interface CollectionDetailModalProps {
     onAddArtwork: (artwork: Omit<Artwork, 'id' | 'createdAt'>) => Promise<Artwork>;
 }
 
-export const CollectionDetailModal: React.FC<CollectionDetailModalProps> = ({ collection, artworks, onArtworkClick, onUpdateCollection, onDeleteCollection, onAddArtwork }) => {
+export const CollectionDetailModal: React.FC<CollectionDetailModalProps> = ({ collection, artworks, onClose, onArtworkClick, onUpdateCollection, onDeleteCollection, onAddArtwork }) => {
     const [isEditing, setIsEditing] = useState(false);
     const [isAddingProduct, setIsAddingProduct] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
@@ -224,9 +239,14 @@ export const CollectionDetailModal: React.FC<CollectionDetailModalProps> = ({ co
     return (
         <div className="neu-sheet z-50 animate-fade-in-up">
             <div className="px-3 pb-2.5 z-10" style={{ paddingTop: 'calc(1.75rem + var(--safe-top))' }}>
-                <div className="flex justify-between items-center mb-3">
-                    <h2 className="text-xl font-serif text-gray-900 dark:text-white truncate px-1">{collection.name}</h2>
-                    <div className="flex items-center gap-2">
+                <div className="flex justify-between items-center gap-2 mb-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                        <button onClick={onClose} aria-label="Close collection" className="neu-icon-btn shrink-0 text-gray-700 dark:text-gray-300 active-scale">
+                            <X size={18} />
+                        </button>
+                        <h2 className="text-xl font-serif text-gray-900 dark:text-white truncate px-1">{collection.name}</h2>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
                         <IfCan section="collections">
                             <button onClick={() => setIsEditing(true)} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale">
                                 <Edit2 size={18} />
@@ -243,9 +263,9 @@ export const CollectionDetailModal: React.FC<CollectionDetailModalProps> = ({ co
             </div>
 
             <div className="flex-1 overflow-y-auto no-scrollbar pb-20 lg:pb-8">
-                <div className="w-full aspect-[21/9] relative neu-inset animate-fade-in group">
+                <div className="w-full aspect-[21/9] relative roster-backdrop-studio animate-fade-in group">
                     {coverImage ? (
-                        <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={collection.name} className="w-full h-full object-cover" />
+                        <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={collection.name} className="w-full h-full object-contain p-2" />
                     ) : (
                         <div className="w-full h-full flex items-center justify-center text-gray-600 dark:text-gray-300">
                             <ImageIcon size={40} strokeWidth={1} />
@@ -276,47 +296,11 @@ export const CollectionDetailModal: React.FC<CollectionDetailModalProps> = ({ co
                         </button>
                     </div>
 
-                    {filteredCollectionArtworks.map((artwork, index) => {
-                        let artistText = '';
-                        if (artwork.artist) {
-                            artistText = artwork.artist;
-                            if (artwork.artworkYear) artistText += `, ${artwork.artworkYear}`;
-                            artistText += ' • ';
-                        }
-
-                        return (
-                            <button
-                                type="button"
-                                key={artwork.id}
-                                onClick={() => onArtworkClick(artwork)}
-                                className="w-full text-left neu-raised rounded-2xl overflow-hidden flex h-28 animate-fade-in-up cursor-pointer active-scale"
-                                style={{ animationDelay: `${index * 50}ms` }}
-                            >
-                                <div className="w-28 h-full relative shrink-0 neu-inset">
-                                    {artwork.imageUrls.length > 0 ? (
-                                        <img loading="lazy" decoding="async" src={getThumbUrl(artwork.imageUrls[0])} alt={artwork.title} className="w-full h-full object-cover" />
-                                    ) : (
-                                        <div className="w-full h-full flex items-center justify-center text-gray-600 dark:text-gray-300">
-                                            <ImageIcon size={28} strokeWidth={1} />
-                                        </div>
-                                    )}
-                                </div>
-                                <div className="p-3 flex flex-col justify-between flex-1">
-                                    <div>
-                                        <h3 className="font-serif text-gray-900 dark:text-gray-100 line-clamp-1 text-sm">{artwork.title}</h3>
-                                        <p className="text-[11px] text-gray-700 dark:text-gray-300 mt-1 uppercase tracking-wider line-clamp-1">
-                                            {artistText}
-                                            {artwork.customId} • {artwork.medium}
-                                        </p>
-                                    </div>
-                                    <div className="flex justify-between items-end">
-                                        <p className="text-[11px] text-gray-600 dark:text-gray-300 font-light">{artwork.dimensions}</p>
-                                        <p className="font-medium text-brand-900 dark:text-gold-400 text-sm">₹{artwork.price.toLocaleString('en-IN')}{artwork.plusGst ? ' + GST' : ''}</p>
-                                    </div>
-                                </div>
-                            </button>
-                        );
-                    })}
+                    <div className={ARTWORK_TILE_GRID}>
+                        {filteredCollectionArtworks.map((artwork, index) => (
+                            <ArtworkTile key={artwork.id} art={artwork} index={index} onOpen={() => onArtworkClick(artwork)} />
+                        ))}
+                    </div>
 
                 </div>
             </div>
