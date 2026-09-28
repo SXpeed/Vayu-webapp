@@ -3,7 +3,7 @@ import { Artwork, CalendarEvent, Catalog, EventTodo, Invoice, ViewState, UserPro
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { EVENT_COLORS, eventColor } from '../services/eventService';
-import { Clock, Receipt, TrendingUp, Palette, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronDown, ChevronRight, Edit2, BookOpen, ShieldCheck, User, LayoutGrid } from 'lucide-react';
+import { Clock, Receipt, TrendingUp, Palette, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronDown, ChevronRight, Edit2, BookOpen, ShieldCheck, User, LayoutGrid, CalendarClock } from 'lucide-react';
 import { PageRoot, PageHeader, PageBody, GhostIconButton } from '../components/ui';
 import { useAppChrome } from '../components/Layout';
 import { useBranding } from '../useBranding';
@@ -258,6 +258,29 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                             <span className="block font-serif text-[17px] leading-tight text-gray-900 dark:text-white">Roster</span>
                             <span className="block mt-0.5 text-[11.5px] text-gray-600 dark:text-gray-400 leading-snug">
                                 Curated sections to browse, heart and present{can('roster', 'edit') ? ' — and arrange' : ''}
+                            </span>
+                        </span>
+                        <ChevronRight size={18} className="shrink-0 text-gold-700 dark:text-gold-300" />
+                    </button>
+                </section>
+                )}
+
+                {/* Staff roster: this week's shifts, for everyone who can see it */}
+                {can('schedule') && (
+                <section className="animate-fade-in-up" style={{ animationDelay: '175ms' }}>
+                    <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-3">Team</h2>
+                    <button
+                        type="button"
+                        onClick={() => onNavigate('schedule')}
+                        className="neu-card-interactive w-full p-3 flex items-center gap-3.5 text-left active-scale"
+                    >
+                        <span className="neu-inset shrink-0 w-14 h-14 rounded-2xl flex items-center justify-center">
+                            <CalendarClock size={24} strokeWidth={1.5} className="text-brand-900 dark:text-gold-400" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                            <span className="block font-serif text-[17px] leading-tight text-gray-900 dark:text-white">Staff roster</span>
+                            <span className="block mt-0.5 text-[11.5px] text-gray-600 dark:text-gray-400 leading-snug">
+                                {can('schedule', 'edit') ? 'Plan shifts, approve leave and publish the week' : 'Your shifts this week, and leave requests'}
                             </span>
                         </span>
                         <ChevronRight size={18} className="shrink-0 text-gold-700 dark:text-gold-300" />

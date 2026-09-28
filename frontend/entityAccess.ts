@@ -19,7 +19,7 @@ export type SyncEntity = (typeof SYNC_ENTITIES)[number];
  * change_log (their records live in KV, which cannot share a D1 transaction).
  * Clients respond by refetching that dataset through its REST endpoint.
  */
-export type SignalEntity = 'payments' | 'roster';
+export type SignalEntity = 'payments' | 'roster' | 'schedule';
 
 export function permissionsForRoles(roles: RoleDef[], roleId: string): Permissions {
   if (roleId === ADMIN_ROLE_ID) return ADMIN_PERMISSIONS;
@@ -56,6 +56,11 @@ export function canReadPayments(perms: Permissions): boolean {
 /** The Roster lives outside change_log too; its signal only makes an open Roster refetch. */
 export function canReadRoster(perms: Permissions): boolean {
   return atLeast(perms['roster'], 'view');
+}
+
+/** Staff roster changes are signal-only too (staffRoster.ts). */
+export function canReadSchedule(perms: Permissions): boolean {
+  return atLeast(perms['schedule'], 'view');
 }
 
 /**

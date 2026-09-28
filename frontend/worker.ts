@@ -4,6 +4,7 @@ import {
   type AccessLevel, type Permissions, type RoleDef, type SectionId,
 } from './permissions';
 import { ROSTER_ARCHIVE_ENTITY, ensureRosterTables, rosterRoutes } from './roster';
+import { staffRosterRoutes } from './staffRoster';
 import {
   CORS, json, err, normalizeRoute, rowToConversation, rowToMessage, rowToArtwork,
   rowToCollection, rowToCatalog, rowToInquiry, rowToInquiryMessage, rowToEvent,
@@ -254,6 +255,10 @@ function accessRule(path: string, method: string): AccessRule | null {
   if (under('/collections')) return { section: 'collections', level };
   // Hearting a piece is personal: browsing the roster is enough. Everything
   // else that changes it is curating, which needs "edit".
+  // Staff roster: asking for (or withdrawing) your own leave only needs
+  // "view"; deciding on leave and everything else that changes it, "edit".
+  if (under('/staff-roster/leaves')) return { section: 'schedule', level: method === 'PATCH' ? 'edit' : 'view' };
+  if (under('/staff-roster')) return { section: 'schedule', level };
   if (under('/roster/favorites')) return { section: 'roster', level: 'view' };
   if (under('/roster')) return { section: 'roster', level };
   if (under('/catalogs')) return { section: 'catalogs', level };
@@ -4060,6 +4065,20 @@ const isPrefix = (p: string) => (path: string) => path.startsWith(p);
 const routes: Route[] = [
   // Roster (roster.ts)
   ...rosterRoutes({ logChange: logEntityChange, archive: archiveDeletedAsync, notify: queueHubNotify }),
+
+  // Staff roster (staffRoster.ts)
+  ...staffRosterRoutes({
+    people: userRecords,
+    stores: async (ctx) => {
+      await ensureStoresTable(ctx.env.VAYU_DB);
+      const { results } = await ctx.env.VAYU_DB.prepare('SELECT id, name FROM stores ORDER BY name ASC').all<{ id: string; name: string }>();
+      return results.map(r => ({ id: String(r.id), name: String(r.name) }));
+    },
+    canManage: (ctx, session) => sessionCan(ctx, session, 'schedule', 'edit'),
+    push: (ctx, userIds, payload) => ctx.execCtx.waitUntil(sendPushToUsers(ctx.env, userIds, payload).catch(e => console.error('Roster push failed:', e))),
+    logChange: logEntityChange,
+    notify: queueHubNotify,
+  }),
 
   { method: 'GET', match: isExact('/viewing-rooms'), handler: handleViewingRoomsList },
   { method: 'POST', match: isExact('/viewing-rooms'), handler: handleViewingRoomsCreate },

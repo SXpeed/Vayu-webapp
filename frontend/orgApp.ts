@@ -114,6 +114,7 @@ const planMemo = new Map<string, { at: number; active: boolean; sectionsOff: Sec
  */
 export const PLAN_GATED_SECTIONS: { module: string; section: SectionId }[] = [
   { module: 'roster', section: 'roster' },
+  { module: 'staffRoster', section: 'schedule' },
 ];
 
 /** After a plan payment, so this isolate lets the organization in at once (others within a minute). */

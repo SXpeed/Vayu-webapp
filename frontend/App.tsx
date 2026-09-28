@@ -31,7 +31,7 @@ import { useBranding } from './useBranding';
 import { currentWorkspace, refreshCurrentWorkspace } from './services/workspace';
 
 /** Views a push-notification click may deep-link into. */
-const PUSH_VIEWS = ['messaging', 'inquiry', 'payments'] as const;
+const PUSH_VIEWS = ['messaging', 'inquiry', 'payments', 'schedule'] as const;
 type PushView = typeof PUSH_VIEWS[number];
 
 /** View requested by a push-notification click when the app was closed (e.g. /?view=messaging). */
@@ -58,6 +58,7 @@ const viewLoaders = {
     CalendarView: () => import('./views/CalendarView'),
     AttendanceView: () => import('./views/AttendanceView'),
     RosterView: () => import('./views/RosterView'),
+    StaffRosterView: () => import('./views/StaffRosterView'),
 };
 
 const ArtworksView = lazy(() => viewLoaders.ArtworksView().then(m => ({ default: m.ArtworksView })));
@@ -74,6 +75,7 @@ const ContactsView = lazy(() => viewLoaders.ContactsView().then(m => ({ default:
 const CalendarView = lazy(() => viewLoaders.CalendarView().then(m => ({ default: m.CalendarView })));
 const AttendanceView = lazy(() => viewLoaders.AttendanceView().then(m => ({ default: m.AttendanceView })));
 const RosterView = lazy(() => viewLoaders.RosterView().then(m => ({ default: m.RosterView })));
+const StaffRosterView = lazy(() => viewLoaders.StaffRosterView().then(m => ({ default: m.StaffRosterView })));
 
 /** Warm every view chunk once the app is idle after sign-in, one per idle
  *  slot, so the first tap on a tab renders at once instead of showing the
@@ -368,6 +370,8 @@ const App: React.FC = () => {
                         onAddCollection={handlers.handleAddCollection}
                     />
                 );
+            case 'schedule':
+                return <StaffRosterView />;
             case 'contacts':
                 return (
                     <ContactsView

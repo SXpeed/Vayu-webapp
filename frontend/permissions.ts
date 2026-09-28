@@ -14,7 +14,7 @@ export type AccessLevel = 'none' | 'view' | 'edit';
 
 export type SectionId =
     | 'inventory' | 'collections' | 'catalogs' | 'roster' | 'contacts' | 'inquiries' | 'invoices'
-    | 'payments' | 'calendar' | 'messages' | 'attendance' | 'activity';
+    | 'payments' | 'calendar' | 'messages' | 'attendance' | 'schedule' | 'activity';
 
 export interface SectionDef {
     id: SectionId;
@@ -41,6 +41,10 @@ export const SECTIONS: SectionDef[] = [
     {
         id: 'attendance', label: 'Attendance', description: 'Check in/out and the team’s records',
         levelLabels: { view: 'Own', edit: 'Manage' },
+    },
+    {
+        id: 'schedule', label: 'Staff roster', description: 'Shifts, days off and leave. Manage plans shifts, approves leave and publishes',
+        levelLabels: { view: 'View', edit: 'Manage' },
     },
     { id: 'activity', label: 'Activity log', description: 'Who changed what (read-only)' },
 ];
@@ -71,7 +75,7 @@ export const ADMIN_PERMISSIONS: Permissions = all('edit');
  * data section, their own attendance, no activity log. The Roster came later:
  * staff browse it, and curating it is given by role.
  */
-export const STAFF_DEFAULT_PERMISSIONS: Permissions = { ...all('edit'), roster: 'view', attendance: 'view', activity: 'none' };
+export const STAFF_DEFAULT_PERMISSIONS: Permissions = { ...all('edit'), roster: 'view', attendance: 'view', schedule: 'view', activity: 'none' };
 
 export const BUILT_IN_ROLES: RoleDef[] = [
     { id: ADMIN_ROLE_ID, name: 'Admin', builtIn: true, permissions: ADMIN_PERMISSIONS },
@@ -100,7 +104,7 @@ export function normalizePermissions(input: unknown, fallback?: Permissions): Pe
 
 /**
  * Sections the workspace's plan leaves out, taken away from everyone,
- * admins included. Only the Roster is plan-gated so far (orgApp.ts).
+ * admins included. The Roster and the staff roster are plan-gated (orgApp.ts).
  */
 export function withoutSections(perms: Permissions, off: readonly SectionId[] | undefined): Permissions {
     if (!off?.length) return perms;

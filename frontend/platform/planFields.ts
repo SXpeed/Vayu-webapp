@@ -63,6 +63,7 @@ export const MODULE_FIELDS: FlagField[] = [
   { key: 'privateRooms', label: 'Private rooms', hint: 'Closed group conversations.', default: true },
   { key: 'calendar', label: 'Calendar & follow-ups', hint: 'Events, reminders and follow-ups.', default: true },
   { key: 'attendance', label: 'Attendance', hint: 'Check-in and check-out with location.', default: false },
+  { key: 'staffRoster', label: 'Staff roster', hint: 'Weekly shifts at each store, days off, leave requests and publishing to staff. Switching it off hides it for everyone.', default: true },
 ];
 
 /** Capabilities that are not a whole module. */

@@ -1365,3 +1365,51 @@ html.kb-open .neu-dock-scrim {
         transition: none;
     }
 }
+
+/* ── Staff roster ────────────────────────────────────────────────────────────
+ * Each store gets a pale tint (sage, slate blue, clay, lilac, teal, sand) so a
+ * week reads at a glance; the store's name is always printed too, so colour
+ * never carries the meaning alone. Leave is warm gold, a day off neutral, an
+ * open shift a dashed outline. */
+:root {
+    --st-0-bg: #dde9de; --st-0-ink: #2c5638; --st-0-edge: #b5ceb9;
+    --st-1-bg: #dce4ee; --st-1-ink: #2a4a6f; --st-1-edge: #b4c5da;
+    --st-2-bg: #efe0d6; --st-2-ink: #6e3d22; --st-2-edge: #dcbda8;
+    --st-3-bg: #e6def0; --st-3-ink: #4b3a6d; --st-3-edge: #cabbe0;
+    --st-4-bg: #d8ebe9; --st-4-ink: #1f5652; --st-4-edge: #acd2cd;
+    --st-5-bg: #ece6d4; --st-5-ink: #5b4d22; --st-5-edge: #d6c9a2;
+    --sr-leave-bg: #f1e5c4; --sr-leave-ink: #6b5210; --sr-leave-edge: #dcc68a;
+    --sr-off-bg: #e2e6ed; --sr-off-ink: #505a6c;
+    --sr-open: #875a00; --sr-open-bg: #f7ecd2;
+    --sr-bad: #a8322a; --sr-bad-bg: #f6dfdb;
+}
+html.dark {
+    --st-0-bg: #2b3a30; --st-0-ink: #bddcc3; --st-0-edge: #3e5646;
+    --st-1-bg: #28323f; --st-1-ink: #bcd0ea; --st-1-edge: #3c4b5f;
+    --st-2-bg: #3d2f27; --st-2-ink: #ecc6ad; --st-2-edge: #5a4436;
+    --st-3-bg: #342d40; --st-3-ink: #d3c6ec; --st-3-edge: #4c4260;
+    --st-4-bg: #243937; --st-4-ink: #b1e0da; --st-4-edge: #37554f;
+    --st-5-bg: #39352a; --st-5-ink: #e6d9ad; --st-5-edge: #555036;
+    --sr-leave-bg: #3c3421; --sr-leave-ink: #ecd79c; --sr-leave-edge: #5a4c28;
+    --sr-off-bg: #2b2f36; --sr-off-ink: #aab3c5;
+    --sr-open: #f1c46b; --sr-open-bg: #3b3220;
+    --sr-bad: #ff9d93; --sr-bad-bg: #452a28;
+}
+@layer components {
+    .sr-store-0 { background: var(--st-0-bg); color: var(--st-0-ink); border-color: var(--st-0-edge); }
+    .sr-store-1 { background: var(--st-1-bg); color: var(--st-1-ink); border-color: var(--st-1-edge); }
+    .sr-store-2 { background: var(--st-2-bg); color: var(--st-2-ink); border-color: var(--st-2-edge); }
+    .sr-store-3 { background: var(--st-3-bg); color: var(--st-3-ink); border-color: var(--st-3-edge); }
+    .sr-store-4 { background: var(--st-4-bg); color: var(--st-4-ink); border-color: var(--st-4-edge); }
+    .sr-store-5 { background: var(--st-5-bg); color: var(--st-5-ink); border-color: var(--st-5-edge); }
+    .sr-leave { background: var(--sr-leave-bg); color: var(--sr-leave-ink); border-color: var(--sr-leave-edge); }
+    .sr-off { background: var(--sr-off-bg); color: var(--sr-off-ink); border-color: transparent; }
+    .sr-open { background: transparent; color: var(--sr-open); border-color: currentColor; border-style: dashed; }
+    .sr-pending { background: transparent; color: var(--sr-leave-ink); border-color: var(--sr-leave-edge); border-style: dashed; }
+    .sr-conflict { box-shadow: 0 0 0 2px var(--sr-bad); }
+    .sr-bad-text { color: var(--sr-bad); }
+    .sr-open-text { color: var(--sr-open); }
+    .sr-open-row { background: color-mix(in srgb, var(--neu-bg) 86%, var(--sr-open-bg)); }
+    .sr-bad-box { background: var(--sr-bad-bg); color: var(--sr-bad); }
+    .sr-warn-box { background: var(--sr-open-bg); color: var(--sr-open); }
+}

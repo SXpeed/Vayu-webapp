@@ -18,6 +18,7 @@ export const VIEW_SECTION: Partial<Record<ViewState, SectionId>> = {
     calendar: 'calendar',
     messaging: 'messages',
     attendance: 'attendance',
+    schedule: 'schedule',
     activity: 'activity',
 };
 

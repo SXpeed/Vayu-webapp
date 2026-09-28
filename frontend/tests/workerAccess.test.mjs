@@ -215,3 +215,41 @@ test('roster permissions: Staff browse by default, gaps take the fallback, the p
     assert.equal(perms.ADMIN_PERMISSIONS.roster, 'edit', 'the shared admin set is not changed');
     assert.equal(perms.withoutSections(perms.ADMIN_PERMISSIONS, []), perms.ADMIN_PERMISSIONS);
 });
+
+test('staff roster rules: paid hours, overnight shifts, overlaps and leave conflicts', async () => {
+    const r = await load('staffRosterRules.ts');
+    const shift = (id, employeeId, date, s, e, extra = {}) => ({ id, kind: 'shift', employeeId, storeId: 'st1', date, startMin: s * 60, endMin: e * 60, breakMin: 60, role: 'Cashier', note: '', ...extra });
+    const day = shift('a', 'neha', '2026-10-01', 9, 17);
+    assert.equal(r.paidMin(day), 7 * 60, 'eight hours less an hour');
+    const night = shift('n', 'kabir', '2026-10-01', 22, 6);
+    assert.equal(r.endsNextDay(night), true);
+    assert.equal(r.shiftLengthMin(night), 8 * 60);
+    assert.equal(r.defaultBreakMin(9 * 60, 13 * 60), 30);
+    assert.equal(r.defaultBreakMin(9 * 60, 17 * 60), 60);
+
+    assert.deepEqual(r.shiftFieldErrors({ ...day, startMin: 540, endMin: 540 }).length, 1, 'same start and end');
+    assert.ok(r.shiftFieldErrors({ ...day, storeId: null }).some(e => /store/i.test(e)));
+    assert.ok(r.shiftFieldErrors({ ...day, startMin: 0, endMin: 17 * 60 + 30 }).some(e => /16 hours/.test(e)));
+    assert.equal(r.shiftFieldErrors({ kind: 'off', storeId: null, date: '2026-10-01', startMin: 0, endMin: 0, breakMin: 0, role: '' }).length, 0, 'a day off needs no times');
+
+    const leaves = [{ id: 'l1', employeeId: 'ananya', from: '2026-10-03', to: '2026-10-04', type: 'Personal leave', reason: '', status: 'approved', requestedAt: 0, decidedAt: 0, decidedByName: '' }];
+    const shifts = [
+        day, shift('b', 'neha', '2026-10-01', 13, 21),                 // overlaps a
+        night, shift('c', 'kabir', '2026-10-02', 5, 9),                 // overlaps the overnight shift's early hours
+        shift('d', 'kabir', '2026-10-02', 7, 15, { kind: 'off' }),      // days off never conflict
+        shift('e', 'ananya', '2026-10-03', 10, 18),                     // during approved leave
+        shift('f', null, '2026-10-01', 9, 17),                          // open shifts never conflict
+        shift('g', 'priya', '2026-10-01', 9, 17), shift('h', 'priya', '2026-10-01', 17, 21), // back to back is fine
+    ];
+    const c = r.findConflicts(shifts, leaves);
+    assert.deepEqual([...c.keys()].sort(), ['a', 'b', 'c', 'e', 'n']);
+    assert.equal(c.get('e')[0].type, 'leave');
+    assert.equal(r.findConflicts(shifts, [{ ...leaves[0], status: 'pending' }]).has('e'), false, 'pending leave does not block');
+    assert.equal(r.mondayOf('2026-10-04'), '2026-09-28');
+});
+
+test('staff roster permission: Staff view by default; the plan gate maps it', () => {
+    assert.equal(perms.STAFF_DEFAULT_PERMISSIONS.schedule, 'view');
+    assert.equal(access.canReadSchedule(perms.normalizePermissions({ schedule: 'view' })), true);
+    assert.equal(access.canReadSchedule(perms.normalizePermissions({})), false);
+});
