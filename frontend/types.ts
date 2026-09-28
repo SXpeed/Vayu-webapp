@@ -79,6 +79,29 @@ export interface PdfOptions {
     gradientStyle?: 'Solid' | 'Linear' | 'Radial' | 'Diagonal' | 'Vignette' | 'Spotlight';
 }
 
+/** How a Roster section shows prices: "Price on request" is the gallery default. */
+export type RosterPriceDisplay = 'request' | 'price' | 'hidden';
+/** The backdrop pieces sit on in a Roster section; "studio" is gallery navy. */
+export type RosterBackdrop = 'studio' | 'ivory' | 'charcoal' | 'none';
+
+/** One curated row of the Roster (roster.ts on the server). */
+export interface RosterSection {
+    id: string;
+    name: string;
+    description: string;
+    /** In the order the curator arranged them. */
+    artworkIds: string[];
+    priceDisplay: RosterPriceDisplay;
+    backdrop: RosterBackdrop;
+    hideSold: boolean;
+    position: number;
+    /** Sent back on update; a stale one is refused (409). */
+    version: number;
+    createdAt: number;
+    updatedAt: number;
+    updatedByName: string;
+}
+
 export type CatalogTheme = 1 | 2 | 3 | 4 | 5;
 
 export interface InvoiceItem {
@@ -297,7 +320,7 @@ export interface AttendanceRecord {
 /** A contact as passed by the UI before id/creator metadata is stamped. */
 export type NewContact = Omit<Contact, 'id' | 'createdAt' | 'createdBy' | 'createdByName'>;
 
-export type ViewState = 'login' | 'home' | 'artworks' | 'collections' | 'catalogs' | 'contacts' | 'calendar' | 'attendance' | 'invoice' | 'inquiry' | 'messaging' | 'profile' | 'activity' | 'payments';
+export type ViewState = 'login' | 'home' | 'artworks' | 'collections' | 'catalogs' | 'roster' | 'contacts' | 'calendar' | 'attendance' | 'invoice' | 'inquiry' | 'messaging' | 'profile' | 'activity' | 'payments';
 
 export interface PaymentLink {
     id: string;

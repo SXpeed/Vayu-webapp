@@ -91,7 +91,7 @@ export async function getRoles(kv: KVNamespace): Promise<RoleDef[]> {
     {
       ...BUILT_IN_ROLES[1],
       name: staff?.name || BUILT_IN_ROLES[1].name,
-      permissions: staff ? normalizePermissions(staff.permissions) : STAFF_DEFAULT_PERMISSIONS,
+      permissions: staff ? normalizePermissions(staff.permissions, STAFF_DEFAULT_PERMISSIONS) : STAFF_DEFAULT_PERMISSIONS,
     },
     ...stored
       .filter(r => r.id !== ADMIN_ROLE_ID && r.id !== STAFF_ROLE_ID)

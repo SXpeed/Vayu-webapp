@@ -25,6 +25,7 @@ import { getEffectiveLoginMethods } from './platform/settings';
 import { resolveEntitlements } from './platform/plans';
 import { orgDatabase, orgFilePrefix, orgKvPrefix, prefixedBucket, prefixedKv } from './orgStorage';
 import type { Env, SessionData } from './workerEnv';
+import type { SectionId } from './permissions';
 import type { StoredUser } from './workerRoles';
 import { deviceLabel, type DeviceSummary } from './deviceSessions';
 
@@ -101,9 +102,19 @@ function isPublicPath(rest: string): boolean {
 const notFound = () => Response.json({ error: 'Not found' }, { status: 404 });
 
 // Whether the organization's plan lets it work (active, trialing, or no plan
-// yet), remembered for a minute per organization: it changes rarely, and
-// every request asks.
-const planMemo = new Map<string, { at: number; active: boolean }>();
+// yet), and which plan-gated sections it leaves out, remembered for a minute
+// per organization: it changes rarely, and every request asks.
+const planMemo = new Map<string, { at: number; active: boolean; sectionsOff: SectionId[] }>();
+
+/**
+ * Plan modules that switch a whole app section on or off (planFields.ts).
+ * Only the Roster so far: the older modules are shown on plans but not yet
+ * enforced (docs/PLANS.md), and switching them on now would lock
+ * organizations out of screens they use today.
+ */
+export const PLAN_GATED_SECTIONS: { module: string; section: SectionId }[] = [
+  { module: 'roster', section: 'roster' },
+];
 
 /** After a plan payment, so this isolate lets the organization in at once (others within a minute). */
 export function forgetPlanActive(orgId: string): void {
@@ -117,13 +128,15 @@ export function forgetPlanActive(orgId: string): void {
 function reachableWithoutPlan(rest: string): boolean {
   return rest === '/plan' || rest === '/billing' || rest.startsWith('/billing/') || rest === '/auth/logout';
 }
-async function planActive(db: D1Database, orgId: string): Promise<boolean> {
+async function planState(db: D1Database, orgId: string): Promise<{ active: boolean; sectionsOff: SectionId[] }> {
   const hit = planMemo.get(orgId);
-  if (hit && Date.now() - hit.at < 60_000) return hit.active;
-  const { active } = await resolveEntitlements(db, orgId);
+  if (hit && Date.now() - hit.at < 60_000) return hit;
+  const { active, limits } = await resolveEntitlements(db, orgId);
+  const sectionsOff = PLAN_GATED_SECTIONS.filter(g => limits.modules[g.module] === false).map(g => g.section);
   if (planMemo.size > 1000) planMemo.clear();
-  planMemo.set(orgId, { at: Date.now(), active });
-  return active;
+  const state = { at: Date.now(), active, sectionsOff };
+  planMemo.set(orgId, state);
+  return state;
 }
 
 /** The platform account signed in on this request (Better Auth cookie), if any. */
@@ -168,11 +181,12 @@ export async function openOrgRequest(request: Request, env: Env, orgId: string, 
     return Response.json({ error: 'This workspace is paused. Contact support to restore it.', code: 'org_inactive' }, { status: 403 });
   }
 
-  if (member && !reachableWithoutPlan(rest) && !(await planActive(db, orgId))) {
+  const plan = member ? await planState(db, orgId) : null;
+  if (plan && !reachableWithoutPlan(rest) && !plan.active) {
     return Response.json({ error: 'This workspace opens once its plan is active (payment or renewal). Contact us if this is unexpected.', code: 'subscription_inactive' }, { status: 402 });
   }
 
-  const orgEnv = orgStorageEnv(env, row);
+  const orgEnv: Env = { ...orgStorageEnv(env, row), SECTIONS_OFF: plan?.sectionsOff ?? [] };
   let session: SessionData | null = null;
   if (user && member) {
     const record = await ensureAppUser(orgEnv, { appUserId: row.app_user_id ?? user.id, name: user.name, email: user.email, role: member });

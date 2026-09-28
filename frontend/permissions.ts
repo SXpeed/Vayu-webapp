@@ -13,7 +13,7 @@
 export type AccessLevel = 'none' | 'view' | 'edit';
 
 export type SectionId =
-    | 'inventory' | 'collections' | 'catalogs' | 'contacts' | 'inquiries' | 'invoices'
+    | 'inventory' | 'collections' | 'catalogs' | 'roster' | 'contacts' | 'inquiries' | 'invoices'
     | 'payments' | 'calendar' | 'messages' | 'attendance' | 'activity';
 
 export interface SectionDef {
@@ -28,6 +28,10 @@ export const SECTIONS: SectionDef[] = [
     { id: 'inventory', label: 'Inventory', description: 'Artworks, prices and photos' },
     { id: 'collections', label: 'Collections', description: 'Grouped artworks' },
     { id: 'catalogs', label: 'Catalogs', description: 'Catalog PDFs and the catalog builder' },
+    {
+        id: 'roster', label: 'Roster', description: 'The curated showcase. Curate arranges its sections and pieces',
+        levelLabels: { view: 'Browse', edit: 'Curate' },
+    },
     { id: 'contacts', label: 'Contacts', description: 'Client phone numbers and emails' },
     { id: 'inquiries', label: 'Inquiries', description: 'Customer inquiries and their chats' },
     { id: 'invoices', label: 'Proforma invoices', description: 'Proforma invoices (stored on each device)' },
@@ -64,9 +68,10 @@ export const ADMIN_PERMISSIONS: Permissions = all('edit');
 
 /**
  * Staff starts exactly as regular users worked before roles existed: every
- * data section, their own attendance, no activity log.
+ * data section, their own attendance, no activity log. The Roster came later:
+ * staff browse it, and curating it is given by role.
  */
-export const STAFF_DEFAULT_PERMISSIONS: Permissions = { ...all('edit'), attendance: 'view', activity: 'none' };
+export const STAFF_DEFAULT_PERMISSIONS: Permissions = { ...all('edit'), roster: 'view', attendance: 'view', activity: 'none' };
 
 export const BUILT_IN_ROLES: RoleDef[] = [
     { id: ADMIN_ROLE_ID, name: 'Admin', builtIn: true, permissions: ADMIN_PERMISSIONS },
@@ -78,13 +83,28 @@ const LEVEL_RANK: Record<AccessLevel, number> = { none: 0, view: 1, edit: 2 };
 export const atLeast = (have: AccessLevel | undefined, need: AccessLevel): boolean =>
     LEVEL_RANK[have ?? 'none'] >= LEVEL_RANK[need];
 
-/** Fill gaps with 'none' and drop anything unknown (e.g. a section removed later). */
-export function normalizePermissions(input: unknown): Permissions {
+/**
+ * Fill gaps and drop anything unknown (e.g. a section removed later). Gaps
+ * are 'none' unless `fallback` says otherwise: a role saved before a section
+ * existed gets the fallback's level for it (the Staff defaults, for Staff).
+ */
+export function normalizePermissions(input: unknown, fallback?: Permissions): Permissions {
     const src = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
-    const out = all('none');
+    const out = fallback ? { ...fallback } : all('none');
     for (const id of SECTION_IDS) {
         const v = src[id];
         if (v === 'view' || v === 'edit' || v === 'none') out[id] = v;
     }
+    return out;
+}
+
+/**
+ * Sections the workspace's plan leaves out, taken away from everyone,
+ * admins included. Only the Roster is plan-gated so far (orgApp.ts).
+ */
+export function withoutSections(perms: Permissions, off: readonly SectionId[] | undefined): Permissions {
+    if (!off?.length) return perms;
+    const out = { ...perms };
+    for (const id of off) out[id] = 'none';
     return out;
 }

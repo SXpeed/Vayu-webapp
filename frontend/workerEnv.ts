@@ -3,6 +3,8 @@
 // (frontend/deltaSync.ts) can import the same Env without a circular import
 // back into worker.ts.
 
+import type { SectionId } from './permissions';
+
 export interface Env {
   /** Sign-in attempts per IP address, per minute (wrangler.json "ratelimits"). */
   LOGIN_IP_LIMITER?: RateLimit;
@@ -100,6 +102,9 @@ export interface Env {
   // 'own' when this organization has its own storage, 'original' for the
   // one that owns the original app's data (orgApp.ts).
   ORG_STORAGE?: 'own' | 'original';
+  // App sections this organization's plan leaves out (plan modules that gate
+  // a section; only the Roster so far). Nobody reaches them, admins included.
+  SECTIONS_OFF?: SectionId[];
 }
 
 /** The address a stored file is served at, for this request's organization. */

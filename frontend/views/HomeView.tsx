@@ -3,7 +3,7 @@ import { Artwork, CalendarEvent, Catalog, EventTodo, Invoice, ViewState, UserPro
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { EVENT_COLORS, eventColor } from '../services/eventService';
-import { Clock, Receipt, TrendingUp, Palette, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronDown, Edit2, BookOpen, ShieldCheck, User } from 'lucide-react';
+import { Clock, Receipt, TrendingUp, Palette, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronDown, ChevronRight, Edit2, BookOpen, ShieldCheck, User, LayoutGrid } from 'lucide-react';
 import { PageRoot, PageHeader, PageBody, GhostIconButton } from '../components/ui';
 import { useAppChrome } from '../components/Layout';
 import { useBranding } from '../useBranding';
@@ -242,6 +242,29 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                 </div>
 
             <div className="mt-6 lg:mt-8 space-y-8 w-full lg:grid lg:grid-cols-2 2xl:grid-cols-3 lg:gap-x-6 lg:gap-y-8 lg:space-y-0 lg:items-start">
+                {/* Roster: the curated showcase, on its own studio-navy tile */}
+                {can('roster') && (
+                <section className="animate-fade-in-up" style={{ animationDelay: '150ms' }}>
+                    <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-3">Showcase</h2>
+                    <button
+                        type="button"
+                        onClick={() => onNavigate('roster')}
+                        className="neu-card-interactive w-full p-3 flex items-center gap-3.5 text-left active-scale"
+                    >
+                        <span className="roster-backdrop-studio shrink-0 w-14 h-14 rounded-2xl flex items-center justify-center shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+                            <LayoutGrid size={24} strokeWidth={1.5} className="text-gold-300" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                            <span className="block font-serif text-[17px] leading-tight text-gray-900 dark:text-white">Roster</span>
+                            <span className="block mt-0.5 text-[11.5px] text-gray-600 dark:text-gray-400 leading-snug">
+                                Curated sections to browse, heart and present{can('roster', 'edit') ? ' — and arrange' : ''}
+                            </span>
+                        </span>
+                        <ChevronRight size={18} className="shrink-0 text-gold-700 dark:text-gold-300" />
+                    </button>
+                </section>
+                )}
+
                 {/* Quick Actions */}
                 {(['payments', 'contacts', 'invoices', 'attendance'] as const).some(sec => can(sec)) && (
                 <section className="animate-fade-in-up" style={{ animationDelay: '200ms' }}>

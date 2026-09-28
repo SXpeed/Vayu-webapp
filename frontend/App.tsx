@@ -57,6 +57,7 @@ const viewLoaders = {
     ContactsView: () => import('./views/ContactsView'),
     CalendarView: () => import('./views/CalendarView'),
     AttendanceView: () => import('./views/AttendanceView'),
+    RosterView: () => import('./views/RosterView'),
 };
 
 const ArtworksView = lazy(() => viewLoaders.ArtworksView().then(m => ({ default: m.ArtworksView })));
@@ -72,6 +73,7 @@ const PaymentsView = lazy(() => viewLoaders.PaymentsView().then(m => ({ default:
 const ContactsView = lazy(() => viewLoaders.ContactsView().then(m => ({ default: m.ContactsView })));
 const CalendarView = lazy(() => viewLoaders.CalendarView().then(m => ({ default: m.CalendarView })));
 const AttendanceView = lazy(() => viewLoaders.AttendanceView().then(m => ({ default: m.AttendanceView })));
+const RosterView = lazy(() => viewLoaders.RosterView().then(m => ({ default: m.RosterView })));
 
 /** Warm every view chunk once the app is idle after sign-in, one per idle
  *  slot, so the first tap on a tab renders at once instead of showing the
@@ -356,6 +358,16 @@ const App: React.FC = () => {
                 return <CollectionsView collections={collections} artworks={artworks} onAddCollection={handlers.handleAddCollection} onUpdateCollection={handlers.handleUpdateCollection} onDeleteCollection={handlers.handleDeleteCollection} onArtworkClick={handleArtworkClick} onAddArtwork={handlers.handleAddArtwork} />;
             case 'catalogs':
                 return <CatalogsView catalogs={catalogs} artworks={artworks} onAddCatalog={handlers.handleAddCatalog} onUpdateCatalog={handlers.handleUpdateCatalog} onDeleteCatalog={handlers.handleDeleteCatalog} onArtworkClick={handleArtworkClick} onAddArtwork={handlers.handleAddArtwork} />;
+            case 'roster':
+                return (
+                    <RosterView
+                        artworks={artworks}
+                        userId={userProfile?.id || authUser?.id || ''}
+                        onArtworkClick={handleArtworkClick}
+                        onAddInquiry={handlers.handleAddInquiry}
+                        onAddCollection={handlers.handleAddCollection}
+                    />
+                );
             case 'contacts':
                 return (
                     <ContactsView

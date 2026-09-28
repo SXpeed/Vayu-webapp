@@ -1,4 +1,4 @@
-import type { Permissions, RoleDef } from '../permissions';
+import type { Permissions, RoleDef, SectionId } from '../permissions';
 export interface AuthUser {
   id: string;
   name: string;
@@ -10,6 +10,8 @@ export interface AuthUser {
   /** Sent by the server for the signed-in user (login and /auth/me). */
   roleName?: string;
   permissions?: Permissions;
+  /** Sections the workspace's plan leaves out (hidden even from admins). */
+  sectionsOff?: SectionId[];
   /** Assigned attendance store (geofence target), set by an admin. */
   storeId?: string;
   createdAt: number;

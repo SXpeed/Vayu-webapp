@@ -291,7 +291,10 @@ export async function resolveEntitlements(db: D1Database, orgId: string): Promis
      WHERE s.org_id = ?`,
   ).bind(orgId).first<Record<string, unknown>>();
 
-  const limits = row?.limits ? parseLimits(JSON.parse(String(row.limits))) : { ...DEFAULT_LIMITS };
+  // A deep copy: overrides are applied to it below, and a shallow one let an
+  // override on one organization without a plan change the defaults of every
+  // other such organization served by the same isolate.
+  const limits = row?.limits ? parseLimits(JSON.parse(String(row.limits))) : structuredClone(DEFAULT_LIMITS);
   const { results: overrideRows } = await db.prepare(
     'SELECT key, value FROM entitlement_overrides WHERE org_id = ? AND (expires_at IS NULL OR expires_at > ?)',
   ).bind(orgId, Date.now()).all();

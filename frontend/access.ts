@@ -1,7 +1,7 @@
 import type { AuthUser } from './services/authService';
 import type { ViewState } from './types';
 import {
-    ADMIN_PERMISSIONS, ADMIN_ROLE_ID, STAFF_DEFAULT_PERMISSIONS, atLeast, normalizePermissions,
+    ADMIN_PERMISSIONS, ADMIN_ROLE_ID, STAFF_DEFAULT_PERMISSIONS, atLeast, normalizePermissions, withoutSections,
     type AccessLevel, type Permissions, type SectionId,
 } from './permissions';
 
@@ -10,6 +10,7 @@ export const VIEW_SECTION: Partial<Record<ViewState, SectionId>> = {
     artworks: 'inventory',
     collections: 'collections',
     catalogs: 'catalogs',
+    roster: 'roster',
     contacts: 'contacts',
     inquiry: 'inquiries',
     invoice: 'invoices',
@@ -27,7 +28,8 @@ export const VIEW_SECTION: Partial<Record<ViewState, SectionId>> = {
  */
 export function permissionsOf(user: AuthUser | null | undefined): Permissions {
     if (!user) return normalizePermissions({});
-    if (user.role === ADMIN_ROLE_ID) return ADMIN_PERMISSIONS;
+    // What the plan leaves out is closed to admins too (the server says which).
+    if (user.role === ADMIN_ROLE_ID) return withoutSections(ADMIN_PERMISSIONS, user.sectionsOff);
     return user.permissions ? normalizePermissions(user.permissions) : STAFF_DEFAULT_PERMISSIONS;
 }
 

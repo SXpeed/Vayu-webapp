@@ -1,8 +1,9 @@
 import { getOrCreateVapidKeys, sendWebPush, type StoredPushSubscription } from './webpush';
 import {
-  ADMIN_ROLE_ID, STAFF_ROLE_ID, atLeast, normalizePermissions,
+  ADMIN_ROLE_ID, STAFF_ROLE_ID, atLeast, normalizePermissions, withoutSections,
   type AccessLevel, type Permissions, type RoleDef, type SectionId,
 } from './permissions';
+import { ROSTER_ARCHIVE_ENTITY, ensureRosterTables, rosterRoutes } from './roster';
 import {
   CORS, json, err, normalizeRoute, rowToConversation, rowToMessage, rowToArtwork,
   rowToCollection, rowToCatalog, rowToInquiry, rowToInquiryMessage, rowToEvent,
@@ -205,19 +206,26 @@ function generateToken(): string {
 // Sessions and role storage live in ./workerRoles; this section keeps the
 // route-level access decisions.
 
+/** Left out by the workspace's plan: closed to everyone, admins included. */
+const sectionOff = (ctx: Ctx, section: SectionId): boolean => !!ctx.env.SECTIONS_OFF?.includes(section);
+
 /** A role that no longer exists grants nothing. */
 async function sessionCan(ctx: Ctx, session: SessionData, section: SectionId, level: AccessLevel): Promise<boolean> {
+  if (sectionOff(ctx, section)) return false;
   if (session.role === ADMIN_ROLE_ID) return true;
   return atLeast(permissionsFor(await getRoles(ctx.env.VAYU_KV), session.role)[section], level);
 }
 
 /** Public user plus what the app needs to decide what to show. */
-async function withAccess(ctx: Ctx, user: StoredUser): Promise<PublicUser & { roleName: string; permissions: Permissions }> {
+async function withAccess(ctx: Ctx, user: StoredUser): Promise<PublicUser & { roleName: string; permissions: Permissions; sectionsOff: SectionId[] }> {
   const roles = await getRoles(ctx.env.VAYU_KV);
+  const sectionsOff = ctx.env.SECTIONS_OFF ?? [];
   return {
     ...stripPassword(user),
     roleName: roles.find(r => r.id === user.role)?.name || 'No role',
-    permissions: permissionsFor(roles, user.role),
+    permissions: withoutSections(permissionsFor(roles, user.role), sectionsOff),
+    // Admins' permissions are "everything" on the app's side; this tells it what the plan leaves out.
+    sectionsOff,
   };
 }
 
@@ -241,9 +249,13 @@ function accessRule(path: string, method: string): AccessRule | null {
 
   if (under('/artworks')) {
     // Collections, catalogs, inquiries and invoices all show artworks.
-    return { section: 'inventory', level, readableBy: read ? ['collections', 'catalogs', 'inquiries', 'invoices'] : undefined };
+    return { section: 'inventory', level, readableBy: read ? ['collections', 'catalogs', 'roster', 'inquiries', 'invoices'] : undefined };
   }
   if (under('/collections')) return { section: 'collections', level };
+  // Hearting a piece is personal: browsing the roster is enough. Everything
+  // else that changes it is curating, which needs "edit".
+  if (under('/roster/favorites')) return { section: 'roster', level: 'view' };
+  if (under('/roster')) return { section: 'roster', level };
   if (under('/catalogs')) return { section: 'catalogs', level };
   // Private viewing rooms are shared catalogs. (/viewing/:token is the
   // client's side: no account, checked by its own handlers.)
@@ -271,8 +283,11 @@ async function checkAccess(ctx: Ctx): Promise<Response | null> {
   if (!rule) return null;
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return null; // handlers answer 401 themselves
+  if (sectionOff(ctx, rule.section)) {
+    return json({ error: "This workspace's plan doesn't include this. Ask the owner about upgrading.", code: 'module_off' }, 403);
+  }
   if (session.role === ADMIN_ROLE_ID) return null;
-  const perms = permissionsFor(await getRoles(ctx.env.VAYU_KV), session.role);
+  const perms = withoutSections(permissionsFor(await getRoles(ctx.env.VAYU_KV), session.role), ctx.env.SECTIONS_OFF);
   if (atLeast(perms[rule.section], rule.level)) return null;
   if (rule.readableBy?.some(s => atLeast(perms[s], 'view'))) return null;
   return err("Your role doesn't have access to this", 403);
@@ -2332,6 +2347,18 @@ async function handleDeletedItemsRestore(ctx: Ctx): Promise<Response> {
     await ctx.env.VAYU_KV.put(emailKey, userId);
     const countRaw = await ctx.env.VAYU_KV.get('auth:count');
     await ctx.env.VAYU_KV.put('auth:count', String((countRaw ? Number.parseInt(countRaw, 10) : 0) + 1));
+  } else if (entity === ROSTER_ARCHIVE_ENTITY) {
+    // Roster sections aren't in change_log (roster.ts): a signal is enough.
+    const sectionId = String(payload.id || '');
+    const cols = Object.keys(payload).filter(k => /^[a-z_]+$/.test(k) && (typeof payload![k] !== 'object' || payload![k] === null));
+    if (!sectionId || cols.length === 0) return err('Archived snapshot is incomplete');
+    await ensureRosterTables(ctx.env.VAYU_DB);
+    const existing = await ctx.env.VAYU_DB.prepare('SELECT id FROM roster_sections WHERE id = ?').bind(sectionId).first();
+    if (existing) return err('An item with this id already exists — restore aborted', 409);
+    await ctx.env.VAYU_DB.prepare(
+      `INSERT INTO roster_sections (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`,
+    ).bind(...cols.map(c => payload![c] as string | number | null)).run();
+    queueHubNotify(ctx, [{ entity: 'roster', id: sectionId, op: 'put' }]);
   } else {
     const table = RESTORABLE_TABLES[entity];
     if (!table) return err(`Cannot restore entity type "${entity}"`);
@@ -4031,6 +4058,9 @@ const isExact = (p: string) => (path: string) => path === p;
 const isPrefix = (p: string) => (path: string) => path.startsWith(p);
 
 const routes: Route[] = [
+  // Roster (roster.ts)
+  ...rosterRoutes({ logChange: logEntityChange, archive: archiveDeletedAsync, notify: queueHubNotify }),
+
   { method: 'GET', match: isExact('/viewing-rooms'), handler: handleViewingRoomsList },
   { method: 'POST', match: isExact('/viewing-rooms'), handler: handleViewingRoomsCreate },
   { method: 'PATCH', match: isPrefix('/viewing-rooms/'), handler: handleViewingRoomsUpdate },

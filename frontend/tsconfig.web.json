@@ -36,6 +36,7 @@
     "entityAccess.ts",
     "privateRooms.ts",
     "viewingRooms.ts",
+    "roster.ts",
     "fileAuth.ts",
     "deviceSessions.ts",
     "planUsage.ts",

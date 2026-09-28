@@ -3,7 +3,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Building2, ChevronDown, CreditCard, Gauge, Layers, Plus, UserPlus, Users } from 'lucide-react';
+import { Building2, ChevronDown, CreditCard, Gauge, Layers, LayoutGrid, Plus, UserPlus, Users } from 'lucide-react';
 import { Button, Card, Field, Input, Select } from '../components/ui';
 import { Avatar, Detail, EmptyState, PageHeader, STAT_TILE_H, Section, Skeleton, SkeletonRows, StatTile, StatusPill, useDialogs } from './kit';
 import { api, guarded as sharedGuarded, timeAgo, type ApiError, type Reauth } from './api';
@@ -497,6 +497,33 @@ const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; on
         act('/entitlements', { key: 'maxMembers', value: value.trim() === '' ? null : Number(value), reason });
     };
 
+    /**
+     * The Roster for this organization only, whatever its plan says: a
+     * module override. It takes effect in the app within a minute (at once
+     * on the server that handled this change).
+     */
+    const rosterOn = info.limits.modules.roster !== false;
+    const rosterOverridden = 'roster' in info.overrides;
+    const switchRoster = async () => {
+        const reason = await dialogs.prompt({
+            title: rosterOn ? 'Switch the Roster off for this organization?' : 'Switch the Roster on for this organization?',
+            body: rosterOn
+                ? 'Nobody in the organization can open it, admins included. Its sections and favourites stay stored and come back if it is switched on again.'
+                : 'Everyone whose role can browse the Roster sees it again. This overrides the plan for this organization only.',
+            label: 'Reason (recorded in the audit log)', minLength: 3,
+            confirmLabel: rosterOn ? 'Switch off' : 'Switch on', danger: rosterOn,
+        });
+        if (!reason) return;
+        act('/entitlements', { key: 'roster', value: !rosterOn, reason });
+    };
+    const followPlanForRoster = async () => {
+        if (!(await dialogs.confirm({ title: 'Use the plan’s Roster setting?', body: 'Removes this organization’s exception, so its plan decides again.', confirmLabel: 'Use the plan' }))) return;
+        setBusy(true);
+        const next = await guarded(reauth, () => api<Entitlements>(`/admin/orgs/${orgId}/entitlements/roster`, { method: 'DELETE' }));
+        setBusy(false);
+        if (next) { toast.success('Updated'); onChanged(); }
+    };
+
     const limits = info.limits.limits;
     const overridden = new Set(Object.keys(info.overrides));
     const included = [
@@ -525,7 +552,31 @@ const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; on
             <p className="mt-6 mb-2.5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-gray-600 dark:text-gray-400">Included</p>
             <div className="flex flex-wrap gap-1.5">
                 {included.length === 0 ? <span className="text-[13px] ac-faint">Nothing</span>
-                    : included.map(f => <span key={f.key} className="neu-badge">{f.label}</span>)}
+                    : included.map(f => (
+                        <span key={f.key} className="neu-badge">
+                            {f.label}
+                            {overridden.has(f.key) && <span className="ml-1 text-[var(--ac-warn)]">· override</span>}
+                        </span>
+                    ))}
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl neu-inset px-3.5 py-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                    <LayoutGrid size={16} className="shrink-0 ac-faint" />
+                    <div className="min-w-0">
+                        <p className="text-[13px] font-medium">
+                            Roster <span className="ml-1 align-middle"><StatusPill tone={rosterOn ? 'ok' : 'bad'}>{rosterOn ? 'On' : 'Off'}</StatusPill></span>
+                            {rosterOverridden && <span className="ml-1.5 align-middle"><StatusPill tone="warn">override</StatusPill></span>}
+                        </p>
+                        <p className="text-[11.5px] ac-faint">
+                            {rosterOverridden ? 'Set for this organization only.' : 'Follows the plan.'} Who can curate it is set by each role in the app.
+                        </p>
+                    </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                    {rosterOverridden && <Button onClick={followPlanForRoster} disabled={busy}>Use the plan</Button>}
+                    <Button onClick={switchRoster} disabled={busy}>{rosterOn ? 'Switch off' : 'Switch on'}</Button>
+                </div>
             </div>
 
             <div className="mt-6 rounded-2xl neu-inset p-3.5 space-y-3">

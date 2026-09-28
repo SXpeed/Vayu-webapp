@@ -56,6 +56,12 @@ test('entity visibility mirrors the REST read rules', () => {
 
     assert.equal(access.canReadPayments(perms.normalizePermissions({ payments: 'view' })), true);
     assert.equal(access.canReadPayments(none), false);
+
+    // A Roster-only role reads the artworks the Roster shows, nothing else.
+    const rosterOnly = perms.normalizePermissions({ roster: 'view' });
+    assert.deepEqual([...access.readableEntities(rosterOnly)], ['artwork']);
+    assert.equal(access.canReadRoster(rosterOnly), true);
+    assert.equal(access.canReadRoster(none), false);
     // An unknown role falls back to no access.
     assert.equal(access.readableEntities(access.permissionsForRoles([], 'deleted-role')).size, 0);
 });
@@ -192,4 +198,20 @@ test('device limits: defaults, admin exemption, validation, labels', async () =>
     assert.equal(d.deviceLabel('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1'), 'Safari on iPhone');
     assert.equal(d.deviceLabel('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0 Safari/537.36 Edg/130.0'), 'Edge on Windows');
     assert.equal(d.deviceLabel(null), 'Browser');
+});
+
+test('roster permissions: Staff browse by default, gaps take the fallback, the plan can close a section', () => {
+    assert.equal(perms.STAFF_DEFAULT_PERMISSIONS.roster, 'view');
+    // A Staff role saved before the Roster existed has no roster key: it gets the Staff default, not "none".
+    const savedBefore = { ...perms.STAFF_DEFAULT_PERMISSIONS };
+    delete savedBefore.roster;
+    assert.equal(perms.normalizePermissions(savedBefore, perms.STAFF_DEFAULT_PERMISSIONS).roster, 'view');
+    assert.equal(perms.normalizePermissions(savedBefore).roster, 'none', 'custom roles: nothing unless chosen');
+    assert.equal(perms.normalizePermissions({ roster: 'edit' }, perms.STAFF_DEFAULT_PERMISSIONS).roster, 'edit', 'a saved choice wins');
+
+    const closed = perms.withoutSections(perms.ADMIN_PERMISSIONS, ['roster']);
+    assert.equal(closed.roster, 'none');
+    assert.equal(closed.inventory, 'edit');
+    assert.equal(perms.ADMIN_PERMISSIONS.roster, 'edit', 'the shared admin set is not changed');
+    assert.equal(perms.withoutSections(perms.ADMIN_PERMISSIONS, []), perms.ADMIN_PERMISSIONS);
 });

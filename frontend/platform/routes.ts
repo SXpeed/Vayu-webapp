@@ -93,6 +93,7 @@ import { deliverOutbox } from './notify';
 import { acceptInvitation, createAccountFromInvitation, describeInvitation } from './invitations';
 import { importOriginalPeople, setAppStorage } from './originalApp';
 import { emailConfigured } from './email';
+import { forgetPlanActive } from '../orgApp';
 import { listMySessions, signOutMySessions } from './mySessions';
 
 interface AdminContext {
@@ -379,10 +380,14 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
         return reply(await extendTrial(db, orgId, await body(), actor));
       } else if (rest === '/entitlements' && method === 'POST') {
         if (!fresh) return needFresh();
-        return reply(await setOverride(db, orgId, await body(), actor));
+        const next = await setOverride(db, orgId, await body(), actor);
+        forgetPlanActive(orgId); // a module switched here applies at once on this isolate
+        return reply(next);
       } else if (rest.startsWith('/entitlements/') && method === 'DELETE') {
         if (!fresh) return needFresh();
-        return reply(await removeOverride(db, orgId, rest.slice('/entitlements/'.length).slice(0, 40), actor));
+        const next = await removeOverride(db, orgId, rest.slice('/entitlements/'.length).slice(0, 40), actor);
+        forgetPlanActive(orgId);
+        return reply(next);
       } else if (rest === '/import-legacy' && method === 'GET') {
         return reply({ imports: await listImports(db, orgId) });
       } else if (rest === '/import-legacy' && method === 'POST') {
