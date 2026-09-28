@@ -1,8 +1,9 @@
 import { getThumbUrl } from '../services/storageService';
 import React, { useState, useMemo } from 'react';
 import toast from 'react-hot-toast';
-import { Plus, X, FileText, CheckCircle2, Image as ImageIcon, Info, ArrowLeft, Edit2, Trash2, Download, Share2, Loader2, Phone, Mail, MapPin } from 'lucide-react';
+import { Plus, X, FileText, Image as ImageIcon, ArrowLeft, Edit2, Trash2, Download, Share2, Loader2, Phone, Mail, MapPin } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
+import { ArtworkPicker } from '../components/ArtworkPicker';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton, EmptyState } from '../components/ui';
 import { Invoice, Artwork, InvoiceItem } from '../types';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
@@ -443,7 +444,7 @@ export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData,
                 </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-3 no-scrollbar flex flex-col gap-6">
+            <div className="flex-1 overflow-y-auto p-3 pb-[calc(6rem+var(--safe-bottom-ui))] lg:pb-3 no-scrollbar flex flex-col gap-6">
                 {/* Client Info */}
                 <div className="neu-card p-5 space-y-5 animate-fade-in-up" style={{ animationDelay: '50ms' }}>
                     <div>
@@ -516,58 +517,9 @@ export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData,
                         <span className="text-[11px] neu-inset px-2 py-0.5 rounded-[3px] text-gray-600 dark:text-gray-300 uppercase tracking-wider">{selectedItems.length} selected</span>
                     </div>
 
-                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1 no-scrollbar">
-                        {availableArtworks.length === 0 && (
-                            <p className="text-xs text-gray-600 dark:text-gray-300 font-light">No available artworks.</p>
-                        )}
-                        {availableArtworks.map((art, index) => {
-                            const isSelected = selectedArtworkIds.has(art.id);
-                            const coverImage = art.imageUrls?.[0];
-                            return (
-                                <div
-                                    key={art.id}
-                                    className={`relative w-full text-left flex items-center p-2 rounded-lg border transition-colors cursor-pointer active-scale animate-scale-in ${
-                                        isSelected ? 'border-gold-500 bg-gold-50/50 dark:bg-gold-900/10' : 'border-gray-100 dark:border-gray-800'
-                                    }`}
-                                    style={{ animationDelay: `${index * 45}ms` }}
-                                >
-                                    {/* Row tap target; inner action buttons sit above it (z-[2]). */}
-                                    <button
-                                        type="button"
-                                        onClick={() => toggleArtwork(art.id)}
-                                        aria-label={`${isSelected ? 'Remove' : 'Add'} ${art.title}`}
-                                        aria-pressed={isSelected}
-                                        className="absolute inset-0 z-[1] w-full h-full rounded-lg cursor-pointer"
-                                    />
-                                    {coverImage ? (
-                                        <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={art.title} className="w-10 h-10 rounded-[3px] object-cover mr-3" />
-                                    ) : (
-                                        <div className="w-10 h-10 rounded-[3px] neu-inset flex items-center justify-center text-gray-400 mr-3">
-                                            <ImageIcon size={14} />
-                                        </div>
-                                    )}
-                                    <div className="flex-1">
-                                        <p className="font-serif text-xs text-gray-900 dark:text-gray-100 line-clamp-1">{art.title}</p>
-                                        <p className="text-[11px] text-gray-700 dark:text-gray-300 uppercase tracking-wider mt-0.5">{art.customId}</p>
-                                    </div>
-                                    <div className="text-right flex items-center gap-3">
-                                        <p className="font-medium text-xs text-gray-900 dark:text-gray-100">₹{art.price.toLocaleString('en-IN')}{art.plusGst ? ' + GST' : ''}</p>
-                                        <button type="button" aria-label="View artwork details"
-                                            onClick={(e) => { e.stopPropagation(); onArtworkClick(art); }}
-                                            className="relative z-[2] p-1 text-gray-400 hover:text-gold-500 transition-colors"
-                                        >
-                                            <Info size={14} />
-                                        </button>
-                                        <div className={`w-4 h-4 rounded-full flex items-center justify-center transition-colors ${
-                                            isSelected ? 'neu-check-on' : 'neu-check'
-                                        }`}>
-                                            <CheckCircle2 size={10} strokeWidth={3} />
-                                        </div>
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
+                    <ArtworkPicker artworks={availableArtworks} selected={selectedArtworkIds} onToggle={toggleArtwork} onInfo={onArtworkClick} scroll
+                        statusFilters={false} searchPlaceholder="Search available artworks…"
+                        detail={art => `₹${art.price.toLocaleString('en-IN')}${art.plusGst ? ' + GST' : ''}`} />
                 </div>
 
                 {/* Totals */}

@@ -1,14 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { ArrowDown, ArrowUp, Check, GripVertical, Image as ImageIcon, Loader2, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, GripVertical, Loader2, Trash2, X } from 'lucide-react';
 import { FullScreenPortal } from '../../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../../components/TypeDeleteDialog';
-import { SearchBar } from '../../components/SearchBar';
+import { ArtworkPicker } from '../../components/ArtworkPicker';
 import { Field, Input, Pill, Textarea, ToggleRow } from '../../components/ui';
 import { getThumbUrl } from '../../services/storageService';
 import { rosterService, StaleSectionError, type RosterSectionInput } from '../../services/rosterService';
-import type { Artwork, ArtworkStatus, RosterBackdrop, RosterPriceDisplay, RosterSection } from '../../types';
-import { BACKDROP_CLASS, BACKDROP_LABEL, PRICE_LABEL, matchesQuery } from './rosterShared';
+import type { Artwork, RosterBackdrop, RosterPriceDisplay, RosterSection } from '../../types';
+import { BACKDROP_CLASS, BACKDROP_LABEL, PRICE_LABEL } from './rosterShared';
 
 /** Mirrors MAX_SECTION_ARTWORKS on the server (roster.ts). */
 const MAX_PIECES = 300;
@@ -24,7 +24,6 @@ interface RosterSectionEditorProps {
 
 const PRICE_OPTIONS: RosterPriceDisplay[] = ['request', 'price', 'hidden'];
 const BACKDROPS: RosterBackdrop[] = ['studio', 'ivory', 'charcoal', 'none'];
-const STATUS_FILTERS: (ArtworkStatus | 'All')[] = ['All', 'Available', 'Reserved', 'Sold'];
 
 /**
  * Creating or changing one Roster section: its name and note, how prices
@@ -40,8 +39,6 @@ export const RosterSectionEditor: React.FC<RosterSectionEditorProps> = ({ sectio
     const byId = useMemo(() => new Map(artworks.map(a => [a.id, a])), [artworks]);
     // Pieces deleted from the inventory since are dropped from the list.
     const [chosen, setChosen] = useState<string[]>(() => (section?.artworkIds ?? []).filter(id => byId.has(id)));
-    const [query, setQuery] = useState('');
-    const [status, setStatus] = useState<ArtworkStatus | 'All'>('All');
     const [saving, setSaving] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [dragFrom, setDragFrom] = useState<number | null>(null);
@@ -49,11 +46,6 @@ export const RosterSectionEditor: React.FC<RosterSectionEditorProps> = ({ sectio
     const [base, setBase] = useState<RosterSection | null>(section);
 
     const chosenSet = useMemo(() => new Set(chosen), [chosen]);
-    const q = query.trim().toLowerCase();
-    const candidates = useMemo(
-        () => artworks.filter(a => (status === 'All' || a.status === status) && matchesQuery(a, q)),
-        [artworks, status, q],
-    );
 
     const toggle = (id: string) => {
         setChosen(prev => {
@@ -74,12 +66,6 @@ export const RosterSectionEditor: React.FC<RosterSectionEditorProps> = ({ sectio
             next.splice(to, 0, item);
             return next;
         });
-    };
-
-    const addAllShown = () => {
-        const room = MAX_PIECES - chosen.length;
-        const extra = candidates.map(a => a.id).filter(id => !chosenSet.has(id)).slice(0, Math.max(room, 0));
-        if (extra.length) setChosen(prev => [...prev, ...extra]);
     };
 
     const save = async () => {
@@ -219,42 +205,9 @@ export const RosterSectionEditor: React.FC<RosterSectionEditorProps> = ({ sectio
                         </div>
 
                         {/* Picker */}
-                        <div className="space-y-3">
-                            <SearchBar value={query} onChange={setQuery} placeholder="Search the inventory…" />
-                            <div className="flex flex-wrap items-center gap-2">
-                                {STATUS_FILTERS.map(s => <Pill key={s} active={status === s} onClick={() => setStatus(s)}>{s}</Pill>)}
-                                <button type="button" onClick={addAllShown} disabled={candidates.every(a => chosenSet.has(a.id))}
-                                    className="ml-auto text-[10.5px] font-semibold uppercase tracking-wider text-gold-700 dark:text-gold-300 disabled:opacity-40 active-scale">
-                                    Add all shown
-                                </button>
-                            </div>
-                            {candidates.length === 0 ? (
-                                <p className="neu-card p-6 text-center text-[13px] text-[var(--neu-text-dim)]">No pieces match.</p>
-                            ) : (
-                                <div className="grid grid-cols-3 sm:grid-cols-4 xl:grid-cols-5 gap-2.5">
-                                    {candidates.map(art => {
-                                        const on = chosenSet.has(art.id);
-                                        return (
-                                            <button key={art.id} type="button" onClick={() => toggle(art.id)} aria-pressed={on}
-                                                className={`text-left rounded-2xl p-1.5 active-scale transition-shadow ${on ? 'neu-inset ring-1 ring-gold-500/60' : 'neu-raised-sm'}`}>
-                                                <span className={`relative block aspect-square rounded-xl overflow-hidden ${BACKDROP_CLASS[backdrop] || 'neu-inset'}`}>
-                                                    {art.imageUrls[0] ? (
-                                                        <img src={getThumbUrl(art.imageUrls[0])} alt="" loading="lazy" className={`w-full h-full ${backdrop === 'none' ? 'object-cover' : 'object-contain p-1.5'}`} />
-                                                    ) : (
-                                                        <span className="w-full h-full flex items-center justify-center text-white/40"><ImageIcon size={18} strokeWidth={1} /></span>
-                                                    )}
-                                                    <span className={`absolute top-1 right-1 w-5 h-5 rounded-full flex items-center justify-center ${on ? 'neu-accent' : 'bg-black/25'}`}>
-                                                        {on && <Check size={11} strokeWidth={3} className="text-white" />}
-                                                    </span>
-                                                </span>
-                                                <span className="mt-1 block px-0.5 text-[11px] leading-tight truncate text-[var(--neu-text)]">{art.title}</span>
-                                                <span className="block px-0.5 text-[9.5px] uppercase tracking-wider truncate text-[var(--neu-text-dim)]">{art.customId || art.status}</span>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            )}
-                        </div>
+                        <ArtworkPicker artworks={artworks} selected={chosenSet} onToggle={toggle} backdrop={backdrop}
+                            searchPlaceholder="Search the inventory…"
+                            onAddMany={ids => setChosen(prev => [...prev, ...ids].slice(0, MAX_PIECES))} />
                     </div>
                 </div>
             </div>

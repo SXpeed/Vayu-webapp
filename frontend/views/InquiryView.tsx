@@ -1,8 +1,9 @@
 import storageService, { getThumbUrl } from '../services/storageService';
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import toast from 'react-hot-toast';
-import { Plus, X, MessageSquare, MessageCircle, Send, Search, ArrowLeft, Edit2, Trash2, Phone, Mail, Image as ImageIcon, User, Clock, Tag, BookOpen, CheckCircle2, XCircle, Check, CheckCheck, Paperclip, Reply, Camera, Loader2, MapPin, FileText } from 'lucide-react';
+import { Plus, X, MessageCircle, Send, Search, ArrowLeft, Edit2, Trash2, Phone, Mail, Image as ImageIcon, User, Clock, Tag, BookOpen, CheckCircle2, XCircle, Check, CheckCheck, Paperclip, Reply, Camera, Loader2, MapPin, FileText } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
+import { ArtworkPicker } from '../components/ArtworkPicker';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton } from '../components/ui';
 import { Inquiry, Artwork, InquiryMessage, MessageReplyTo, MessageAttachment, MessageTag, UserProfile, Invoice } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
@@ -1231,62 +1232,14 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                     />
                 </div>
 
-                {/* Select Artworks */}
-                <div className="neu-card p-5 animate-fade-in-up" style={{ animationDelay: '150ms' }}>
+                {/* Select Artworks: search, filters and a tall grid (ArtworkPicker) */}
+                <div className="neu-card p-4 lg:p-5 animate-fade-in-up" style={{ animationDelay: '150ms' }}>
                     <div className="flex justify-between items-center mb-4">
                         <h3 className="font-bold text-gray-900 dark:text-gray-100 text-[11px] uppercase tracking-widest">Interested Artworks</h3>
                         <span className="text-[11px] neu-inset px-2 py-0.5 rounded-[3px] text-gray-600 dark:text-gray-300 uppercase tracking-wider">{selectedArtworkIds.size} selected</span>
                     </div>
 
-                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1 no-scrollbar">
-                        {artworks.length === 0 && (
-                            <p className="text-xs text-gray-600 dark:text-gray-300 font-light">No artworks available.</p>
-                        )}
-                        {artworks.map((art, index) => {
-                            const isSelected = selectedArtworkIds.has(art.id);
-                            const coverImage = art.imageUrls?.[0];
-                            return (
-                                <div
-                                    key={art.id}
-                                    className={`relative w-full text-left flex items-center p-2 rounded-lg border transition-colors cursor-pointer active-scale animate-scale-in ${isSelected ? 'border-gold-500 bg-gold-50/50 dark:bg-gold-900/10' : 'border-gray-100 dark:border-gray-800'
-                                        }`}
-                                    style={{ animationDelay: `${index * 45}ms` }}
-                                >
-                                    {/* Row tap target; inner action buttons sit above it (z-[2]). */}
-                                    <button
-                                        type="button"
-                                        onClick={() => toggleArtwork(art.id)}
-                                        aria-label={`${isSelected ? 'Remove' : 'Add'} ${art.title}`}
-                                        aria-pressed={isSelected}
-                                        className="absolute inset-0 z-[1] w-full h-full rounded-lg cursor-pointer"
-                                    />
-                                    {coverImage ? (
-                                        <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={art.title} className="w-10 h-10 rounded-[3px] object-cover mr-3" />
-                                    ) : (
-                                        <div className="w-10 h-10 rounded-[3px] neu-inset flex items-center justify-center text-gray-400 mr-3">
-                                            <ImageIcon size={14} />
-                                        </div>
-                                    )}
-                                    <div className="flex-1">
-                                        <p className="font-serif text-xs text-gray-900 dark:text-gray-100 line-clamp-1">{art.title}</p>
-                                        <p className="text-[11px] text-gray-700 dark:text-gray-300 uppercase tracking-wider mt-0.5">{art.medium} • ₹{art.price.toLocaleString('en-IN')}</p>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <button type="button" aria-label="View artwork details"
-                                            onClick={(e) => { e.stopPropagation(); onArtworkClick(art); }}
-                                            className="relative z-[2] p-1 text-gray-400 hover:text-gold-500 transition-colors"
-                                        >
-                                            <MessageSquare size={14} />
-                                        </button>
-                                        <div className={`w-4 h-4 rounded-full flex items-center justify-center transition-colors ${isSelected ? 'neu-check-on' : 'neu-check'
-                                            }`}>
-                                            {isSelected && <span className="text-[10px] font-bold">✓</span>}
-                                        </div>
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
+                    <ArtworkPicker artworks={artworks} selected={selectedArtworkIds} onToggle={toggleArtwork} onInfo={onArtworkClick} scroll />
                 </div>
 
                 <div className="h-10"></div>

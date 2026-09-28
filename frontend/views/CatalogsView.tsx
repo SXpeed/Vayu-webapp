@@ -1,8 +1,9 @@
 import React, { useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
-import { Plus, X, Edit2, Trash2, Download, Image as ImageIcon, Check, Loader2, Camera, Upload, FileText, FileDown, BookOpen, Lock } from 'lucide-react';
+import { Plus, X, Edit2, Trash2, Download, Image as ImageIcon, Loader2, Camera, Upload, FileText, FileDown, BookOpen, Lock } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
+import { ArtworkPicker } from '../components/ArtworkPicker';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton, GhostIconButton, EmptyState } from '../components/ui';
 import { toast } from 'react-hot-toast';
 import { Catalog, Artwork, PdfOptions, CatalogTheme } from '../types';
@@ -740,14 +741,8 @@ export interface CatalogFormModalProps {
 export const CatalogFormModal: React.FC<CatalogFormModalProps> = ({ initialData, artworks, onClose, onSave, inline, onGenerate, onDelete }) => {
     const [name, setName] = useState(initialData?.name || '');
     const [description, setDescription] = useState(initialData?.description || '');
-    const [searchQuery, setSearchQuery] = useState('');
     const [selectedArtworks, setSelectedArtworks] = useState<Set<string>>(new Set(initialData?.artworkIds ?? []));
     const [confirmDelete, setConfirmDelete] = useState(false);
-
-    const filteredArtworks = artworks.filter(art =>
-        art.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        art.customId.toLowerCase().includes(searchQuery.toLowerCase())
-    );
 
     const toggleArtwork = (id: string) => {
         const newSet = new Set(selectedArtworks);
@@ -758,9 +753,6 @@ export const CatalogFormModal: React.FC<CatalogFormModalProps> = ({ initialData,
         }
         setSelectedArtworks(newSet);
     };
-
-    /** Currently selected products, in artwork order — shown as a tile tray. */
-    const selectedList = artworks.filter(art => selectedArtworks.has(art.id));
 
     const buildPayload = (): (Omit<Catalog, 'id' | 'createdAt'> & { id?: string }) | null => {
         if (!name.trim()) {
@@ -832,7 +824,7 @@ export const CatalogFormModal: React.FC<CatalogFormModalProps> = ({ initialData,
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-3 no-scrollbar flex flex-col gap-6">
+            <div className="flex-1 overflow-y-auto p-3 pb-[calc(6rem+var(--safe-bottom-ui))] lg:pb-3 no-scrollbar flex flex-col gap-6">
                 <div className="space-y-5 neu-card p-5 animate-fade-in-up" style={{ animationDelay: '100ms' }}>
                     <div>
                         <label htmlFor="catalog-name" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Catalog Name *</label>
@@ -863,71 +855,8 @@ export const CatalogFormModal: React.FC<CatalogFormModalProps> = ({ initialData,
                         <span className="text-[11px] text-gray-700 dark:text-gray-300 uppercase tracking-wider">{selectedArtworks.size} selected</span>
                     </div>
 
-                    {/* Search Bar for Artworks */}
-                    <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search artworks to add..." className="mb-4" />
-
-                    {/* Selected product tile tray */}
-                    {selectedList.length > 0 && (
-                        <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1 mb-4">
-                            {selectedList.map(art => (
-                                <div key={art.id} className="relative w-16 h-16 rounded-lg overflow-hidden border-2 border-gold-500 shrink-0 animate-scale-in">
-                                    {art.imageUrls?.[0] ? (
-                                        <img loading="lazy" decoding="async" src={getThumbUrl(art.imageUrls[0])} alt={art.title} className="w-full h-full object-cover" />
-                                    ) : (
-                                        <div className="w-full h-full flex items-center justify-center text-gray-600 dark:text-gray-300">
-                                            <ImageIcon size={14} />
-                                        </div>
-                                    )}
-                                    <button
-                                        type="button"
-                                        onClick={() => toggleArtwork(art.id)}
-                                        aria-label={`Remove ${art.title}`}
-                                        className="absolute top-0.5 right-0.5 bg-black/70 text-white rounded-full p-0.5 active-scale"
-                                    >
-                                        <X size={9} />
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
-                        {filteredArtworks.map((art, index) => {
-                            const isSelected = selectedArtworks.has(art.id);
-                            const coverImage = art.imageUrls?.[0];
-                            return (
-                                <button
-                                    type="button"
-                                    key={art.id}
-                                    onClick={() => toggleArtwork(art.id)}
-                                    className={`relative w-full text-left rounded-lg overflow-hidden border-2 cursor-pointer transition-all neu-inset animate-scale-in active-scale ${isSelected ? 'border-gold-500 shadow-md' : 'border-transparent shadow-sm'
-                                        }`}
-                                    style={{ animationDelay: `${index * 30}ms` }}
-                                >
-                                    {coverImage ? (
-                                        <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={art.title} className="w-full h-32 object-cover" />
-                                    ) : (
-                                        <div className="w-full h-32 flex items-center justify-center text-gray-600 dark:text-gray-300">
-                                            <ImageIcon size={20} strokeWidth={1.5} />
-                                        </div>
-                                    )}
-                                    <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2 pt-6">
-                                        <p className="text-white text-[11px] font-serif truncate">{art.title}</p>
-                                    </div>
-                                    {isSelected && (
-                                        <div className="absolute top-1.5 right-1.5 bg-gold-500 text-white rounded-full p-1 shadow-sm">
-                                            <Check size={12} strokeWidth={3} />
-                                        </div>
-                                    )}
-                                </button>
-                            );
-                        })}
-                        {filteredArtworks.length === 0 && (
-                            <div className="col-span-2 text-center text-gray-600 dark:text-gray-300 py-6 text-xs font-light">
-                                No artworks found matching "{searchQuery}".
-                            </div>
-                        )}
-                    </div>
+                    <ArtworkPicker artworks={artworks} selected={selectedArtworks} onToggle={toggleArtwork}
+                        onAddMany={ids => setSelectedArtworks(prev => new Set([...prev, ...ids]))} />
                 </div>
 
 

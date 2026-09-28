@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
-import { Plus, X, Check, Image as ImageIcon, Edit2, Trash2, Camera, Loader2 } from 'lucide-react';
+import { Plus, X, Image as ImageIcon, Edit2, Trash2, Camera, Loader2 } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
+import { ArtworkPicker } from '../components/ArtworkPicker';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton, EmptyState } from '../components/ui';
 import { Collection, Artwork } from '../types';
 import storageService, { getThumbUrl } from '../services/storageService';
@@ -368,13 +369,7 @@ export interface CollectionFormModalProps {
 export const CollectionFormModal: React.FC<CollectionFormModalProps> = ({ initialData, artworks, onClose, onSave }) => {
     const [name, setName] = useState(initialData?.name || '');
     const [description, setDescription] = useState(initialData?.description || '');
-    const [searchQuery, setSearchQuery] = useState('');
     const [selectedArtworks, setSelectedArtworks] = useState<Set<string>>(new Set(initialData?.artworkIds ?? []));
-
-    const filteredArtworks = artworks.filter(art =>
-        art.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        art.customId.toLowerCase().includes(searchQuery.toLowerCase())
-    );
 
     const toggleArtwork = (id: string) => {
         const newSet = new Set(selectedArtworks);
@@ -410,7 +405,7 @@ export const CollectionFormModal: React.FC<CollectionFormModalProps> = ({ initia
                 </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-3 no-scrollbar flex flex-col gap-6">
+            <div className="flex-1 overflow-y-auto p-3 pb-[calc(6rem+var(--safe-bottom-ui))] lg:pb-3 no-scrollbar flex flex-col gap-6">
                 <div className="space-y-5 neu-card p-5 animate-fade-in-up" style={{ animationDelay: '100ms' }}>
                     <div>
                         <label htmlFor="collection-name" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Collection Name *</label>
@@ -441,46 +436,8 @@ export const CollectionFormModal: React.FC<CollectionFormModalProps> = ({ initia
                         <span className="text-[11px] text-gray-700 dark:text-gray-300 uppercase tracking-wider">{selectedArtworks.size} selected</span>
                     </div>
 
-                    {/* Search Bar for Artworks */}
-                    <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search artworks to add..." className="mb-4" />
-
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
-                        {filteredArtworks.map((art, index) => {
-                            const isSelected = selectedArtworks.has(art.id);
-                            const coverImage = art.imageUrls?.[0];
-                            return (
-                                <button
-                                    type="button"
-                                    key={art.id}
-                                    onClick={() => toggleArtwork(art.id)}
-                                    className={`relative w-full text-left rounded-lg overflow-hidden border-2 cursor-pointer transition-all neu-inset animate-scale-in active-scale ${isSelected ? 'border-gold-500 shadow-md' : 'border-transparent shadow-sm'
-                                        }`}
-                                    style={{ animationDelay: `${index * 30}ms` }}
-                                >
-                                    {coverImage ? (
-                                        <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={art.title} className="w-full h-32 object-cover" />
-                                    ) : (
-                                        <div className="w-full h-32 flex items-center justify-center text-gray-600 dark:text-gray-300">
-                                            <ImageIcon size={20} strokeWidth={1.5} />
-                                        </div>
-                                    )}
-                                    <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2 pt-6">
-                                        <p className="text-white text-[11px] font-serif truncate">{art.title}</p>
-                                    </div>
-                                    {isSelected && (
-                                        <div className="absolute top-1.5 right-1.5 bg-gold-500 text-white rounded-full p-1 shadow-sm">
-                                            <Check size={12} strokeWidth={3} />
-                                        </div>
-                                    )}
-                                </button>
-                            );
-                        })}
-                        {filteredArtworks.length === 0 && (
-                            <div className="col-span-2 text-center text-gray-600 dark:text-gray-300 py-6 text-xs font-light">
-                                No artworks found matching "{searchQuery}".
-                            </div>
-                        )}
-                    </div>
+                    <ArtworkPicker artworks={artworks} selected={selectedArtworks} onToggle={toggleArtwork}
+                        onAddMany={ids => setSelectedArtworks(prev => new Set([...prev, ...ids]))} />
                 </div>
 
 

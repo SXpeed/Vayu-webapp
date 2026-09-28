@@ -1,14 +1,14 @@
 // Private viewing rooms, the staff side: curate artworks for one client, share
 // a secret link and passcode, see views and inquiries, switch a room off.
 // The client's page is room/RoomPage.tsx; the rules are in viewingRooms.ts.
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Check, Copy, Eye, Image as ImageIcon, KeyRound, Lock, MessageCircle, Pencil, Plus, Power, Share2, Trash2, X } from 'lucide-react';
+import { Copy, Eye, Image as ImageIcon, KeyRound, Lock, MessageCircle, Pencil, Plus, Power, Share2, Trash2, X } from 'lucide-react';
 import { currentWorkspace } from '../services/workspace';
 import { Artwork } from '../types';
 import { apiCall } from '../services/apiClient';
 import { getThumbUrl } from '../services/storageService';
-import { SearchBar } from '../components/SearchBar';
+import { ArtworkPicker } from '../components/ArtworkPicker';
 import { Button, Card, Field, Input, Textarea, ToggleRow } from '../components/ui';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { IfCan } from '../components/Layout';
@@ -262,13 +262,8 @@ const RoomForm: React.FC<{ artworks: Artwork[]; initial: StaffRoom | null; onClo
     const [showPrices, setShowPrices] = useState(initial?.showPrices ?? false);
     const [days, setDays] = useState(30);
     const [selected, setSelected] = useState<Set<string>>(new Set(initial?.artworkIds ?? []));
-    const [query, setQuery] = useState('');
     const [busy, setBusy] = useState(false);
 
-    const shown = useMemo(() => {
-        const q = query.trim().toLowerCase();
-        return q ? artworks.filter(a => a.title.toLowerCase().includes(q) || a.customId.toLowerCase().includes(q) || (a.artist ?? '').toLowerCase().includes(q)) : artworks;
-    }, [artworks, query]);
     const toggle = (id: string) => setSelected(s => toggled(s, id));
     const saveLabel = initial ? 'Save' : 'Create';
 
@@ -324,26 +319,8 @@ const RoomForm: React.FC<{ artworks: Artwork[]; initial: StaffRoom | null; onClo
                         <h3 className="font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest text-[11px]">Choose works</h3>
                         <span className="text-[11px] text-gray-700 dark:text-gray-300 uppercase tracking-wider">{selected.size} selected</span>
                     </div>
-                    <SearchBar value={query} onChange={setQuery} placeholder="Search by title, artist or ID..." className="mb-4" />
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                        {shown.map(art => {
-                            const isSelected = selected.has(art.id);
-                            return (
-                                <button type="button" key={art.id} onClick={() => toggle(art.id)} aria-pressed={isSelected}
-                                    className={`relative w-full text-left rounded-lg overflow-hidden border-2 transition-all neu-inset active-scale ${isSelected ? 'border-gold-500 shadow-md' : 'border-transparent'}`}>
-                                    {art.imageUrls?.[0]
-                                        ? <img loading="lazy" decoding="async" src={getThumbUrl(art.imageUrls[0])} alt={art.title} className="w-full h-32 object-cover" />
-                                        : <div className="w-full h-32 flex items-center justify-center text-gray-500"><ImageIcon size={20} strokeWidth={1.5} /></div>}
-                                    <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/80 to-transparent p-2 pt-6">
-                                        <p className="text-white text-[11px] font-serif truncate leading-[1.35]">{art.title}</p>
-                                        {art.status !== 'Available' && <p className="text-white/80 text-[10px] uppercase tracking-wider">{art.status}</p>}
-                                    </div>
-                                    {isSelected && <div className="absolute top-1.5 right-1.5 bg-gold-500 text-white rounded-full p-1"><Check size={12} strokeWidth={3} /></div>}
-                                </button>
-                            );
-                        })}
-                        {shown.length === 0 && <p className="col-span-full text-center text-gray-600 dark:text-gray-300 py-6 text-xs">No artworks match "{query}".</p>}
-                    </div>
+                    <ArtworkPicker artworks={artworks} selected={selected} onToggle={toggle}
+                        onAddMany={ids => setSelected(prev => new Set([...prev, ...ids]))} />
                 </div>
                 <div className="h-10" />
             </div>
