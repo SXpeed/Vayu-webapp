@@ -79,8 +79,8 @@ export const RosterView: React.FC<RosterViewProps> = ({ artworks, userId, onArtw
         } catch (e) {
             const error = e as Error & { code?: string };
             setLoadError(error.code === 'module_off'
-                ? 'The Roster isn’t part of this workspace’s plan.'
-                : error.message || 'Could not load the roster');
+                ? 'The Showcase isn’t part of this workspace’s plan.'
+                : error.message || 'Could not load the showcase');
         }
     }, []);
 
@@ -207,7 +207,7 @@ export const RosterView: React.FC<RosterViewProps> = ({ artworks, userId, onArtw
     };
 
     // ── Header ────────────────────────────────────────────────────────────
-    const title = openSection ? openSection.name : 'Roster';
+    const title = openSection ? openSection.name : 'Showcase';
     let subtitle: string | undefined;
     if (openSection) subtitle = `${sectionPieces(openSection, byId).length} pieces`;
     else if (data) subtitle = `${sections.length} ${sections.length === 1 ? 'section' : 'sections'} · ${totalPieces} pieces`;
@@ -251,7 +251,7 @@ export const RosterView: React.FC<RosterViewProps> = ({ artworks, userId, onArtw
         );
     } else if (loadError && !data) {
         body = (
-            <EmptyState icon={<LayoutGrid size={22} strokeWidth={1.5} />} title="The roster didn’t load" message={loadError}
+            <EmptyState icon={<LayoutGrid size={22} strokeWidth={1.5} />} title="The showcase didn’t load" message={loadError}
                 action={<Button onClick={() => { void load(); }}>Try again</Button>} />
         );
     } else if (searching) {
@@ -282,11 +282,11 @@ export const RosterView: React.FC<RosterViewProps> = ({ artworks, userId, onArtw
         );
     } else if (sections.length === 0) {
         body = canEdit ? (
-            <EmptyState icon={<LayoutGrid size={22} strokeWidth={1.5} />} title="Build your roster"
+            <EmptyState icon={<LayoutGrid size={22} strokeWidth={1.5} />} title="Build your showcase"
                 message="Group pieces into sections — a collection, a new arrival, a client’s brief — and show them the way a gallery would."
                 action={<Button variant="primary" onClick={() => setEditing('new')} icon={<Plus size={14} />}>New section</Button>} />
         ) : (
-            <EmptyState icon={<LayoutGrid size={22} strokeWidth={1.5} />} title="The roster is being put together"
+            <EmptyState icon={<LayoutGrid size={22} strokeWidth={1.5} />} title="The showcase is being put together"
                 message="Sections show here once someone curates them." />
         );
     } else {
@@ -343,7 +343,7 @@ export const RosterView: React.FC<RosterViewProps> = ({ artworks, userId, onArtw
         <PageRoot width="wide">
             <PageHeader title={title} subtitle={subtitle} actions={actions}
                 onBack={openSection ? () => setOpenSectionId(null) : undefined}>
-                <SearchBar value={query} onChange={setQuery} placeholder={openSection ? `Search ${openSection.name}…` : 'Search the roster…'} />
+                <SearchBar value={query} onChange={setQuery} placeholder={openSection ? `Search ${openSection.name}…` : 'Search the showcase…'} />
                 <div className="flex items-center gap-2 overflow-x-auto no-scrollbar -mx-1 px-1 py-1">
                     <Pill active={filter === 'all'} onClick={() => setFilter('all')} className="shrink-0">All</Pill>
                     <Pill active={filter === 'favorites'} onClick={() => setFilter('favorites')} className="shrink-0">

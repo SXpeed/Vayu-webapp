@@ -175,7 +175,7 @@ test('an organization whose plan leaves the Roster out: closed to everyone, admi
     assert.equal(on.status, 200, on.text);
     assert.deepEqual((await orgOwner.call(app('/auth/me'))).body.sectionsOff, []);
     const plan = await orgOwner.call(app('/plan'));
-    assert.ok(plan.body.modules.includes('Roster'), 'listed on the plan');
+    assert.ok(plan.body.modules.includes('Showcase'), 'listed on the plan');
 
     const off = await admin.call(`/admin/orgs/${org.id}/entitlements`, { method: 'POST', body: { key: 'roster', value: false, reason: 'Not on this plan' } });
     assert.equal(off.status, 200, off.text);

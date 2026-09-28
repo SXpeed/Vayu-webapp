@@ -242,26 +242,28 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                 </div>
 
             <div className="mt-6 lg:mt-8 space-y-8 w-full lg:grid lg:grid-cols-2 2xl:grid-cols-3 lg:gap-x-6 lg:gap-y-8 lg:space-y-0 lg:items-start">
-                {/* Roster: the curated showcase, on its own studio-navy tile */}
-                {can('roster') && (
+                {/* Quick Actions */}
+                {(['payments', 'contacts', 'invoices', 'attendance'] as const).some(sec => can(sec)) && (
                 <section className="animate-fade-in-up" style={{ animationDelay: '150ms' }}>
-                    <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-3">Showcase</h2>
-                    <button
-                        type="button"
-                        onClick={() => onNavigate('roster')}
-                        className="neu-card-interactive w-full p-3 flex items-center gap-3.5 text-left active-scale"
-                    >
-                        <span className="roster-backdrop-studio shrink-0 w-14 h-14 rounded-2xl flex items-center justify-center shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
-                            <LayoutGrid size={24} strokeWidth={1.5} className="text-gold-300" />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                            <span className="block font-serif text-[17px] leading-tight text-gray-900 dark:text-white">Roster</span>
-                            <span className="block mt-0.5 text-[11.5px] text-gray-600 dark:text-gray-400 leading-snug">
-                                Curated sections to browse, heart and present{can('roster', 'edit') ? ' — and arrange' : ''}
-                            </span>
-                        </span>
-                        <ChevronRight size={18} className="shrink-0 text-gold-700 dark:text-gold-300" />
-                    </button>
+                    <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-3">Quick Actions</h2>
+                    {/* Four across when there is room; two by two, icon beside
+                        the label, in narrow columns so no label spills out. */}
+                    <div className="@container">
+                    <div className="grid grid-cols-2 @[22rem]:grid-cols-4 gap-3">
+                        {QUICK_ACTIONS.filter(a => can(a.section)).map(({ section, view, label, Icon }) => (
+                        <button
+                            key={section}
+                            onClick={() => onNavigate(view)}
+                            className="neu-card min-w-0 px-2.5 py-3 @[22rem]:px-1 flex @[22rem]:flex-col items-center justify-start @[22rem]:justify-center gap-2 hover:border-gold-500 dark:hover:border-gold-500 transition-colors active-scale"
+                        >
+                            <div className="shrink-0 text-brand-900 dark:text-gold-400">
+                                <Icon size={22} strokeWidth={1.5} />
+                            </div>
+                            <span className="min-w-0 max-w-full text-[11px] @[22rem]:text-[10px] @[26rem]:text-[11px] font-medium text-gray-600 dark:text-gray-300 uppercase tracking-normal @[26rem]:tracking-wider text-left @[22rem]:text-center leading-tight [overflow-wrap:anywhere]">{label}</span>
+                        </button>
+                        ))}
+                    </div>
+                    </div>
                 </section>
                 )}
 
@@ -288,28 +290,26 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                 </section>
                 )}
 
-                {/* Quick Actions */}
-                {(['payments', 'contacts', 'invoices', 'attendance'] as const).some(sec => can(sec)) && (
+                {/* Showcase: the curated sections, on its own studio-navy tile */}
+                {can('roster') && (
                 <section className="animate-fade-in-up" style={{ animationDelay: '200ms' }}>
-                    <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-3">Quick Actions</h2>
-                    {/* Four across when there is room; two by two, icon beside
-                        the label, in narrow columns so no label spills out. */}
-                    <div className="@container">
-                    <div className="grid grid-cols-2 @[22rem]:grid-cols-4 gap-3">
-                        {QUICK_ACTIONS.filter(a => can(a.section)).map(({ section, view, label, Icon }) => (
-                        <button
-                            key={section}
-                            onClick={() => onNavigate(view)}
-                            className="neu-card min-w-0 px-2.5 py-3 @[22rem]:px-1 flex @[22rem]:flex-col items-center justify-start @[22rem]:justify-center gap-2 hover:border-gold-500 dark:hover:border-gold-500 transition-colors active-scale"
-                        >
-                            <div className="shrink-0 text-brand-900 dark:text-gold-400">
-                                <Icon size={22} strokeWidth={1.5} />
-                            </div>
-                            <span className="min-w-0 max-w-full text-[11px] @[22rem]:text-[10px] @[26rem]:text-[11px] font-medium text-gray-600 dark:text-gray-300 uppercase tracking-normal @[26rem]:tracking-wider text-left @[22rem]:text-center leading-tight [overflow-wrap:anywhere]">{label}</span>
-                        </button>
-                        ))}
-                    </div>
-                    </div>
+                    <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-3">Studio</h2>
+                    <button
+                        type="button"
+                        onClick={() => onNavigate('roster')}
+                        className="neu-card-interactive w-full p-3 flex items-center gap-3.5 text-left active-scale"
+                    >
+                        <span className="roster-backdrop-studio shrink-0 w-14 h-14 rounded-2xl flex items-center justify-center shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+                            <LayoutGrid size={24} strokeWidth={1.5} className="text-gold-300" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                            <span className="block font-serif text-[17px] leading-tight text-gray-900 dark:text-white">Showcase</span>
+                            <span className="block mt-0.5 text-[11.5px] text-gray-600 dark:text-gray-400 leading-snug">
+                                Curated sections to browse, heart and present{can('roster', 'edit') ? ' — and arrange' : ''}
+                            </span>
+                        </span>
+                        <ChevronRight size={18} className="shrink-0 text-gold-700 dark:text-gold-300" />
+                    </button>
                 </section>
                 )}
 

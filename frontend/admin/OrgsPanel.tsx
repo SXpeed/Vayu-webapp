@@ -506,10 +506,10 @@ const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; on
     const rosterOverridden = 'roster' in info.overrides;
     const switchRoster = async () => {
         const reason = await dialogs.prompt({
-            title: rosterOn ? 'Switch the Roster off for this organization?' : 'Switch the Roster on for this organization?',
+            title: rosterOn ? 'Switch the Showcase off for this organization?' : 'Switch the Showcase on for this organization?',
             body: rosterOn
                 ? 'Nobody in the organization can open it, admins included. Its sections and favourites stay stored and come back if it is switched on again.'
-                : 'Everyone whose role can browse the Roster sees it again. This overrides the plan for this organization only.',
+                : 'Everyone whose role can browse the Showcase sees it again. This overrides the plan for this organization only.',
             label: 'Reason (recorded in the audit log)', minLength: 3,
             confirmLabel: rosterOn ? 'Switch off' : 'Switch on', danger: rosterOn,
         });
@@ -517,7 +517,7 @@ const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; on
         act('/entitlements', { key: 'roster', value: !rosterOn, reason });
     };
     const followPlanForRoster = async () => {
-        if (!(await dialogs.confirm({ title: 'Use the plan’s Roster setting?', body: 'Removes this organization’s exception, so its plan decides again.', confirmLabel: 'Use the plan' }))) return;
+        if (!(await dialogs.confirm({ title: 'Use the plan’s Showcase setting?', body: 'Removes this organization’s exception, so its plan decides again.', confirmLabel: 'Use the plan' }))) return;
         setBusy(true);
         const next = await guarded(reauth, () => api<Entitlements>(`/admin/orgs/${orgId}/entitlements/roster`, { method: 'DELETE' }));
         setBusy(false);
@@ -565,7 +565,7 @@ const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; on
                     <LayoutGrid size={16} className="shrink-0 ac-faint" />
                     <div className="min-w-0">
                         <p className="text-[13px] font-medium">
-                            Roster <span className="ml-1 align-middle"><StatusPill tone={rosterOn ? 'ok' : 'bad'}>{rosterOn ? 'On' : 'Off'}</StatusPill></span>
+                            Showcase <span className="ml-1 align-middle"><StatusPill tone={rosterOn ? 'ok' : 'bad'}>{rosterOn ? 'On' : 'Off'}</StatusPill></span>
                             {rosterOverridden && <span className="ml-1.5 align-middle"><StatusPill tone="warn">override</StatusPill></span>}
                         </p>
                         <p className="text-[11.5px] ac-faint">

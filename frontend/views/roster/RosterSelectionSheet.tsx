@@ -81,7 +81,7 @@ export const RosterSelectionSheet: React.FC<RosterSelectionSheetProps> = ({
                 customerPhone: customer.phone.trim(),
                 customerEmail: customer.email.trim(),
                 artworkIds: pieces.map(a => a.id),
-                notes: customer.notes.trim() || 'Selected from the Roster.',
+                notes: customer.notes.trim() || 'Selected from the Showcase.',
                 source: customer.source,
                 status: 'New',
                 catalogShared: false,
@@ -107,7 +107,7 @@ export const RosterSelectionSheet: React.FC<RosterSelectionSheetProps> = ({
         try {
             await onAddCollection({
                 name: collectionName.trim(),
-                description: 'Gathered from the Roster.',
+                description: 'Gathered from the Showcase.',
                 artworkIds: pieces.map(a => a.id),
                 coverImageUrl: pieces.find(a => a.imageUrls[0])?.imageUrls[0],
                 createdAt: Date.now(),

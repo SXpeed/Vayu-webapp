@@ -219,7 +219,7 @@ export function rosterRoutes(deps: RosterDeps): RosterRoute[] {
     const input = await readSectionInput(db, raw);
     if (typeof input === 'string') return err(input);
     const stats = await db.prepare('SELECT COUNT(*) AS n, COALESCE(MAX(position), -1) AS last FROM roster_sections').first<{ n: number; last: number }>();
-    if ((stats?.n ?? 0) >= MAX_SECTIONS) return err(`The roster can hold up to ${MAX_SECTIONS} sections`);
+    if ((stats?.n ?? 0) >= MAX_SECTIONS) return err(`The showcase can hold up to ${MAX_SECTIONS} sections`);
     const now = Date.now();
     const id = `rs_${crypto.randomUUID().replaceAll('-', '').slice(0, 20)}`;
     await db.prepare(
@@ -228,7 +228,7 @@ export function rosterRoutes(deps: RosterDeps): RosterRoute[] {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
     ).bind(id, input.name, input.description, JSON.stringify(input.artworkIds), input.priceDisplay, input.backdrop,
       input.hideSold ? 1 : 0, (stats?.last ?? -1) + 1, now, session.userId, now, session.userId, session.name).run();
-    deps.logChange(ctx, session, 'created', 'roster section', id, `Created roster section "${input.name}"`);
+    deps.logChange(ctx, session, 'created', 'roster section', id, `Created showcase section "${input.name}"`);
     signal(ctx, id, 'put');
     return json(await sectionById(db, id), 201);
   };
@@ -258,7 +258,7 @@ export function rosterRoutes(deps: RosterDeps): RosterRoute[] {
       const latest = await sectionById(db, id);
       return json({ error: `${latest?.updatedByName || 'Someone'} changed this section while you were editing. Your changes were not saved.`, code: 'stale', section: latest }, 409);
     }
-    deps.logChange(ctx, session, 'updated', 'roster section', id, `Updated roster section "${input.name}"`);
+    deps.logChange(ctx, session, 'updated', 'roster section', id, `Updated showcase section "${input.name}"`);
     signal(ctx, id, 'put');
     return json(await sectionById(db, id));
   };
@@ -275,8 +275,8 @@ export function rosterRoutes(deps: RosterDeps): RosterRoute[] {
     const current = rowToSection(row);
     await db.prepare('DELETE FROM roster_sections WHERE id = ?').bind(id).run();
     // The raw row, so an admin can restore it from Deleted (worker.ts).
-    deps.archive(ctx, session, ROSTER_ARCHIVE_ENTITY, id, `Roster section "${current.name}"`, row);
-    deps.logChange(ctx, session, 'deleted', 'roster section', id, `Deleted roster section "${current.name}"`);
+    deps.archive(ctx, session, ROSTER_ARCHIVE_ENTITY, id, `Showcase section "${current.name}"`, row);
+    deps.logChange(ctx, session, 'deleted', 'roster section', id, `Deleted showcase section "${current.name}"`);
     signal(ctx, id, 'delete');
     return json({ success: true });
   };
@@ -291,11 +291,11 @@ export function rosterRoutes(deps: RosterDeps): RosterRoute[] {
     const existing = await listSections(db);
     const known = new Set(existing.map(s => s.id));
     if (ids.length !== existing.length || ids.some(id => !known.has(id))) {
-      return err('The roster changed while you were arranging it. Reload and try again.', 409);
+      return err('The showcase changed while you were arranging it. Reload and try again.', 409);
     }
     await db.batch(ids.map((id, position) =>
       db.prepare('UPDATE roster_sections SET position = ? WHERE id = ?').bind(position, id)));
-    deps.logChange(ctx, session, 'updated', 'roster', 'order', 'Rearranged the roster sections');
+    deps.logChange(ctx, session, 'updated', 'roster', 'order', 'Rearranged the showcase sections');
     signal(ctx, 'order', 'put');
     return json(await listSections(db));
   };

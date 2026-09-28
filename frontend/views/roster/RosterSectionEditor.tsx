@@ -74,7 +74,7 @@ export const RosterSectionEditor: React.FC<RosterSectionEditorProps> = ({ sectio
         const input: RosterSectionInput = { name: name.trim(), description: description.trim(), artworkIds: chosen, priceDisplay, backdrop, hideSold };
         try {
             const saved = base ? await rosterService.update(base, input) : await rosterService.create(input);
-            toast.success(base ? 'Section saved' : 'Section added to the roster');
+            toast.success(base ? 'Section saved' : 'Section added to the showcase');
             onSaved(saved);
         } catch (e) {
             if (e instanceof StaleSectionError) {
@@ -103,7 +103,7 @@ export const RosterSectionEditor: React.FC<RosterSectionEditorProps> = ({ sectio
 
     return (
         <FullScreenPortal>
-            <div className="neu-sheet-wide animate-fade-in-up" role="dialog" aria-modal="true" aria-label={section ? 'Edit roster section' : 'New roster section'}>
+            <div className="neu-sheet-wide animate-fade-in-up" role="dialog" aria-modal="true" aria-label={section ? 'Edit showcase section' : 'New showcase section'}>
                 <div className="flex justify-between items-center gap-3 px-3 pb-2" style={{ paddingTop: 'calc(0.75rem + var(--safe-top))' }}>
                     <button type="button" onClick={onClose} aria-label="Close" className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale">
                         <X size={20} />

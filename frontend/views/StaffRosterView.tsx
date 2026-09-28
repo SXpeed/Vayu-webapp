@@ -179,7 +179,6 @@ export const StaffRosterView: React.FC = () => {
             <PageHeader
                 title="Staff roster"
                 subtitle={subtitle}
-                floatTools={false}
                 actions={manage ? (
                     <>
                         <span className={`hidden sm:inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-semibold ${STATUS_CLS[status]}`} role="status">

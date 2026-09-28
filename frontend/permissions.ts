@@ -29,7 +29,7 @@ export const SECTIONS: SectionDef[] = [
     { id: 'collections', label: 'Collections', description: 'Grouped artworks' },
     { id: 'catalogs', label: 'Catalogs', description: 'Catalog PDFs and the catalog builder' },
     {
-        id: 'roster', label: 'Roster', description: 'The curated showcase. Curate arranges its sections and pieces',
+        id: 'roster', label: 'Showcase', description: 'Curated sections of pieces. Curate arranges its sections and pieces',
         levelLabels: { view: 'Browse', edit: 'Curate' },
     },
     { id: 'contacts', label: 'Contacts', description: 'Client phone numbers and emails' },
