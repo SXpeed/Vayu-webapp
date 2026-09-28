@@ -47,6 +47,15 @@ export interface Invitation {
   expiresAt: number;
 }
 
+export interface InviteResult {
+  invitation: Invitation;
+  emailSent: boolean;
+  /** When the email didn't go out: the link to pass on by hand, and why. */
+  link?: string;
+  emailProblem?: 'not_configured' | 'failed';
+  emailError?: string;
+}
+
 export interface PresenceMap {
   [userId: string]: { isOnline: boolean; lastSeen: number };
 }
@@ -248,8 +257,8 @@ export const authService = {
     return call<Invitation[]>('/team/invitations');
   },
 
-  async invite(email: string, role: string): Promise<{ invitation: Invitation; emailSent: boolean; link?: string }> {
-    const result = await call<{ invitation: Invitation; emailSent: boolean; link?: string }>('/team/invitations', {
+  async invite(email: string, role: string): Promise<InviteResult> {
+    const result = await call<InviteResult>('/team/invitations', {
       method: 'POST', body: JSON.stringify({ email, role }),
     });
     broadcastSync();

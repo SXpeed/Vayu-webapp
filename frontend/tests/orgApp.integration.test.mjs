@@ -190,6 +190,7 @@ test('admins invite people by email; staff cannot', async () => {
     assert.equal(res.body.invitation.email, 'new.person@example.com');
     // Email is off in this test, so the admin is given the link to pass on.
     assert.equal(res.body.emailSent, false);
+    assert.equal(res.body.emailProblem, 'not_configured');
     assert.match(res.body.link, /\/join\/[0-9a-f]{64}$/);
     inviteToken = res.body.link.split('/join/')[1];
 
