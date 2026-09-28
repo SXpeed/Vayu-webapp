@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { UserProfile } from '../types';
-import { Moon, Sun, LogOut, Check, Bell, BellOff, Pencil, X, Type } from 'lucide-react';
+import { Moon, Sun, LogOut, Check, Bell, BellOff, Pencil, X, Type, Image as ImageIcon } from 'lucide-react';
 import { pushService } from '../services/pushService';
 import { MyDevicesCard } from '../components/MyDevicesCard';
 import { PasswordCard, WorkspaceCard } from '../components/AccountCards';
 import { getUiSize, setUiSize, type UiSize } from '../uiSize';
+import { TILE_BACKDROPS, getTileBackdrop, setTileBackdrop, type TileBackdrop } from '../tileBackdrop';
 import {
     PageRoot, PageHeader, PageBody, Card, SectionTitle, Field, Input, Textarea,
     ReadOnlyValue, ToggleRow, Button, Divider, Pill,
@@ -132,6 +133,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ profile, onUpdateProfi
 
                     <Divider />
 
+                    <TileBackdropRow />
+
+                    <Divider />
+
                     <ToggleRow
                         icon={pushEnabled ? <Bell size={18} /> : <BellOff size={18} />}
                         title="Notifications"
@@ -171,6 +176,46 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ profile, onUpdateProfi
                 </Button>
             </PageBody>
         </PageRoot>
+    );
+};
+
+/** The backdrop behind product photos in tiles: six choices, this device only. */
+const TileBackdropRow: React.FC = () => {
+    const [value, setValue] = useState<TileBackdrop>(getTileBackdrop);
+    const choose = (next: TileBackdrop) => {
+        setTileBackdrop(next);
+        setValue(next);
+    };
+    return (
+        <div className="py-1.5 space-y-3">
+            <div className="flex items-center gap-3 min-w-0 text-gray-700 dark:text-gray-200">
+                <ImageIcon size={18} className="shrink-0" />
+                <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">Product tile background</p>
+                    <p className="text-[11px] text-gray-600 dark:text-gray-400 font-light">Behind product photos in Inventory, collections and pickers. On this device</p>
+                </div>
+            </div>
+            <div role="radiogroup" aria-label="Product tile background" className="grid grid-cols-3 sm:grid-cols-6 gap-2.5">
+                {TILE_BACKDROPS.map(o => {
+                    const on = value === o.value;
+                    return (
+                        <button
+                            key={o.value}
+                            type="button"
+                            role="radio"
+                            aria-checked={on}
+                            onClick={() => choose(o.value)}
+                            className={`rounded-2xl p-1.5 flex flex-col items-center gap-1.5 active-scale ${on ? 'neu-inset' : 'neu-raised-sm'}`}
+                        >
+                            <span data-tile-bg={o.value} className="tile-backdrop relative w-full aspect-[4/3] rounded-xl flex items-center justify-center">
+                                {on && <span className="w-6 h-6 rounded-full neu-accent flex items-center justify-center"><Check size={13} strokeWidth={3} className="text-white" /></span>}
+                            </span>
+                            <span className={`text-[11px] ${on ? 'font-semibold text-gold-700 dark:text-gold-300' : 'text-gray-600 dark:text-gray-300'}`}>{o.label}</span>
+                        </button>
+                    );
+                })}
+            </div>
+        </div>
     );
 };
 

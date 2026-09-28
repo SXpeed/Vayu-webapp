@@ -25,11 +25,11 @@ export const ArtworkTile: React.FC<{ art: Artwork; onOpen: () => void; index?: n
         className="w-full text-left rounded-2xl p-1.5 neu-raised-sm active-scale animate-fade-in-up"
         style={{ animationDelay: `${Math.min(index, 12) * 35}ms` }}
     >
-        <span className="relative block aspect-square rounded-xl overflow-hidden roster-backdrop-studio">
+        <span className="relative block aspect-square rounded-xl overflow-hidden tile-backdrop">
             {art.imageUrls?.[0] ? (
                 <img src={getThumbUrl(art.imageUrls[0])} alt="" loading="lazy" decoding="async" className="w-full h-full object-contain p-1.5" />
             ) : (
-                <span className="w-full h-full flex items-center justify-center text-white/40"><ImageIcon size={20} strokeWidth={1} /></span>
+                <span className="w-full h-full flex items-center justify-center tile-backdrop-icon"><ImageIcon size={20} strokeWidth={1} /></span>
             )}
             {art.status !== 'Available' && (
                 <span className={`neu-chip-float top-1 left-1 !text-[8.5px] !px-1.5 ${STATUS_TONE[art.status]}`}>{art.status}</span>

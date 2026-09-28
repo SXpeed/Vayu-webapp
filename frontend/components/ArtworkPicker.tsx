@@ -19,7 +19,7 @@ interface ArtworkPickerProps {
     detail?: (art: Artwork) => string;
     /** Offer the Available / Reserved / Sold filters (off where only one status is listed). */
     statusFilters?: boolean;
-    /** The backdrop the photos sit on, as on the Roster. */
+    /** A Showcase section's own backdrop; otherwise the one chosen in Profile. */
     backdrop?: RosterBackdrop;
     /** Scroll inside a tall box instead of growing the page (forms with more below). */
     scroll?: boolean;
@@ -46,7 +46,7 @@ const matches = (art: Artwork, q: string) =>
  * under it. Tapping a tile adds or removes it.
  */
 export const ArtworkPicker: React.FC<ArtworkPickerProps> = ({
-    artworks, selected, onToggle, onAddMany, onInfo, detail, statusFilters = true, backdrop = 'studio',
+    artworks, selected, onToggle, onAddMany, onInfo, detail, statusFilters = true, backdrop,
     scroll = false, searchPlaceholder = 'Search by title, ID or artist…', className = '',
 }) => {
     const [query, setQuery] = useState('');
@@ -94,11 +94,11 @@ export const ArtworkPicker: React.FC<ArtworkPickerProps> = ({
                                     <button type="button" onClick={() => onToggle(art.id)} aria-pressed={on}
                                         aria-label={`${on ? 'Remove' : 'Add'} ${art.title}`}
                                         className={`w-full text-left rounded-2xl p-1.5 active-scale transition-shadow ${on ? 'neu-inset ring-1 ring-gold-500/60' : 'neu-raised-sm'}`}>
-                                        <span className={`relative block aspect-square rounded-xl overflow-hidden ${BACKDROP[backdrop]}`}>
+                                        <span className={`relative block aspect-square rounded-xl overflow-hidden ${backdrop ? BACKDROP[backdrop] : 'tile-backdrop'}`}>
                                             {art.imageUrls?.[0] ? (
                                                 <img src={getThumbUrl(art.imageUrls[0])} alt="" loading="lazy" decoding="async" className={`w-full h-full ${fit}`} />
                                             ) : (
-                                                <span className="w-full h-full flex items-center justify-center text-white/40"><ImageIcon size={18} strokeWidth={1} /></span>
+                                                <span className={`w-full h-full flex items-center justify-center ${backdrop ? 'text-white/40' : 'tile-backdrop-icon'}`}><ImageIcon size={18} strokeWidth={1} /></span>
                                             )}
                                             <span className={`absolute top-1 right-1 w-5 h-5 rounded-full flex items-center justify-center ${on ? 'neu-accent' : 'bg-black/25'}`}>
                                                 {on && <Check size={11} strokeWidth={3} className="text-white" />}

@@ -1413,3 +1413,37 @@ html.dark {
     .sr-bad-box { background: var(--sr-bad-bg); color: var(--sr-bad); }
     .sr-warn-box { background: var(--sr-open-bg); color: var(--sr-open); }
 }
+
+/* ── Product tile backdrop (Profile → App Settings) ──────────────────────────
+ * The surface product photos sit on in tiles and thumbnails. Each choice
+ * keeps the same soft studio falloff; the photo itself is never cropped.
+ * Blue is the default. Set on <html> before first paint by index.html; the
+ * selectors match any element so Profile's swatches can preview each one. */
+:root,
+[data-tile-bg="blue"] {
+    --tile-bg: radial-gradient(120% 90% at 50% 30%, #2c3d66 0%, #1c2a4a 55%, #131c33 100%);
+    --tile-icon: rgba(255, 255, 255, 0.4);
+}
+[data-tile-bg="light"] {
+    --tile-bg: radial-gradient(120% 90% at 50% 30%, #fbfcfe 0%, #eef1f6 60%, #e2e6ee 100%);
+    --tile-icon: rgba(31, 36, 48, 0.3);
+}
+[data-tile-bg="dark"] {
+    --tile-bg: radial-gradient(120% 90% at 50% 30%, #3b3e45 0%, #2a2c31 55%, #1c1d21 100%);
+}
+[data-tile-bg="offwhite"] {
+    --tile-bg: radial-gradient(120% 90% at 50% 30%, #fbf7ef 0%, #f1eadb 60%, #e6dcc7 100%);
+    --tile-icon: rgba(31, 36, 48, 0.3);
+}
+[data-tile-bg="sage"] {
+    --tile-bg: radial-gradient(120% 90% at 50% 30%, #e8eee4 0%, #d3dfcf 60%, #bccbb6 100%);
+    --tile-icon: rgba(31, 36, 48, 0.3);
+}
+[data-tile-bg="clay"] {
+    --tile-bg: radial-gradient(120% 90% at 50% 30%, #f3e4d9 0%, #e5cdbd 60%, #d3b3a0 100%);
+    --tile-icon: rgba(31, 36, 48, 0.3);
+}
+@layer components {
+    .tile-backdrop { background: var(--tile-bg); }
+    .tile-backdrop-icon { color: var(--tile-icon); }
+}

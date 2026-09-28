@@ -952,7 +952,7 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
                                 <div key={art.id} className="flex justify-between items-center">
                                     <div className="flex items-center gap-3">
                                         {art.imageUrls && art.imageUrls.length > 0 ? (
-                                            <img loading="lazy" decoding="async" src={getThumbUrl(art.imageUrls[0])} alt={art.title} className="w-10 h-10 rounded-[3px] object-contain p-0.5 roster-backdrop-studio" />
+                                            <img loading="lazy" decoding="async" src={getThumbUrl(art.imageUrls[0])} alt={art.title} className="w-10 h-10 rounded-[3px] object-contain p-0.5 tile-backdrop" />
                                         ) : (
                                             <div className="w-10 h-10 rounded-[3px] neu-inset flex items-center justify-center text-gray-400">
                                                 <ImageIcon size={14} />
@@ -1012,7 +1012,7 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
                         className="absolute inset-0 w-full h-full neu-scrim cursor-default"
                     />
                     <div className="relative neu-raised rounded-[12px] w-full max-w-sm overflow-hidden shadow-2xl animate-scale-in">
-                        <div className="relative h-48 roster-backdrop-studio">
+                        <div className="relative h-48 tile-backdrop">
                             {selectedArtworkForPopup.imageUrls && selectedArtworkForPopup.imageUrls.length > 0 ? (
                                 <img loading="lazy" decoding="async" src={selectedArtworkForPopup.imageUrls[0]} alt={selectedArtworkForPopup.title} className="w-full h-full object-contain p-3" />
                             ) : (

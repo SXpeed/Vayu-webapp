@@ -153,7 +153,7 @@ export const RosterSelectionSheet: React.FC<RosterSelectionSheetProps> = ({
                                 {pieces.map(art => (
                                     <li key={art.id} className="neu-card p-2 flex items-center gap-3">
                                         <button type="button" onClick={() => onOpenPiece(art)} className="flex items-center gap-3 min-w-0 flex-1 text-left active-scale">
-                                            <span className="w-14 h-14 shrink-0 rounded-xl overflow-hidden roster-backdrop-studio">
+                                            <span className="w-14 h-14 shrink-0 rounded-xl overflow-hidden tile-backdrop">
                                                 {art.imageUrls[0] && <img src={getThumbUrl(art.imageUrls[0])} alt="" loading="lazy" className="w-full h-full object-contain p-1" />}
                                             </span>
                                             <span className="min-w-0">

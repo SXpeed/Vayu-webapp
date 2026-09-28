@@ -302,7 +302,7 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({ invoice,
                                 <div key={item.artworkId} className="flex justify-between items-center">
                                     <div className="flex items-center gap-3">
                                         {art?.imageUrls?.length ? (
-                                            <img loading="lazy" decoding="async" src={getThumbUrl(art.imageUrls[0])} alt={item.title} className="w-10 h-10 rounded-[3px] object-contain p-0.5 roster-backdrop-studio" />
+                                            <img loading="lazy" decoding="async" src={getThumbUrl(art.imageUrls[0])} alt={item.title} className="w-10 h-10 rounded-[3px] object-contain p-0.5 tile-backdrop" />
                                         ) : (
                                             <div className="w-10 h-10 rounded-[3px] neu-inset flex items-center justify-center text-gray-400">
                                                 <ImageIcon size={14} />

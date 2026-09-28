@@ -89,7 +89,7 @@ export const CollectionsView: React.FC<CollectionsViewProps> = ({ collections, a
                             style={{ animationDelay: `${Math.min(index, 12) * 45}ms` }}
                         >
                             {/* Cover mosaic, set into the card — whole photos on the studio backdrop */}
-                            <div className="neu-picture-well neu-picture-well-sm roster-backdrop-studio w-full aspect-[4/3] rounded-[1rem]">
+                            <div className="neu-picture-well neu-picture-well-sm tile-backdrop w-full aspect-[4/3] rounded-[1rem]">
                                 {images.length === 0 && (
                                     <div className="w-full h-full flex items-center justify-center text-[var(--neu-text-dim)]">
                                         <ImageIcon size={28} strokeWidth={1} />
@@ -263,7 +263,7 @@ export const CollectionDetailModal: React.FC<CollectionDetailModalProps> = ({ co
             </div>
 
             <div className="flex-1 overflow-y-auto no-scrollbar pb-20 lg:pb-8">
-                <div className="w-full aspect-[21/9] relative roster-backdrop-studio animate-fade-in group">
+                <div className="w-full aspect-[21/9] relative tile-backdrop animate-fade-in group">
                     {coverImage ? (
                         <img loading="lazy" decoding="async" src={getThumbUrl(coverImage)} alt={collection.name} className="w-full h-full object-contain p-2" />
                     ) : (

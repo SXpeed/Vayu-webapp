@@ -50,6 +50,12 @@
             const zoom = { small: 0.9, default: 0.95, large: 1 }[size] || 0.95;
             document.documentElement.style.setProperty('--ui-zoom', String(zoom));
         })();
+        // Product tile backdrop, before first paint (tileBackdrop.ts, ".tile-backdrop" in index.css).
+        (function () {
+            let bg = 'blue';
+            try { bg = localStorage.getItem('vayu_tile_bg') || bg; } catch { /* private mode */ }
+            document.documentElement.dataset.tileBg = bg;
+        })();
     </script>
 
     <style>

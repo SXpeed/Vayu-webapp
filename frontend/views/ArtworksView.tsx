@@ -52,7 +52,7 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
                             style={{ animationDelay: `${Math.min(index, 12) * 45}ms` }}
                         >
                             {/* Photo, set into the card */}
-                            <div className="neu-picture-well neu-picture-well-sm roster-backdrop-studio w-full aspect-[4/3] rounded-[1rem]">
+                            <div className="neu-picture-well neu-picture-well-sm tile-backdrop w-full aspect-[4/3] rounded-[1rem]">
                                 {imageCount > 0 ? (
                                     <img loading="lazy" decoding="async" src={getThumbUrl(artwork.imageUrls[0])} alt={artwork.title} className="w-full h-full object-contain p-2" />
                                 ) : (
@@ -239,7 +239,7 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
                         <label className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-2 uppercase tracking-wider">Photos ({formData.imageUrls.length})</label>
                         <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2 snap-x">
                             {formData.imageUrls.map((url: string, idx: number) => (
-                                <div key={url} className="relative w-32 h-32 shrink-0 rounded-lg overflow-hidden snap-start shadow-sm animate-scale-in roster-backdrop-studio" style={{ animationDelay: `${idx * 50}ms` }}>
+                                <div key={url} className="relative w-32 h-32 shrink-0 rounded-lg overflow-hidden snap-start shadow-sm animate-scale-in tile-backdrop" style={{ animationDelay: `${idx * 50}ms` }}>
                                     <img loading="lazy" decoding="async" src={getThumbUrl(url)} alt={`Preview ${idx + 1}`} className="w-full h-full object-contain p-1" />
                                     <button
                                         type="button"
