@@ -8,6 +8,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { after, before, test } from 'node:test';
+import { sessionTokenFrom, withSessionToken } from './helpers/session.mjs';
 import { startDevWorker } from './helpers/devWorker.mjs';
 
 const OWNER = { name: 'Aarav Shah', email: 'owner@example.com', password: 'owner-password-1234' };
@@ -42,7 +43,7 @@ async function api(token, path, { method = 'GET', body } = {}) {
     const text = await res.text();
     let json = null;
     try { json = JSON.parse(text); } catch { /* not JSON */ }
-    return { status: res.status, body: json, text };
+    return { status: res.status, body: withSessionToken(json, res), text };
 }
 
 async function person(name, email, roleId) {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import toast from 'react-hot-toast';
-import type { Invoice, PaymentAccountInfo, PaymentLink } from '../types';
+import type { Invoice, PaymentAccountInfo, PaymentLink, PaymentSummary } from '../types';
 import { paymentService } from '../services/paymentService';
 import { createRefreshScheduler } from '../services/refreshScheduler';
 import { realtimeService } from '../services/realtimeService';
@@ -10,7 +10,7 @@ import {
     Button, GhostIconButton, Badge, EmptyState, ToggleRow,
 } from '../components/ui';
 import { IfCan, useAppChrome } from '../components/Layout';
-import { AccountNotice, InvoiceField, OverrideFields, TestBadge, rupeesToPaise } from './payments/NewLinkParts';
+import { AccountNotice, InvoiceField, OverrideFields, RefundNote, SummaryStrip, TestBadge, rupeesToPaise } from './payments/NewLinkParts';
 import { DetailRow, PaymentAttemptCard, dateTime, formatRupees, sortPayments } from '../components/PaymentAttempts';
 
 const formatDate = (ts: number) => {
@@ -144,6 +144,7 @@ export const PaymentsView: React.FC<{ invoices?: Invoice[] }> = ({ invoices = []
     const [createdLink, setCreatedLink] = useState<PaymentLink | null>(null);
 
     const [links, setLinks] = useState<PaymentLink[]>([]);
+    const [summary, setSummary] = useState<PaymentSummary | null>(null);
     const [isLoadingLinks, setIsLoadingLinks] = useState(true);
     const [copiedId, setCopiedId] = useState<string | null>(null);
     /** Link whose delete button asked "tap again"; the question lapses. */
@@ -164,6 +165,9 @@ export const PaymentsView: React.FC<{ invoices?: Invoice[] }> = ({ invoices = []
         if (!silent) setIsLoadingLinks(true);
         try {
             setLinks(await paymentService.getPaymentLinks());
+            const now = new Date();
+            const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+            paymentService.getSummary(monthStart, Date.now()).then(setSummary).catch(() => undefined);
         } catch (e) {
             if (!silent) toast.error((e as Error).message || 'Could not load payment links');
             if (silent) throw e;
@@ -171,6 +175,14 @@ export const PaymentsView: React.FC<{ invoices?: Invoice[] }> = ({ invoices = []
             if (!silent) setIsLoadingLinks(false);
         }
     }, []);
+
+    /** Ask Razorpay about links due a check, then show the list (the scheduled job does this too). */
+    const refreshFromRazorpay = useCallback(async () => {
+        await paymentService.refresh().catch(() => undefined);
+        await loadLinks();
+    }, [loadLinks]);
+
+    useEffect(() => { void paymentService.refresh().then(() => loadLinks(true)).catch(() => undefined); }, [loadLinks]);
 
     // Load on mount and refresh occasionally while visible. Razorpay webhooks
     // are the source of truth; a 15-second loop needlessly multiplied Worker
@@ -320,7 +332,7 @@ export const PaymentsView: React.FC<{ invoices?: Invoice[] }> = ({ invoices = []
                 subtitle={links.length > 0 ? linkCount : undefined}
                 actions={
                     <GhostIconButton
-                        onClick={() => loadLinks()}
+                        onClick={() => void refreshFromRazorpay()}
                         label="Refresh"
                         icon={<RefreshCw size={16} className={isLoadingLinks ? 'animate-spin' : ''} />}
                         disabled={isLoadingLinks}
@@ -436,6 +448,7 @@ export const PaymentsView: React.FC<{ invoices?: Invoice[] }> = ({ invoices = []
 
                     {/* ── History ─────────────────────────────────────────── */}
                     <section className="animate-fade-in-up">
+                        {summary && <SummaryStrip summary={summary} />}
                         <SectionTitle className="px-1">Recent Links</SectionTitle>
                         {links.length === 0 && !isLoadingLinks ? (
                             <EmptyState
@@ -470,6 +483,7 @@ export const PaymentsView: React.FC<{ invoices?: Invoice[] }> = ({ invoices = []
                                         <div className="flex justify-between items-center mt-2 gap-2">
                                             <span className={`text-[11px] leading-tight min-w-0 ${link.status === 'expired' ? 'text-gray-500 dark:text-gray-400' : 'text-gray-700 dark:text-gray-300'}`}>
                                                 {validityText(link) ?? ''}
+                                                <RefundNote link={link} />
                                             </span>
                                             <div className="flex items-center gap-2 shrink-0">
                                                 <button
@@ -600,7 +614,7 @@ const PaymentDetailsPanel: React.FC<{ link: PaymentLink; onUpdated: (link: Payme
     const recheck = useCallback(async (announce: boolean) => {
         setChecking(true);
         try {
-            const res = await paymentService.getPaymentLinkDetails(link.id);
+            const res = await paymentService.getPaymentLinkDetails(link.id, announce);
             onUpdated(res.link);
             setNote(res.checked ? `Checked with Razorpay at ${new Date(res.checkedAt ?? Date.now()).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })}` : res.reason ?? null);
             if (announce) {

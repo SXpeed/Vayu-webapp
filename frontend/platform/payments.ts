@@ -12,6 +12,14 @@ import type { Env } from '../workerEnv';
 import { auditStmt } from './audit';
 import { OrgError, type Actor } from './orgs';
 import { decryptSecret, encryptSecret, maskKeyId, secretsConfigured, tryDecryptSecret } from './secrets';
+import { recordRejection, recordVerified, webhookHealth } from './webhookHealth';
+
+/**
+ * How long a replaced webhook secret still verifies: Razorpay retries a
+ * failed delivery for 24 hours, signed with the secret in force when the
+ * event was created.
+ */
+export const WEBHOOK_OVERLAP_MS = 24 * 3_600_000;
 
 const PROVIDER = 'razorpay';
 const KEY_ID_RE = /^rzp_(test|live)_[A-Za-z0-9]{8,32}$/;
@@ -51,6 +59,8 @@ export async function describeRazorpay(db: D1Database, orgId: string, webhookUrl
     connected: true,
     legacyAppAccount,
     allowTestLinks: r.allow_test_links === 1,
+    webhookHealth: await webhookHealth(db, orgId),
+    previousWebhookSecretUntil: r.webhook_secret_prev_enc && (r.webhook_secret_prev_until ?? 0) > Date.now() ? r.webhook_secret_prev_until : null,
     mode: r.mode,
     keyIdHint: maskKeyId(r.key_id),
     hasWebhookSecret: !!r.webhook_secret_enc,
@@ -94,7 +104,13 @@ export async function connectRazorpay(env: Env, db: D1Database, orgId: string, b
     ? await encryptSecret(env, ctx(orgId, 'webhook_secret'), webhookSecret)
     : existing?.webhook_secret_enc ?? null;
   const now = Date.now();
+  // A new webhook secret: the old one keeps verifying Razorpay's retries of
+  // earlier events for WEBHOOK_OVERLAP_MS (only once migration 0010 is in).
+  const overlap = !!webhookSecret && !!existing?.webhook_secret_enc && existing.webhook_secret_enc !== webhookEnc && 'webhook_secret_prev_until' in existing;
+  const overlapUntil = overlap ? now + WEBHOOK_OVERLAP_MS : null;
   await db.batch([
+    ...(overlap ? [db.prepare('UPDATE org_payment_integrations SET webhook_secret_prev_enc = ?, webhook_secret_prev_until = ? WHERE org_id = ? AND provider = ?')
+      .bind(existing!.webhook_secret_enc, overlapUntil, orgId, PROVIDER)] : []),
     db.prepare(
       `INSERT INTO org_payment_integrations
          (org_id, provider, mode, key_id, key_secret_enc, webhook_secret_enc, status, last_verified_at, last_error, connected_by, connected_at, updated_at)
@@ -107,7 +123,7 @@ export async function connectRazorpay(env: Env, db: D1Database, orgId: string, b
     auditStmt(db, {
       actorUserId: actor.userId, actorKind: 'provider_admin', action: existing ? 'payments.razorpay.replace' : 'payments.razorpay.connect',
       targetType: 'organization', targetId: orgId, orgId,
-      details: { mode, keyIdHint: maskKeyId(keyId), webhookSecretChanged: !!webhookSecret },
+      details: { mode, keyIdHint: maskKeyId(keyId), webhookSecretChanged: !!webhookSecret, previousSecretValidUntil: overlapUntil },
       ip: actor.ip,
     }),
   ]);
@@ -271,12 +287,17 @@ export async function receiveRazorpayWebhook(env: Env, db: D1Database, orgId: st
   if (!signature || !eventId || eventId.length > 128) return unauthorized;
 
   const r = await row(db, orgId);
-  if (!r?.webhook_secret_enc || r.status === 'disabled') return unauthorized;
-  let secret: string;
-  const decrypted = await tryDecryptSecret(env, ctx(orgId, 'webhook_secret'), r.webhook_secret_enc, 'org.webhook');
-  if (decrypted === null) return unauthorized;
-  secret = decrypted;
-  if (!timingSafeEqual(await signRazorpayBody(secret, raw), signature.toLowerCase())) return unauthorized;
+  // Only this organization's own secrets are ever tried. An unknown address
+  // is counted under one fixed name, so it can't create new rows.
+  if (!r?.webhook_secret_enc || r.status === 'disabled') {
+    await recordRejection(db, r ? `org:${orgId}` : 'org:unknown', 'no_secret');
+    return unauthorized;
+  }
+  const verdict = await verifyWithSecrets(env, orgId, r, raw, signature.toLowerCase());
+  if (verdict === 'invalid') {
+    await recordRejection(db, `org:${orgId}`, 'bad_signature');
+    return unauthorized;
+  }
 
   let event: unknown;
   try { event = JSON.parse(raw); } catch { return { status: 400, body: { error: 'Invalid JSON' } }; }
@@ -287,7 +308,24 @@ export async function receiveRazorpayWebhook(env: Env, db: D1Database, orgId: st
      VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
   ).bind(orgId, PROVIDER, eventId, eventType, Date.now(), raw).run();
   const duplicate = (result.meta?.changes ?? 0) === 0;
+  await recordVerified(db, orgId, eventType, verdict === 'previous');
   // Handed back even for a duplicate: applying it is idempotent, and a retry
   // must be able to finish work a failed first attempt left undone.
   return { status: 200, body: { ok: true, duplicate }, event };
+}
+
+/**
+ * Checks the signature against this organization's current webhook secret,
+ * and, during a rotation overlap, its previous one. Constant-time compare on
+ * the exact raw body. Never any other organization's secret, and there is no
+ * way to skip the check.
+ */
+async function verifyWithSecrets(env: Env, orgId: string, r: IntegrationRow, raw: string, signature: string): Promise<'current' | 'previous' | 'invalid'> {
+  const current = await tryDecryptSecret(env, ctx(orgId, 'webhook_secret'), r.webhook_secret_enc!, 'org.webhook');
+  if (current !== null && timingSafeEqual(await signRazorpayBody(current, raw), signature)) return 'current';
+  if (r.webhook_secret_prev_enc && (r.webhook_secret_prev_until ?? 0) > Date.now()) {
+    const previous = await tryDecryptSecret(env, ctx(orgId, 'webhook_secret'), r.webhook_secret_prev_enc, 'org.webhook.previous');
+    if (previous !== null && timingSafeEqual(await signRazorpayBody(previous, raw), signature)) return 'previous';
+  }
+  return 'invalid';
 }

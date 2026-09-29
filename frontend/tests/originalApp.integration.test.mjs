@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { pbkdf2Sync, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { sessionTokenFrom } from './helpers/session.mjs';
 import { startDevWorker } from './helpers/devWorker.mjs';
 
 /** A private test address (sign-in is rate limited per address). */
@@ -123,8 +124,10 @@ test('old installs keep signing in the original way meanwhile', async () => {
         body: JSON.stringify({ email: 'staff@vayu.example', password: STAFF_OLD_PASSWORD }),
     });
     assert.equal(res.status, 200);
-    const { token } = await res.json();
-    const artworks = await fetch(`${worker.origin}/api/artworks`, { headers: { Authorization: `Bearer ${token}` } });
+    // The session arrives as an HttpOnly cookie now; the cookie alone signs in.
+    const token = sessionTokenFrom(res);
+    assert.ok(token);
+    const artworks = await fetch(`${worker.origin}/api/artworks`, { headers: { Cookie: `vayu_session=${token}` } });
     assert.equal(artworks.status, 200);
     assert.equal((await artworks.json())[0].title, 'Old Banyan');
 });

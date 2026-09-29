@@ -211,7 +211,10 @@ if (!existsSync(marker)) {
   try {
     const { needsSetup } = await call('/auth/status');
     if (needsSetup) await call('/auth/setup', { method: 'POST', body: ACCOUNTS.admin });
-    const { token } = await call('/auth/login', { method: 'POST', body: { email: ACCOUNTS.admin.email, password: ACCOUNTS.admin.password } });
+    // The session comes back as a cookie (no token in the body); this script sends it as a bearer token.
+    const login = await fetch(`${API}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: ACCOUNTS.admin.email, password: ACCOUNTS.admin.password }) });
+    const token = (login.headers.getSetCookie?.() ?? []).map(c => /^(?:__Host-)?vayu_session=([^;]+)/.exec(c)?.[1]).find(Boolean);
+    if (!token) throw new Error(`POST /auth/login: ${login.status}`);
     // A re-run after an interrupted first start finds the staff login already there.
     await call('/auth/users', { token, method: 'POST', body: ACCOUNTS.staff }).catch(e => {
         if (!/409|already/i.test(e.message)) throw e;

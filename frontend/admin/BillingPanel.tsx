@@ -99,7 +99,7 @@ const SummaryTiles: React.FC<{ summary: Summary | undefined }> = ({ summary: s }
         );
     }
     const plural = s.paid30dCount === 1 ? '' : 's';
-    const allTimeFoot = s.testCount ? `${s.paidCount} paid · ${s.testCount} in test mode` : `${s.paidCount} paid`;
+    const allTimeFoot = s.testCount ? `${s.paidCount} paid · ${s.testCount} test-mode not counted` : `${s.paidCount} paid`;
     return (
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
             <StatTile icon={<IndianRupee size={16} />} label="Last 30 days" value={formatRupees(s.paid30dAmount)} foot={`${s.paid30dCount} payment${plural}`} />

@@ -44,7 +44,7 @@ export async function startDevWorker({ port = 8810, inspectorPort = 9240, adminE
         { cwd: frontend, stdio: 'pipe', env: { ...process.env, ADMIN_PASSWORD: adminPassword } });
 
     const child = spawn(process.execPath, [wranglerBin, 'dev', '-c', 'wrangler.json', '--local',
-        '--persist-to', persistDir, '--port', String(port), '--inspector-port', String(inspectorPort),
+        '--persist-to', persistDir, '--port', String(port), '--inspector-port', String(inspectorPort), '--test-scheduled',
         '--var', `AUTH_ORIGINS:${origin}`, '--var', 'PLATFORM_ENV:development', '--var', 'ADMIN_REQUIRE_2FA:off',
         '--var', `PAYMENT_SECRETS_KEY:${randomBytes(32).toString('base64')}`,
         '--var', `BETTER_AUTH_SECRET:${randomBytes(32).toString('base64')}`,

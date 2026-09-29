@@ -5,6 +5,7 @@
 //   node frontend/tests/realtime.smoke.mjs
 //
 // Exits non-zero on the first failed check.
+import { sessionTokenFrom, withSessionToken } from './helpers/session.mjs';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -35,7 +36,8 @@ async function api(path, { token, method = 'GET', body } = {}) {
     const text = await res.text();
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-    return { status: res.status, data };
+    // Sign-in sets the session as a cookie; hand its token back where the checks expect it.
+    return { status: res.status, data: withSessionToken(data, res) };
 }
 
 /** Open a socket and collect frames; resolves once it opens or fails. */
@@ -197,7 +199,7 @@ try {
             headers: { 'Content-Type': 'application/json', 'User-Agent': ua },
             body: JSON.stringify({ email, password }),
         });
-        return (await res.json()).token;
+        return sessionTokenFrom(res);
     };
     const works = async t => (await api('/auth/me', { token: t })).status === 200;
     let staffTokens = [];

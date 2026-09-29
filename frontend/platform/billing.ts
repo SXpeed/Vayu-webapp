@@ -19,7 +19,8 @@
 import type { Env } from '../workerEnv';
 import { auditStmt } from './audit';
 import { OrgError, type Actor } from './orgs';
-import { razorpayApiBase, signRazorpayBody } from './payments';
+import { WEBHOOK_OVERLAP_MS, razorpayApiBase, signRazorpayBody } from './payments';
+import { recordRejection, recordVerified } from './webhookHealth';
 import { parseLimits } from './plans';
 import { discounted, runningOffers, type Offer } from './offers';
 import { toPaymentDetail, type PaymentDetail } from './razorpayDetails';
@@ -47,6 +48,9 @@ interface StoredAccount {
   keyId: string;
   keySecretEnc: string;
   webhookSecretEnc: string | null;
+  /** The replaced webhook secret, still valid for Razorpay's retries until webhookSecretPrevUntil. */
+  webhookSecretPrevEnc?: string | null;
+  webhookSecretPrevUntil?: number | null;
   status: 'unverified' | 'verified' | 'failed';
   lastVerifiedAt: number | null;
   lastError: string | null;
@@ -115,6 +119,10 @@ export async function connectBillingAccount(env: Env, db: D1Database, body: Reco
     webhookSecretEnc: webhookSecret
       ? await encryptSecret(env, secretContext('webhook_secret'), webhookSecret)
       : existing?.webhookSecretEnc ?? null,
+    // A new webhook secret: the old one still verifies retries of earlier events for a day.
+    ...(webhookSecret && existing?.webhookSecretEnc
+      ? { webhookSecretPrevEnc: existing.webhookSecretEnc, webhookSecretPrevUntil: now + WEBHOOK_OVERLAP_MS }
+      : { webhookSecretPrevEnc: existing?.webhookSecretPrevEnc ?? null, webhookSecretPrevUntil: existing?.webhookSecretPrevUntil ?? null }),
     status: 'unverified',
     lastVerifiedAt: null,
     lastError: null,
@@ -614,12 +622,13 @@ export async function listAllPayments(db: D1Database, params: URLSearchParams) {
   const [{ results }, summary] = await Promise.all([
     db.prepare(sql).bind(...binds).all<BillingPaymentRow & { org_name: string | null }>(),
     db.prepare(
+      // Money figures are live payments only: test-mode payments took no real money.
       `SELECT COUNT(*) AS paid_count, COALESCE(SUM(amount), 0) AS paid_amount,
-              (SELECT COUNT(*) FROM billing_payments WHERE status = 'paid' AND paid_at >= ?) AS paid_30d_count,
-              (SELECT COALESCE(SUM(amount), 0) FROM billing_payments WHERE status = 'paid' AND paid_at >= ?) AS paid_30d_amount,
+              (SELECT COUNT(*) FROM billing_payments WHERE status = 'paid' AND mode = 'live' AND paid_at >= ?) AS paid_30d_count,
+              (SELECT COALESCE(SUM(amount), 0) FROM billing_payments WHERE status = 'paid' AND mode = 'live' AND paid_at >= ?) AS paid_30d_amount,
               (SELECT COUNT(*) FROM billing_payments WHERE status = 'attempted' AND created_at >= ?) AS failed_30d_count,
               (SELECT COUNT(*) FROM billing_payments WHERE status = 'paid' AND mode = 'test') AS test_count
-       FROM billing_payments WHERE status = 'paid'`,
+       FROM billing_payments WHERE status = 'paid' AND mode = 'live'`,
     ).bind(since, since, since).first<Record<string, number>>(),
   ]);
   return {
@@ -630,7 +639,7 @@ export async function listAllPayments(db: D1Database, params: URLSearchParams) {
       paid30dCount: summary?.paid_30d_count ?? 0,
       paid30dAmount: summary?.paid_30d_amount ?? 0,
       unfinished30dCount: summary?.failed_30d_count ?? 0,
-      /** Paid in test mode (no real money), counted in the totals above. */
+      /** Paid in test mode (no real money): NOT in the totals above. */
       testCount: summary?.test_count ?? 0,
     },
   };
@@ -651,6 +660,17 @@ const MAX_WEBHOOK_BYTES = 256 * 1024;
  * which order to look at: its state is read back from Razorpay and applied
  * like a recheck. Anything that fails before the signature check is 401.
  */
+/** The current webhook secret, or during a rotation overlap the previous one. Never a way to skip the check. */
+async function verifyBillingSignature(env: Env, a: StoredAccount, raw: string, signature: string): Promise<'current' | 'previous' | 'invalid'> {
+  const current = await tryDecryptSecret(env, secretContext('webhook_secret'), a.webhookSecretEnc!, 'billing.webhook');
+  if (current !== null && timingSafeEqual(await signRazorpayBody(current, raw), signature)) return 'current';
+  if (a.webhookSecretPrevEnc && (a.webhookSecretPrevUntil ?? 0) > Date.now()) {
+    const previous = await tryDecryptSecret(env, secretContext('webhook_secret'), a.webhookSecretPrevEnc, 'billing.webhook.previous');
+    if (previous !== null && timingSafeEqual(await signRazorpayBody(previous, raw), signature)) return 'previous';
+  }
+  return 'invalid';
+}
+
 export async function receiveBillingWebhook(env: Env, db: D1Database, request: Request): Promise<{ status: number; body: unknown }> {
   const unauthorized = { status: 401, body: { error: 'Invalid signature' } };
   const signature = request.headers.get('x-razorpay-signature') ?? '';
@@ -659,12 +679,10 @@ export async function receiveBillingWebhook(env: Env, db: D1Database, request: R
   if (raw.length > MAX_WEBHOOK_BYTES) return { status: 413, body: { error: 'Too large' } };
   if (!signature || !eventId || eventId.length > 128) return unauthorized;
   const a = await readAccount(db);
-  if (!a?.webhookSecretEnc) return unauthorized;
-  let secret: string;
-  const decrypted = await tryDecryptSecret(env, secretContext('webhook_secret'), a.webhookSecretEnc, 'billing.webhook');
-  if (decrypted === null) return unauthorized;
-  secret = decrypted;
-  if (!timingSafeEqual(await signRazorpayBody(secret, raw), signature.toLowerCase())) return unauthorized;
+  if (!a?.webhookSecretEnc) { await recordRejection(db, 'billing', 'no_secret'); return unauthorized; }
+  const verdict = await verifyBillingSignature(env, a, raw, signature.toLowerCase());
+  if (verdict === 'invalid') { await recordRejection(db, 'billing', 'bad_signature'); return unauthorized; }
+  await recordVerified(db, WEBHOOK_OWNER, null, verdict === 'previous');
 
   let event: any;
   try { event = JSON.parse(raw); } catch { return { status: 400, body: { error: 'Invalid JSON' } }; }

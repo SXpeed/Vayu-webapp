@@ -34,7 +34,39 @@ interface Razorpay {
     legacyAppAccount?: boolean;
     /** Test-mode keys may make customer payment links in production. */
     allowTestLinks?: boolean;
+    /** After a webhook secret change, the old one still verifies Razorpay's retries until then. */
+    previousWebhookSecretUntil?: number | null;
+    webhookHealth?: {
+        state: 'healthy' | 'attention' | 'no_events' | 'unknown'; detail: string;
+        lastVerifiedAt: number | null; verifiedCount: number; processingFailures: number;
+        missedByWebhook: number; reconciledAt: number | null; rejected24h: number;
+    };
 }
+
+const HEALTH_TONE: Record<string, Tone> = { healthy: 'ok', attention: 'bad', no_events: 'neutral', unknown: 'warn' };
+const HEALTH_LABEL: Record<string, string> = { healthy: 'Arriving', attention: 'Needs attention', no_events: 'No events yet', unknown: 'Not recorded' };
+
+/** Webhook health from verified deliveries and the scheduled check; rejected deliveries are shown but never count against it. */
+const WebhookHealthRow: React.FC<{ info: Razorpay }> = ({ info }) => {
+    const h = info.webhookHealth;
+    if (!h) return null;
+    const facts = [
+        h.lastVerifiedAt ? `last verified ${timeAgo(h.lastVerifiedAt)}` : '',
+        h.reconciledAt ? `checked with Razorpay ${timeAgo(h.reconciledAt)}` : '',
+        h.rejected24h ? `${h.rejected24h} rejected in 24 h (not counted: anyone can send these)` : '',
+    ].filter(Boolean).join(' · ');
+    return (
+        <div className="col-span-2">
+            <Detail label="Webhook">
+                <span className="flex flex-col gap-1">
+                    <span><StatusPill tone={HEALTH_TONE[h.state] ?? 'neutral'}>{HEALTH_LABEL[h.state] ?? h.state}</StatusPill></span>
+                    <span className="text-[12px] ac-muted">{h.detail}{facts ? ` (${facts})` : ''}</span>
+                    {info.previousWebhookSecretUntil && <span className="text-[12px] ac-muted">The previous secret still verifies Razorpay’s retries until {new Date(info.previousWebhookSecretUntil).toLocaleString()}.</span>}
+                </span>
+            </Detail>
+        </div>
+    );
+};
 
 /** A Razorpay connection at a glance: verified, failing, or saved but not checked yet. */
 function connectionTone(rz: Razorpay | null): Tone {
@@ -619,6 +651,7 @@ const RazorpayDetails: React.FC<{ info: Razorpay }> = ({ info }) => (
         <div className="col-span-2">
             <Detail label="Payment links"><LinksStatus info={info} /></Detail>
         </div>
+        <WebhookHealthRow info={info} />
         {info.legacyAppAccount && (
             <p className="col-span-2 text-[12px] text-[var(--ac-warn)]">The retired “use for the app’s payment links” setting still names this account. It no longer decides anything; clear it below.</p>
         )}
@@ -648,7 +681,7 @@ const RazorpayKeysForm: React.FC<{ path: string; reauth: Reauth; hasWebhookSecre
             <Field label="Key secret" htmlFor="rz-secret">
                 <Input id="rz-secret" type="password" required value={keySecret} onChange={e => setKeySecret(e.target.value)} autoComplete="off" />
             </Field>
-            <Field label="Webhook secret" htmlFor="rz-wh" hint={hasWebhookSecret ? 'Leave blank to keep the current one.' : 'The secret you type when creating the webhook in Razorpay.'}>
+            <Field label="Webhook secret" htmlFor="rz-wh" hint={hasWebhookSecret ? 'Leave blank to keep the current one. A new one replaces it; the old one keeps working for 24 hours for Razorpay’s retries.' : 'The secret you type when creating the webhook in Razorpay.'}>
                 <Input id="rz-wh" type="password" value={webhookSecret} onChange={e => setWebhookSecret(e.target.value)} autoComplete="off" />
             </Field>
             <div className="flex flex-wrap gap-2">

@@ -72,6 +72,7 @@ import {
   listOrganizations, setOrganizationStatus, updateMember, type Actor,
 } from './orgs';
 import { keyUsage, runRotationBatch, startRotation } from './secretRotation';
+import { recordProcessed, recordProcessingFailure } from './webhookHealth';
 import { clearAppPaymentsOrg, connectRazorpay, describeRazorpay, disconnectRazorpay, receiveRazorpayWebhook, setAllowTestLinks, verifyRazorpay } from './payments';
 import { importLegacyWorkspace, listImports } from './legacyImport';
 import { PLAN_SCHEMA } from './planFields';
@@ -518,7 +519,18 @@ async function handleWebhook(env: Env, db: D1Database, request: Request, path: s
       return reply(out.body, out.status);
     }
     const out = await receiveRazorpayWebhook(env, db, hook[1], request);
-    if (out.status === 200 && out.event !== undefined) await hooks.onPaymentEvent?.(hook[1], out.event);
+    if (out.status === 200 && out.event !== undefined) {
+      try {
+        await hooks.onPaymentEvent?.(hook[1], out.event);
+      } catch (e) {
+        // Verified but not applied: answer 500 so Razorpay retries, and say so in its health.
+        await recordProcessingFailure(db, hook[1], e);
+        throw e;
+      }
+      await recordProcessed(db, hook[1]);
+      const eventId = request.headers.get('x-razorpay-event-id');
+      if (eventId) await db.prepare("UPDATE payment_webhook_events SET processed_at = ? WHERE org_id = ? AND provider = 'razorpay' AND event_id = ?").bind(Date.now(), hook[1], eventId).run();
+    }
     return reply(out.body, out.status);
   } catch (e) {
     console.error(hook ? 'razorpay webhook failed' : 'billing webhook failed', e);

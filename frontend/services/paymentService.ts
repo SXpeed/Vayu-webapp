@@ -1,4 +1,4 @@
-import type { PaymentAccountInfo, PaymentLink } from '../types';
+import type { PaymentAccountInfo, PaymentLink, PaymentSummary } from '../types';
 import { apiCall as call } from './apiClient';
 
 export interface CreatePaymentLinkInput {
@@ -48,9 +48,23 @@ export const paymentService = {
         await call(`/payments/links/${encodeURIComponent(id)}`, { method: 'DELETE' });
     },
 
-    /** Ask Razorpay afresh about one link: its status and every payment on it (also "Recheck"). */
-    async getPaymentLinkDetails(id: string): Promise<{ link: PaymentLink; checked: boolean; reason?: string; checkedAt?: number }> {
-        return call(`/payments/links/${encodeURIComponent(id)}/details`);
+    /**
+     * Ask Razorpay afresh about one link: its status and every payment on it.
+     * `save` ("Recheck") also records what it finds; otherwise it only shows it.
+     */
+    async getPaymentLinkDetails(id: string, save = false): Promise<{ link: PaymentLink; checked: boolean; reason?: string; checkedAt?: number }> {
+        const path = `/payments/links/${encodeURIComponent(id)}`;
+        return save ? call(`${path}/recheck`, { method: 'POST' }) : call(`${path}/details`);
+    },
+
+    /** Ask Razorpay about links that are due a check (the screen's refresh). */
+    async refresh(): Promise<{ checked: number }> {
+        return call('/payments/links/refresh', { method: 'POST' });
+    },
+
+    /** Collected, refunded and net for live links paid between from and to (ms). */
+    async getSummary(from: number, to: number): Promise<PaymentSummary> {
+        return call(`/payments/summary?from=${from}&to=${to}`);
     },
 
     /** How long an unpaid link stays valid. */

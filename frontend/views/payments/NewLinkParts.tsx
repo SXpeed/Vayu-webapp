@@ -2,7 +2,8 @@ import React from 'react';
 import { FlaskConical, ShieldAlert } from 'lucide-react';
 import { Field, Input, Select, ToggleRow } from '../../components/ui';
 import { formatRupees } from '../../components/PaymentAttempts';
-import type { Invoice, PaymentAccountInfo } from '../../types';
+import { StatStrip } from '../../components/StatStrip';
+import type { Invoice, PaymentAccountInfo, PaymentLink, PaymentSummary } from '../../types';
 
 // Pieces of the "New payment link" form: which account and mode it uses, the
 // invoice it can collect against, and an admin's override. The server
@@ -76,6 +77,47 @@ export const OverrideFields: React.FC<{
             )}
         </>
     );
+};
+
+/** "1 test link", "3 test links". */
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/**
+ * This month's money from live links: collected, refunded (processed only)
+ * and net. Test links are never in these figures; a note says how many were
+ * left out.
+ */
+export const SummaryStrip: React.FC<{ summary: PaymentSummary }> = ({ summary }) => {
+    const { live, excluded } = summary;
+    const left = [
+        excluded.testLinks ? plural(excluded.testLinks, 'test link') : '',
+        excluded.unknownMode ? plural(excluded.unknownMode, 'older link') + ' not yet confirmed live' : '',
+    ].filter(Boolean).join(' and ');
+    const pending = live.pendingRefundPaise ? `${formatRupees(live.pendingRefundPaise)} pending` : '';
+    return (
+        <div className="mb-4">
+            <StatStrip
+                label="This month"
+                cols="grid-cols-3"
+                stats={[
+                    { label: 'Collected', value: formatRupees(live.collectedPaise), sub: `${live.paidCount} paid this month` },
+                    { label: 'Refunded', value: formatRupees(live.refundedPaise), sub: pending },
+                    { label: 'Net', value: formatRupees(live.netPaise) },
+                ]}
+                footer={left ? `Live payments only; ${left} left out.` : undefined}
+            />
+        </div>
+    );
+};
+
+/** " · Refunded ₹500" on a link with refunds (processed), and what's still pending. */
+export const RefundNote: React.FC<{ link: PaymentLink }> = ({ link }) => {
+    if (!link.refundedPaise && !link.refundPendingPaise) return null;
+    const parts = [
+        link.refundedPaise ? `Refunded ${formatRupees(link.refundedPaise)}` : '',
+        link.refundPendingPaise ? `refund of ${formatRupees(link.refundPendingPaise)} pending` : '',
+    ].filter(Boolean).join(', ');
+    return <span className="block text-amber-800 dark:text-amber-300">{parts}</span>;
 };
 
 /** "TEST" on a test-mode link, so it's never mistaken for real money. */

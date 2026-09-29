@@ -1,12 +1,35 @@
 import { apiBase, isPlatformSession } from './workspace';
 
-const TOKEN_KEY = 'vayu_token';
+/**
+ * The old sign-in token, from before sessions moved into an HttpOnly cookie.
+ * Only a device that hasn't started since still has one; authService swaps it
+ * for the cookie once (POST /api/auth/session) and deletes it.
+ */
+export const LEGACY_TOKEN_KEY = 'vayu_token';
 
-/** Only the original sign-in sends a token; a platform sign-in is a cookie. */
+/** The CSRF value the server set in a readable cookie, sent back as a header on every call. */
+export function csrfToken(): string | null {
+    if (typeof document === 'undefined') return null;
+    for (const part of document.cookie.split(';')) {
+        const [name, ...rest] = part.trim().split('=');
+        if (name === '__Host-vayu_csrf' || name === 'vayu_csrf') return rest.join('=') || null;
+    }
+    return null;
+}
+
+/**
+ * What every API call sends besides cookies: the CSRF header, and only on a
+ * device not yet switched over, the old token.
+ */
 export function tokenHeader(): Record<string, string> {
-    if (isPlatformSession()) return {};
-    const token = localStorage.getItem(TOKEN_KEY);
-    return token ? { Authorization: `Bearer ${token}` } : {};
+    const headers: Record<string, string> = {};
+    const csrf = csrfToken();
+    if (csrf) headers['X-CSRF-Token'] = csrf;
+    if (!isPlatformSession()) {
+        const legacy = localStorage.getItem(LEGACY_TOKEN_KEY);
+        if (legacy) headers.Authorization = `Bearer ${legacy}`;
+    }
+    return headers;
 }
 
 export function authHeaders(): Record<string, string> {

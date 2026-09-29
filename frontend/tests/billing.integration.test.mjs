@@ -231,7 +231,9 @@ test('the control centre lists every plan payment with the fee, and can recheck 
     assert.ok(res.body.payments.every(p => p.orgName === 'Paying Studio'));
     const paid = res.body.payments.find(p => p.id === first.id);
     assert.equal(paid.payments[0].fee, 2360);
-    assert.equal(res.body.summary.paidCount, 3);
+    // All three were paid with test keys: no real money, so not in the money totals.
+    assert.equal(res.body.summary.paidCount, 0);
+    assert.equal(res.body.summary.paidAmount, 0);
     assert.equal(res.body.summary.testCount, 3);
     assert.equal((await admin.call('/admin/billing/payments?status=paid')).body.payments.length, 3);
     const recheck = await post(admin, `/admin/billing/payments/${first.id}/recheck`);

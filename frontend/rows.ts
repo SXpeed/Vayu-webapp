@@ -3,11 +3,13 @@
 // a circular import between the two modules.
 import { databaseKey } from './workerEnv';
 
-export const CORS: HeadersInit = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-};
+/**
+ * No cross-origin access to the API. Every browser page calls it on its own
+ * address (docs/HOSTING.md), so none needs CORS, and the session is now a
+ * cookie: a wildcard origin must never be sent with it. (Stored files set
+ * their own header for image loading, without credentials.)
+ */
+export const CORS: HeadersInit = {};
 
 export function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {

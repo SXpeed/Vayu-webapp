@@ -20,9 +20,10 @@
 // before, with the original app's own sign-in, for installed copies of the
 // app that have not signed in again yet.
 
-import { configuredOrigins, getAuth, resolveAuthOrigin } from './platform/auth';
+import { getAuth, resolveAuthOrigin } from './platform/auth';
 import { getEffectiveLoginMethods } from './platform/settings';
 import { resolveEntitlements } from './platform/plans';
+import { fromTrustedPage } from './sessionCookies';
 import { orgDatabase, orgFilePrefix, orgKvPrefix, prefixedBucket, prefixedKv } from './orgStorage';
 import type { Env, SessionData } from './workerEnv';
 import type { SectionId } from './permissions';
@@ -155,17 +156,33 @@ export interface OpenedOrg {
   orgId: string;
 }
 
+/**
+ * Who may not open this organization: someone signed in but not a member
+ * gets the same answer as for no such organization, and only members learn
+ * that it is paused.
+ */
+function accessRefusal(row: OrgRow, signedIn: boolean, member: string | null, rest: string): Response | null {
+  if (signedIn && !member && !isPublicPath(rest)) return notFound();
+  if (row.status === 'active') return null;
+  if (!member) return notFound();
+  return Response.json({ error: 'This workspace is paused. Contact support to restore it.', code: 'org_inactive' }, { status: 403 });
+}
+
 export async function openOrgRequest(request: Request, env: Env, orgId: string, rest: string): Promise<Response | OpenedOrg> {
   const db = env.PLATFORM_DB;
   if (!db || !env.BETTER_AUTH_SECRET) return notFound();
 
-  // Changes only from our own pages (the session cookie is SameSite=Lax too).
-  const origin = request.headers.get('Origin');
-  if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method) && origin && !configuredOrigins(env).includes(origin)) {
-    return Response.json({ error: 'Forbidden' }, { status: 403 });
+  // Changes only from our own pages: a trusted Origin, or (a browser that
+  // sent none) Sec-Fetch-Site: same-origin. A missing Origin is no longer
+  // waved through. The session cookie is SameSite=Lax too.
+  if (!fromTrustedPage(request, env)) {
+    return Response.json({ error: 'Forbidden', code: 'csrf_origin' }, { status: 403 });
   }
 
   const { user, expiresAt, sessionId } = await platformSignIn(request, env, db);
+  // Signed out: the same answer whether or not the organization exists, and
+  // before looking it up (only the public viewing pages work signed out).
+  if (!user && !isPublicPath(rest)) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
   const row = await db.prepare(
     `SELECT o.id, o.name, o.status, o.app_storage, m.role, m.status AS member_status, m.app_user_id
@@ -175,11 +192,8 @@ export async function openOrgRequest(request: Request, env: Env, orgId: string, 
   if (!row) return notFound();
 
   const member = user && row.role && row.member_status === 'active' ? row.role : null;
-  // Signed in elsewhere but not here: the same answer as no such organization.
-  if (user && !member && !isPublicPath(rest)) return notFound();
-  if (row.status !== 'active') {
-    return Response.json({ error: 'This workspace is paused. Contact support to restore it.', code: 'org_inactive' }, { status: 403 });
-  }
+  const refused = accessRefusal(row, !!user, member, rest);
+  if (refused) return refused;
 
   const plan = member ? await planState(db, orgId) : null;
   if (plan && !reachableWithoutPlan(rest) && !plan.active) {

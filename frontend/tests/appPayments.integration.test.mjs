@@ -12,6 +12,7 @@ import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { after, before, test } from 'node:test';
+import { sessionTokenFrom, withSessionToken } from './helpers/session.mjs';
 import { startDevWorker } from './helpers/devWorker.mjs';
 
 const SHARED_KEY = 'rzp_test_SHARED00001';
@@ -26,6 +27,7 @@ let razorpayDown = false;   // make the stand-in reject keys
 let loseNextAnswer = false; // make the link, then answer 500 (as if the answer was lost)
 const plinks = new Map();   // the stand-in's payment links: id -> entity
 const rzPayments = new Map(); // the stand-in's payments: id -> entity
+const rzRefunds = new Map();  // the stand-in's refunds: payment id -> [refund entity]
 
 /** A local stand-in for api.razorpay.com: records which key id called it. */
 function startRazorpay() {
@@ -38,6 +40,8 @@ function startRazorpay() {
             calls.push({ method: req.method, path: req.url, keyId });
             res.setHeader('Content-Type', 'application/json');
             if (razorpayDown) { res.statusCode = 401; res.end('{"error":{"description":"bad keys"}}'); return; }
+            const refundsOf = /^\/v1\/payments\/(pay_[A-Za-z0-9_]+)\/refunds$/.exec(req.url);
+            if (refundsOf) { res.end(JSON.stringify({ entity: 'collection', items: rzRefunds.get(refundsOf[1]) ?? [] })); return; }
             const payment = /^\/v1\/payments\/(pay_[A-Za-z0-9_]+)$/.exec(req.url);
             if (payment) {
                 const entity = rzPayments.get(payment[1]);
@@ -129,7 +133,7 @@ before(async () => {
     });
     // The app's own admin (bearer token), and the control centre's (cookies).
     await fetch(`${worker.origin}/api/auth/setup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Owner', email: 'owner@example.com', password: 'owner-password-1234' }) });
-    appToken = (await (await fetch(`${worker.origin}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'owner@example.com', password: 'owner-password-1234' }) })).json()).token;
+    appToken = sessionTokenFrom(await fetch(`${worker.origin}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'owner@example.com', password: 'owner-password-1234' }) }));
     admin = worker.browser();
     assert.equal((await admin.signIn('admin@example.com', 'provider-admin-password')).status, 200);
     for (const [name, key, secret] of [['Vayu Design', ORG_KEY, WEBHOOK_SECRET], ['Studio B', ORG_B_KEY, WEBHOOK_SECRET_B]]) {
@@ -310,7 +314,7 @@ test('staff can make routine links but not overrides', async () => {
     // Staff (the built-in role) can make payment links but aren't admins.
     const made = await app('/auth/users', { method: 'POST', body: { name: 'Staff One', email: 'staff1@example.com', password: 'staff-password-123' } });
     assert.ok([200, 201].includes(made.status), JSON.stringify(made.body));
-    const staffToken = (await (await fetch(`${worker.origin}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'staff1@example.com', password: 'staff-password-123' }) })).json()).token;
+    const staffToken = sessionTokenFrom(await fetch(`${worker.origin}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'staff1@example.com', password: 'staff-password-123' }) }));
     const routine = await app('/payments/link', { method: 'POST', token: staffToken, body: linkBody(1000, { invoiceId: invoice.id }) });
     assert.equal(routine.status, 201, JSON.stringify(routine.body));
     const discount = await app('/payments/link', { method: 'POST', token: staffToken, body: linkBody(500, { invoiceId: invoice.id, settlesInFull: true, overrideReason: 'Staff trying a discount' }) });
@@ -376,16 +380,17 @@ test('a link paid just before it was deleted is kept, and shows as paid', async 
     assert.equal((await links()).some(l => l.id === link.id), false);
 });
 
-test('without a webhook, the app picks up a payment by asking Razorpay', async () => {
+test('without a webhook, the app picks up a payment by asking Razorpay (refresh), and the list itself changes nothing', async () => {
     const link = (await createLink()).body;
     // Paid at Razorpay; no webhook arrives (the shared account has none set).
     payAt(link.id, { status: 'paid', payments: [{ payment_id: 'pay_quiet', method: 'upi', status: 'captured', created_at: Math.floor(Date.now() / 1000) }] });
-    await links(); // the list asks Razorpay in the background
-    let seen;
-    for (let i = 0; i < 20 && seen?.status !== 'paid'; i++) {
-        await new Promise(r => setTimeout(r, 250));
-        seen = (await links()).find(l => l.id === link.id);
-    }
+    calls.length = 0;
+    await links();
+    assert.equal(calls.length, 0, 'reading the list never calls Razorpay or changes a record');
+    assert.equal((await links()).find(l => l.id === link.id).status, 'created');
+    const refreshed = await app('/payments/links/refresh', { method: 'POST' });
+    assert.equal(refreshed.status, 200, JSON.stringify(refreshed.body));
+    const seen = (await links()).find(l => l.id === link.id);
     assert.equal(seen?.status, 'paid');
     assert.equal(seen.paymentId, 'pay_quiet');
     assert.equal(seen.paymentMethod, 'upi');
@@ -394,13 +399,9 @@ test('without a webhook, the app picks up a payment by asking Razorpay', async (
 test('a link past its expiry shows as expired', async () => {
     const link = (await createLink()).body;
     payAt(link.id, { status: 'expired' });
-    // The background check only runs every few minutes per link; a fresh link is due at once.
-    let seen;
-    for (let i = 0; i < 20 && seen?.status !== 'expired'; i++) {
-        seen = (await links()).find(l => l.id === link.id);
-        await new Promise(r => setTimeout(r, 250));
-    }
-    assert.equal(seen?.status, 'expired');
+    // A fresh link is due for a check at once.
+    await app('/payments/links/refresh', { method: 'POST' });
+    assert.equal((await links()).find(l => l.id === link.id)?.status, 'expired');
 });
 
 test('payment details: references, time, method and what the customer entered, fetched from Razorpay', async () => {
@@ -415,7 +416,11 @@ test('payment details: references, time, method and what the customer entered, f
     rzPayments.set('pay_fail01', { id: 'pay_fail01', amount: 250000, currency: 'INR', status: 'failed', method: 'card', created_at: paidAtSec - 300, card: { network: 'Visa', last4: '4242', type: 'credit', name: 'R Mehta' }, error_description: 'Payment was declined by the bank.' });
     payAt(link.id, { status: 'paid', payments: [{ payment_id: 'pay_fail01', status: 'failed' }, { payment_id: 'pay_rich01', status: 'captured' }] });
 
-    const res = await app(`/payments/links/${link.id}/details`);
+    // Opening the details only shows Razorpay's view; "Recheck" (POST) records it.
+    const peek = await app(`/payments/links/${link.id}/details`);
+    assert.equal(peek.body.link.status, 'paid');
+    assert.equal((await links()).find(l => l.id === link.id).status, 'created', 'a GET changes nothing');
+    const res = await app(`/payments/links/${link.id}/recheck`, { method: 'POST' });
     assert.equal(res.status, 200, JSON.stringify(res.body));
     assert.equal(res.body.checked, true);
     assert.equal(res.body.link.status, 'paid', 'recheck confirms the payment');
@@ -437,4 +442,100 @@ test('payment details: references, time, method and what the customer entered, f
     assert.equal(listed.paymentMethod, 'upi');
     assert.equal(listed.payments.length, 2);
     assert.equal((await app('/payments/links/plink_nosuch01/details')).status, 404);
+});
+
+// ── Refunds, totals and reconciliation ───────────────────────────────────────
+
+const ORG_B_LIVE_KEY = 'rzp_live_ORGBACCOUNT1';
+const refundEvent = (type, refundId, paymentId, amount, status) => ({
+    event: type,
+    payload: {
+        refund: { entity: { id: refundId, entity: 'refund', amount, currency: 'INR', payment_id: paymentId, status, created_at: Math.floor(Date.now() / 1000) } },
+        payment: { entity: { id: paymentId, amount_refunded: amount, refund_status: 'partial' } },
+    },
+});
+const orgBLinks = async () => (await admin.call(`/api/o/${orgB.id}/payments/links`)).body;
+let liveLink;
+
+test('refunds: pending, processed, duplicates, out of order, several partial ones, and failed ones', async () => {
+    // Organization B switches to LIVE keys, so its figures count.
+    await admin.call(rzp(orgB), { method: 'PUT', body: { keyId: ORG_B_LIVE_KEY, keySecret: 'studio-b-live-key-secret', webhookSecret: '' } });
+    assert.equal((await admin.call(`${rzp(orgB)}/verify`, { method: 'POST' })).body.status, 'verified');
+    const made = await orgLink(orgB, { amount: 2500, customerName: 'Mrs. Iyer' });
+    assert.equal(made.status, 201, made.text);
+    assert.equal(made.body.mode, 'live');
+    liveLink = made.body;
+    const pay = `pay_${liveLink.id}`;
+    assert.equal(await orgWebhook(orgB.id, WEBHOOK_SECRET_B, paidEvent(liveLink.id), 'evt_b_paid'), 200);
+
+    const refundState = async () => { const l = (await orgBLinks()).find(x => x.id === liveLink.id); return [l.refundedPaise ?? 0, l.refundPendingPaise ?? 0]; };
+    // refund.created is not a completed refund.
+    assert.equal(await orgWebhook(orgB.id, WEBHOOK_SECRET_B, refundEvent('refund.created', 'rfnd_one00001', pay, 50000, 'pending'), 'evt_r1'), 200);
+    assert.deepEqual(await refundState(), [0, 50000]);
+    assert.equal(await orgWebhook(orgB.id, WEBHOOK_SECRET_B, refundEvent('refund.processed', 'rfnd_one00001', pay, 50000, 'processed'), 'evt_r2'), 200);
+    assert.deepEqual(await refundState(), [50000, 0]);
+    // The same event again, and a late refund.created: nothing moves backwards or doubles.
+    assert.equal(await orgWebhook(orgB.id, WEBHOOK_SECRET_B, refundEvent('refund.processed', 'rfnd_one00001', pay, 50000, 'processed'), 'evt_r2'), 200);
+    assert.equal(await orgWebhook(orgB.id, WEBHOOK_SECRET_B, refundEvent('refund.created', 'rfnd_one00001', pay, 50000, 'pending'), 'evt_r1_late'), 200);
+    assert.deepEqual(await refundState(), [50000, 0]);
+    // A second partial refund, and one that failed.
+    assert.equal(await orgWebhook(orgB.id, WEBHOOK_SECRET_B, refundEvent('refund.processed', 'rfnd_two00002', pay, 30000, 'processed'), 'evt_r3'), 200);
+    assert.equal(await orgWebhook(orgB.id, WEBHOOK_SECRET_B, refundEvent('refund.failed', 'rfnd_three003', pay, 20000, 'failed'), 'evt_r4'), 200);
+    assert.deepEqual(await refundState(), [80000, 0]);
+    // Another organization's (validly signed) refund event for this payment changes nothing.
+    assert.equal(await orgWebhook(orgA.id, WEBHOOK_SECRET, refundEvent('refund.processed', 'rfnd_four0004', pay, 90000, 'processed'), 'evt_a_r'), 200);
+    assert.deepEqual(await refundState(), [80000, 0]);
+});
+
+test('totals: collected, refunded and net for live links only; test links are left out', async () => {
+    const summary = await admin.call(`/api/o/${orgB.id}/payments/summary`);
+    assert.equal(summary.status, 200, summary.text);
+    assert.deepEqual(summary.body.live, { paidCount: 1, collectedPaise: 250000, refundedPaise: 80000, pendingRefundPaise: 0, netPaise: 170000 });
+    // Organization A's links are all test mode: none of its money counts.
+    const a = await admin.call(`/api/o/${orgA.id}/payments/summary`);
+    assert.equal(a.body.live.collectedPaise, 0);
+    assert.ok(a.body.excluded.testLinks >= 1);
+});
+
+test('a refund no webhook delivered is found by reconciliation', async () => {
+    const pay = `pay_${liveLink.id}`;
+    rzRefunds.set(pay, [
+        { id: 'rfnd_one00001', amount: 50000, currency: 'INR', payment_id: pay, status: 'processed', created_at: 1 },
+        { id: 'rfnd_quiet005', amount: 10000, currency: 'INR', payment_id: pay, status: 'processed', created_at: 2 },
+    ]);
+    const refreshed = await admin.call(`/api/o/${orgB.id}/payments/links/refresh`, { method: 'POST' });
+    assert.equal(refreshed.status, 200, refreshed.text);
+    const l = (await orgBLinks()).find(x => x.id === liveLink.id);
+    assert.equal(l.refundedPaise, 90000);
+    assert.equal((await admin.call(`/api/o/${orgB.id}/payments/summary`)).body.live.netPaise, 160000);
+});
+
+test('the scheduled job picks up a payment with nobody on the Payments screen', async () => {
+    const link = (await createLink(900)).body;
+    payAt(link.id, { status: 'paid', payments: [{ payment_id: 'pay_cron0001', method: 'card', status: 'captured', created_at: Math.floor(Date.now() / 1000) }] });
+    const res = await fetch(`${worker.origin}/__scheduled?cron=*/10+*+*+*+*`);
+    assert.equal(res.status, 200);
+    let seen;
+    for (let i = 0; i < 20 && seen?.status !== 'paid'; i++) {
+        await new Promise(r => setTimeout(r, 250));
+        seen = (await links()).find(l => l.id === link.id);
+    }
+    assert.equal(seen?.status, 'paid');
+    assert.equal(seen.paymentId, 'pay_cron0001');
+});
+
+test("webhook health: a refund the webhook missed needs attention, until verified deliveries arrive again", async () => {
+    let b = (await admin.call(rzp(orgB))).body;
+    // Reconciliation just found a refund (rfnd_quiet005) no webhook delivered.
+    assert.equal(b.webhookHealth.state, 'attention');
+    assert.ok(b.webhookHealth.missedByWebhook >= 1);
+    assert.ok(b.webhookHealth.verifiedCount >= 5);
+    // Forged deliveries don't change the verdict either way.
+    assert.equal(await orgWebhook(orgB.id, 'forged-secret', paidEvent(liveLink.id), 'evt_forged_b'), 401);
+    assert.equal((await admin.call(rzp(orgB))).body.webhookHealth.rejected24h, 1);
+    // A verified delivery arrives again: healthy.
+    assert.equal(await orgWebhook(orgB.id, WEBHOOK_SECRET_B, refundEvent('refund.processed', 'rfnd_quiet005', `pay_${liveLink.id}`, 10000, 'processed'), 'evt_r5'), 200);
+    b = (await admin.call(rzp(orgB))).body;
+    assert.equal(b.webhookHealth.state, 'healthy');
+    assert.equal((await orgBLinks()).find(x => x.id === liveLink.id).refundedPaise, 90000, 'the late webhook for an already-found refund adds nothing');
 });

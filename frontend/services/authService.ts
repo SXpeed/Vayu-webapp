@@ -51,7 +51,7 @@ export interface PresenceMap {
   [userId: string]: { isOnline: boolean; lastSeen: number };
 }
 
-import { apiCall as call, authHeaders } from './apiClient';
+import { apiCall as call, authHeaders, LEGACY_TOKEN_KEY } from './apiClient';
 import { db } from './db';
 import { flushPendingSales } from './salesService';
 import { apiBase, authClient, isPlatformSession, setWorkspace, type Workspace } from './workspace';
@@ -86,10 +86,38 @@ async function platformCall<T>(path: string, init?: RequestInit): Promise<T> {
   return body;
 }
 
-const TOKEN_KEY = 'vayu_token';
+/**
+ * Not a credential: only whether this device has signed in with the original
+ * sign-in, so starting offline can go straight to the saved copy and a
+ * signed-out device doesn't ask the server. The session itself is an
+ * HttpOnly cookie that JavaScript can't read.
+ */
+const SIGNED_IN_KEY = 'vayu_signed_in';
 
-function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
+const markSignedIn = () => { try { localStorage.setItem(SIGNED_IN_KEY, '1'); } catch { /* private mode */ } };
+const forgetSignIn = () => {
+  try { localStorage.removeItem(SIGNED_IN_KEY); localStorage.removeItem(LEGACY_TOKEN_KEY); } catch { /* private mode */ }
+};
+
+/**
+ * A device still holding the old JavaScript-kept token swaps it for the
+ * cookie session, once, and deletes it. Offline: tried again next start.
+ */
+async function exchangeLegacyToken(): Promise<void> {
+  const legacy = localStorage.getItem(LEGACY_TOKEN_KEY);
+  if (!legacy) return;
+  let res: Response;
+  try {
+    res = await fetch('/api/auth/session', { method: 'POST', headers: { Authorization: `Bearer ${legacy}` }, signal: AbortSignal.timeout(20_000) });
+  } catch {
+    return;
+  }
+  if (res.ok) {
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
+    markSignedIn();
+  } else if (res.status === 401 || res.status === 410) {
+    forgetSignIn();
+  }
 }
 
 function broadcastSync(): void {
@@ -128,15 +156,15 @@ export const authService = {
         isOnline: true,
         lastSeen: Date.now(),
       };
-      const devToken = 'dev-token';
-      localStorage.setItem(TOKEN_KEY, devToken);
       return devUser;
     }
-    const data = await call<{ token: string; user: AuthUser }>('/auth/login', {
+    // The server sets the session as an HttpOnly cookie; nothing to keep here.
+    const data = await call<{ user: AuthUser }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     });
-    localStorage.setItem(TOKEN_KEY, data.token);
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
+    markSignedIn();
     return data.user;
   },
 
@@ -152,9 +180,10 @@ export const authService = {
       return;
     }
     try {
+      // The server ends the session and clears its cookies.
       await fetch('/api/auth/logout', { method: 'POST', headers: authHeaders() });
     } finally {
-      localStorage.removeItem(TOKEN_KEY);
+      forgetSignIn();
     }
   },
 
@@ -175,9 +204,9 @@ export const authService = {
     }
   },
 
-  /** Drop this device's token without calling the server (already signed out there). */
+  /** Forget this device's sign-in without calling the server (already signed out there). */
   clearLocalSession(): void {
-    localStorage.removeItem(TOKEN_KEY);
+    forgetSignIn();
     setWorkspace(null);
   },
 
@@ -193,17 +222,15 @@ export const authService = {
         return null;
       }
     }
-    if (!getToken()) return null;
+    await exchangeLegacyToken();
+    if (!localStorage.getItem(SIGNED_IN_KEY) && !localStorage.getItem(LEGACY_TOKEN_KEY)) return null;
     try {
       return await call<AuthUser>('/auth/me');
     } catch (err) {
-      // Only remove the token on a genuine 401 Unauthorized (invalid/expired
+      // Only forget the sign-in on a genuine 401 (invalid or expired
       // session). Transient errors (network, 500, etc.) should NOT log the
       // user out — they may just be a momentary blip on hard refresh.
-      const msg = (err as Error).message || '';
-      if (msg.includes('Unauthorized')) {
-        localStorage.removeItem(TOKEN_KEY);
-      }
+      if ((err as { status?: number }).status === 401) forgetSignIn();
       return null;
     }
   },

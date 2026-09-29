@@ -47,6 +47,11 @@ import { razorpayApiBase, razorpayCredentials, verifiedRazorpayKeys } from './pl
 import { runRotationBatch } from './platform/secretRotation';
 import { maskKeyId, secretsConfigured } from './platform/secrets';
 import {
+  AUTH_KIND_HEADER, clearedSessionCookies, cookieNames, csrfProblem, normalizeAuth, readCookie, sessionCookies, trustedOrigins, type AuthKind,
+} from './sessionCookies';
+import { costlyGroup, limitKeys } from './rateLimits';
+import { recordProcessed, recordProcessingFailure, recordReconcile, recordRejection, recordVerified, safeError, type ReconcileOutcome } from './platform/webhookHealth';
+import {
   CURRENCY, amountProblem, idempotencyKey, invoiceTotals, maxPaise, outstandingPaise, overrideNeeded, overrideReason,
   nextLinkStatus, referenceIdFor, testModeRefusal, requestFingerprint, requestedPaise, type InvoiceLike, type InvoiceTotals, type OverrideKind,
 } from './paymentLinkPolicy';
@@ -198,9 +203,43 @@ async function underLimit(limiter: RateLimit | undefined, key: string): Promise<
 }
 
 function tooMany(message: string): Response {
-  const res = json({ error: message }, 429);
+  const res = json({ error: message, code: 'rate_limited' }, 429);
   res.headers.set('Retry-After', '60');
   return res;
+}
+
+/**
+ * Public webhook addresses, per client IP and before any signature or
+ * database work: a flood from one address is refused (429) without costing
+ * anything. Generous, because Razorpay retries whatever it can't deliver for
+ * 24 hours, so a refusal delays an event rather than losing it. Deliberately
+ * NOT per organization: an attacker could otherwise use up an organization's
+ * allowance and block its real payment notices.
+ */
+async function webhookIngressLimit(request: Request, env: Env): Promise<Response | null> {
+  if (request.method !== 'POST') return null;
+  const path = new URL(request.url).pathname;
+  if (!/^\/api\/(v2\/webhooks\/|payments\/webhook$)/.test(path)) return null;
+  const ip = request.headers.get('cf-connecting-ip') ?? 'local';
+  return (await underLimit(env.WEBHOOK_INGRESS_LIMITER, `webhook:${ip}`)) ? null : tooMany('Too many requests.');
+}
+
+/**
+ * Costly routes (rateLimits.ts): a limit per person and per workspace, after
+ * the access check has read the (memoised) session and before the handler
+ * does any real work. Null when the request may go ahead.
+ */
+async function costlyLimit(ctx: Ctx, env: Env): Promise<Response | null> {
+  const group = costlyGroup(ctx.method, ctx.path);
+  if (!group) return null;
+  const session = await getSession(ctx.request, env.VAYU_KV);
+  if (!session) return null; // the handler answers 401
+  const keys = limitKeys(group, session.userId, env.ORG_ID);
+  const personal = group === 'payment_link' ? env.PAYMENT_LINK_LIMITER : env.COSTLY_USER_LIMITER;
+  if (!(await underLimit(personal, keys.user)) || !(await underLimit(env.COSTLY_ORG_LIMITER, keys.org))) {
+    return tooMany('Too many of these in a short time. Wait a minute and try again.');
+  }
+  return null;
 }
 
 function generateToken(): string {
@@ -569,6 +608,12 @@ interface StoredPaymentLink {
   invoiceId?: string;
   /** What was approved when it was made (amount, invoice totals, any override and who made it). Never changed afterwards. */
   approved?: ApprovedAmount;
+  /** What customers have paid on it, in paise (Razorpay's amount_paid). */
+  amountPaid?: number;
+  /** Consecutive failed status checks (the scheduled job backs off). */
+  checkFailures?: number;
+  /** Last time its refunds were asked of Razorpay. */
+  refundsCheckedAt?: number;
   /** When the link stops accepting payment (Razorpay's expire_by); unset: Razorpay's default. */
   expiresAt?: number;
   /** Last time the app asked Razorpay for this link's status (see reconcilePaymentLinks). */
@@ -651,6 +696,7 @@ function applyRazorpayLinkState(record: StoredPaymentLink, entity: any): boolean
   const wasPaid = record.status === 'paid';
   if (typeof entity?.status === 'string') record.status = entity.status;
   if (Number(entity?.expire_by) > 0) record.expiresAt = Number(entity.expire_by) * 1000;
+  if (Number.isSafeInteger(entity?.amount_paid) && entity.amount_paid >= 0) record.amountPaid = entity.amount_paid;
   const payment = Array.isArray(entity?.payments) ? entity.payments.find((p: any) => p?.status === 'captured') ?? entity.payments[0] : null;
   if (record.status === 'paid' && payment) {
     record.paidAt ??= Number(payment.created_at) > 0 ? Number(payment.created_at) * 1000 : Date.now();
@@ -1150,55 +1196,398 @@ async function handlePaymentLinkCreate(ctx: Ctx): Promise<Response> {
   return json(record, 201);
 }
 
+// ── Refunds ─────────────────────────────────────────────────────────────────
+// Kept in the workspace's own database, keyed by Razorpay's refund id and
+// scoped to the account it came from. Status only moves forward: pending
+// (refund.created is NOT a completed refund) → processed or failed, which are
+// final. Totals count processed refunds only, from these rows.
+
+type RefundStatus = 'pending' | 'processed' | 'failed';
+
+function ensureRefundsTable(db: D1Database): Promise<void> {
+  return runSetupOnce(db, 'paymentRefunds', () => db.prepare(`
+      CREATE TABLE IF NOT EXISTS payment_refunds (
+        refund_id TEXT PRIMARY KEY,
+        account TEXT NOT NULL,
+        payment_id TEXT NOT NULL,
+        link_id TEXT,
+        mode TEXT,
+        amount INTEGER NOT NULL,
+        currency TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `).run());
+}
+
+interface RefundRow { refund_id: string; account: string; payment_id: string; link_id: string | null; mode: string | null; amount: number; currency: string; status: RefundStatus; created_at: number }
+
+const REFUND_STATUS_BY_EVENT: Record<string, RefundStatus> = {
+  'refund.created': 'pending',
+  'refund.processed': 'processed',
+  'refund.failed': 'failed',
+};
+
+/** A refund as Razorpay describes it, checked; null when it isn't one. */
+function refundFrom(entity: any, status: RefundStatus): { id: string; paymentId: string; amount: number; currency: string; status: RefundStatus; createdAt: number } | null {
+  const id = typeof entity?.id === 'string' ? entity.id : '';
+  const paymentId = typeof entity?.payment_id === 'string' ? entity.payment_id : '';
+  const amount = Number(entity?.amount);
+  const currency = typeof entity?.currency === 'string' ? entity.currency.toUpperCase().slice(0, 3) : '';
+  if (!/^rfnd_\w{6,40}$/.test(id) || !/^pay_\w{6,40}$/.test(paymentId) || !Number.isSafeInteger(amount) || amount <= 0 || currency.length !== 3) return null;
+  return { id, paymentId, amount, currency, status, createdAt: Number(entity?.created_at) > 0 ? Number(entity.created_at) * 1000 : Date.now() };
+}
+
+/** Razorpay's refund status from its API ('pending' | 'processed' | 'failed'), else null. */
+const apiRefundStatus = (s: unknown): RefundStatus | null => (s === 'pending' || s === 'processed' || s === 'failed' ? s : null);
+
+/** Remembers which link a payment belongs to, so a refund can find it. */
+async function indexLinkPayments(env: Env, link: StoredPaymentLink): Promise<void> {
+  const ids = new Set<string>();
+  if (link.paymentId) ids.add(link.paymentId);
+  for (const p of link.payments ?? []) if (p.status === 'captured' || p.status === 'refunded') ids.add(p.id);
+  await Promise.all([...ids].map(id => env.VAYU_KV.put(`payment:pay:${id}`, link.id)));
+}
+
+/** Saves a link, and the payment → link index. */
+async function saveLink(env: Env, link: StoredPaymentLink): Promise<void> {
+  await env.VAYU_KV.put(`payment:link:${link.id}`, JSON.stringify(link));
+  await indexLinkPayments(env, link);
+}
+
+/** The link a payment was made on, in this workspace; older links are found by scanning. */
+async function linkForPayment(env: Env, paymentId: string): Promise<StoredPaymentLink | null> {
+  const linkId = await env.VAYU_KV.get(`payment:pay:${paymentId}`);
+  if (linkId) {
+    const raw = await env.VAYU_KV.get(`payment:link:${linkId}`);
+    if (raw) return JSON.parse(raw) as StoredPaymentLink;
+  }
+  const list = await env.VAYU_KV.list({ prefix: 'payment:link:' });
+  for (const key of list.keys) {
+    const raw = await env.VAYU_KV.get(key.name);
+    const link = raw ? JSON.parse(raw) as StoredPaymentLink : null;
+    if (link && (link.paymentId === paymentId || link.payments?.some(p => p.id === paymentId))) return link;
+  }
+  return null;
+}
+
+/**
+ * Records one refund (insert, or move its status forward). Atomic: one
+ * statement, and a row from another account is never touched. Returns
+ * whether anything changed.
+ */
+async function recordRefund(env: Env, account: string, refund: NonNullable<ReturnType<typeof refundFrom>>, link: StoredPaymentLink | null): Promise<'new' | 'advanced' | 'unchanged' | 'other_account'> {
+  const db = env.VAYU_DB;
+  await ensureRefundsTable(db);
+  const before = await db.prepare('SELECT account, status FROM payment_refunds WHERE refund_id = ?').bind(refund.id).first<{ account: string; status: RefundStatus }>();
+  if (before && before.account !== account) {
+    console.warn(JSON.stringify({ event: 'refund_account_mismatch', refund: refund.id, account: account.slice(0, 64) }));
+    return 'other_account';
+  }
+  const now = Date.now();
+  await db.prepare(
+    `INSERT INTO payment_refunds (refund_id, account, payment_id, link_id, mode, amount, currency, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(refund_id) DO UPDATE SET
+       status = CASE WHEN payment_refunds.status IN ('processed', 'failed') THEN payment_refunds.status ELSE excluded.status END,
+       link_id = COALESCE(payment_refunds.link_id, excluded.link_id),
+       mode = COALESCE(payment_refunds.mode, excluded.mode),
+       updated_at = excluded.updated_at
+     WHERE payment_refunds.account = excluded.account`,
+  ).bind(refund.id, account, refund.paymentId, link?.id ?? null, link?.mode ?? null, refund.amount, refund.currency, refund.status, refund.createdAt, now).run();
+  if (!before) return 'new';
+  const after = await db.prepare('SELECT status FROM payment_refunds WHERE refund_id = ?').bind(refund.id).first<{ status: RefundStatus }>();
+  return after?.status === before.status ? 'unchanged' : 'advanced';
+}
+
+/** A verified refund.* event for this account. */
+async function applyRefundEvent(ctx: Ctx, event: any, account: string): Promise<void> {
+  const status = REFUND_STATUS_BY_EVENT[event?.event];
+  const refund = status ? refundFrom(event?.payload?.refund?.entity, status) : null;
+  if (!refund) return;
+  const found = await linkForPayment(ctx.env, refund.paymentId);
+  // A payment id belongs to one account; a link from another account is never matched.
+  const link = found && (found.account ?? 'shared') === account ? found : null;
+  const outcome = await recordRefund(ctx.env, account, refund, link);
+  if (link && (outcome === 'new' || outcome === 'advanced')) queueHubNotify(ctx, [{ entity: 'payments', id: link.id, op: 'put' }]);
+}
+
+/** Any verified event for an account: payment links, or refunds. */
+async function applyAccountEvent(ctx: Ctx, event: any, account: string): Promise<void> {
+  if (typeof event?.event === 'string' && event.event.startsWith('refund.')) return applyRefundEvent(ctx, event, account);
+  return applyPaymentLinkEvent(ctx, event, account);
+}
+
+/** Every refund in this workspace, by link id. */
+async function refundsByLink(db: D1Database): Promise<Map<string, RefundRow[]>> {
+  await ensureRefundsTable(db);
+  const { results } = await db.prepare('SELECT * FROM payment_refunds WHERE link_id IS NOT NULL').all<RefundRow>();
+  const map = new Map<string, RefundRow[]>();
+  for (const r of results) map.set(r.link_id!, [...(map.get(r.link_id!) ?? []), r]);
+  return map;
+}
+
+/** A link with its refunds summed: processed (refunded) and pending, in paise. */
+function withRefunds(link: StoredPaymentLink, refunds: RefundRow[] | undefined) {
+  if (!refunds?.length) return link;
+  const sum = (s: RefundStatus) => refunds.filter(r => r.status === s && r.currency === (link.currency ?? CURRENCY)).reduce((a, r) => a + r.amount, 0);
+  return { ...link, refundedPaise: sum('processed'), refundPendingPaise: sum('pending'), refunds: refunds.map(r => ({ id: r.refund_id, amount: r.amount, status: r.status, createdAt: r.created_at })) };
+}
+
+/** What a link actually collected: Razorpay's amount_paid when known, else the full amount once paid. */
+const collectedPaise = (l: StoredPaymentLink): number => l.amountPaid ?? (l.status === 'paid' ? l.amount : 0);
+
 async function handlePaymentLinksList(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
-  const list = await ctx.env.VAYU_KV.list({ prefix: 'payment:link:' });
-  const links: StoredPaymentLink[] = [];
-  for (const key of list.keys) {
-    const raw = await ctx.env.VAYU_KV.get(key.name);
-    if (raw) links.push(JSON.parse(raw));
-  }
+  const links = await storedLinks(ctx);
   links.sort((a, b) => b.createdAt - a.createdAt);
-  reconcilePaymentLinks(ctx, links);
+  const refunds = await refundsByLink(ctx.env.VAYU_DB);
+  // Read-only: checking with Razorpay is POST /payments/links/refresh and the scheduled job.
   // Past its expiry but not yet confirmed by Razorpay: show it as expired.
   const now = Date.now();
-  return json(links.map(l => (OPEN_LINK_STATUSES.has(l.status) && l.expiresAt && l.expiresAt < now ? { ...l, status: 'expired' } : l)));
+  return json(links.map(l => withRefunds(OPEN_LINK_STATUSES.has(l.status) && l.expiresAt && l.expiresAt < now ? { ...l, status: 'expired' } : l, refunds.get(l.id))));
 }
 
-/** How often an unpaid link's status is asked of Razorpay, and how many per list. */
-const LINK_CHECK_INTERVAL_MS = 5 * 60_000;
-const LINK_CHECKS_PER_LIST = 10;
+/**
+ * GET /payments/summary?from=&to= (ms) — collected, refunded and net, for
+ * LIVE links only, by when each was paid. Test links and links whose mode
+ * isn't proven yet are counted separately, never in the money figures.
+ * Collected is what customers paid; refunded is processed refunds; neither
+ * is an accounting or tax figure.
+ */
+async function handlePaymentSummary(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const from = Number(ctx.url.searchParams.get('from')) || 0;
+  const to = Number(ctx.url.searchParams.get('to')) || Number.MAX_SAFE_INTEGER;
+  const summary = summarizeLinks(await storedLinks(ctx), await refundsByLink(ctx.env.VAYU_DB), from, to);
+  return json({ currency: CURRENCY, from, to: to === Number.MAX_SAFE_INTEGER ? null : to, ...summary });
+}
+
+/** A link's processed and pending refunds in rupees (other currencies left out). */
+function refundTotals(refunds: RefundRow[] | undefined): { processed: number; pending: number } {
+  const out = { processed: 0, pending: 0 };
+  for (const r of refunds ?? []) {
+    if (r.currency !== CURRENCY) continue;
+    if (r.status === 'processed') out.processed += r.amount;
+    else if (r.status === 'pending') out.pending += r.amount;
+  }
+  return out;
+}
+
+/** Collected, refunded and net over live links paid in [from, to]; test and unproven links only counted. */
+function summarizeLinks(links: StoredPaymentLink[], refunds: Map<string, RefundRow[]>, from: number, to: number) {
+  let collected = 0; let refunded = 0; let pendingRefunds = 0; let paidCount = 0; let testLinks = 0; let unknownMode = 0;
+  for (const l of links) {
+    if (!l.paidAt || l.paidAt < from || l.paidAt > to || collectedPaise(l) === 0) continue;
+    if (l.mode === 'test') { testLinks++; continue; }
+    if (l.mode !== 'live' || (l.currency ?? CURRENCY) !== CURRENCY) { unknownMode++; continue; }
+    paidCount++;
+    collected += collectedPaise(l);
+    const r = refundTotals(refunds.get(l.id));
+    refunded += r.processed;
+    pendingRefunds += r.pending;
+  }
+  return {
+    live: { paidCount, collectedPaise: collected, refundedPaise: refunded, pendingRefundPaise: pendingRefunds, netPaise: collected - refunded },
+    excluded: { testLinks, unknownMode },
+  };
+}
+
+// ── Reconciliation ──────────────────────────────────────────────────────────
+// Webhooks are the fast path. The scheduled job (every 10 minutes, every
+// workspace) and POST /payments/links/refresh ask Razorpay about open links
+// and recently paid ones (for refunds), within a budget of API calls, backing
+// off from links that keep failing. Anything found that no webhook delivered
+// counts as "missed" in the account's webhook health.
+
+const MINUTE = 60_000;
+const RECONCILE_CALLS_PER_RUN = 40;
+const REFUND_CHECK_WINDOW_MS = 90 * 86_400_000;
+const REFUND_CHECK_EVERY_MS = 24 * 3_600_000;
+
+/** How long to wait between checks of an open link: soon after it's made, then less often, and backing off after failures. */
+function checkInterval(link: StoredPaymentLink, now: number): number {
+  const age = now - link.createdAt;
+  let base = 6 * 60 * MINUTE;
+  if (age < 86_400_000) base = 10 * MINUTE;
+  else if (age < 7 * 86_400_000) base = 60 * MINUTE;
+  return base * 2 ** Math.min(link.checkFailures ?? 0, 5);
+}
+
+type Outcomes = Map<string, ReconcileOutcome>;
+const outcomeFor = (o: Outcomes, account: string): ReconcileOutcome => {
+  let x = o.get(account);
+  if (!x) { x = { checked: 0, missed: 0, failures: 0, error: null }; o.set(account, x); }
+  return x;
+};
+
+/** One open link against Razorpay. True when its status changed. */
+async function reconcileOpenLink(ctx: Ctx, link: StoredPaymentLink, out: ReconcileOutcome): Promise<boolean> {
+  const keys = await linkAccountKeys(ctx.env, link);
+  const res = keys ? await razorpayLinkCall(ctx.env, keys, 'GET', `/${encodeURIComponent(link.id)}`).catch(() => null) : null;
+  link.checkedAt = Date.now();
+  if (!keys || !res?.ok) {
+    link.checkFailures = (link.checkFailures ?? 0) + 1;
+    out.failures++;
+    out.error = keys ? `link check answered ${res?.status ?? 'nothing'}` : 'account keys unavailable';
+    await ctx.env.VAYU_KV.put(`payment:link:${link.id}`, JSON.stringify(link));
+    return false;
+  }
+  out.checked++;
+  link.checkFailures = 0;
+  const before = `${link.status}|${link.expiresAt}|${link.amountPaid ?? ''}`;
+  noteProvenMode(link, keys);
+  const nowPaid = applyRazorpayLinkState(link, res.data);
+  await saveLink(ctx.env, link);
+  if (nowPaid) { out.missed++; await announcePaymentReceived(ctx, link); }
+  return before !== `${link.status}|${link.expiresAt}|${link.amountPaid ?? ''}`;
+}
+
+/** A paid link's refunds against Razorpay. True when a refund was new or moved on. */
+async function reconcileRefunds(ctx: Ctx, link: StoredPaymentLink, out: ReconcileOutcome): Promise<boolean> {
+  const keys = await linkAccountKeys(ctx.env, link);
+  const res = keys && link.paymentId
+    ? await fetch(`${razorpayApiBase(ctx.env)}/v1/payments/${encodeURIComponent(link.paymentId)}/refunds`, { headers: { Authorization: basicAuthHeader(keys.keyId, keys.keySecret) } }).catch(() => null)
+    : null;
+  link.refundsCheckedAt = Date.now();
+  if (!res?.ok) {
+    out.failures++;
+    out.error = `refund check answered ${res?.status ?? 'nothing'}`;
+    await ctx.env.VAYU_KV.put(`payment:link:${link.id}`, JSON.stringify(link));
+    return false;
+  }
+  out.checked++;
+  const items = ((await res.json().catch(() => ({}))) as { items?: unknown[] }).items ?? [];
+  let changed = false;
+  for (const item of items.slice(0, 50)) {
+    const status = apiRefundStatus((item as { status?: unknown })?.status);
+    const refund = status ? refundFrom(item, status) : null;
+    if (!refund || refund.paymentId !== link.paymentId) continue;
+    const outcome = await recordRefund(ctx.env, link.account ?? 'shared', refund, link);
+    if (outcome === 'new' || outcome === 'advanced') { changed = true; out.missed++; }
+  }
+  await ctx.env.VAYU_KV.put(`payment:link:${link.id}`, JSON.stringify(link));
+  return changed;
+}
+
+/** Checks this workspace's due links, spending from the shared budget. */
+async function reconcileWorkspace(ctx: Ctx, budget: { left: number }, outcomes: Outcomes): Promise<void> {
+  const now = Date.now();
+  const links = await storedLinks(ctx);
+  const open = links.filter(l => OPEN_LINK_STATUSES.has(l.status) && now - (l.checkedAt ?? 0) > checkInterval(l, now));
+  const paid = links.filter(l => (l.status === 'paid' || l.status === 'partially_paid') && l.paymentId
+    && now - (l.paidAt ?? 0) < REFUND_CHECK_WINDOW_MS && now - (l.refundsCheckedAt ?? 0) > REFUND_CHECK_EVERY_MS);
+  const changed: string[] = [];
+  for (const link of open) {
+    if (budget.left <= 0) break;
+    budget.left--;
+    if (await reconcileOpenLink(ctx, link, outcomeFor(outcomes, link.account ?? 'shared'))) changed.push(link.id);
+  }
+  for (const link of paid) {
+    if (budget.left <= 0) break;
+    budget.left--;
+    if (await reconcileRefunds(ctx, link, outcomeFor(outcomes, link.account ?? 'shared'))) changed.push(link.id);
+  }
+  if (changed.length) queueHubNotify(ctx, changed.map(id => ({ entity: 'payments' as const, id, op: 'put' as const })));
+}
+
+async function saveOutcomes(env: Env, outcomes: Outcomes): Promise<void> {
+  if (!env.PLATFORM_DB) return;
+  for (const [account, o] of outcomes) await recordReconcile(env.PLATFORM_DB, account, o);
+}
+
+/** POST /payments/links/refresh — check this workspace's due links now (the Payments screen's refresh). */
+async function handlePaymentLinksRefresh(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const outcomes: Outcomes = new Map();
+  await reconcileWorkspace(ctx, { left: 10 }, outcomes);
+  ctx.execCtx.waitUntil(saveOutcomes(ctx.env, outcomes));
+  let checked = 0;
+  for (const o of outcomes.values()) checked += o.checked;
+  return json({ checked });
+}
 
 /**
- * Asks Razorpay for the status of unpaid links, in the background. Webhooks
- * are the fast path, but the shared account's webhook secret was never set,
- * so without this a paid link stayed "Awaiting" for good. A link that turns
- * out paid is announced exactly as the webhook would; clients refetch.
+ * The scheduled job: every workspace (the original one and each organization
+ * with its own storage), starting at a different one each run so all get a
+ * turn, until the run's budget of Razorpay calls is spent.
  */
-function reconcilePaymentLinks(ctx: Ctx, links: StoredPaymentLink[]): void {
-  const now = Date.now();
-  const due = links
-    .filter(l => OPEN_LINK_STATUSES.has(l.status) && now - (l.checkedAt ?? 0) > LINK_CHECK_INTERVAL_MS)
-    .slice(0, LINK_CHECKS_PER_LIST);
-  if (due.length === 0) return;
-  ctx.execCtx.waitUntil((async () => {
-    let changed = false;
-    await Promise.all(due.map(async link => {
-      const keys = await linkAccountKeys(ctx.env, link);
-      if (!keys) return;
-      const res = await razorpayLinkCall(ctx.env, keys, 'GET', `/${encodeURIComponent(link.id)}`).catch(() => null);
-      if (!res?.ok) return;
-      const before = `${link.status}|${link.expiresAt}`;
-      noteProvenMode(link, keys);
-      const nowPaid = applyRazorpayLinkState(link, res.data);
-      link.checkedAt = Date.now();
-      await ctx.env.VAYU_KV.put(`payment:link:${link.id}`, JSON.stringify(link));
-      if (before !== `${link.status}|${link.expiresAt}`) changed = true;
-      if (nowPaid) await announcePaymentReceived(ctx, link);
-    }));
-    if (changed) queueHubNotify(ctx, due.map(l => ({ entity: 'payments' as const, id: l.id, op: 'put' as const })));
-  })().catch(e => console.warn('payment link check failed', e)));
+async function reconcileAllWorkspaces(env: Env, execCtx: ExecutionContext): Promise<void> {
+  const spaces: Env[] = [env];
+  if (env.PLATFORM_DB) {
+    const { results } = await env.PLATFORM_DB.prepare("SELECT id, app_storage FROM organizations WHERE status = 'active' AND app_storage = 'own' ORDER BY id")
+      .all<{ id: string; app_storage: 'own' | 'original' }>();
+    spaces.push(...results.map(o => orgStorageEnv(env, o)));
+  }
+  const start = Math.floor(Date.now() / (10 * MINUTE)) % spaces.length;
+  const budget = { left: RECONCILE_CALLS_PER_RUN };
+  const outcomes: Outcomes = new Map();
+  for (let i = 0; i < spaces.length && budget.left > 0; i++) {
+    const space = spaces[(start + i) % spaces.length];
+    const url = new URL('https://scheduled.invalid/api/payments/reconcile');
+    const ctx: Ctx = { request: new Request(url, { method: 'POST' }), env: space, url, path: '/payments/reconcile', method: 'POST', execCtx };
+    try {
+      await reconcileWorkspace(ctx, budget, outcomes);
+    } catch (e) {
+      console.error(JSON.stringify({ event: 'reconcile_workspace_failed', org: space.ORG_ID ?? 'original', reason: safeError(e) }));
+    }
+  }
+  await saveOutcomes(env, outcomes);
+}
+
+/** Asks Razorpay about one link, and its payments. Saves (and announces) only when `persist`. */
+async function freshLinkDetails(ctx: Ctx, link: StoredPaymentLink, persist: boolean): Promise<Response> {
+  const keys = await linkAccountKeys(ctx.env, link);
+  if (!keys) return json({ link, checked: false, reason: "The Razorpay account this link was made in isn't connected." });
+  const res = await razorpayLinkCall(ctx.env, keys, 'GET', `/${encodeURIComponent(link.id)}`).catch(() => null);
+  if (!res?.ok) return json({ link, checked: false, reason: "Couldn't reach Razorpay. Showing what was last recorded." });
+
+  noteProvenMode(link, keys);
+  const nowPaid = applyRazorpayLinkState(link, res.data);
+  const paymentIds: string[] = (Array.isArray(res.data?.payments) ? res.data.payments : [])
+    .map((p: any) => p?.payment_id).filter((v: unknown): v is string => typeof v === 'string' && !!v).slice(0, 10);
+  const fetched = await Promise.all(paymentIds.map(pid => razorpayPayment(ctx.env, keys, pid).catch(() => null)));
+  const payments = fetched.filter(Boolean).map(toPaymentDetail);
+  if (payments.length) link.payments = payments;
+  // The payment that settled it: its own time and method, not our record's guess.
+  const settled = payments.find(p => p.status === 'captured' || p.status === 'refunded');
+  if (link.status === 'paid' && settled) {
+    link.paidAt = settled.createdAt || link.paidAt;
+    link.paymentId = settled.id;
+    link.paymentMethod = settled.method;
+  }
+  link.checkedAt = Date.now();
+  if (persist) {
+    await saveLink(ctx.env, link);
+    if (nowPaid) {
+      ctx.execCtx.waitUntil(announcePaymentReceived(ctx, link));
+      queueHubNotify(ctx, [{ entity: 'payments', id: link.id, op: 'put' }]);
+    }
+  }
+  const refunds = await refundsByLink(ctx.env.VAYU_DB);
+  return json({ link: withRefunds(link, refunds.get(link.id)), checked: true, checkedAt: link.checkedAt });
+}
+
+const LINK_DETAILS_PATH = /^\/payments\/links\/(plink_\w{6,40})\/(details|recheck)$/;
+
+/**
+ * GET /payments/links/:id/details — Razorpay's current view of one link and
+ * every payment on it (references, time, method, what the customer entered),
+ * without changing anything. POST /payments/links/:id/recheck does the same
+ * and saves it: a link found paid is marked paid and announced like a webhook.
+ */
+async function handlePaymentLinkDetails(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const id = LINK_DETAILS_PATH.exec(ctx.path)?.[1];
+  if (!id) return err('Payment link not found', 404);
+  const raw = await ctx.env.VAYU_KV.get(`payment:link:${id}`);
+  if (!raw) return err('Payment link not found', 404);
+  return freshLinkDetails(ctx, JSON.parse(raw) as StoredPaymentLink, ctx.method === 'POST');
 }
 
 /** Push and activity entry for a payment, once (the caller knows it just turned paid). */
@@ -1274,50 +1663,6 @@ async function handlePaymentLinkDelete(ctx: Ctx): Promise<Response> {
   return json({ deleted: true });
 }
 
-/**
- * GET /payments/links/:id/details — ask Razorpay afresh about one link: its
- * status, and every payment made on it (transaction references, when, how,
- * and what the customer entered at checkout). Also the "Recheck" button: a
- * link found paid here is marked paid and announced like a webhook would.
- * Falls back to the last copy when Razorpay can't be reached.
- */
-async function handlePaymentLinkDetails(ctx: Ctx): Promise<Response> {
-  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
-  if (!session) return err('Unauthorized', 401);
-  const id = /^\/payments\/links\/(plink_\w{6,40})\/details$/.exec(ctx.path)?.[1];
-  if (!id) return err('Payment link not found', 404);
-  const raw = await ctx.env.VAYU_KV.get(`payment:link:${id}`);
-  if (!raw) return err('Payment link not found', 404);
-  const link = JSON.parse(raw) as StoredPaymentLink;
-
-  const keys = await linkAccountKeys(ctx.env, link);
-  if (!keys) return json({ link, checked: false, reason: "The Razorpay account this link was made in isn't connected." });
-  const res = await razorpayLinkCall(ctx.env, keys, 'GET', `/${encodeURIComponent(link.id)}`).catch(() => null);
-  if (!res?.ok) return json({ link, checked: false, reason: "Couldn't reach Razorpay. Showing what was last recorded." });
-
-  noteProvenMode(link, keys);
-  const nowPaid = applyRazorpayLinkState(link, res.data);
-  const paymentIds: string[] = (Array.isArray(res.data?.payments) ? res.data.payments : [])
-    .map((p: any) => p?.payment_id).filter((v: unknown): v is string => typeof v === 'string' && !!v).slice(0, 10);
-  const fetched = await Promise.all(paymentIds.map(pid => razorpayPayment(ctx.env, keys, pid).catch(() => null)));
-  const payments = fetched.filter(Boolean).map(toPaymentDetail);
-  if (payments.length) link.payments = payments;
-  // The payment that settled it: its own time and method, not our record's guess.
-  const settled = payments.find(p => p.status === 'captured');
-  if (link.status === 'paid' && settled) {
-    link.paidAt = settled.createdAt || link.paidAt;
-    link.paymentId = settled.id;
-    link.paymentMethod = settled.method;
-  }
-  link.checkedAt = Date.now();
-  await ctx.env.VAYU_KV.put(`payment:link:${link.id}`, JSON.stringify(link));
-  if (nowPaid) {
-    ctx.execCtx.waitUntil(announcePaymentReceived(ctx, link));
-    queueHubNotify(ctx, [{ entity: 'payments', id: link.id, op: 'put' }]);
-  }
-  return json({ link, checked: true, checkedAt: link.checkedAt });
-}
-
 /** PATCH /payments/links/:id { expiresAt } — change how long an unpaid link stays valid. */
 async function handlePaymentLinkUpdate(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
@@ -1360,26 +1705,85 @@ async function verifyRazorpaySignature(rawBody: string, signature: string, secre
   return timingSafeEqualHex(expected, signature);
 }
 
-async function handlePaymentWebhook(ctx: Ctx): Promise<Response> {
-  const secret = ctx.env.RAZORPAY_WEBHOOK_SECRET;
-  if (!secret) return err('Webhook not configured', 503);
-  const signature = ctx.request.headers.get('x-razorpay-signature');
-  if (!signature) return err('Missing signature', 400);
-  const rawBody = await ctx.request.text();
-  if (!await verifyRazorpaySignature(rawBody, signature, secret)) {
-    return err('Invalid signature', 401);
+/** The shared account's webhook secrets: the current one, and during a rotation the previous one until RAZORPAY_WEBHOOK_SECRET_PREVIOUS_UNTIL. */
+function sharedWebhookSecrets(env: Env): { secret: string; previous: boolean }[] {
+  const out: { secret: string; previous: boolean }[] = [];
+  if (env.RAZORPAY_WEBHOOK_SECRET) out.push({ secret: env.RAZORPAY_WEBHOOK_SECRET, previous: false });
+  const until = Date.parse(env.RAZORPAY_WEBHOOK_SECRET_PREVIOUS_UNTIL ?? '');
+  if (env.RAZORPAY_WEBHOOK_SECRET_PREVIOUS && Number.isFinite(until) && until > Date.now()) {
+    out.push({ secret: env.RAZORPAY_WEBHOOK_SECRET_PREVIOUS, previous: true });
   }
+  return out;
+}
 
-  await applyPaymentLinkEvent(ctx, JSON.parse(rawBody), 'shared');
+/**
+ * POST /payments/webhook — the shared account's Razorpay events. Verified
+ * against the exact raw body with the shared secret (or, during a rotation,
+ * the previous one); there is no way to skip the check. Rejections are
+ * counted for telemetry only; health comes from verified deliveries.
+ */
+async function handlePaymentWebhook(ctx: Ctx): Promise<Response> {
+  const secrets = sharedWebhookSecrets(ctx.env);
+  if (!secrets.length) return err('Webhook not configured', 503);
+  const signature = ctx.request.headers.get('x-razorpay-signature')?.toLowerCase();
+  const platformDb = ctx.env.PLATFORM_DB;
+  const reject = async (reason: string, status: number, message: string) => {
+    if (platformDb) await recordRejection(platformDb, 'shared', reason);
+    return err(message, status);
+  };
+  if (!signature) return reject('no_signature', 400, 'Missing signature');
+  const rawBody = await ctx.request.text();
+  if (rawBody.length > 256 * 1024) return reject('too_large', 413, 'Too large');
+  let used: { previous: boolean } | null = null;
+  for (const s of secrets) {
+    if (await verifyRazorpaySignature(rawBody, signature, s.secret)) { used = s; break; }
+  }
+  if (!used) return reject('bad_signature', 401, 'Invalid signature');
+  let event: any;
+  try { event = JSON.parse(rawBody); } catch { return err('Invalid JSON', 400); }
+  if (platformDb) await recordVerified(platformDb, 'shared', typeof event?.event === 'string' ? event.event : null, used.previous);
+  try {
+    await applyAccountEvent(ctx, event, 'shared');
+  } catch (e) {
+    // Verified but not applied: 500, so Razorpay retries it.
+    if (platformDb) await recordProcessingFailure(platformDb, 'shared', e);
+    throw e;
+  }
+  if (platformDb) await recordProcessed(platformDb, 'shared');
   return json({ received: true });
 }
 
 /**
- * Applies one verified Razorpay event to the app's payment link records:
- * status, and for a payment the paid time, payment id and method, plus one
- * push and activity entry. Idempotent (retries change nothing and notify
- * once), so it can run for every delivery of an event.
+ * A record for a link created outside the app (e.g. Razorpay's dashboard),
+ * so the history stays complete. Its mode is unknown until a status check
+ * with this account's keys proves it.
  */
+function linkFromEvent(plink: any, status: string, account: string): StoredPaymentLink {
+  return {
+    id: plink.id,
+    shortUrl: plink.short_url || '',
+    amount: plink.amount || 0,
+    description: plink.description || '',
+    customerName: plink.customer?.name || '',
+    customerPhone: plink.customer?.contact || '',
+    customerEmail: plink.customer?.email || '',
+    status,
+    createdAt: plink.created_at ? plink.created_at * 1000 : Date.now(),
+    createdBy: '',
+    createdByName: '',
+    account,
+    orgId: account === 'shared' ? null : account,
+    currency: typeof plink.currency === 'string' ? plink.currency : CURRENCY,
+  };
+}
+
+/** The payment that paid a link: when, which, how. */
+function notePayment(link: StoredPaymentLink, payment: any): void {
+  link.paidAt = Date.now();
+  link.paymentId = payment?.id || '';
+  link.paymentMethod = payment?.method || '';
+}
+
 const STATUS_BY_EVENT: Record<string, string> = {
   'payment_link.paid': 'paid',
   'payment_link.partially_paid': 'partially_paid',
@@ -1414,35 +1818,13 @@ async function applyPaymentLinkEvent(ctx: Ctx, event: any, receivingAccount: str
   // Razorpay retries webhooks — don't re-notify a link we already marked paid.
   const alreadyPaid = record?.status === 'paid';
 
-  // Links created outside the app (e.g. Razorpay dashboard) still get a
-  // record on payment, so the history stays complete. Its mode is unknown
-  // until a status check with this account's keys proves it.
-  const updated: StoredPaymentLink = record ?? {
-    id: plink.id,
-    shortUrl: plink.short_url || '',
-    amount: plink.amount || 0,
-    description: plink.description || '',
-    customerName: plink.customer?.name || '',
-    customerPhone: plink.customer?.contact || '',
-    customerEmail: plink.customer?.email || '',
-    status: incoming,
-    createdAt: plink.created_at ? plink.created_at * 1000 : Date.now(),
-    createdBy: '',
-    createdByName: '',
-    account: receivingAccount,
-    orgId: receivingAccount === 'shared' ? null : receivingAccount,
-    currency: typeof plink.currency === 'string' ? plink.currency : CURRENCY,
-  };
+  const updated: StoredPaymentLink = record ?? linkFromEvent(plink, incoming, receivingAccount);
   const newStatus = nextLinkStatus(record?.status, incoming);
   if (record && newStatus === record.status && event.event !== 'payment_link.paid') return;
   updated.status = newStatus;
-  if (event.event === 'payment_link.paid' && !alreadyPaid) {
-    const payment = event?.payload?.payment?.entity;
-    updated.paidAt = Date.now();
-    updated.paymentId = payment?.id || '';
-    updated.paymentMethod = payment?.method || '';
-  }
-  await ctx.env.VAYU_KV.put(kvKey, JSON.stringify(updated));
+  if (event.event === 'payment_link.paid' && !alreadyPaid) notePayment(updated, event?.payload?.payment?.entity);
+  if (Number.isSafeInteger(plink.amount_paid) && plink.amount_paid >= (updated.amountPaid ?? 0)) updated.amountPaid = plink.amount_paid;
+  await saveLink(ctx.env, updated);
 
   // Payment links live in KV, which cannot share a D1 transaction with the
   // change log — so the webhook sends a signal-only hub event instead, and
@@ -1522,12 +1904,39 @@ async function handleAuthLogin(ctx: Ctx): Promise<Response> {
   // hub socket closes too (the others reconnect with fresh tickets).
   const signedOut = await registerDevice(ctx.env.VAYU_KV, user, token, session.expiresAt, ctx.request.headers.get('User-Agent'));
   if (signedOut > 0) revokeHubAsync(ctx, user.id);
-  const body = { token, user: await withAccess(ctx, user) };
-  if (!fileAuthEnabled(ctx)) return json(body);
+  // The session lives in an HttpOnly cookie; the body carries no credential.
+  const res = json({ user: await withAccess(ctx, user) });
+  for (const c of await sessionCookies(ctx.request, token, SESSION_TTL_DAYS * 86_400)) res.headers.append('Set-Cookie', c);
   // Same-origin HttpOnly capability cookie so <img>/jsPDF loads (which cannot
-  // send headers) still authenticate. Unrelated to the bearer token.
-  const res = json(body);
-  res.headers.append('Set-Cookie', await issueFileCookie(ctx, user.id));
+  // send headers) still authenticate.
+  if (fileAuthEnabled(ctx)) res.headers.append('Set-Cookie', await issueFileCookie(ctx, user.id));
+  return res;
+}
+
+/**
+ * POST /auth/session — swaps the old sign-in token (kept by JavaScript, sent
+ * as a bearer token) for a cookie session, once: a new token in an HttpOnly
+ * cookie, the old one revoked. Only while LEGACY_BEARER_UNTIL allows bearer
+ * tokens; afterwards those devices sign in again.
+ */
+async function handleAuthSessionExchange(ctx: Ctx): Promise<Response> {
+  const kind = ctx.request.headers.get(AUTH_KIND_HEADER);
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  const raw = session ? await ctx.env.VAYU_KV.get(`auth:user:${session.userId}`) : null;
+  if (!session || !raw) return json({ error: 'Sign in again.', code: 'legacy_token_retired' }, 401);
+  const user = JSON.parse(raw) as StoredUser;
+  if (kind === 'cookie') return json({ user: await withAccess(ctx, user), exchanged: false });
+  if (kind !== 'bearer') return json({ error: 'Sign in again.', code: 'legacy_token_retired' }, 401);
+  const oldToken = bearerToken(ctx.request)!;
+  const token = generateToken();
+  const next: SessionData = { ...session, expiresAt: Date.now() + SESSION_TTL_DAYS * 86_400_000 };
+  await ctx.env.VAYU_KV.put(`auth:session:${token}`, JSON.stringify(next), { expirationTtl: SESSION_TTL_DAYS * 86_400 });
+  await ctx.env.VAYU_KV.delete(`auth:session:${oldToken}`);
+  await forgetDevice(ctx.env.VAYU_KV, user.id, oldToken);
+  await registerDevice(ctx.env.VAYU_KV, user, token, next.expiresAt, ctx.request.headers.get('User-Agent'));
+  const res = json({ user: await withAccess(ctx, user), exchanged: true });
+  for (const c of await sessionCookies(ctx.request, token, SESSION_TTL_DAYS * 86_400)) res.headers.append('Set-Cookie', c);
+  if (fileAuthEnabled(ctx)) res.headers.append('Set-Cookie', await issueFileCookie(ctx, user.id));
   return res;
 }
 
@@ -1546,6 +1955,11 @@ async function handleAuthMe(ctx: Ctx): Promise<Response> {
   // bearer session is always valid here, so it can't be the test.
   if (fileAuthEnabled(ctx) && !(await fileCookieValid(ctx))) {
     res.headers.append('Set-Cookie', await issueFileCookie(ctx, session.userId));
+  }
+  // A cookie session whose CSRF cookie went missing gets it back (same expiry).
+  if (meToken && ctx.request.headers.get(AUTH_KIND_HEADER) === 'cookie' && !readCookie(ctx.request, cookieNames(ctx.request).csrf)) {
+    const left = Math.max(Math.floor((session.expiresAt - Date.now()) / 1000), 60);
+    for (const c of await sessionCookies(ctx.request, meToken, left)) res.headers.append('Set-Cookie', c);
   }
   return res;
 }
@@ -1693,6 +2107,8 @@ async function handleAuthLogout(ctx: Ctx): Promise<Response> {
     revokeHubAsync(ctx, session.userId);
   }
   const res = json({ success: true });
+  // The session and CSRF cookies go too, cleared with the attributes they were set with.
+  for (const c of clearedSessionCookies(ctx.request)) res.headers.append('Set-Cookie', c);
   if (fileAuthEnabled(ctx)) {
     for (const [name, value] of Object.entries(fileCookieClearHeaders())) {
       res.headers.append(name, value);
@@ -1873,6 +2289,7 @@ async function handleAuthUsersUpdate(ctx: Ctx): Promise<Response> {
   if (editLimit.value === null) delete updated.maxDevices;
   else if (editLimit.value !== undefined) updated.maxDevices = editLimit.value;
   await ctx.env.VAYU_KV.put(`auth:user:${userId}`, JSON.stringify(updated));
+  await endOtherSessions(ctx, session, userId, !!password);
   // A lower limit (or a role change away from admin) applies right away.
   if (deviceLimit(updated) !== deviceLimit(existing)) {
     const signedOut = await enforceDeviceLimit(ctx.env.VAYU_KV, updated);
@@ -1883,6 +2300,13 @@ async function handleAuthUsersUpdate(ctx: Ctx): Promise<Response> {
   pub.deviceLimit = deviceLimit(updated);
   pub.devices = await listDevices(ctx.env.VAYU_KV, userId);
   return json(pub);
+}
+
+/** A new password ends that person's other sessions (a security change); the admin's own stays. */
+async function endOtherSessions(ctx: Ctx, session: SessionData, userId: string, passwordChanged: boolean): Promise<void> {
+  if (!passwordChanged) return;
+  const keep = userId === session.userId ? bearerToken(ctx.request) : null;
+  if (await signOutDevices(ctx.env.VAYU_KV, userId, keep, undefined, 'signed-out-by-admin') > 0) revokeHubAsync(ctx, userId);
 }
 
 // ── Roles (admin only) ─────────────────────────────────────────────────────
@@ -4493,7 +4917,7 @@ async function dispatch(ctx: Ctx, env: Env, orgUser: string | null | undefined):
   if (device && !(await underLimit(env.API_LIMITER, `device:${device.slice(0, 32)}`))) {
     return tooMany('Too many requests. Slow down and try again in a minute.');
   }
-  const denied = await checkAccess(ctx);
+  const denied = await checkAccess(ctx) ?? await costlyLimit(ctx, env);
   return denied ?? route.handler(ctx);
 }
 
@@ -4519,6 +4943,26 @@ async function explainSignedOut(response: Response, request: Request, env: Env):
  *     old global setting.
  * Unknown links (made on Razorpay's dashboard) are recorded in its workspace.
  */
+/**
+ * Whether an event's link (or, for a refund, the link its payment was made
+ * on) lives in the original storage and was made in this organization's
+ * account, rather than in the organization's own workspace.
+ */
+async function madeInOriginalStorage(env: Env, home: Env, orgId: string, event: any): Promise<boolean> {
+  const linkId: unknown = event?.payload?.payment_link?.entity?.id;
+  const paymentId: unknown = event?.payload?.refund?.entity?.payment_id;
+  if (typeof linkId === 'string') {
+    if ((await home.VAYU_KV.get(`payment:link:${linkId}`)) !== null) return false;
+    const legacy = await env.VAYU_KV.get(`payment:link:${linkId}`);
+    try { return !!legacy && (JSON.parse(legacy) as StoredPaymentLink).account === orgId; } catch { return false; }
+  }
+  if (typeof paymentId === 'string') {
+    if (await linkForPayment(home, paymentId)) return false;
+    return (await linkForPayment(env, paymentId))?.account === orgId;
+  }
+  return false;
+}
+
 async function routeOrgPaymentEvent(request: Request, env: Env, execCtx: ExecutionContext, orgId: string, event: unknown): Promise<void> {
   if (!env.PLATFORM_DB) return;
   const url = new URL(request.url);
@@ -4527,14 +4971,11 @@ async function routeOrgPaymentEvent(request: Request, env: Env, execCtx: Executi
     .bind(orgId).first<{ id: string; app_storage: 'own' | 'original' }>();
   if (!org) return;
   const home = orgStorageEnv(env, org);
-  const linkId = (event as { payload?: { payment_link?: { entity?: { id?: string } } } })?.payload?.payment_link?.entity?.id;
-  if (org.app_storage === 'own' && linkId && (await home.VAYU_KV.get(`payment:link:${linkId}`)) === null) {
-    const legacy = await env.VAYU_KV.get(`payment:link:${linkId}`);
-    let madeHere = false;
-    try { madeHere = !!legacy && (JSON.parse(legacy) as StoredPaymentLink).account === orgId; } catch { madeHere = false; }
-    if (madeHere) { await applyPaymentLinkEvent(at(env), event, orgId); return; }
+  if (org.app_storage === 'own' && await madeInOriginalStorage(env, home, orgId, event)) {
+    await applyAccountEvent(at(env), event, orgId);
+    return;
   }
-  await applyPaymentLinkEvent(at(home), event, orgId);
+  await applyAccountEvent(at(home), event, orgId);
 }
 
 // ── Removed features ────────────────────────────────────────────────────────
@@ -4595,6 +5036,7 @@ const routes: Route[] = [
   { method: 'POST', match: isExact('/auth/setup'), handler: handleAuthSetup },
   { method: 'POST', match: isExact('/auth/login'), handler: handleAuthLogin },
   { method: 'GET', match: isExact('/auth/me'), handler: handleAuthMe },
+  { method: 'POST', match: isExact('/auth/session'), handler: handleAuthSessionExchange },
   { method: 'PUT', match: isExact('/auth/me'), handler: handleAuthMeUpdate },
   { method: 'POST', match: isExact('/auth/logout'), handler: handleAuthLogout },
   { method: 'GET', match: isExact('/auth/users'), handler: handleAuthUsersList },
@@ -4712,6 +5154,9 @@ const routes: Route[] = [
   // Razorpay payment links
   { method: 'POST', match: isExact('/payments/link'), handler: handlePaymentLinkCreate },
   { method: 'GET', match: isExact('/payments/account'), handler: handlePaymentAccount },
+  { method: 'GET', match: isExact('/payments/summary'), handler: handlePaymentSummary },
+  { method: 'POST', match: isExact('/payments/links/refresh'), handler: handlePaymentLinksRefresh },
+  { method: 'POST', match: (p) => /^\/payments\/links\/plink_\w{6,40}\/recheck$/.test(p), handler: handlePaymentLinkDetails },
   { method: 'GET', match: isExact('/payments/links'), handler: handlePaymentLinksList },
   { method: 'GET', match: isExact('/plan'), handler: handlePlanUsage },
   { method: 'GET', match: isExact('/billing'), handler: handleBillingGet },
@@ -4888,7 +5333,8 @@ function writeAnalytics(
   try {
     const metrics = requestMetrics(request);
     env.ANALYTICS.writeDataPoint({
-      blobs: [route, request.method, workspaceId(env), isWebSocket ? 'ws' : 'http'],
+      // How it signed in: cookie, bearer (the old token, until LEGACY_BEARER_UNTIL), none, or platform.
+      blobs: [route, request.method, workspaceId(env), isWebSocket ? 'ws' : 'http', request.headers.get(AUTH_KIND_HEADER) ?? 'platform'],
       doubles: [
         status,
         durationMs,
@@ -4900,6 +5346,20 @@ function writeAnalytics(
   } catch {
     /* telemetry must never break the request */
   }
+}
+
+/** Signing in, or swapping the old token: no session to protect yet, so a trusted origin is enough. */
+const CSRF_TOKEN_EXEMPT = new Set(['/api/auth/login', '/api/auth/setup', '/api/auth/session']);
+
+async function legacyCsrfProblem(request: Request, env: Env, auth: { kind: AuthKind; token: string | null }): Promise<{ error: string; code: string } | null> {
+  // Signing in (no session to ride on yet): a browser always sends Origin on
+  // a cross-site POST, so only a present, untrusted Origin is refused.
+  // Callers outside a browser send none and are fine.
+  if (CSRF_TOKEN_EXEMPT.has(new URL(request.url).pathname)) {
+    const origin = request.headers.get('Origin');
+    return origin && !trustedOrigins(request, env).has(origin) ? { code: 'csrf_origin', error: 'This request came from a page that is not allowed.' } : null;
+  }
+  return csrfProblem(request, env, auth.kind, auth.token);
 }
 
 /**
@@ -4928,6 +5388,8 @@ async function organizationScope(request: Request, env: Env): Promise<Response |
 export default {
   async fetch(request: Request, env: Env, execCtx: ExecutionContext): Promise<Response> {
     const startedAt = Date.now();
+    const ingress = await webhookIngressLimit(request, env);
+    if (ingress) return ingress;
     // Platform (SaaS) API. Handled first so the legacy wildcard CORS below
     // never applies to cookie-authenticated routes.
     const early = pageVisit(request) ?? await handlePlatformRequest(request, env, {
@@ -4948,6 +5410,20 @@ export default {
 
     // An organization's app: /api/o/<id>/<path> runs the same routes on that
     // organization's storage, signed in with a platform account (orgApp.ts).
+    // The original app's sign-in: cookie (or, until the cutoff, the old
+    // bearer token), and CSRF checks on cookie-signed changes. Organization
+    // requests use the platform session and are checked in openOrgRequest.
+    if (!ORG_PATH.test(new URL(request.url).pathname)) {
+      const auth = normalizeAuth(request, env);
+      request = auth.request;
+      const problem = await legacyCsrfProblem(request, env, auth);
+      if (problem) {
+        // Read the refused body first: leaving it unread on a rebuilt request
+        // upsets the connection for the caller's next request.
+        await request.arrayBuffer().catch(() => undefined);
+        return json(problem, 403);
+      }
+    }
     const scope = await organizationScope(request, env);
     if (scope instanceof Response) return scope;
     ({ request, env } = scope);
@@ -4965,6 +5441,8 @@ export default {
     let response: Response;
     try {
       response = await dispatch(ctx, env, orgUser);
+      // A refused request whose body nobody read: let it go, so the connection stays usable.
+      if (request.body && !request.bodyUsed) await request.arrayBuffer().catch(() => undefined);
     } catch (e) {
       // The details go to the logs, not to the caller: internal messages can
       // reveal table names, queries or other internals.
@@ -4986,7 +5464,10 @@ export default {
    */
   async scheduled(_controller: ScheduledController, env: Env, execCtx: ExecutionContext): Promise<void> {
     const db = env.PLATFORM_DB;
-    if (!db) return;
+    if (!db) {
+      execCtx.waitUntil(reconcileAllWorkspaces(env, execCtx).catch(e => console.error('scheduled payment reconciliation failed', safeError(e))));
+      return;
+    }
     if (emailConfigured(env)) {
       execCtx.waitUntil(deliverOutbox(env, db, 50).then(
         r => { if (r.sent || r.failed) console.log(`outbox: ${r.sent} sent, ${r.failed} failed`); },
@@ -4996,5 +5477,6 @@ export default {
     if (secretsConfigured(env)) {
       execCtx.waitUntil(runRotationBatch(env, db, null).catch(e => console.error('scheduled key rotation batch failed', e)));
     }
+    execCtx.waitUntil(reconcileAllWorkspaces(env, execCtx).catch(e => console.error('scheduled payment reconciliation failed', safeError(e))));
   },
 };

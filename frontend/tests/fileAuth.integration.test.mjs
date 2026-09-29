@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { after, before, test } from 'node:test';
+import { sessionTokenFrom, withSessionToken } from './helpers/session.mjs';
 import { startDevWorker } from './helpers/devWorker.mjs';
 
 const OWNER = { name: 'Owner', email: 'owner@example.com', password: 'owner-password-1234' };
@@ -26,7 +27,7 @@ before(async () => {
     worker = await startDevWorker({ port: 8824, inspectorPort: 9254, seedLegacy: { sql: schema }, vars: { FILE_AUTH: 'on' } });
     await fetch(`${worker.origin}/api/auth/setup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(OWNER) });
     const login = await fetch(`${worker.origin}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: OWNER.email, password: OWNER.password }) });
-    token = (await login.json()).token;
+    token = sessionTokenFrom(login);
     cookie = fileCookieFrom(login);
     const form = new FormData();
     form.append('file', new File([PNG], 'artwork.png', { type: 'image/png' }));

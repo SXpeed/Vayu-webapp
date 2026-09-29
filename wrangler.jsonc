@@ -67,7 +67,14 @@
   "ratelimits": [
     { "name": "LOGIN_IP_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
     { "name": "LOGIN_EMAIL_LIMITER", "namespace_id": "1002", "simple": { "limit": 5, "period": 60 } },
-    { "name": "API_LIMITER", "namespace_id": "1003", "simple": { "limit": 600, "period": 60 } }
+    { "name": "API_LIMITER", "namespace_id": "1003", "simple": { "limit": 600, "period": 60 } },
+    // Costly routes (frontend/rateLimits.ts): per person, per workspace, and
+    // new payment links per person. Webhook ingress per client IP, before the
+    // signature check; generous, since Razorpay retries anything refused.
+    { "name": "PAYMENT_LINK_LIMITER", "namespace_id": "1004", "simple": { "limit": 10, "period": 60 } },
+    { "name": "COSTLY_USER_LIMITER", "namespace_id": "1005", "simple": { "limit": 30, "period": 60 } },
+    { "name": "COSTLY_ORG_LIMITER", "namespace_id": "1006", "simple": { "limit": 200, "period": 60 } },
+    { "name": "WEBHOOK_INGRESS_LIMITER", "namespace_id": "1007", "simple": { "limit": 1000, "period": 60 } }
   ],
   "vars": {
     "WORKSPACE_ID": "default",
@@ -94,6 +101,11 @@
     // the shared RAZORPAY_* account only. Turn off once staff make links from
     // their workspace (docs/PAYMENT_SECURITY.md, "Legacy payment links").
     "LEGACY_PAYMENT_LINKS": "on",
+    // Devices still holding the old sign-in token (kept by JavaScript) swap it
+    // for the HttpOnly cookie session on their next start. After this date the
+    // old token is refused and those devices sign in again. Watch the
+    // Analytics Engine blob5 ("bearer" vs "cookie") before it passes.
+    "LEGACY_BEARER_UNTIL": "2026-11-30T00:00:00Z",
     // TEMPORARY (2026-09-30): the shared account still has TEST keys, which
     // can't take real money. Remove this line when live keys are set; then
     // test-mode links are refused in production again.

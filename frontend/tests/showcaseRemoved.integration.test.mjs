@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { after, before, test } from 'node:test';
+import { sessionTokenFrom, withSessionToken } from './helpers/session.mjs';
 import { startDevWorker } from './helpers/devWorker.mjs';
 
 const OWNER = { name: 'Aarav Shah', email: 'owner@example.com', password: 'owner-password-1234' };
@@ -28,7 +29,7 @@ async function api(token, path, { method = 'GET', body } = {}) {
     if (token) headers.set('Authorization', `Bearer ${token}`);
     if (body !== undefined) headers.set('Content-Type', 'application/json');
     const res = await fetch(`${worker.origin}/api${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
-    return { status: res.status, body: await res.json().catch(() => null) };
+    return { status: res.status, body: withSessionToken(await res.json().catch(() => null), res) };
 }
 
 before(async () => {

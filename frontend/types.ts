@@ -332,6 +332,18 @@ export interface PaymentLink {
     };
     /** Set when a retried request returned the link it had already made. */
     replayed?: boolean;
+    /** What customers paid on it (paise), when Razorpay has said. */
+    amountPaid?: number;
+    /** Processed refunds on it (paise), and refunds still pending. */
+    refundedPaise?: number;
+    refundPendingPaise?: number;
+    refunds?: { id: string; amount: number; status: 'pending' | 'processed' | 'failed'; createdAt: number }[];
+}
+
+/** Collected, refunded and net for live links (GET /payments/summary), in paise. */
+export interface PaymentSummary {
+    live: { paidCount: number; collectedPaise: number; refundedPaise: number; pendingRefundPaise: number; netPaise: number };
+    excluded: { testLinks: number; unknownMode: number };
 }
 
 /** Which Razorpay account new links are made in (GET /payments/account). Never a key. */

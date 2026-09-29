@@ -12,6 +12,11 @@ export interface Env {
   LOGIN_EMAIL_LIMITER?: RateLimit;
   /** API calls per signed-in device, per minute. */
   API_LIMITER?: RateLimit;
+  // Costly routes and webhook ingress (frontend/rateLimits.ts).
+  PAYMENT_LINK_LIMITER?: RateLimit;
+  COSTLY_USER_LIMITER?: RateLimit;
+  COSTLY_ORG_LIMITER?: RateLimit;
+  WEBHOOK_INGRESS_LIMITER?: RateLimit;
   VAYU_KV: KVNamespace;
   VAYU_R2: R2Bucket;
   VAYU_DB: D1Database;
@@ -19,6 +24,11 @@ export interface Env {
   RAZORPAY_KEY_ID?: string;
   RAZORPAY_KEY_SECRET?: string;
   RAZORPAY_WEBHOOK_SECRET?: string;
+  // Rotating the shared webhook secret: the old one (a secret) still verifies
+  // Razorpay's retries until this time (ISO 8601, a var; at most a day after
+  // the change is enough: Razorpay retries for 24 hours).
+  RAZORPAY_WEBHOOK_SECRET_PREVIOUS?: string;
+  RAZORPAY_WEBHOOK_SECRET_PREVIOUS_UNTIL?: string;
   // Calendarific (Indian public holidays & festivals) — set via `wrangler secret put`.
   CALENDARIFIC_API_KEY?: string;
   // HMAC secret shared by the Worker and the SyncHub Durable Object. Used for
@@ -87,6 +97,10 @@ export interface Env {
   // links, in the shared RAZORPAY_* account only. Off or unset: that route
   // answers 410 and links are made from a workspace (/api/o/<org>).
   LEGACY_PAYMENT_LINKS?: string;
+  // The old sign-in token kept by JavaScript (Authorization: Bearer) is still
+  // accepted, and exchanged for the cookie session, until this date (ISO
+  // 8601). Unset or past: refused; those devices sign in again.
+  LEGACY_BEARER_UNTIL?: string;
   // "on": the shared account may make links with TEST keys in production
   // (they can't take real money). Organizations' accounts have their own
   // switch in the control centre. Local development always allows test keys.
