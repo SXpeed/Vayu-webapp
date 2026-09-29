@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Plus, Image as ImageIcon, X, Trash2, Loader2, Camera, Folder } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
-import { PageRoot, PageHeader, PageBody, PrimaryIconButton, EmptyState } from '../components/ui';
+import { PageRoot, PageHeader, PageBody, PrimaryIconButton, EmptyState, Pill } from '../components/ui';
 import { Artwork } from '../types';
 import toast from 'react-hot-toast';
 import storageService, { getThumbUrl } from '../services/storageService';
@@ -15,13 +15,19 @@ interface ArtworksViewProps {
     onArtworkClick: (artwork: Artwork) => void;
 }
 
+const STATUS_FILTERS = ['All', 'Available', 'Sold'] as const;
+type StatusFilter = typeof STATUS_FILTERS[number];
+
 export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwork, onArtworkClick }) => {
     const [isAdding, setIsAdding] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
+    const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
 
     const filteredArtworks = artworks.filter(art =>
-        art.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        art.customId.toLowerCase().includes(searchQuery.toLowerCase())
+        (statusFilter === 'All' || art.status === statusFilter) && (
+            art.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            art.customId.toLowerCase().includes(searchQuery.toLowerCase())
+        )
     );
 
     return (
@@ -31,6 +37,11 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
                 actions={<IfCan section="inventory"><PrimaryIconButton onClick={() => setIsAdding(true)} label="Add artwork" icon={<Plus size={16} />} /></IfCan>}
             >
                 <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search artworks..." />
+                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar -mx-1 px-1 py-1">
+                    {STATUS_FILTERS.map(f => (
+                        <Pill key={f} active={statusFilter === f} onClick={() => setStatusFilter(f)} className="shrink-0">{f}</Pill>
+                    ))}
+                </div>
             </PageHeader>
 
             {/* List */}
@@ -89,7 +100,7 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
                     <EmptyState
                         icon={<ImageIcon size={22} strokeWidth={1.25} />}
                         title="No artworks found"
-                        message="Add your first artwork with the + button above."
+                        message={artworks.length === 0 ? 'Add your first artwork with the + button above.' : 'Try another search or filter.'}
                     />
                 )}
             </PageBody>
