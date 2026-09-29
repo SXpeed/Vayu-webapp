@@ -73,7 +73,7 @@ export const WeekGrid: React.FC<WeekProps> = ({ data, d, dates, filters, onEdit,
     return (
         <div className="neu-card p-2.5">
             <div className="overflow-x-auto overflow-y-hidden overscroll-x-contain rounded-xl no-scrollbar" tabIndex={0} aria-label="Weekly roster; scrolls sideways">
-                <table className="w-full min-w-[980px] table-fixed border-separate border-spacing-0 text-[13px]">
+                <table className="w-full min-w-[980px] table-fixed border-separate border-spacing-0 text-[13px] text-[var(--neu-text)]">
                     <colgroup>
                         <col className="w-52" />
                         {dates.map(date => <col key={date} />)}

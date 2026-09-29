@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { ChevronLeft, ChevronRight, CloudOff, HandCoins, Image as ImageIcon, IndianRupee, Loader2, PackageX, Plus, ReceiptText, RotateCcw, Tag, Trash2, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CloudOff, HandCoins, Loader2, Plus, RotateCcw, Tag, Trash2, X } from 'lucide-react';
 import { ArtworkPicker } from '../components/ArtworkPicker';
 import { PhotoAttachments } from '../components/PhotoAttachments';
 import { SearchBar } from '../components/SearchBar';
@@ -10,15 +10,15 @@ import { useAppChrome } from '../components/Layout';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { realtimeService } from '../services/realtimeService';
 import { salesService, type PendingSale, type SalesData } from '../services/salesService';
-import { getThumbUrl } from '../services/storageService';
 import {
     MAX_PHOTOS, MAX_TAG_LENGTH, MAX_TAGS, PAYMENT_MODES, cleanTags, monthRange, saleFieldErrors, shiftMonth, summarize, summarizeByTag, todayIso,
-    type PaymentMode, type Sale, type SaleInput, type SalesSummary, type TagTotal,
+    type PaymentMode, type Sale, type SaleInput, type SalesSummary,
 } from '../salesRules';
 import { addDays, mondayOf } from '../staffRosterRules';
 import type { Artwork, Contact } from '../types';
 import { Drawer, Msg } from './staffRoster/Panels';
-import { ModeBreakdown, TagBreakdown, itemsText, rupees, saleDayLabel as dayLabel } from '../components/SalesSummary';
+import { itemsText, rupees, saleDayLabel as dayLabel } from '../components/SalesSummary';
+import { ItemNote, ItemThumb, SalesFigures, SalesList, TagChips, TagFilterBar, sameTag } from './sales/SalesParts';
 
 interface SalesViewProps {
     artworks: Artwork[];
@@ -34,8 +34,8 @@ const REFERENCE_HINT: Record<PaymentMode, string> = {
     Other: 'Reference (optional)',
 };
 
-const monthLabel = (first: string): string =>
-    new Date(`${first}T00:00:00Z`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+const monthLabel = (first: string, short = false): string =>
+    new Date(`${first}T00:00:00Z`).toLocaleDateString('en-IN', { month: short ? 'short' : 'long', year: 'numeric', timeZone: 'UTC' });
 const yearOf = (iso: string): string => iso.slice(0, 4);
 
 type RangeKind = 'week' | 'month' | 'custom';
@@ -54,8 +54,9 @@ function rangeAround(kind: 'week' | 'month', day: string): Range {
     return { kind, from, to };
 }
 
-function rangeLabel(r: Range): string {
-    if (r.kind === 'month') return monthLabel(r.from);
+/** The dates as words; `short` shortens the month's name, for phones. */
+function rangeLabel(r: Range, short = false): string {
+    if (r.kind === 'month') return monthLabel(r.from, short);
     const sameYear = yearOf(r.from) === yearOf(r.to);
     return `${dayLabel(r.from)}${sameYear ? '' : ' ' + yearOf(r.from)} – ${dayLabel(r.to)} ${yearOf(r.to)}`;
 }
@@ -64,32 +65,8 @@ const daysBetween = (from: string, to: string): number => (Date.parse(`${to}T00:
 
 /** A tag filter: every sale, or one tag ('' = untagged sales). */
 type TagFilter = { kind: 'all' } | { kind: 'tag'; tag: string };
-const sameTag = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
 const hasTag = (s: Pick<Sale, 'tags'>, tag: string): boolean => (tag === '' ? s.tags.length === 0 : s.tags.some(t => sameTag(t, tag)));
 
-const chip = 'inline-flex items-center gap-1 rounded-full neu-inset px-2 py-0.5 text-[10.5px] text-[var(--neu-text)]';
-
-/** A sale's tags as small chips. */
-const TagChips: React.FC<{ tags: string[] }> = ({ tags }) => {
-    if (!tags.length) return null;
-    return <span className="mt-1 flex flex-wrap gap-1">{tags.map(t => <span key={t} className={chip}><Tag size={9} aria-hidden="true" />{t}</span>)}</span>;
-};
-
-/** The item's photo, or what stands in for it: a piece since deleted, or one never in the inventory. */
-const ItemThumb: React.FC<{ sale: Pick<Sale, 'artworkId' | 'inInventory' | 'imageUrl'>; size?: string }> = ({ sale, size = 'w-11 h-11' }) => {
-    let inner: React.ReactNode;
-    if (sale.imageUrl) inner = <img src={getThumbUrl(sale.imageUrl)} alt="" loading="lazy" decoding="async" className="w-full h-full object-contain p-0.5" />;
-    else if (sale.artworkId && !sale.inInventory) inner = <PackageX size={16} strokeWidth={1.5} aria-hidden="true" />;
-    else inner = sale.artworkId ? <ImageIcon size={16} strokeWidth={1.25} aria-hidden="true" /> : <ReceiptText size={16} strokeWidth={1.5} aria-hidden="true" />;
-    return <span className={`neu-inset tile-backdrop shrink-0 ${size} rounded-xl overflow-hidden flex items-center justify-center text-[var(--neu-text-dim)]`}>{inner}</span>;
-};
-
-/** "Removed from inventory" / "Not in inventory", under the item's title. */
-const ItemNote: React.FC<{ sale: Pick<Sale, 'artworkId' | 'inInventory'> }> = ({ sale }) => {
-    if (sale.artworkId && !sale.inInventory) return <span className="block text-[10.5px] uppercase tracking-wider sr-open-text">Removed from inventory</span>;
-    if (!sale.artworkId) return <span className="block text-[10.5px] uppercase tracking-wider text-[var(--neu-text-dim)]">Not in inventory</span>;
-    return null;
-};
 
 /** Sales recorded on this device that haven't reached the server yet. */
 const PendingSection: React.FC<{ pending: PendingSale[]; artworks: Artwork[]; canRecord: boolean; onRetry: (p: PendingSale) => void; onDiscard: (p: PendingSale) => void }> = ({ pending, artworks, canRecord, onRetry, onDiscard }) => {
@@ -115,117 +92,70 @@ const PendingSection: React.FC<{ pending: PendingSale[]; artworks: Artwork[]; ca
     );
 };
 
-/** The sales shown: cards on a phone, a table elsewhere. Tapping one opens it (with "Record"). */
-const SalesList: React.FC<{ sales: Sale[]; phone: boolean; canRecord: boolean; onOpen: (s: Sale) => void }> = ({ sales, phone, canRecord, onOpen }) => {
-    if (!sales.length) return null;
-    if (phone) {
-        return (
-            <ul className="space-y-2.5">
-                {sales.map(s => (
-                    <li key={s.id}>
-                        <button type="button" disabled={!canRecord} onClick={() => onOpen(s)}
-                            className="neu-card w-full p-3 flex items-center gap-3 text-left active-scale disabled:cursor-default">
-                            <ItemThumb sale={s} />
-                            <span className="min-w-0 flex-1">
-                                <span className="block truncate font-medium text-[14px] text-[var(--neu-text)]">{s.itemTitle}</span>
-                                <ItemNote sale={s} />
-                                <span className="block text-[11.5px] text-[var(--neu-text-dim)] truncate">{dayLabel(s.saleDate)} · {s.buyerName}</span>
-                                <TagChips tags={s.tags} />
-                            </span>
-                            <span className="text-right shrink-0">
-                                <span className="block font-semibold tabular-nums text-[var(--neu-gold)]">{rupees(s.amount)}</span>
-                                <span className="block text-[11px] text-[var(--neu-text-dim)]">{s.paymentMode}</span>
-                            </span>
-                        </button>
-                    </li>
-                ))}
-            </ul>
-        );
-    }
-    return (
-        <div className="neu-card overflow-x-auto">
-            <table className="w-full text-[13px]">
-                <thead>
-                    <tr className="text-left text-[10.5px] uppercase tracking-widest text-[var(--neu-text-dim)]">
-                        <th scope="col" className="px-4 py-3 font-semibold">Date</th>
-                        <th scope="col" className="px-2 py-3 font-semibold">Item</th>
-                        <th scope="col" className="px-2 py-3 font-semibold">Buyer</th>
-                        <th scope="col" className="px-2 py-3 font-semibold">Mode</th>
-                        <th scope="col" className="px-2 py-3 font-semibold">Reference</th>
-                        <th scope="col" className="px-4 py-3 font-semibold text-right">Amount</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {sales.map(s => (
-                        <tr key={s.id} onClick={canRecord ? () => onOpen(s) : undefined}
-                            className={`border-t border-[var(--neu-line)] ${canRecord ? 'cursor-pointer hover:bg-black/[0.025] dark:hover:bg-white/[0.03]' : ''}`}>
-                            <td className="px-4 py-2.5 whitespace-nowrap">
-                                {dayLabel(s.saleDate)}
-                                <span className="block text-[10.5px] text-[var(--neu-text-dim)]">{s.saleNumber}</span>
-                            </td>
-                            <td className="px-2 py-2.5">
-                                <span className="flex items-center gap-2.5 min-w-[12rem]">
-                                    <ItemThumb sale={s} size="w-9 h-9" />
-                                    <span className="min-w-0">
-                                        {canRecord
-                                            ? <button type="button" onClick={(e) => { e.stopPropagation(); onOpen(s); }} className="block truncate max-w-[16rem] font-medium text-left hover:underline">{s.itemTitle}</button>
-                                            : <span className="block truncate max-w-[16rem] font-medium">{s.itemTitle}</span>}
-                                        <ItemNote sale={s} />
-                                        <TagChips tags={s.tags} />
-                                    </span>
-                                </span>
-                            </td>
-                            <td className="px-2 py-2.5">
-                                <span className="block truncate max-w-[12rem]">{s.buyerName}</span>
-                                {s.buyerPhone && <span className="block text-[11px] text-[var(--neu-text-dim)]">{s.buyerPhone}</span>}
-                            </td>
-                            <td className="px-2 py-2.5 whitespace-nowrap">{s.paymentMode}</td>
-                            <td className="px-2 py-2.5 text-[var(--neu-text-dim)] truncate max-w-[10rem]">{s.referenceNo || '—'}</td>
-                            <td className="px-4 py-2.5 text-right font-semibold tabular-nums text-[var(--neu-gold)] whitespace-nowrap">{rupees(s.amount)}</td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
-        </div>
+/** Week / Month / Custom. */
+const RangeTabs: React.FC<{ kind: RangeKind; onKind: (k: RangeKind) => void }> = ({ kind, onKind }) => (
+    <div className="flex gap-0.5 p-1 rounded-full neu-inset shrink-0" role="tablist" aria-label="Dates">
+        {RANGE_TABS.map(([k, label]) => (
+            <button key={k} type="button" role="tab" aria-selected={kind === k} onClick={() => onKind(k)}
+                className={`rounded-full px-3 py-1.5 text-[12px] font-semibold ${kind === k ? 'neu-raised-sm text-gold-700 dark:text-gold-300' : 'text-[var(--neu-text-dim)]'}`}>
+                {label}
+            </button>
+        ))}
+    </div>
+);
 
+/** The two custom dates. */
+const CustomDates: React.FC<{ today: string; draft: { from: string; to: string }; onCustom: (from: string, to: string) => void }> = ({ today, draft, onCustom }) => (
+    <div className="flex items-center gap-1.5 max-sm:w-full sm:flex-none">
+        <label className="sr-only" htmlFor="sales-from">From</label>
+        <Input id="sales-from" type="date" value={draft.from} max={today} onChange={e => onCustom(e.target.value, draft.to)} className="!h-10 !py-0 !text-[13px] flex-1 min-w-0 sm:w-40" />
+        <span className="text-[var(--neu-text-dim)]" aria-hidden="true">–</span>
+        <label className="sr-only" htmlFor="sales-to">To</label>
+        <Input id="sales-to" type="date" value={draft.to} max={today} onChange={e => onCustom(draft.from, e.target.value)} className="!h-10 !py-0 !text-[13px] flex-1 min-w-0 sm:w-40" />
+    </div>
+);
+
+/** Moving through weeks or months, and back to the current one. */
+const RangeStepper: React.FC<{ range: Range; today: string; current: boolean; phone: boolean; onMove: (by: number) => void; onReset: () => void }> = ({ range, today, current, phone, onMove, onReset }) => {
+    const unit = range.kind === 'week' ? 'week' : 'month';
+    return (
+        <div className="flex items-center gap-1 min-w-0 flex-1 sm:flex-none">
+            <button type="button" onClick={() => onMove(-1)} aria-label={`Previous ${unit}`} className="neu-icon-btn-sm active-scale"><ChevronLeft size={15} /></button>
+            <span className="min-w-0 flex-1 sm:flex-none sm:w-[11.5rem] truncate text-center text-[13px] font-semibold text-[var(--neu-text)]" aria-live="polite">{rangeLabel(range, phone)}</span>
+            <button type="button" onClick={() => onMove(1)} disabled={range.to >= today} aria-label={`Next ${unit}`} className="neu-icon-btn-sm active-scale disabled:opacity-40"><ChevronRight size={15} /></button>
+            {!current && (
+                <button type="button" onClick={onReset} aria-label={`This ${unit}`} title={`This ${unit}`} className="neu-pill shrink-0 ml-1">
+                    <RotateCcw size={12} aria-hidden="true" /><span className="hidden sm:inline">This {unit}</span>
+                </button>
+            )}
+        </div>
     );
 };
 
-/** Week / Month / Custom, and moving through them. */
-const RangeBar: React.FC<{
-    range: Range; today: string; current: boolean; draft: { from: string; to: string }; problem: string | null;
+/**
+ * The header's tools: the dates, then the payment mode and search. One row on
+ * wide screens; on phones the dates take the first row and search the second.
+ */
+const SalesTools: React.FC<{
+    range: Range; today: string; current: boolean; phone: boolean; draft: { from: string; to: string }; problem: string | null;
+    mode: 'all' | PaymentMode; query: string;
     onKind: (k: RangeKind) => void; onMove: (by: number) => void; onCustom: (from: string, to: string) => void; onReset: () => void;
-}> = ({ range, today, current, draft, problem, onKind, onMove, onCustom, onReset }) => (
+    onMode: (m: 'all' | PaymentMode) => void; onQuery: (q: string) => void;
+}> = ({ range, today, current, phone, draft, problem, mode, query, onKind, onMove, onCustom, onReset, onMode, onQuery }) => (
     <>
-        <div className="flex flex-wrap items-center gap-2">
-            <div className="flex gap-1 p-1 rounded-full neu-inset shrink-0" role="tablist" aria-label="Dates">
-                {RANGE_TABS.map(([k, label]) => (
-                    <button key={k} type="button" role="tab" aria-selected={range.kind === k} onClick={() => onKind(k)}
-                        className={`rounded-full px-3 py-1.5 text-[12px] font-semibold ${range.kind === k ? 'neu-raised-sm text-gold-700 dark:text-gold-300' : 'text-[var(--neu-text-dim)]'}`}>
-                        {label}
-                    </button>
-                ))}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <RangeTabs kind={range.kind} onKind={onKind} />
+            {range.kind === 'custom'
+                ? <CustomDates today={today} draft={draft} onCustom={onCustom} />
+                : <RangeStepper range={range} today={today} current={current} phone={phone} onMove={onMove} onReset={onReset} />}
+            <div className="flex items-center gap-2 w-full lg:w-auto lg:flex-1 lg:justify-end min-w-0">
+                <label className="sr-only" htmlFor="sales-mode">Payment mode</label>
+                <Select id="sales-mode" value={mode} onChange={e => onMode(e.target.value as 'all' | PaymentMode)} className="!w-auto !h-10 !py-0 !pr-8 !rounded-full !text-[13px] shrink-0">
+                    <option value="all">All modes</option>
+                    {PAYMENT_MODES.map(m => <option key={m} value={m}>{m}</option>)}
+                </Select>
+                <SearchBar value={query} onChange={onQuery} placeholder="Search buyer, item, tag or reference" className="flex-1 min-w-0 lg:max-w-sm" />
             </div>
-            {range.kind === 'custom' ? (
-                <div className="flex items-center gap-1.5 flex-1 min-w-[15rem]">
-                    <label className="sr-only" htmlFor="sales-from">From</label>
-                    <Input id="sales-from" type="date" value={draft.from} max={today} onChange={e => onCustom(e.target.value, draft.to)} className="!py-1.5 !text-[13px] flex-1 min-w-0" />
-                    <span className="text-[var(--neu-text-dim)]" aria-hidden="true">–</span>
-                    <label className="sr-only" htmlFor="sales-to">To</label>
-                    <Input id="sales-to" type="date" value={draft.to} max={today} onChange={e => onCustom(draft.from, e.target.value)} className="!py-1.5 !text-[13px] flex-1 min-w-0" />
-                </div>
-            ) : (
-                <div className="flex items-center gap-1.5 flex-1 min-w-[14rem]">
-                    <button type="button" onClick={() => onMove(-1)} aria-label={range.kind === 'week' ? 'Previous week' : 'Previous month'} className="neu-icon-btn-sm active-scale"><ChevronLeft size={15} /></button>
-                    <span className="flex-1 sm:flex-none sm:min-w-[11rem] text-center text-[13px] font-semibold" aria-live="polite">{rangeLabel(range)}</span>
-                    <button type="button" onClick={() => onMove(1)} disabled={range.to >= today} aria-label={range.kind === 'week' ? 'Next week' : 'Next month'} className="neu-icon-btn-sm active-scale disabled:opacity-40"><ChevronRight size={15} /></button>
-                    {!current && (
-                        <button type="button" onClick={onReset} className="neu-pill shrink-0">
-                            {range.kind === 'week' ? 'This week' : 'This month'}
-                        </button>
-                    )}
-                </div>
-            )}
         </div>
         {range.kind === 'custom' && problem && <p className="text-[12px] sr-bad-text" role="alert">{problem}</p>}
     </>
@@ -233,68 +163,11 @@ const RangeBar: React.FC<{
 
 const OfflineNote: React.FC<{ savedAt: number | null; canRecord: boolean }> = ({ savedAt, canRecord }) => (
     <Msg kind="warn">
-        <Msg kind="warn">
-            You’re offline. {savedAt ? `Showing the copy saved on this device at ${new Date(savedAt).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })}.` : 'Nothing for these dates is saved on this device yet.'}
-            {canRecord ? ' Sales you record now upload when you’re back online.' : ''}
-        </Msg>
+        You’re offline. {savedAt ? `Showing the copy saved on this device at ${new Date(savedAt).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })}.` : 'Nothing for these dates is saved on this device yet.'}
+        {canRecord ? ' Sales you record now upload when you’re back online.' : ''}
     </Msg>
 );
 
-/** One button per tag among the sales shown, to see only that tag's. */
-const TagFilterBar: React.FC<{ byTag: TagTotal[]; activeTag: string | null; onAll: () => void; onPick: (tag: string) => void }> = ({ byTag, activeTag, onAll, onPick }) => (
-    <div className="flex items-center gap-2 overflow-x-auto no-scrollbar -mx-1 px-1 py-1" role="group" aria-label="Filter by tag">
-        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar -mx-1 px-1 py-1" role="group" aria-label="Filter by tag">
-            <Pill active={activeTag === null} onClick={onAll} className="shrink-0">All sales</Pill>
-            {byTag.map(r => (
-                <Pill key={r.tag || '(untagged)'} active={activeTag !== null && sameTag(activeTag, r.tag)} onClick={() => onPick(r.tag)} className="shrink-0">
-                    {r.tag ? <Tag size={11} aria-hidden="true" /> : null}{r.tag || 'Untagged'} · {r.count}
-                </Pill>
-            ))}
-            {activeTag !== null && !byTag.some(r => sameTag(r.tag, activeTag)) && (
-                <Pill active onClick={onAll} className="shrink-0">{activeTag || 'Untagged'} · 0</Pill>
-            )}
-        </div>
-    </div>
-);
-
-/** Items sold and received, and the split by payment mode and (when used) by tag. */
-const SummaryGrid: React.FC<{ summary: SalesSummary; anyTagged: boolean; byTag: TagTotal[]; matchingTotal: number; activeTag: string | null; onPick: (tag: string) => void }> = ({ summary, anyTagged, byTag, matchingTotal, activeTag, onPick }) => (
-    <div className={`grid grid-cols-1 gap-3 lg:gap-4 ${anyTagged ? 'sm:grid-cols-2 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1fr)]' : 'sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]'}`}>
-        <div className="grid grid-cols-2 sm:grid-cols-1 gap-3 lg:gap-4">
-            <div className="neu-card p-3 lg:p-4">
-                <div className="flex items-center gap-2 mb-1.5"><HandCoins size={14} className="text-gold-500" /><span className="text-[10.5px] font-semibold uppercase tracking-widest text-gray-700 dark:text-gray-300">Items sold</span></div>
-                <p className="text-xl lg:text-2xl font-serif tabular-nums text-gray-900 dark:text-white">{summary.count}</p>
-            </div>
-            <div className="neu-card p-3 lg:p-4">
-                <div className="flex items-center gap-2 mb-1.5"><IndianRupee size={14} className="text-gold-500" /><span className="text-[10.5px] font-semibold uppercase tracking-widest text-gray-700 dark:text-gray-300">Received</span></div>
-                <p className="text-xl lg:text-2xl font-serif tabular-nums text-gray-900 dark:text-white">{rupees(summary.totalAmount)}</p>
-            </div>
-        </div>
-        <div className="neu-card p-3.5 lg:p-4">
-            <h2 className="mb-2.5 text-[10.5px] font-semibold uppercase tracking-widest text-gray-700 dark:text-gray-300">By payment mode</h2>
-            {summary.count ? <ModeBreakdown summary={summary} /> : <p className="text-[12px] text-[var(--neu-text-dim)]">No sales match.</p>}
-        </div>
-        {anyTagged && (
-            <div className="neu-card p-3.5 lg:p-4 sm:col-span-2 xl:col-span-1">
-                <h2 className="mb-2.5 text-[10.5px] font-semibold uppercase tracking-widest text-gray-700 dark:text-gray-300">By tag</h2>
-                <TagBreakdown rows={byTag} total={matchingTotal}
-                    active={activeTag === null ? undefined : byTag.find(r => sameTag(r.tag, activeTag))?.tag}
-                    onPick={onPick} />
-                <p className="mt-2.5 text-[11px] text-[var(--neu-text-dim)]">Tap a tag to see only its sales. A sale with two tags counts under both.</p>
-            </div>
-        )}
-    </div>
-);
-
-/** When filters narrow the figures, says so, with the whole range's total beside. */
-const FilterNote: React.FC<{ activeTag: string | null; all: SalesSummary; shown: SalesSummary }> = ({ activeTag, all, shown }) => (
-    <p className="-mt-2 text-[11.5px] text-[var(--neu-text-dim)]">
-        <p className="-mt-2 text-[11.5px] text-[var(--neu-text-dim)]">
-            Figures above are for the sales shown{activeTag === null ? '' : ` tagged “${activeTag || 'Untagged'}”`}.
-            {all.count === shown.count ? '' : ` All sales in these dates: ${itemsText(all.count)} · ${rupees(all.totalAmount)}.`}
-        </p>
-    </p>
-);
 
 /** An inventory piece already sold by this sale: shown, not changeable. */
 const LinkedItem: React.FC<{ sale: Sale }> = ({ sale }) => (
@@ -392,13 +265,20 @@ const SalesBody: React.FC<{
             <EmptyState
                 icon={<HandCoins size={22} strokeWidth={1.5} />}
                 title={`No sales in ${rangeText}`}
-                message={canRecord ? 'Record a sale with the + button above.' : 'Sales recorded by the accounts team show here.'}
+                message={canRecord ? 'Record one with “Record sale” above.' : 'Sales recorded by the accounts team show here.'}
             />
         );
     }
     if (!shown.length) return <EmptyState icon={<HandCoins size={22} strokeWidth={1.5} />} title="No sales match" message="Try another tag, payment mode or search." action={<Button onClick={onShowAll}>Show all</Button>} />;
     return <>{children}</>;
 };
+
+/** "Record sale": labelled where there's room, the round + on phones. */
+const RecordButton: React.FC<{ phone: boolean; onClick: () => void }> = ({ phone, onClick }) => (
+    phone
+        ? <PrimaryIconButton onClick={onClick} label="Record sale" icon={<Plus size={16} />} />
+        : <Button variant="primary" onClick={onClick} icon={<Plus size={15} />}>Record sale</Button>
+);
 
 type Editor = { sale: Sale | null } | null;
 
@@ -510,33 +390,24 @@ export const SalesView: React.FC<SalesViewProps> = ({ artworks, contacts }) => {
             <PageHeader
                 title="Sales"
                 subtitle={subtitle}
-                actions={canRecord ? <PrimaryIconButton onClick={() => setEditor({ sale: null })} label="Record sale" icon={<Plus size={16} />} /> : undefined}
+                actions={canRecord ? <RecordButton phone={isPhone} onClick={() => setEditor({ sale: null })} /> : undefined}
             >
-                <RangeBar range={range} today={today} current={current} draft={customDraft} problem={customProblem}
-                    onKind={pickKind} onMove={move} onCustom={setCustom} onReset={resetRange} />
-                <div className="flex items-center gap-2">
-                    <label className="sr-only" htmlFor="sales-mode">Payment mode</label>
-                    <Select id="sales-mode" value={mode} onChange={e => setMode(e.target.value as 'all' | PaymentMode)} className="!w-auto !rounded-full !py-2 shrink-0">
-                        <option value="all">All modes</option>
-                        {PAYMENT_MODES.map(m => <option key={m} value={m}>{m}</option>)}
-                    </Select>
-                    <SearchBar value={query} onChange={setQuery} placeholder="Search buyer, item, tag or reference" className="flex-1 min-w-0" />
-                </div>
+                <SalesTools range={range} today={today} current={current} phone={isPhone} draft={customDraft} problem={customProblem}
+                    mode={mode} query={query} onKind={pickKind} onMove={move} onCustom={setCustom} onReset={resetRange} onMode={setMode} onQuery={setQuery} />
             </PageHeader>
 
-            <PageBody space="lg">
+            <PageBody space="md">
                 {data?.offline && <OfflineNote savedAt={data.savedAt} canRecord={canRecord} />}
 
-                {anyTagged && <TagFilterBar byTag={byTag} activeTag={activeTag} onAll={() => setTagFilter({ kind: 'all' })} onPick={pickTag} />}
+                {anyTagged && <TagFilterBar byTag={byTag} allCount={matching.length} activeTag={activeTag} onAll={() => setTagFilter({ kind: 'all' })} onPick={pickTag} />}
 
-                {summary && (data?.sales.length ?? 0) > 0 && (
-                    <SummaryGrid summary={summary} anyTagged={anyTagged} byTag={byTag} matchingTotal={summarize(matching).totalAmount} activeTag={activeTag} onPick={pickTag} />
+                {summary && data && data.sales.length > 0 && (
+                    <SalesFigures summary={summary} all={data.summary} filtered={filtered} activeTag={activeTag} phone={isPhone} />
                 )}
-                {filtered && summary && data && data.sales.length > 0 && <FilterNote activeTag={activeTag} all={data.summary} shown={summary} />}
 
                 <SalesBody error={error} data={data} shown={shown} rangeText={rangeLabel(range)} canRecord={canRecord} onRetryLoad={() => { void load(); }} onShowAll={showAll}>
                     <PendingSection pending={data?.pending ?? []} artworks={artworks} canRecord={canRecord} onRetry={p => { void retry(p); }} onDiscard={discard} />
-                    <SalesList sales={shown} phone={isPhone} canRecord={canRecord} onOpen={s => setEditor({ sale: s })} />
+                    <SalesList sales={shown} phone={isPhone} today={today} canRecord={canRecord} onOpen={s => setEditor({ sale: s })} />
                 </SalesBody>
             </PageBody>
 

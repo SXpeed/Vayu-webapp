@@ -3,6 +3,7 @@ import {
     AlertTriangle, CalendarClock, ChevronLeft, ChevronRight, Download, Leaf, Loader2, Plus, Send, Store as StoreIcon, Users,
 } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
+import { StatStrip, type Stat } from '../components/StatStrip';
 import { Button, EmptyState, GhostIconButton, PageBody, PageHeader, PageRoot, PrimaryIconButton, Select, Toggle } from '../components/ui';
 import { useAppChrome } from '../components/Layout';
 import { useMediaQuery } from '../hooks/useMediaQuery';
@@ -27,23 +28,21 @@ const STATUS_CLS = {
     changed: 'sr-warn-box',
 } as const;
 
-type Tile = { Icon: React.ElementType; label: string; value: React.ReactNode; sub: string; alert?: boolean };
-
 /** The four figures above the roster: the team's week for managers, your own for everyone else. */
-function summaryTiles(manage: boolean, data: StaffRosterData | null, work: StaffShift[], openCount: number, pendingCount: number, me: string): Tile[] {
-    const open: Tile = { Icon: AlertTriangle, label: 'Open shifts', value: openCount, sub: openCount ? 'need someone' : 'all covered', alert: openCount > 0 };
+function summaryStats(manage: boolean, data: StaffRosterData | null, work: StaffShift[], openCount: number, pendingCount: number, me: string): Stat[] {
+    const open: Stat = { Icon: AlertTriangle, label: 'Open shifts', value: openCount, sub: openCount ? 'need someone' : 'all covered', alert: openCount > 0 };
     if (!manage) {
         const mine = work.filter(s => s.employeeId === me);
         return [
             { Icon: CalendarClock, label: 'Your shifts', value: mine.length, sub: 'this week' },
-            { Icon: Users, label: 'Your hours', value: hoursText(mine.reduce((a, s) => a + paidMin(s), 0)), sub: 'paid' },
+            { Icon: Users, label: 'Your hours', value: hoursText(mine.reduce((a, s) => a + paidMin(s), 0)), sub: 'paid, this week' },
             open,
             { Icon: Leaf, label: 'Your requests', value: pendingCount, sub: 'waiting' },
         ];
     }
     const staffed = work.filter(s => s.employeeId);
     return [
-        { Icon: Users, label: 'Staff scheduled', value: new Set(staffed.map(s => s.employeeId)).size, sub: `of ${data?.people.length ?? 0} · ${hoursText(staffed.reduce((a, s) => a + paidMin(s), 0))} h` },
+        { Icon: Users, label: 'Staff scheduled', value: new Set(staffed.map(s => s.employeeId)).size, sub: `of ${data?.people.length ?? 0} · ${hoursText(staffed.reduce((a, s) => a + paidMin(s), 0))} h paid` },
         { Icon: StoreIcon, label: 'Stores', value: data?.stores.length ?? 0, sub: data?.stores.map(s => s.name).slice(0, 3).join(', ') || 'none yet' },
         open,
         { Icon: Leaf, label: 'Pending leave', value: pendingCount, sub: pendingCount === 1 ? 'request' : 'requests' },
@@ -62,6 +61,24 @@ function rosterSubtitle(manage: boolean, isPhone: boolean, status: WeekStatus, n
     return `Published ${new Date(published.publishedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}${by}`;
 }
 
+/** The month shown by the Month view: today's when this week holds today, else the one holding the week's Thursday. */
+function monthOfWeek(weekStart: string): string {
+    const today = todayIso();
+    return inWeek({ date: today }, weekStart) ? today : addDays(weekStart, 3);
+}
+
+/** "28 Sep – 4 Oct 2026", or on the Month view "October 2026". */
+function navLabel(view: View, weekStart: string): string {
+    if (view !== 'month') return rangeLabel(weekStart);
+    return new Date(`${monthOfWeek(weekStart)}T00:00:00Z`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+
+/** A week in the month `by` months from the one `weekStart` shows (its middle, so the Month view lands on that month). */
+function shiftMonthOfWeek(weekStart: string, by: number): string {
+    const mid = new Date(Date.parse(`${monthOfWeek(weekStart)}T00:00:00Z`));
+    return mondayOf(new Date(Date.UTC(mid.getUTCFullYear(), mid.getUTCMonth() + by, 15)).toISOString().slice(0, 10));
+}
+
 /** The view tabs, and moving through weeks (or months). */
 const RosterNav: React.FC<{ view: View; tabs: [View, string][]; weekStart: string; onView: (v: View) => void; onMove: (by: number) => void; onToday: () => void }> = ({ view, tabs: TABS, weekStart, onView, onMove, onToday }) => (
     <div className="flex flex-wrap items-center gap-2">
@@ -74,33 +91,27 @@ const RosterNav: React.FC<{ view: View; tabs: [View, string][]; weekStart: strin
             ))}
         </div>
         {view !== 'requests' && (
-            <div className="flex items-center gap-1.5 ml-auto max-sm:w-full">
+            <div className="flex items-center gap-1 ml-auto max-sm:w-full">
                 <button type="button" onClick={() => onMove(-1)} aria-label={view === 'month' ? 'Previous month' : 'Previous week'} className="neu-icon-btn-sm active-scale"><ChevronLeft size={15} /></button>
-                <span className="flex-1 sm:flex-none sm:min-w-[10.5rem] text-center text-[13px] font-semibold tabular-nums" aria-live="polite">{rangeLabel(weekStart)}</span>
+                <span className="min-w-0 flex-1 sm:flex-none sm:w-[11.5rem] truncate text-center text-[13px] font-semibold tabular-nums text-[var(--neu-text)]" aria-live="polite">{navLabel(view, weekStart)}</span>
                 <button type="button" onClick={() => onMove(1)} aria-label={view === 'month' ? 'Next month' : 'Next week'} className="neu-icon-btn-sm active-scale"><ChevronRight size={15} /></button>
-                <button type="button" onClick={onToday} className="neu-pill shrink-0">Today</button>
+                <button type="button" onClick={onToday} className="neu-pill shrink-0 ml-1">Today</button>
             </div>
         )}
     </div>
 );
 
-const SummaryTiles: React.FC<{ tiles: Tile[] }> = ({ tiles }) => (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
-            {tiles.map(t => (
-                <div key={t.label} className="neu-card p-3 lg:p-4">
-                    <div className="flex items-center gap-2 mb-1.5">
-                        <t.Icon size={14} className="text-gold-500 shrink-0" />
-                        <span className="text-[10.5px] font-semibold uppercase tracking-widest text-gray-700 dark:text-gray-300 truncate">{t.label}</span>
-                    </div>
-                    <p className={`text-xl lg:text-2xl font-serif tabular-nums ${'alert' in t && t.alert ? 'sr-bad-text' : 'text-gray-900 dark:text-white'}`}>
-                        {t.value}<span className="ml-1.5 font-sans text-[11.5px] text-[var(--neu-text-dim)]">{t.sub}</span>
-                    </p>
-                </div>
-            ))}
-        </div>
-    </div>
+/** "Add shift": labelled where there's room, the round + on phones (as Sales' "Record sale"). */
+const AddShiftButton: React.FC<{ phone: boolean; onClick: () => void }> = ({ phone, onClick }) => (
+    phone
+        ? <PrimaryIconButton onClick={onClick} label="Add shift" icon={<Plus size={16} />} />
+        : <Button variant="primary" onClick={onClick} icon={<Plus size={15} />}>Add shift</Button>
 );
+
+/** The week's figures in one strip: two to a row on phones, four across on wide screens. */
+const RosterStats: React.FC<{ stats: Stat[] }> = ({ stats }) => <StatStrip label="This week" stats={stats} />;
+
+const FILTER_SELECT = '!w-auto !h-10 !py-0 !pr-8 !rounded-full !text-[13px]';
 
 /** Store, role and name filters, and (on the week) the week / day layout. */
 const RosterFilters: React.FC<{
@@ -108,29 +119,29 @@ const RosterFilters: React.FC<{
     onFilters: (patch: Partial<Filters>) => void; onLayout: (l: 'grid' | 'day') => void;
 }> = ({ view, filters, stores, titles, layout, onFilters, onLayout }) => (
     <div className="flex flex-wrap items-center gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-            <label className="sr-only" htmlFor="sr-store">Store</label>
-            <Select id="sr-store" value={filters.storeId} onChange={e => onFilters({ storeId: e.target.value })} className="!w-auto !rounded-full !py-2 flex-1 sm:flex-none min-w-[8rem]">
-                <option value="all">All stores</option>
-                {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </Select>
-            <label className="sr-only" htmlFor="sr-title">Role</label>
-            <Select id="sr-title" value={filters.title} onChange={e => onFilters({ title: e.target.value })} className="!w-auto !rounded-full !py-2 flex-1 sm:flex-none min-w-[8rem]">
-                <option value="all">All roles</option>
-                {titles.map(t => <option key={t} value={t}>{t}</option>)}
-            </Select>
-            <SearchBar value={filters.q} onChange={q => onFilters({ q })} placeholder="Search people" className="flex-[1_1_12rem] sm:max-w-xs" />
-            {view === 'week' && (
-                <div className="flex gap-1 p-1 rounded-full neu-inset ml-auto" role="group" aria-label="Week layout">
-                    {(['grid', 'day'] as const).map(k => (
-                        <button key={k} type="button" aria-pressed={layout === k} onClick={() => onLayout(k)}
-                            className={`rounded-full px-3 py-1 text-[12px] ${layout === k ? 'neu-raised-sm text-gold-700 dark:text-gold-300 font-semibold' : 'text-[var(--neu-text-dim)]'}`}>
-                            {k === 'grid' ? 'Week' : 'Day'}
-                        </button>
-                    ))}
-                </div>
-            )}
-        </div>
+        <label className="sr-only" htmlFor="sr-store">Store</label>
+        <Select id="sr-store" value={filters.storeId} onChange={e => onFilters({ storeId: e.target.value })} className={`${FILTER_SELECT} flex-1 sm:flex-none min-w-0 sm:min-w-[9rem]`}>
+            <option value="all">All stores</option>
+            {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </Select>
+        <label className="sr-only" htmlFor="sr-title">Role</label>
+        <Select id="sr-title" value={filters.title} onChange={e => onFilters({ title: e.target.value })} className={`${FILTER_SELECT} flex-1 sm:flex-none min-w-0 sm:min-w-[9rem]`}>
+            <option value="all">All roles</option>
+            {titles.map(t => <option key={t} value={t}>{t}</option>)}
+        </Select>
+        {/* Phones: the two lists share a row, search and the layout the next. */}
+        <div className="basis-full h-0 sm:hidden" aria-hidden="true" />
+        <SearchBar value={filters.q} onChange={q => onFilters({ q })} placeholder="Search people" className="flex-[1_1_12rem] sm:max-w-xs" />
+        {view === 'week' && (
+            <div className="flex gap-0.5 p-1 rounded-full neu-inset ml-auto shrink-0" role="group" aria-label="Week layout">
+                {(['grid', 'day'] as const).map(k => (
+                    <button key={k} type="button" aria-pressed={layout === k} onClick={() => onLayout(k)}
+                        className={`rounded-full px-3 py-1.5 text-[12px] font-semibold ${layout === k ? 'neu-raised-sm text-gold-700 dark:text-gold-300' : 'text-[var(--neu-text-dim)]'}`}>
+                        {k === 'grid' ? 'Week' : 'Day'}
+                    </button>
+                ))}
+            </div>
+        )}
     </div>
 );
 
@@ -173,17 +184,19 @@ const RosterBody: React.FC<{
     onDay: (i: number) => void; onOpenDay: (i: number) => void; onPickDay: (date: string) => void; onChanged: () => void; onReview: () => void;
 }> = ({ view, layout, isPhone, common, dayIdx, weekStart, onDay, onOpenDay, onPickDay, onChanged, onReview }) => {
     const { data, d, filters, onEdit, onNew } = common;
-    if (view === 'month') return <MonthView data={data} d={d} monthOf={addDays(weekStart, 3)} filters={filters} onPickDay={onPickDay} />;
+    if (view === 'month') return <MonthView data={data} d={d} monthOf={monthOfWeek(weekStart)} filters={filters} onPickDay={onPickDay} />;
     if (view === 'store') return <ByStoreView data={data} d={d} weekStart={weekStart} filters={filters} onEdit={onEdit} onNew={onNew} />;
     if (view === 'requests') return <RequestsView data={data} d={d} onChanged={onChanged} onReview={onReview} />;
     if (layout === 'day') return <DayAgenda {...common} dayIdx={dayIdx} onDay={onDay} />;
     return isPhone ? <PhoneWeek {...common} onOpenDay={onOpenDay} /> : <WeekGrid {...common} />;
 };
 
+const coverNote = (n: number): string => (n > 1 ? `${n} shifts need coverage` : `${n} shift needs coverage`);
+
 /** First and last day to load: the week, or the whole month grid around it. */
 function rangeFor(view: View, weekStart: string): [string, string] {
     if (view !== 'month') return [weekStart, addDays(weekStart, 6)];
-    const mid = new Date(Date.parse(`${addDays(weekStart, 3)}T00:00:00Z`));
+    const mid = new Date(Date.parse(`${monthOfWeek(weekStart)}T00:00:00Z`));
     const first = new Date(Date.UTC(mid.getUTCFullYear(), mid.getUTCMonth(), 1)).toISOString().slice(0, 10);
     const last = new Date(Date.UTC(mid.getUTCFullYear(), mid.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
     return [mondayOf(first), addDays(mondayOf(last), 6)];
@@ -195,8 +208,6 @@ function rangeFor(view: View, weekStart: string): [string, string] {
  * shifts and days off, decide on leave and publish each week; everyone else
  * sees the published weeks and can ask for leave.
  */
-
-const coverNote = (n: number): string => (n > 1 ? `${n} shifts need coverage` : `${n} shift needs coverage`);
 export const StaffRosterView: React.FC = () => {
     const { can, navigate } = useAppChrome();
     const isPhone = useMediaQuery('(max-width: 767px)');
@@ -266,7 +277,7 @@ export const StaffRosterView: React.FC = () => {
         else if (inWeek({ date: today }, weekStart)) date = today;
         newShift(null, date);
     };
-    const moveWeek = (by: number) => setWeekStart(w => addDays(w, by * 7));
+    const moveWeek = (by: number) => setWeekStart(w => (view === 'month' ? shiftMonthOfWeek(w, by) : addDays(w, by * 7)));
     const goToday = () => { setWeekStart(mondayOf(todayIso())); setDayIdx(weekdayIdx(todayIso())); };
 
     // ── Summary ──────────────────────────────────────────────────────────
@@ -278,7 +289,7 @@ export const StaffRosterView: React.FC = () => {
     const needCover = openCount + leaveHits;
     const pendingCount = data ? data.leaves.filter(l => l.status === 'pending' && (manage || l.employeeId === data.me)).length : 0;
 
-    const tiles = summaryTiles(manage, data, work, openCount, pendingCount, data?.me ?? '');
+    const stats = summaryStats(manage, data, work, openCount, pendingCount, data?.me ?? '');
 
     const csv = () => {
         if (!data || !d) return '';
@@ -313,14 +324,14 @@ export const StaffRosterView: React.FC = () => {
                         </span>
                         <GhostIconButton onClick={() => setOverlay({ kind: 'export' })} label="Export this week" icon={<Download size={16} className="text-brand-900 dark:text-gold-400" />} />
                         <GhostIconButton onClick={() => setOverlay({ kind: 'publish' })} label="Publish roster" icon={<Send size={15} className="text-brand-900 dark:text-gold-400" />} />
-                        <PrimaryIconButton onClick={addAnywhere} label="Add shift" icon={<Plus size={16} />} />
+                        <AddShiftButton phone={isPhone} onClick={addAnywhere} />
                     </>
                 ) : undefined}
             >
                 <RosterNav view={view} tabs={TABS} weekStart={weekStart} onView={setView} onMove={moveWeek} onToday={goToday} />
             </PageHeader>
 
-            <PageBody space="lg">
+            <PageBody space="md" className="text-[var(--neu-text)]">
                 {manage && data && data.stores.length === 0 && (
                     <div className="neu-card p-4 flex flex-wrap items-center gap-3">
                         <StoreIcon size={18} className="text-[var(--neu-gold)]" />
@@ -329,7 +340,7 @@ export const StaffRosterView: React.FC = () => {
                     </div>
                 )}
 
-                {view !== 'requests' && <SummaryTiles tiles={tiles} />}
+                {view !== 'requests' && <RosterStats stats={stats} />}
 
                 {view !== 'requests' && view !== 'month' && (
                     <RosterFilters view={view} filters={filters} stores={data?.stores ?? []} titles={titles} layout={layout}
