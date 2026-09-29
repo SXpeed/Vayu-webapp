@@ -89,6 +89,14 @@
     // control centre shows). docs/HOSTING.md.
     "API_ORIGIN": "https://api.ateliersupport.com",
     // Sender for every email; must be on the onboarded domain.
-    "EMAIL_FROM": "no-reply@ateliersupport.com"
+    "EMAIL_FROM": "no-reply@ateliersupport.com",
+    // Payment links from the original app (no organization) still work, in
+    // the shared RAZORPAY_* account only. Turn off once staff make links from
+    // their workspace (docs/PAYMENT_SECURITY.md, "Legacy payment links").
+    "LEGACY_PAYMENT_LINKS": "on",
+    // TEMPORARY (2026-09-30): the shared account still has TEST keys, which
+    // can't take real money. Remove this line when live keys are set; then
+    // test-mode links are refused in production again.
+    "SHARED_RAZORPAY_ALLOW_TEST": "on"
   }
 }

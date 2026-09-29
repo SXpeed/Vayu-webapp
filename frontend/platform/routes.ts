@@ -13,6 +13,8 @@
 //   PATCH           /api/v2/admin/orgs/:id/members/:mid      role / enable / disable
 //   GET|PUT|DELETE  /api/v2/admin/orgs/:id/payments/razorpay the org's own Razorpay
 //   POST            /api/v2/admin/orgs/:id/payments/razorpay/verify
+//   PUT             /api/v2/admin/orgs/:id/payments/razorpay/test-links  { allow } test keys may make customer links
+//   DELETE          /api/v2/admin/orgs/:id/payments/razorpay/app  clear the retired "app account" setting (POST: 410)
 //   POST            /api/v2/admin/users                      create a sign-in account
 //   GET|POST        /api/v2/admin/orgs/:id/import-legacy     move the original app in
 //   POST            /api/v2/admin/orgs/:id/app-storage       use the original app's data (or its own)
@@ -40,6 +42,9 @@
 //   POST            /api/v2/admin/settings/branding/logo     upload a logo (raw image body)
 //   POST            /api/v2/webhooks/razorpay/:orgId         signed, per organization
 //   POST            /api/v2/webhooks/billing/razorpay        signed, the platform's own account (plan payments)
+//   GET             /api/v2/admin/secrets?verify=1          which key each stored credential uses (owners, admins)
+//   POST            /api/v2/admin/secrets/rotation          start re-encrypting under the active key
+//   POST            /api/v2/admin/secrets/rotation/batch    run one batch of it (also every 10 minutes)
 //   GET|PUT|DELETE  /api/v2/admin/billing/razorpay           the account organizations pay their plans into
 //   POST            /api/v2/admin/billing/razorpay/verify
 //   GET             /api/v2/admin/billing/payments?status=&org=  every plan payment, with details
@@ -66,7 +71,8 @@ import {
   OrgError, addMember, createOrganization, createUserAccount, getOrganization,
   listOrganizations, setOrganizationStatus, updateMember, type Actor,
 } from './orgs';
-import { connectRazorpay, describeRazorpay, disconnectRazorpay, receiveRazorpayWebhook, setAppPaymentsOrg, verifyRazorpay } from './payments';
+import { keyUsage, runRotationBatch, startRotation } from './secretRotation';
+import { clearAppPaymentsOrg, connectRazorpay, describeRazorpay, disconnectRazorpay, receiveRazorpayWebhook, setAllowTestLinks, verifyRazorpay } from './payments';
 import { importLegacyWorkspace, listImports } from './legacyImport';
 import { PLAN_SCHEMA } from './planFields';
 import {
@@ -277,6 +283,30 @@ const BILLING_ROUTES: AdminRoute[] = [
   },
 ];
 
+// Payment credential keys (secretRotation.ts). Owners and admins only, not
+// support; starting and running a rotation also needs a recent sign-in.
+const managesSecrets = (c: AdminCtx) => c.admin.role === 'owner' || c.admin.role === 'admin';
+const SECRETS_ROUTES: AdminRoute[] = [
+  {
+    path: '/admin/secrets', methods: ['GET'],
+    run: async (c) => (managesSecrets(c)
+      ? reply(await keyUsage(c.env, c.db, c.url.searchParams.get('verify') === '1'))
+      : fail(403, 'forbidden', 'Only owners and admins can see payment credential keys.')),
+  },
+  {
+    path: '/admin/secrets/rotation', methods: ['POST'], fresh: true,
+    run: async (c) => (managesSecrets(c)
+      ? reply(await startRotation(c.env, c.db, c.actor))
+      : fail(403, 'forbidden', 'Only owners and admins can rotate payment credential keys.')),
+  },
+  {
+    path: '/admin/secrets/rotation/batch', methods: ['POST'], fresh: true,
+    run: async (c) => (managesSecrets(c)
+      ? reply(await runRotationBatch(c.env, c.db, c.actor))
+      : fail(403, 'forbidden', 'Only owners and admins can rotate payment credential keys.')),
+  },
+];
+
 const ID = '[A-Za-z0-9-]{1,64}';
 const planPath = (rest = '') => new RegExp(`^/admin/plans/(${ID})${rest}$`);
 
@@ -353,11 +383,23 @@ const ORG_ROUTES: AdminRoute[] = [
     run: async (c, m) => { await disconnectRazorpay(c.db, m![1], c.actor); return reply(await describeRazorpay(c.db, m![1], orgWebhookUrl(c, m![1]))); },
   },
   {
-    // Which account the app's payment links use: this organization's (POST)
-    // or, if it was this one, back to the shared account (DELETE).
-    path: orgPath('/payments/razorpay/app'), methods: ['POST', 'DELETE'], fresh: true,
+    // Retired (2026-09): a global choice of which organization's account the
+    // original app's links use. New links are always attributed explicitly
+    // (docs/PAYMENT_SECURITY.md). DELETE still clears an old setting.
+    path: orgPath('/payments/razorpay/app'), methods: ['POST'],
+    run: async () => fail(410, 'retired', "Choosing an organization for the original app's payment links has been retired: links are made in the account of the workspace they're made from."),
+  },
+  {
+    path: orgPath('/payments/razorpay/app'), methods: ['DELETE'], fresh: true,
+    run: async (c, m) => { await clearAppPaymentsOrg(c.db, c.actor); return reply(await describeRazorpay(c.db, m![1], orgWebhookUrl(c, m![1]))); },
+  },
+  {
+    // Test-mode keys may make customer links in production only when allowed here.
+    path: orgPath('/payments/razorpay/test-links'), methods: ['PUT'], fresh: true,
     run: async (c, m) => {
-      await setAppPaymentsOrg(c.db, c.method === 'POST' ? m![1] : null, c.actor);
+      const body = await objectBody(c.request);
+      if (typeof body.allow !== 'boolean') return fail(400, 'invalid', 'Send { "allow": true } or { "allow": false }.');
+      await setAllowTestLinks(c.db, m![1], body.allow, c.actor);
       return reply(await describeRazorpay(c.db, m![1], orgWebhookUrl(c, m![1])));
     },
   },
@@ -411,7 +453,7 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
   if (center) return center;
 
   const c: AdminCtx = { env, db, request, url, path, method, admin, actor: { userId: admin.userId, ip }, fresh };
-  for (const table of [SETTINGS_ROUTES, BILLING_ROUTES, PLAN_ROUTES, ORG_ROUTES]) {
+  for (const table of [SETTINGS_ROUTES, SECRETS_ROUTES, BILLING_ROUTES, PLAN_ROUTES, ORG_ROUTES]) {
     const out = await runAdminTable(table, c);
     if (out) return out;
   }

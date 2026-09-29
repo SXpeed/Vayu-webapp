@@ -30,8 +30,10 @@ interface OrgDetail {
 interface Razorpay {
     connected: boolean; webhookUrl: string; mode?: 'test' | 'live'; keyIdHint?: string; hasWebhookSecret?: boolean;
     status?: string; lastVerifiedAt?: number | null; lastError?: string | null; updatedAt?: number;
-    /** The app's payment links are created in this account. */
-    usedByApp?: boolean;
+    /** The retired "use for the app's payment links" setting still names this account (clear it). */
+    legacyAppAccount?: boolean;
+    /** Test-mode keys may make customer payment links in production. */
+    allowTestLinks?: boolean;
 }
 
 /** A Razorpay connection at a glance: verified, failing, or saved but not checked yet. */
@@ -594,15 +596,13 @@ const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; on
     );
 };
 
-/** Whether the app's payment links are created in this account, and whether they can be right now. */
-const AppLinksStatus: React.FC<{ info: Razorpay }> = ({ info }) => {
-    const verified = info.status === 'verified';
-    if (info.usedByApp) {
-        return verified
-            ? <StatusPill tone="ok">Created in this account</StatusPill>
-            : <StatusPill tone="bad">Blocked until the keys are verified</StatusPill>;
-    }
-    return <span className="ac-muted">{verified ? 'Not used by the app' : 'Verify the keys to use this account for the app'}</span>;
+/** Whether this organization's workspace can make payment links with this account right now. */
+const LinksStatus: React.FC<{ info: Razorpay }> = ({ info }) => {
+    if (info.status !== 'verified') return <StatusPill tone="bad">Blocked until the keys are verified</StatusPill>;
+    if (info.mode === 'live') return <StatusPill tone="ok">Live: real payments</StatusPill>;
+    return info.allowTestLinks
+        ? <StatusPill tone="warn">TEST links allowed (no real money)</StatusPill>
+        : <StatusPill tone="bad">Test keys: links refused in production</StatusPill>;
 };
 
 /** A connected account: its key, mode, status, webhook secret and whether the app's links use it. */
@@ -617,8 +617,11 @@ const RazorpayDetails: React.FC<{ info: Razorpay }> = ({ info }) => (
         </div>
         {info.lastError && <p className="col-span-2 text-[13px] text-[var(--ac-bad)] break-words">{info.lastError}</p>}
         <div className="col-span-2">
-            <Detail label="App payment links"><AppLinksStatus info={info} /></Detail>
+            <Detail label="Payment links"><LinksStatus info={info} /></Detail>
         </div>
+        {info.legacyAppAccount && (
+            <p className="col-span-2 text-[12px] text-[var(--ac-warn)]">The retired “use for the app’s payment links” setting still names this account. It no longer decides anything; clear it below.</p>
+        )}
     </dl>
 );
 
@@ -671,19 +674,27 @@ const RazorpayCard: React.FC<{ path: string; info: Razorpay; reauth: Reauth; onC
         }
     };
 
-    const useForApp = async (on: boolean) => {
-        const ok = await dialogs.confirm(on
-            ? { title: "Use this account for the app's payment links?", body: "New payment links in the app are created in this organization's own Razorpay account, so the money goes there. Links already sent keep working in the account they were made in.", confirmLabel: 'Use this account' }
-            : { title: "Stop using this account for the app?", body: 'New payment links go back to the shared account. Links already made in this account keep working.', confirmLabel: 'Stop using it', danger: true });
-        if (!ok) return;
+    const clearLegacy = async () => {
         setBusy(true);
-        const next = await guarded(reauth, () => api<Razorpay>(`${path}/app`, { method: on ? 'POST' : 'DELETE' }));
+        const next = await guarded(reauth, () => api<Razorpay>(`${path}/app`, { method: 'DELETE' }));
         setBusy(false);
-        if (next) { onChange(next); toast.success(on ? "The app's payment links now use this account" : 'Back to the shared account'); }
+        if (next) { onChange(next); toast.success('Old setting cleared'); }
+    };
+
+    const setTestLinks = async (allow: boolean) => {
+        if (allow && !(await dialogs.confirm({
+            title: 'Allow TEST payment links?',
+            body: "This account has test keys: customers paying these links aren't charged and the business receives nothing. Only for trying the flow. The app labels every such link TEST and leaves it out of its totals.",
+            confirmLabel: 'Allow test links',
+        }))) return;
+        setBusy(true);
+        const next = await guarded(reauth, () => api<Razorpay>(`${path}/test-links`, { method: 'PUT', ...json({ allow }) }));
+        setBusy(false);
+        if (next) { onChange(next); toast.success(allow ? 'Test links allowed' : 'Test links stopped'); }
     };
 
     const disconnect = async () => {
-        if (!(await dialogs.confirm({ title: 'Disconnect Razorpay?', body: info.usedByApp ? "The app's payment links use this account: until another is chosen, the app cannot create payment links. Payment notifications for it stop too." : 'Payment links and payment notifications for this organization stop working until it is connected again.', confirmLabel: 'Disconnect', danger: true }))) return;
+        if (!(await dialogs.confirm({ title: 'Disconnect Razorpay?', body: 'Payment links and payment notifications for this organization stop working until it is connected again. Links already made stay in its records.', confirmLabel: 'Disconnect', danger: true }))) return;
         const next = await guarded(reauth, () => api<Razorpay>(path, { method: 'DELETE' }));
         if (next) { onChange(next); toast.success('Disconnected'); }
     };
@@ -705,7 +716,7 @@ const RazorpayCard: React.FC<{ path: string; info: Razorpay; reauth: Reauth; onC
                 <div className="mt-2 text-[12px] space-y-1.5 ac-muted">
                     <p>Razorpay → Settings → Webhooks, this address:</p>
                     <p className="font-mono break-all select-all rounded-lg neu-inset px-2.5 py-2 text-[var(--ac-text)]">{info.webhookUrl}</p>
-                    <p>Events: payment_link.paid, payment_link.cancelled, payment_link.expired. Use the same secret as the webhook secret here.</p>
+                    <p>Events: payment_link.paid, payment_link.partially_paid, payment_link.cancelled, payment_link.expired, refund.created, refund.processed, refund.failed. Use the same secret as the webhook secret here.</p>
                 </div>
             </details>
 
@@ -716,8 +727,8 @@ const RazorpayCard: React.FC<{ path: string; info: Razorpay; reauth: Reauth; onC
                 <div className="mt-4 flex flex-wrap gap-2">
                     <Button variant={info.connected ? 'default' : 'primary'} onClick={() => setEditing(true)}>{info.connected ? 'Replace keys' : 'Connect Razorpay'}</Button>
                     {info.connected && <Button onClick={verify} disabled={busy}>{busy ? 'Checking…' : 'Verify keys'}</Button>}
-                    {info.connected && info.status === 'verified' && !info.usedByApp && <Button onClick={() => void useForApp(true)} disabled={busy}>Use for the app's payment links</Button>}
-                    {info.usedByApp && <Button onClick={() => void useForApp(false)} disabled={busy}>Stop using for the app</Button>}
+                    {info.connected && info.mode === 'test' && <Button onClick={() => void setTestLinks(!info.allowTestLinks)} disabled={busy}>{info.allowTestLinks ? 'Stop test links' : 'Allow test links'}</Button>}
+                    {info.legacyAppAccount && <Button onClick={() => void clearLegacy()} disabled={busy}>Clear old app setting</Button>}
                     {info.connected && <Button variant="danger" onClick={disconnect}>Disconnect</Button>}
                 </div>
             )}

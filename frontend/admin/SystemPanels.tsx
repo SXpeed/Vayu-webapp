@@ -228,6 +228,94 @@ export const NotificationsPanel: React.FC<{ onChange?: () => void }> = ({ onChan
     );
 };
 
+/* ----------------------- Payment credential keys ---------------------- */
+
+interface KeyUsage {
+    active: string;
+    configured: string[];
+    byKid: Record<string, number>;
+    unreadable: { target: string; field: string; reason: string }[];
+    missingKeys: string[];
+    rotation: null | {
+        targetKid: string; running: boolean; reencrypted: number; skippedChanged: number;
+        failures: { target: string; field: string; reason: string }[]; startedAt: number; finishedAt: number | null;
+    };
+}
+
+/** "3 on k0 · 12 on k1" */
+const usageText = (byKid: Record<string, number>): string =>
+    Object.entries(byKid).map(([kid, n]) => `${n} on ${kid}`).join(' · ') || 'No stored credentials';
+
+/** Where a rotation stands, in words. */
+function rotationText(r: NonNullable<KeyUsage['rotation']>): string {
+    const failed = r.failures.length ? `, ${r.failures.length} could not be read` : '';
+    if (r.running) return `Re-encrypting under ${r.targetKid}: ${r.reencrypted} done so far${failed}. It continues every 10 minutes, or run it now.`;
+    return `Last run ${timeAgo(r.finishedAt ?? r.startedAt)}: ${r.reencrypted} re-encrypted under ${r.targetKid}${failed}.`;
+}
+
+/**
+ * Which key each stored payment credential is encrypted with, and moving them
+ * all to the active key after a new one is added (docs/PAYMENT_SECURITY.md).
+ * Never shows a secret. Owners and admins only.
+ */
+export const PaymentKeysPanel: React.FC<{ reauth: Reauth }> = ({ reauth }) => {
+    const [usage, setUsage] = useState<KeyUsage | null>(null);
+    const [busy, setBusy] = useState<'verify' | 'rotate' | null>(null);
+
+    const load = useCallback(async (verify = false) => {
+        try { setUsage(await api<KeyUsage>(`/admin/secrets${verify ? '?verify=1' : ''}`)); }
+        catch (e) { toast.error((e as ApiError).message); }
+    }, []);
+    useEffect(() => { load(); }, [load]);
+
+    const verify = async () => { setBusy('verify'); await load(true); setBusy(null); };
+    const rotate = async () => {
+        setBusy('rotate');
+        const started = await guarded(reauth, () => api('/admin/secrets/rotation', { method: 'POST' }), m => toast.error(m));
+        // Batches until done (a handful for a few hundred organizations); the scheduled job finishes it otherwise.
+        for (let i = 0; started && i < 40; i++) {
+            const state = await guarded(reauth, () => api<KeyUsage['rotation']>('/admin/secrets/rotation/batch', { method: 'POST' }), m => toast.error(m));
+            if (!state?.running) break;
+        }
+        await load(true);
+        setBusy(null);
+    };
+
+    const onOlder = usage ? Object.entries(usage.byKid).filter(([kid]) => kid !== usage.active).reduce((n, [, c]) => n + c, 0) : 0;
+    let tone: 'ok' | 'warn' | 'bad' = 'ok';
+    if (usage && onOlder > 0) tone = 'warn';
+    if (usage && (usage.unreadable.length > 0 || usage.missingKeys.length > 0)) tone = 'bad';
+
+    return (
+        <Section
+            title="Payment credential keys"
+            description="Organizations' Razorpay keys and the plan-payments keys are encrypted at rest. After adding a new key and making it active, re-encrypt, then check that nothing is left on the old key before removing it."
+            actions={usage ? <StatusPill tone={tone}>{`Active: ${usage.active}`}</StatusPill> : <ShieldCheck size={16} className="ac-faint" />}
+        >
+            {!usage ? <SkeletonRows rows={2} /> : (
+                <div className="space-y-3 text-[13px]">
+                    <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-3">
+                        <Detail label="Keys configured">{usage.configured.join(', ')}</Detail>
+                        <Detail label="Stored values">{usageText(usage.byKid)}</Detail>
+                    </dl>
+                    {usage.missingKeys.length > 0 && (
+                        <p className="text-[var(--ac-bad)]">Values are stored under {usage.missingKeys.join(', ')}, which this server doesn’t have. Restore that key; don’t retire keys still in use.</p>
+                    )}
+                    {usage.unreadable.length > 0 && (
+                        <p className="text-[var(--ac-bad)]">{usage.unreadable.length} stored value(s) don’t decrypt ({[...new Set(usage.unreadable.map(u => u.target))].slice(0, 5).join(', ')}). Reconnect those accounts’ keys.</p>
+                    )}
+                    {onOlder > 0 && usage.missingKeys.length === 0 && <p className="ac-muted">{onOlder} value(s) are still on an older key.</p>}
+                    {usage.rotation && <p className="ac-muted">{rotationText(usage.rotation)}</p>}
+                    <div className="flex flex-wrap gap-2">
+                        <Button disabled={busy !== null} onClick={verify}>{busy === 'verify' ? 'Checking…' : 'Check every value'}</Button>
+                        <Button disabled={busy !== null || onOlder === 0} onClick={rotate}>{busy === 'rotate' ? 'Re-encrypting…' : `Re-encrypt under ${usage.active}`}</Button>
+                    </div>
+                </div>
+            )}
+        </Section>
+    );
+};
+
 /* ------------------------------ Health -------------------------------- */
 
 interface Health {

@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import toast from 'react-hot-toast';
-import { PaymentLink } from '../types';
+import type { Invoice, PaymentAccountInfo, PaymentLink } from '../types';
 import { paymentService } from '../services/paymentService';
 import { createRefreshScheduler } from '../services/refreshScheduler';
 import { realtimeService } from '../services/realtimeService';
@@ -9,7 +9,8 @@ import {
     PageRoot, PageHeader, PageBody, Card, SectionTitle, Field, Input, Select,
     Button, GhostIconButton, Badge, EmptyState, ToggleRow,
 } from '../components/ui';
-import { IfCan } from '../components/Layout';
+import { IfCan, useAppChrome } from '../components/Layout';
+import { AccountNotice, InvoiceField, OverrideFields, TestBadge, rupeesToPaise } from './payments/NewLinkParts';
 import { DetailRow, PaymentAttemptCard, dateTime, formatRupees, sortPayments } from '../components/PaymentAttempts';
 
 const formatDate = (ts: number) => {
@@ -105,7 +106,32 @@ const binLabel = (open: boolean): string => (open ? 'Cancel and delete link' : '
 
 const removeNote = (paid: boolean): string =>
     'Tap the bin again to remove it from the list.' + (paid ? ' The payment stays in Razorpay.' : '');
-export const PaymentsView: React.FC = () => {
+
+/** Errors worth trying again with the SAME request key (the first try may have worked). */
+const retryable = (e: unknown): boolean => {
+    const { status, code } = e as { status?: number; code?: string };
+    return status === undefined || status >= 500 || code === 'request_in_progress';
+};
+
+/** A new link's amount, checked on this device first (the server checks it again). */
+function linkAmount(amount: string, invoiceId: string): { amountPaise?: number; problem?: string } {
+    const typed = amount.trim();
+    if (!typed) return invoiceId ? {} : { problem: 'Enter the amount' };
+    const paise = rupeesToPaise(typed);
+    if (paise === null || paise < 100) return { problem: 'Enter a valid amount (minimum ₹1, at most two decimals)' };
+    return { amountPaise: paise };
+}
+
+export const PaymentsView: React.FC<{ invoices?: Invoice[] }> = ({ invoices = [] }) => {
+    const { isAdmin } = useAppChrome();
+    const [account, setAccount] = useState<PaymentAccountInfo | null>(null);
+    const [confirmTest, setConfirmTest] = useState(false);
+    const [invoiceId, setInvoiceId] = useState('');
+    const [settles, setSettles] = useState(false);
+    const [overrideReason, setOverrideReason] = useState('');
+    const [reasonShown, setReasonShown] = useState(false);
+    /** One key per request: reused when retrying it, so a retry never makes a second link. */
+    const requestKey = useRef<string | null>(null);
     const [amount, setAmount] = useState('');
     const [customerName, setCustomerName] = useState('');
     const [customerPhone, setCustomerPhone] = useState('');
@@ -177,15 +203,23 @@ export const PaymentsView: React.FC = () => {
         };
     }, [loadLinks]);
 
+    useEffect(() => {
+        paymentService.getAccount().then(setAccount).catch(() => setAccount(null));
+    }, []);
+
+    // A changed request is a new request: it gets a new key.
+    useEffect(() => { requestKey.current = null; }, [amount, customerName, customerPhone, customerEmail, description, invoiceId, settles, confirmTest]);
+
     const handleCreate = async () => {
         if (isCreating) return;
-        const rupees = Number.parseFloat(amount);
-        if (!Number.isFinite(rupees) || rupees < 1) {
-            toast.error('Enter a valid amount (minimum ₹1)');
-            return;
-        }
+        const checked = linkAmount(amount, invoiceId);
+        if (checked.problem) { toast.error(checked.problem); return; }
         if (!customerName.trim()) {
             toast.error('Customer name is required');
+            return;
+        }
+        if (account?.mode === 'test' && !confirmTest) {
+            toast.error('This account is in TEST mode: confirm it’s a test link first');
             return;
         }
         const expiresAt = expiryFor(validity, validUntil);
@@ -194,9 +228,10 @@ export const PaymentsView: React.FC = () => {
             return;
         }
         setIsCreating(true);
+        requestKey.current ??= crypto.randomUUID();
         try {
             const link = await paymentService.createPaymentLink({
-                amount: rupees,
+                amountPaise: checked.amountPaise,
                 description: description.trim() || undefined,
                 customerName: customerName.trim(),
                 customerPhone: customerPhone.trim() || undefined,
@@ -204,12 +239,18 @@ export const PaymentsView: React.FC = () => {
                 notifySms,
                 notifyEmail: !!customerEmail.trim(),
                 expiresAt,
-            });
+                ...(account?.mode === 'test' ? { mode: 'test' as const } : {}),
+                ...(invoiceId ? { invoiceId, settlesInFull: settles || undefined, overrideReason: overrideReason.trim() || undefined } : {}),
+            }, requestKey.current);
+            requestKey.current = null;
             setCreatedLink(link);
-            setLinks(prev => [link, ...prev]);
-            setAmount(''); setDescription('');
-            toast.success('Payment link created');
+            setLinks(prev => [link, ...prev.filter(l => l.id !== link.id)]);
+            setAmount(''); setDescription(''); setInvoiceId(''); setSettles(false); setOverrideReason(''); setReasonShown(false);
+            toast.success(link.replayed ? 'That link was already made; here it is' : 'Payment link created');
         } catch (e) {
+            const code = (e as { code?: string }).code;
+            if (code === 'override_reason_required') setReasonShown(true);
+            if (!retryable(e)) requestKey.current = null;
             toast.error((e as Error).message || 'Could not create payment link');
         } finally {
             setIsCreating(false);
@@ -297,14 +338,23 @@ export const PaymentsView: React.FC = () => {
                         <Card padding="lg" className="space-y-4 animate-fade-in-up">
                             <SectionTitle>New Payment Link</SectionTitle>
 
-                            <Field label="Amount (₹) *" htmlFor="pay-amount">
+                            <AccountNotice info={account} confirmTest={confirmTest} onConfirmTest={setConfirmTest} />
+
+                            <InvoiceField invoices={invoices} value={invoiceId} onChange={id => { setInvoiceId(id); setSettles(false); setReasonShown(false); }} />
+
+                            <Field label={invoiceId ? 'Amount (₹)' : 'Amount (₹) *'} htmlFor="pay-amount" hint={invoiceId ? 'Leave blank to collect what’s outstanding on the invoice.' : undefined}>
                                 <Input
-                                    id="pay-amount" type="number" inputMode="decimal" min="1" value={amount}
+                                    id="pay-amount" type="text" inputMode="decimal" value={amount}
                                     onChange={e => setAmount(e.target.value)}
-                                    placeholder="0.00"
+                                    placeholder={invoiceId ? 'Outstanding amount' : '0.00'}
                                     className="font-serif text-lg"
                                 />
                             </Field>
+
+                            {invoiceId && (
+                                <OverrideFields isAdmin={isAdmin} settles={settles} onSettles={setSettles}
+                                    reasonShown={reasonShown} reason={overrideReason} onReason={setOverrideReason} />
+                            )}
 
                             <Field label="Customer Name *" htmlFor="pay-name">
                                 <Input id="pay-name" value={customerName} onChange={e => setCustomerName(e.target.value)} />
@@ -359,8 +409,8 @@ export const PaymentsView: React.FC = () => {
                                     <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em]">Link Ready</h3>
                                 </div>
                                 <p className="text-sm text-gray-900 dark:text-white break-all font-medium">{createdLink.shortUrl}</p>
-                                <p className="text-xs text-gray-700 dark:text-gray-300">
-                                    {formatRupees(createdLink.amount)} · {createdLink.customerName}
+                                <p className="text-xs text-gray-700 dark:text-gray-300 flex items-center gap-2">
+                                    {formatRupees(createdLink.amount)} · {createdLink.customerName} <TestBadge mode={createdLink.mode} />
                                 </p>
                                 <div className="flex gap-3">
                                     <Button
@@ -402,7 +452,7 @@ export const PaymentsView: React.FC = () => {
                                             onClick={() => { if (link.status === 'paid' || link.status === 'partially_paid') setDetailsId(id => (id === link.id ? null : link.id)); }}
                                         >
                                             <div className="min-w-0">
-                                                <p className="font-serif text-base text-gray-900 dark:text-white truncate">{link.customerName}</p>
+                                                <p className="font-serif text-base text-gray-900 dark:text-white truncate flex items-center gap-2"><span className="truncate">{link.customerName}</span><TestBadge mode={link.mode} /></p>
                                                 {link.description && (
                                                     <p className="text-xs text-gray-700 dark:text-gray-300 mt-0.5 truncate">{link.description}</p>
                                                 )}

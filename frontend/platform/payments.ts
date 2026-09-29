@@ -11,7 +11,7 @@
 import type { Env } from '../workerEnv';
 import { auditStmt } from './audit';
 import { OrgError, type Actor } from './orgs';
-import { decryptSecret, encryptSecret, maskKeyId, secretsConfigured } from './secrets';
+import { decryptSecret, encryptSecret, maskKeyId, secretsConfigured, tryDecryptSecret } from './secrets';
 
 const PROVIDER = 'razorpay';
 const KEY_ID_RE = /^rzp_(test|live)_[A-Za-z0-9]{8,32}$/;
@@ -29,6 +29,10 @@ interface IntegrationRow {
   last_error: string | null;
   connected_at: number;
   updated_at: number;
+  /** Migration 0010; absent before it is applied. */
+  webhook_secret_prev_enc?: string | null;
+  webhook_secret_prev_until?: number | null;
+  allow_test_links?: number;
 }
 
 async function row(db: D1Database, orgId: string): Promise<IntegrationRow | null> {
@@ -39,11 +43,14 @@ async function row(db: D1Database, orgId: string): Promise<IntegrationRow | null
 /** What the control panel may see. Never includes a secret. */
 export async function describeRazorpay(db: D1Database, orgId: string, webhookUrl: string) {
   const r = await row(db, orgId);
-  const usedByApp = (await getAppPaymentsOrg(db)) === orgId;
-  if (!r) return { connected: false, webhookUrl, usedByApp };
+  // The retired "use for the app's payment links" setting: shown so it can be
+  // cleared; it no longer decides anything (docs/PAYMENT_SECURITY.md).
+  const legacyAppAccount = (await getAppPaymentsOrg(db)) === orgId;
+  if (!r) return { connected: false, webhookUrl, legacyAppAccount };
   return {
     connected: true,
-    usedByApp,
+    legacyAppAccount,
+    allowTestLinks: r.allow_test_links === 1,
     mode: r.mode,
     keyIdHint: maskKeyId(r.key_id),
     hasWebhookSecret: !!r.webhook_secret_enc,
@@ -172,27 +179,41 @@ export async function getAppPaymentsOrg(db: D1Database): Promise<string | null> 
   }
 }
 
-/** Point the app's payment links at this organization's account (null: back to the shared one). */
-export async function setAppPaymentsOrg(db: D1Database, orgId: string | null, actor: Actor): Promise<void> {
+/**
+ * Clears the retired "use for the app's payment links" setting. Choosing an
+ * organization this way is no longer possible: new links are made in the
+ * account of the organization the request is for, and older links are
+ * matched by the account recorded on each link.
+ */
+export async function clearAppPaymentsOrg(db: D1Database, actor: Actor): Promise<void> {
   const previous = await getAppPaymentsOrg(db);
-  if (orgId) {
-    await orgExists(db, orgId);
-    const r = await row(db, orgId);
-    if (r?.status !== 'verified') {
-      throw new OrgError(409, 'razorpay_not_verified', "Connect this organization's Razorpay and verify its keys first.");
-    }
+  if (!previous) return;
+  await db.batch([
+    db.prepare('DELETE FROM platform_settings WHERE key = ?').bind(APP_PAYMENTS_KEY),
+    auditStmt(db, {
+      actorUserId: actor.userId, actorKind: 'provider_admin', action: 'payments.app_account.clear',
+      targetType: 'organization', targetId: previous, orgId: previous, details: { from: previous }, ip: actor.ip,
+    }),
+  ]);
+}
+
+/**
+ * Allows (or stops) customer payment links with this account's TEST keys in
+ * production. Test links can't take real money, so this is only for trying
+ * the flow; it is audited, and live keys ignore it.
+ */
+export async function setAllowTestLinks(db: D1Database, orgId: string, allow: boolean, actor: Actor): Promise<void> {
+  const r = await row(db, orgId);
+  if (!r) throw new OrgError(404, 'not_connected', 'No Razorpay account is connected.');
+  if (r.allow_test_links === undefined) {
+    throw new OrgError(409, 'migration_needed', 'Apply the platform database migration 0010_payment_security first.');
   }
   await db.batch([
-    orgId
-      ? db.prepare(
-          `INSERT INTO platform_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)
-           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
-        ).bind(APP_PAYMENTS_KEY, JSON.stringify({ orgId }), Date.now(), actor.userId)
-      : db.prepare('DELETE FROM platform_settings WHERE key = ?').bind(APP_PAYMENTS_KEY),
+    db.prepare('UPDATE org_payment_integrations SET allow_test_links = ?, updated_at = ? WHERE org_id = ? AND provider = ?')
+      .bind(allow ? 1 : 0, Date.now(), orgId, PROVIDER),
     auditStmt(db, {
-      actorUserId: actor.userId, actorKind: 'provider_admin', action: 'payments.app_account.set',
-      targetType: 'organization', targetId: orgId ?? previous ?? 'shared', orgId: orgId ?? previous ?? undefined,
-      details: { from: previous ?? 'shared', to: orgId ?? 'shared' }, ip: actor.ip,
+      actorUserId: actor.userId, actorKind: 'provider_admin', action: 'payments.razorpay.test_links',
+      targetType: 'organization', targetId: orgId, orgId, details: { allow, mode: r.mode }, ip: actor.ip,
     }),
   ]);
 }
@@ -202,14 +223,11 @@ export async function setAppPaymentsOrg(db: D1Database, orgId: string | null, ac
  * has accepted (status verified). Never falls back to another account, so a
  * business's money cannot land in someone else's.
  */
-export async function verifiedRazorpayKeys(env: Env, db: D1Database, orgId: string): Promise<{ keyId: string; keySecret: string; mode: 'test' | 'live' } | null> {
+export async function verifiedRazorpayKeys(env: Env, db: D1Database, orgId: string): Promise<{ keyId: string; keySecret: string; mode: 'test' | 'live'; allowTestLinks: boolean } | null> {
   const r = await row(db, orgId);
   if (r?.status !== 'verified') return null;
-  try {
-    return { keyId: r.key_id, keySecret: await decryptSecret(env, ctx(orgId, 'key_secret'), r.key_secret_enc), mode: r.mode };
-  } catch {
-    return null;
-  }
+  const keySecret = await tryDecryptSecret(env, ctx(orgId, 'key_secret'), r.key_secret_enc, 'org.verifiedKeys');
+  return keySecret === null ? null : { keyId: r.key_id, keySecret, mode: r.mode, allowTestLinks: r.allow_test_links === 1 };
 }
 
 /** Decrypted credentials for server-side use only (creating payment links). */
@@ -255,7 +273,9 @@ export async function receiveRazorpayWebhook(env: Env, db: D1Database, orgId: st
   const r = await row(db, orgId);
   if (!r?.webhook_secret_enc || r.status === 'disabled') return unauthorized;
   let secret: string;
-  try { secret = await decryptSecret(env, ctx(orgId, 'webhook_secret'), r.webhook_secret_enc); } catch { return unauthorized; }
+  const decrypted = await tryDecryptSecret(env, ctx(orgId, 'webhook_secret'), r.webhook_secret_enc, 'org.webhook');
+  if (decrypted === null) return unauthorized;
+  secret = decrypted;
   if (!timingSafeEqual(await signRazorpayBody(secret, raw), signature.toLowerCase())) return unauthorized;
 
   let event: unknown;

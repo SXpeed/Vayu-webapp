@@ -19,7 +19,7 @@ import { OverviewPanel } from './OverviewPanel';
 import { ApplicationsPanel } from './ApplicationsPanel';
 import { AccountsPanel } from './AccountsPanel';
 import { ProfilePanel } from './ProfilePanel';
-import { AdminsPanel, HealthPanel, NotificationsPanel } from './SystemPanels';
+import { AdminsPanel, HealthPanel, NotificationsPanel, PaymentKeysPanel } from './SystemPanels';
 import { DialogProvider, EmptyState, PageHeader, Section, Segmented, SkeletonRows, StatusPill, useHashRoute, type Tone } from './kit';
 import { CommandPalette, Dock, MoreSheet, PhoneHeader, Sidebar, useSmoothScroll, type NavGroup, type NavItem, type Tab } from './Shell';
 import { useBranding } from '../useBranding';
@@ -252,6 +252,7 @@ const ControlCentre: React.FC = () => {
                                 <div className="space-y-6">
                                     <LoginMethodsPanel reauth={reauth} />
                                     <AdminsPanel reauth={reauth} myRole={screen.role} myEmail={screen.email} />
+                                    {(screen.role === 'owner' || screen.role === 'admin') && <PaymentKeysPanel reauth={reauth} />}
                                 </div>
                             )}
                             {tab === 'health' && <HealthPanel navigate={navigate} />}

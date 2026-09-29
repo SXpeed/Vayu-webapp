@@ -79,6 +79,20 @@ export interface Env {
   // (frontend/platform/secrets.ts): 32 random bytes, base64, a Worker secret.
   // Without it, connecting a Razorpay account is refused.
   PAYMENT_SECRETS_KEY?: string;
+  // Key rotation (secrets.ts): further keys as JSON {"k1":"<base64>"} (Worker
+  // secret), and which key id encrypts new values (default "k0", the key above).
+  PAYMENT_SECRETS_KEYS?: string;
+  PAYMENT_SECRETS_ACTIVE_KID?: string;
+  // "on": the original app (no organization, /api) may still make payment
+  // links, in the shared RAZORPAY_* account only. Off or unset: that route
+  // answers 410 and links are made from a workspace (/api/o/<org>).
+  LEGACY_PAYMENT_LINKS?: string;
+  // "on": the shared account may make links with TEST keys in production
+  // (they can't take real money). Organizations' accounts have their own
+  // switch in the control centre. Local development always allows test keys.
+  SHARED_RAZORPAY_ALLOW_TEST?: string;
+  // Optional business ceiling for one payment link, in paise (integer).
+  PAYMENT_LINK_MAX_PAISE?: string;
   // Cloudflare Email Service (`send_email` binding named EMAIL). The sending
   // domain must be onboarded in the dashboard (Email Service → Onboard
   // domain). Absent, nothing is sent and notices wait in the outbox.

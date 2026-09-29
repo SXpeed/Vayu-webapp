@@ -321,6 +321,28 @@ export interface PaymentLink {
     checkedAt?: number;
     /** Each payment on the link as Razorpay recorded it (filled in by "details"). */
     payments?: PaymentDetail[];
+    /** Test or live; missing on older links until checked (counted as unknown). */
+    mode?: 'test' | 'live';
+    /** The proforma invoice it collects against. */
+    invoiceId?: string;
+    /** What was approved when it was made; an override carries its reason. */
+    approved?: {
+        amountPaise: number; invoiceNumber: string | null; outstandingBeforePaise: number | null; settlesInFull: boolean;
+        override: { kind: 'above_outstanding' | 'settles_for_less'; reason: string } | null; approvedByName: string;
+    };
+    /** Set when a retried request returned the link it had already made. */
+    replayed?: boolean;
+}
+
+/** Which Razorpay account new links are made in (GET /payments/account). Never a key. */
+export interface PaymentAccountInfo {
+    ready: boolean;
+    account?: 'organization' | 'shared';
+    mode?: 'test' | 'live';
+    testAllowed?: boolean;
+    keyIdHint?: string;
+    code?: string;
+    error?: string;
 }
 
 /** One payment as Razorpay recorded it: references, when, how, and what the customer entered at checkout. */

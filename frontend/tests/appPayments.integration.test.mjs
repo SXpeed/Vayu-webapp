@@ -1,8 +1,10 @@
 // The app's payment links and per-organization Razorpay, against a real local
-// Worker and a local stand-in for Razorpay's API: links use the shared account
-// until the control centre points the app at an organization, then only that
-// organization's own verified keys (never a fallback), and that organization's
-// webhook marks the links paid.
+// Worker and a local stand-in for Razorpay's API. Every new link has explicit
+// attribution: the original app (no organization) uses only the shared
+// account; a workspace uses only its own organization's verified keys (never
+// a fallback, never a global setting); each account's webhook touches only
+// its own links. Amounts are approved on the server (invoices, overrides) and
+// a retried request never makes a second link.
 //
 //   node --test frontend/tests/appPayments.integration.test.mjs
 import assert from 'node:assert/strict';
@@ -21,6 +23,7 @@ const WEBHOOK_SECRET_B = 'org-b-webhook-secret';
 let worker, razorpay, admin, appToken, orgA, orgB;
 const calls = [];           // what the stand-in Razorpay received
 let razorpayDown = false;   // make the stand-in reject keys
+let loseNextAnswer = false; // make the link, then answer 500 (as if the answer was lost)
 const plinks = new Map();   // the stand-in's payment links: id -> entity
 const rzPayments = new Map(); // the stand-in's payments: id -> entity
 
@@ -44,12 +47,23 @@ function startRazorpay() {
             }
             if (req.url.startsWith('/v1/payments')) { res.end('{"items":[]}'); return; }
             if (req.url === '/v1/payment_links' && req.method === 'POST') {
-                n += 1;
                 const sent = JSON.parse(body || '{}');
-                const entity = { id: `plink_test_${n}`, short_url: `https://rzp.io/i/test${n}`, status: 'created', expire_by: sent.expire_by ?? 0, payments: [] };
-                plinks.set(entity.id, entity);
                 calls.at(-1).body = sent;
+                // Razorpay: a reference_id can be used for one link only.
+                if (sent.reference_id && [...plinks.values()].some(l => l.reference_id === sent.reference_id)) {
+                    res.statusCode = 400; res.end('{"error":{"description":"payment link creation with reference ID already attempted"}}'); return;
+                }
+                n += 1;
+                const entity = { id: `plink_test_${n}`, short_url: `https://rzp.io/i/test${n}`, status: 'created', expire_by: sent.expire_by ?? 0, payments: [], reference_id: sent.reference_id, amount: sent.amount };
+                plinks.set(entity.id, entity);
+                if (loseNextAnswer) { loseNextAnswer = false; res.statusCode = 500; res.end('{"error":{"description":"gateway timeout"}}'); return; }
                 res.end(JSON.stringify(entity));
+                return;
+            }
+            const byRef = /^\/v1\/payment_links\?reference_id=([^&]+)$/.exec(req.url);
+            if (byRef && req.method === 'GET') {
+                const ref = decodeURIComponent(byRef[1]);
+                res.end(JSON.stringify({ payment_links: [...plinks.values()].filter(l => l.reference_id === ref) }));
                 return;
             }
             // One link: read it, cancel it, or change it (Razorpay's real API shapes).
@@ -73,15 +87,19 @@ function startRazorpay() {
     return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)));
 }
 
-async function app(path, { method = 'GET', body } = {}) {
+async function app(path, { method = 'GET', body, headers = {}, token = appToken } = {}) {
     const res = await fetch(`${worker.origin}/api${path}`, {
-        method, headers: { Authorization: `Bearer ${appToken}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+        method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}), ...headers },
         body: body && JSON.stringify(body),
     });
     return { status: res.status, body: await res.json().catch(() => null) };
 }
 
-const createLink = (amount = 2500) => app('/payments/link', { method: 'POST', body: { amount, customerName: 'Mrs. Mehta', customerPhone: '+919820000000' } });
+// Every account here has test keys, so links confirm test mode (local development allows it).
+const linkBody = (amount = 2500, extra = {}) => ({ amount, customerName: 'Mrs. Mehta', customerPhone: '+919820000000', mode: 'test', ...extra });
+const createLink = (amount = 2500) => app('/payments/link', { method: 'POST', body: linkBody(amount) });
+/** A link from organization A's workspace (the provider admin owns both test organizations). */
+const orgLink = (org, body, headers = {}) => admin.call(`/api/o/${org.id}/payments/link`, { method: 'POST', body, headers });
 const links = async () => (await app('/payments/links')).body;
 
 async function orgWebhook(orgId, secret, event, eventId) {
@@ -131,70 +149,173 @@ after(async () => {
 
 const rzp = (org) => `/admin/orgs/${org.id}/payments/razorpay`;
 
-test('with no organization chosen, links use the shared account', async () => {
+test('the original app (no organization) makes links in the shared account only, recording account and mode', async () => {
     calls.length = 0;
     const res = await createLink();
     assert.equal(res.status, 201, JSON.stringify(res.body));
     assert.equal(res.body.account, 'shared');
+    assert.equal(res.body.orgId, null);
+    assert.equal(res.body.mode, 'test');
+    assert.equal(res.body.currency, 'INR');
+    assert.match(res.body.keyIdHint, /^rzp_test_…/);
+    assert.equal(calls.at(-1).keyId, SHARED_KEY);
+    assert.equal(calls.at(-1).body.amount, 250000, 'rupees from older clients become whole paise');
+    assert.ok(calls.at(-1).body.reference_id?.length <= 40);
+});
+
+test('a test-mode account needs the test confirmed', async () => {
+    calls.length = 0;
+    const res = await app('/payments/link', { method: 'POST', body: { ...linkBody(), mode: undefined } });
+    assert.equal(res.status, 409);
+    assert.equal(res.body.code, 'test_mode_confirm');
+    assert.equal(calls.length, 0, 'Razorpay was not asked');
+    const account = await app('/payments/account');
+    assert.deepEqual({ ready: account.body.ready, mode: account.body.mode, account: account.body.account }, { ready: true, mode: 'test', account: 'shared' });
+    assert.ok(!JSON.stringify(account.body).includes('shared-secret-value'), 'never the key secret');
+});
+
+test('the retired global "app account" setting cannot be chosen any more', async () => {
+    assert.equal((await admin.call(`${rzp(orgA)}/verify`, { method: 'POST' })).body.status, 'verified');
+    const chosen = await admin.call(`${rzp(orgA)}/app`, { method: 'POST' });
+    assert.equal(chosen.status, 410);
+    assert.equal(chosen.body.code, 'retired');
+    // And the original app keeps using the shared account, never organization A's.
+    calls.length = 0;
+    assert.equal((await createLink()).body.account, 'shared');
     assert.equal(calls.at(-1).keyId, SHARED_KEY);
 });
 
-test('an organization can be chosen only once its keys are verified', async () => {
-    const early = await admin.call(`${rzp(orgA)}/app`, { method: 'POST' });
-    assert.equal(early.status, 409);
-    assert.equal(early.body.code, 'razorpay_not_verified');
-    assert.equal((await admin.call(`${rzp(orgA)}/verify`, { method: 'POST' })).body.status, 'verified');
-    const chosen = await admin.call(`${rzp(orgA)}/app`, { method: 'POST' });
-    assert.equal(chosen.status, 200, chosen.text);
-    assert.equal(chosen.body.usedByApp, true);
-    assert.equal((await admin.call(rzp(orgB))).body.usedByApp, false, 'only one organization at a time');
-});
-
-test("then links are created in that organization's own account, and its webhook marks them paid", async () => {
+test("a workspace's links use its own verified account; only its webhook marks them paid", async () => {
     calls.length = 0;
-    const res = await createLink();
-    assert.equal(res.status, 201, JSON.stringify(res.body));
+    const res = await orgLink(orgA, linkBody());
+    assert.equal(res.status, 201, res.text);
     assert.equal(res.body.account, orgA.id);
-    assert.equal(calls.at(-1).keyId, ORG_KEY, "Vayu's own key id, not the shared one");
+    assert.equal(res.body.orgId, orgA.id);
+    assert.equal(calls.at(-1).keyId, ORG_KEY, "organization A's own key id, not the shared one");
+    // Organization B isn't verified: its workspace can't make links, and doesn't borrow anyone's.
+    calls.length = 0;
+    const b = await orgLink(orgB, linkBody());
+    assert.equal(b.status, 503);
+    assert.equal(b.body.code, 'account_not_ready');
+    assert.equal(calls.length, 0);
 
+    const orgLinks = async () => (await admin.call(`/api/o/${orgA.id}/payments/links`)).body;
     // Another organization's (validly signed) event for this link changes nothing.
     assert.equal(await orgWebhook(orgB.id, WEBHOOK_SECRET_B, paidEvent(res.body.id), 'evt_b_1'), 200);
-    assert.equal((await links()).find(l => l.id === res.body.id).status, 'created');
+    assert.equal((await orgLinks()).find(l => l.id === res.body.id).status, 'created');
     // A forged signature is refused.
     assert.equal(await orgWebhook(orgA.id, 'wrong-secret', paidEvent(res.body.id), 'evt_forged'), 401);
 
     assert.equal(await orgWebhook(orgA.id, WEBHOOK_SECRET, paidEvent(res.body.id), 'evt_a_1'), 200);
-    const paid = (await links()).find(l => l.id === res.body.id);
+    const paid = (await orgLinks()).find(l => l.id === res.body.id);
     assert.equal(paid.status, 'paid');
     assert.equal(paid.paymentMethod, 'upi');
-    // A retry is harmless.
+    // A retry is harmless, and a late "expired" doesn't un-pay it.
     assert.equal(await orgWebhook(orgA.id, WEBHOOK_SECRET, paidEvent(res.body.id), 'evt_a_1'), 200);
-    assert.equal((await links()).find(l => l.id === res.body.id).status, 'paid');
+    assert.equal(await orgWebhook(orgA.id, WEBHOOK_SECRET, { event: 'payment_link.expired', payload: { payment_link: { entity: { id: res.body.id } } } }, 'evt_a_2'), 200);
+    assert.equal((await orgLinks()).find(l => l.id === res.body.id).status, 'paid');
 });
 
-test('if the chosen account stops being usable, no link is made (never the shared account instead)', async () => {
+test("an organization's webhook never touches the original app's links", async () => {
+    const shared = (await createLink()).body;
+    assert.equal(await orgWebhook(orgA.id, WEBHOOK_SECRET, paidEvent(shared.id), 'evt_a_shared'), 200);
+    assert.equal((await links()).find(l => l.id === shared.id).status, 'created');
+});
+
+test('if the workspace account stops being usable, no link is made (never the shared account instead)', async () => {
     // New keys go back to "unverified".
     await admin.call(rzp(orgA), { method: 'PUT', body: { keyId: ORG_KEY, keySecret: 'replaced-key-secret-value', webhookSecret: '' } });
     calls.length = 0;
-    const res = await createLink();
+    const res = await orgLink(orgA, linkBody());
     assert.equal(res.status, 503);
-    assert.match(res.body.error, /isn't ready/);
     assert.equal(calls.length, 0, 'Razorpay was not called with any other keys');
-
-    // Keys Razorpay rejects stay unusable too.
     razorpayDown = true;
     assert.equal((await admin.call(`${rzp(orgA)}/verify`, { method: 'POST' })).body.status, 'failed');
     razorpayDown = false;
-    assert.equal((await createLink()).status, 503);
+    assert.equal((await orgLink(orgA, linkBody())).status, 503);
+    assert.equal((await admin.call(`${rzp(orgA)}/verify`, { method: 'POST' })).body.status, 'verified');
 });
 
-test('disconnecting the chosen account puts the app back on the shared account', async () => {
-    assert.equal((await admin.call(rzp(orgA), { method: 'DELETE' })).status, 200);
-    const res = await createLink();
+// ── Amounts and duplicates ──────────────────────────────────────────────────
+
+test('the same request key makes one link, however often it is sent', async () => {
+    calls.length = 0;
+    const headers = { 'Idempotency-Key': 'double-tap-key-0001' };
+    const first = await app('/payments/link', { method: 'POST', body: linkBody(1500), headers });
+    const second = await app('/payments/link', { method: 'POST', body: linkBody(1500), headers });
+    assert.equal(first.status, 201, JSON.stringify(first.body));
+    assert.equal(second.status, 200);
+    assert.equal(second.body.id, first.body.id);
+    assert.equal(second.body.replayed, true);
+    assert.equal(calls.filter(c => c.method === 'POST' && c.path === '/v1/payment_links').length, 1);
+    // The same key for a different request is refused.
+    const other = await app('/payments/link', { method: 'POST', body: linkBody(1600), headers });
+    assert.equal(other.status, 422);
+    assert.equal(other.body.code, 'idempotency_key_reused');
+});
+
+test('a lost answer from Razorpay: the retry finds the link it made instead of making another', async () => {
+    const headers = { 'Idempotency-Key': 'lost-answer-key-0001' };
+    loseNextAnswer = true;
+    const res = await app('/payments/link', { method: 'POST', body: linkBody(1750), headers });
     assert.equal(res.status, 201, JSON.stringify(res.body));
-    assert.equal(res.body.account, 'shared');
-    const audit = await admin.call('/admin/audit');
-    assert.ok(JSON.stringify(audit.body).includes('payments.app_account.set'), 'choosing the account is audited');
+    const made = [...plinks.values()].filter(l => l.amount === 175000);
+    assert.equal(made.length, 1, 'exactly one link at Razorpay');
+    assert.equal(res.body.id, made[0].id);
+});
+
+test('amounts are checked on the server: bad, tiny and tampered amounts are refused', async () => {
+    for (const [body, code] of [
+        [{ ...linkBody(), amount: 10.001 }, 'invalid_amount'],
+        [{ ...linkBody(), amount: undefined, amountPaise: 99 }, 'amount_too_small'],
+        [{ ...linkBody(), amount: undefined, amountPaise: -500 }, 'amount_too_small'],
+        [{ ...linkBody(), amount: undefined, amountPaise: 12.5 }, 'invalid_amount'],
+        [{ ...linkBody(), currency: 'USD' }, 'unsupported_currency'],
+    ]) {
+        const res = await app('/payments/link', { method: 'POST', body });
+        assert.equal(res.status, 400, JSON.stringify(body));
+        assert.equal(res.body.code, code);
+    }
+});
+
+test('against an invoice: the server works out what is outstanding, and overrides need a reason', async () => {
+    const invoice = { id: 'inv-test-1', invoiceNumber: 'PI-001', customerName: 'Mrs. Mehta', customerEmail: '', items: [{ artworkId: 'a1', title: 'Study', price: 10000 }], subtotal: 10000, taxRate: 18, total: 11800, date: Date.now(), status: 'Sent' };
+    assert.ok([200, 201].includes((await app(`/invoices/${invoice.id}`, { method: 'PUT', body: invoice })).status));
+    // Blank amount: what's outstanding (₹11,800).
+    const full = await app('/payments/link', { method: 'POST', body: { ...linkBody(), amount: undefined, invoiceId: invoice.id } });
+    assert.equal(full.status, 201, JSON.stringify(full.body));
+    assert.equal(full.body.amount, 1_180_000);
+    assert.equal(full.body.approved.invoiceTotalPaise, 1_180_000);
+    // That open link counts: nothing more is outstanding.
+    const more = await app('/payments/link', { method: 'POST', body: { ...linkBody(), amount: undefined, invoiceId: invoice.id } });
+    assert.equal(more.status, 409);
+    assert.equal(more.body.code, 'nothing_outstanding');
+    // Asking for more than is outstanding is an override: a reason is required and kept.
+    const noReason = await app('/payments/link', { method: 'POST', body: linkBody(500, { invoiceId: invoice.id }) });
+    assert.equal(noReason.status, 400);
+    assert.equal(noReason.body.code, 'override_reason_required');
+    const withReason = await app('/payments/link', { method: 'POST', body: linkBody(500, { invoiceId: invoice.id, overrideReason: 'Framing added after the invoice' }) });
+    assert.equal(withReason.status, 201, JSON.stringify(withReason.body));
+    assert.deepEqual(withReason.body.approved.override, { kind: 'above_outstanding', reason: 'Framing added after the invoice' });
+    assert.equal(withReason.body.approved.approvedByName, 'Owner');
+    // Another business's invoice isn't there: organization A's workspace can't collect against it.
+    const cross = await orgLink(orgA, { ...linkBody(), amount: undefined, invoiceId: invoice.id });
+    assert.equal(cross.status, 404);
+    assert.equal(cross.body.code, 'invoice_not_found');
+});
+
+test('staff can make routine links but not overrides', async () => {
+    const invoice = { id: 'inv-test-2', invoiceNumber: 'PI-002', customerName: 'Mr. Rao', customerEmail: '', items: [{ artworkId: 'a2', title: 'Print', price: 2000 }], subtotal: 2000, taxRate: 0, total: 2000, date: Date.now(), status: 'Sent' };
+    assert.ok([200, 201].includes((await app(`/invoices/${invoice.id}`, { method: 'PUT', body: invoice })).status));
+    // Staff (the built-in role) can make payment links but aren't admins.
+    const made = await app('/auth/users', { method: 'POST', body: { name: 'Staff One', email: 'staff1@example.com', password: 'staff-password-123' } });
+    assert.ok([200, 201].includes(made.status), JSON.stringify(made.body));
+    const staffToken = (await (await fetch(`${worker.origin}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'staff1@example.com', password: 'staff-password-123' }) })).json()).token;
+    const routine = await app('/payments/link', { method: 'POST', token: staffToken, body: linkBody(1000, { invoiceId: invoice.id }) });
+    assert.equal(routine.status, 201, JSON.stringify(routine.body));
+    const discount = await app('/payments/link', { method: 'POST', token: staffToken, body: linkBody(500, { invoiceId: invoice.id, settlesInFull: true, overrideReason: 'Staff trying a discount' }) });
+    assert.equal(discount.status, 403);
+    assert.equal(discount.body.code, 'override_forbidden');
 });
 
 // ── Delete and validity ────────────────────────────────────────────────────
@@ -205,14 +326,14 @@ const payAt = (id, entity) => Object.assign(plinks.get(id), entity);
 test('a new link can be given a validity, sent to Razorpay as expire_by', async () => {
     calls.length = 0;
     const expiresAt = Date.now() + 3 * DAY;
-    const res = await app('/payments/link', { method: 'POST', body: { amount: 1200, customerName: 'Mr. Rao', expiresAt } });
+    const res = await app('/payments/link', { method: 'POST', body: { amount: 1200, customerName: 'Mr. Rao', mode: 'test', expiresAt } });
     assert.equal(res.status, 201, JSON.stringify(res.body));
     assert.equal(calls.at(-1).body.expire_by, Math.floor(expiresAt / 1000));
     assert.equal(Math.floor(res.body.expiresAt / 1000), Math.floor(expiresAt / 1000));
     // Too soon, or longer than six months, is refused before Razorpay is called.
     calls.length = 0;
-    assert.equal((await app('/payments/link', { method: 'POST', body: { amount: 1200, customerName: 'Mr. Rao', expiresAt: Date.now() + 5 * 60_000 } })).status, 400);
-    assert.equal((await app('/payments/link', { method: 'POST', body: { amount: 1200, customerName: 'Mr. Rao', expiresAt: Date.now() + 200 * DAY } })).status, 400);
+    assert.equal((await app('/payments/link', { method: 'POST', body: { amount: 1200, customerName: 'Mr. Rao', mode: 'test', expiresAt: Date.now() + 5 * 60_000 } })).status, 400);
+    assert.equal((await app('/payments/link', { method: 'POST', body: { amount: 1200, customerName: 'Mr. Rao', mode: 'test', expiresAt: Date.now() + 200 * DAY } })).status, 400);
     assert.equal(calls.length, 0);
 });
 

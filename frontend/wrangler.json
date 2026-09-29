@@ -58,6 +58,7 @@
     "DELTA_SYNC_ENABLED": "off",
     "REALTIME_ENABLED": "off",
     "FILE_AUTH": "off",
-    "EMAIL_SENDING": "off"
+    "EMAIL_SENDING": "off",
+    "LEGACY_PAYMENT_LINKS": "on"
   }
 }

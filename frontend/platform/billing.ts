@@ -23,7 +23,7 @@ import { razorpayApiBase, signRazorpayBody } from './payments';
 import { parseLimits } from './plans';
 import { discounted, runningOffers, type Offer } from './offers';
 import { toPaymentDetail, type PaymentDetail } from './razorpayDetails';
-import { decryptSecret, encryptSecret, maskKeyId, secretsConfigured } from './secrets';
+import { decryptSecret, encryptSecret, maskKeyId, secretsConfigured, tryDecryptSecret } from './secrets';
 
 const SETTINGS_KEY = 'billing_razorpay';
 const KEY_ID_RE = /^rzp_(test|live)_[A-Za-z0-9]{8,32}$/;
@@ -174,11 +174,8 @@ function basicAuth(keyId: string, secret: string): string {
 async function payableKeys(env: Env, db: D1Database): Promise<{ keyId: string; keySecret: string; mode: 'test' | 'live' } | null> {
   const a = await readAccount(db);
   if (a?.status !== 'verified') return null;
-  try {
-    return { keyId: a.keyId, keySecret: await decryptSecret(env, secretContext('key_secret'), a.keySecretEnc), mode: a.mode };
-  } catch {
-    return null;
-  }
+  const keySecret = await tryDecryptSecret(env, secretContext('key_secret'), a.keySecretEnc, 'billing.payableKeys');
+  return keySecret === null ? null : { keyId: a.keyId, keySecret, mode: a.mode };
 }
 
 /**
@@ -189,11 +186,8 @@ async function payableKeys(env: Env, db: D1Database): Promise<{ keyId: string; k
 async function keysForPayment(env: Env, db: D1Database, keyId: string): Promise<{ keyId: string; keySecret: string } | null> {
   const a = await readAccount(db);
   if (a?.keyId !== keyId) return null;
-  try {
-    return { keyId: a.keyId, keySecret: await decryptSecret(env, secretContext('key_secret'), a.keySecretEnc) };
-  } catch {
-    return null;
-  }
+  const keySecret = await tryDecryptSecret(env, secretContext('key_secret'), a.keySecretEnc, 'billing.keysForPayment');
+  return keySecret === null ? null : { keyId: a.keyId, keySecret };
 }
 
 async function razorpay(env: Env, keys: { keyId: string; keySecret: string }, method: 'GET' | 'POST', path: string, body?: unknown) {
@@ -667,7 +661,9 @@ export async function receiveBillingWebhook(env: Env, db: D1Database, request: R
   const a = await readAccount(db);
   if (!a?.webhookSecretEnc) return unauthorized;
   let secret: string;
-  try { secret = await decryptSecret(env, secretContext('webhook_secret'), a.webhookSecretEnc); } catch { return unauthorized; }
+  const decrypted = await tryDecryptSecret(env, secretContext('webhook_secret'), a.webhookSecretEnc, 'billing.webhook');
+  if (decrypted === null) return unauthorized;
+  secret = decrypted;
   if (!timingSafeEqual(await signRazorpayBody(secret, raw), signature.toLowerCase())) return unauthorized;
 
   let event: any;

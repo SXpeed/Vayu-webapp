@@ -419,7 +419,7 @@ const App: React.FC = () => {
             case 'activity':
                 return <ActivityLogView onBack={() => navigateTo('home')} />;
             case 'payments':
-                return <PaymentsView />;
+                return <PaymentsView invoices={invoices} />;
             case 'sales':
                 return <SalesView artworks={artworks} contacts={contacts} />;
             case 'profile':

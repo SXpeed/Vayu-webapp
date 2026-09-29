@@ -14,6 +14,7 @@ import { OrgError, type Actor } from './orgs';
 import { secretsConfigured } from './secrets';
 import { getNotificationSettings } from './notify';
 import { getAppPaymentsOrg } from './payments';
+import { keyUsage } from './secretRotation';
 import { emailConfigured } from './email';
 
 // ── Overview ──────────────────────────────────────────────────────────────
@@ -226,22 +227,41 @@ export async function updateAdmin(db: D1Database, userId: string, body: Record<s
 
 /** What is configured, as yes/no. Never a secret value. */
 /**
- * Which Razorpay account the app's payment links use, and whether payments
- * on it reach the app at once (webhook) or only via its status check.
+ * The original app's payment links (no organization): the shared account, if
+ * the LEGACY_PAYMENT_LINKS switch still allows them, its mode, and whether its
+ * payments reach the app at once (webhook) or only via the scheduled check.
+ * Workspaces use their own accounts (each organization's Customer payments).
  */
 async function appPaymentLinksCheck(env: Env, db: D1Database): Promise<{ ok: boolean; detail: string }> {
-  const appPaymentsOrg = await getAppPaymentsOrg(db);
-  if (appPaymentsOrg) {
-    const org = await db.prepare('SELECT name FROM organizations WHERE id = ?').bind(appPaymentsOrg).first<{ name: string }>();
-    return { ok: true, detail: `${org?.name ?? 'An organization'}'s own Razorpay account (see its Customer payments card)` };
+  const leftover = await getAppPaymentsOrg(db);
+  const leftoverNote = leftover ? ' The retired "app account" setting is still stored; clear it on that organization’s card.' : '';
+  if (env.LEGACY_PAYMENT_LINKS !== 'on') return { ok: !leftover, detail: `Original app: payment links retired (made from workspaces only).${leftoverNote}` };
+  const mode = /^rzp_(test|live)_/.exec(env.RAZORPAY_KEY_ID ?? '')?.[1];
+  if (!mode || !env.RAZORPAY_KEY_SECRET) {
+    return { ok: false, detail: 'Original app: RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET not set or not a Razorpay key: it cannot create payment links' };
   }
-  if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) {
-    return { ok: false, detail: 'RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET not set: the app cannot create payment links' };
+  const production = env.PLATFORM_ENV !== 'development';
+  if (mode === 'test' && production && env.SHARED_RAZORPAY_ALLOW_TEST !== 'on') {
+    return { ok: false, detail: 'Original app: the shared account has TEST keys, and test links are not allowed in production: set live keys (or SHARED_RAZORPAY_ALLOW_TEST=on to test)' };
   }
   if (!env.RAZORPAY_WEBHOOK_SECRET) {
-    return { ok: false, detail: 'Shared account: RAZORPAY_WEBHOOK_SECRET not set, so payments show as paid only when the app next checks Razorpay (a few minutes), with no instant notice' };
+    return { ok: false, detail: `Original app: shared account (${mode}); RAZORPAY_WEBHOOK_SECRET not set, so payments show as paid only after the scheduled check.${leftoverNote}` };
   }
-  return { ok: true, detail: 'Shared account: keys and webhook secret set' };
+  return { ok: !leftover, detail: `Original app: shared account (${mode}); keys and webhook secret set.${leftoverNote}` };
+}
+
+/**
+ * The payment-credential keys: configured, and every stored value on a key
+ * this Worker has (counts only; decrypting every value is Security → Check).
+ */
+async function paymentKeysCheck(env: Env, db: D1Database): Promise<{ ok: boolean; detail: string }> {
+  if (!secretsConfigured(env)) return { ok: false, detail: 'PAYMENT_SECRETS_KEY missing or invalid — organizations cannot connect Razorpay' };
+  const usage = await keyUsage(env, db, false);
+  if (usage.missingKeys.length) return { ok: false, detail: `Stored values use ${usage.missingKeys.join(', ')}, which is not configured: those credentials can't be read` };
+  const older = Object.entries(usage.byKid).filter(([kid]) => kid !== usage.active).reduce((n, [, c]) => n + c, 0);
+  if (usage.rotation?.running) return { ok: true, detail: `Active key ${usage.active}; re-encryption in progress (${older} left)` };
+  if (older) return { ok: false, detail: `Active key ${usage.active}; ${older} value(s) still on an older key — re-encrypt before retiring it` };
+  return { ok: true, detail: `Active key ${usage.active}; every stored value uses it` };
 }
 
 /** A check's words, when it passes and when it doesn't. */
@@ -258,7 +278,8 @@ export async function systemHealth(env: Env, db: D1Database) {
   check('File storage', ...status(!!env.VAYU_R2, 'Available', 'R2 binding missing'));
   check('Original app database', ...status(!!env.VAYU_DB, 'Available (needed for the import)', 'Not bound'));
   check('Sign-in secret', ...status((env.BETTER_AUTH_SECRET?.length ?? 0) >= 32, 'Configured', 'Missing or too short'));
-  check('Payment credential key', ...status(secretsConfigured(env), 'Configured', 'PAYMENT_SECRETS_KEY missing — organizations cannot connect Razorpay'));
+  const keys = await paymentKeysCheck(env, db);
+  check('Payment credential keys', keys.ok, keys.detail, keys.ok ? undefined : 'security');
   check('Google sign-in', ...status(googleConfigured(env), 'Credentials configured', 'Not configured (optional)'));
   check('Two-factor for admins', ...status(env.ADMIN_REQUIRE_2FA !== 'off', 'Required', 'OFF — only acceptable locally'));
   check('Admin host restriction', ...status(!!env.ADMIN_HOST, `Only on ${env.ADMIN_HOST}`, 'Not set (any configured host)'));

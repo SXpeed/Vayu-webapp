@@ -43,7 +43,13 @@ import {
   looksLikeEmail, roomImageKeys, roomStatus, staffRoom,
 } from './viewingRooms';
 import { handlePlatformRequest } from './platform/routes';
-import { getAppPaymentsOrg, razorpayApiBase, razorpayCredentials, verifiedRazorpayKeys } from './platform/payments';
+import { razorpayApiBase, razorpayCredentials, verifiedRazorpayKeys } from './platform/payments';
+import { runRotationBatch } from './platform/secretRotation';
+import { maskKeyId, secretsConfigured } from './platform/secrets';
+import {
+  CURRENCY, amountProblem, idempotencyKey, invoiceTotals, maxPaise, outstandingPaise, overrideNeeded, overrideReason,
+  nextLinkStatus, referenceIdFor, testModeRefusal, requestFingerprint, requestedPaise, type InvoiceLike, type InvoiceTotals, type OverrideKind,
+} from './paymentLinkPolicy';
 import { toPaymentDetail, type PaymentDetail } from './platform/razorpayDetails';
 import {
   billingOptions, confirmCheckout, listOrgPayments, orgNameOf, paymentView, recheckOrgPayment, startCheckout, type Reconciled,
@@ -526,6 +532,8 @@ async function handlePushUnsubscribe(ctx: Ctx): Promise<Response> {
 // at /api/v2/webhooks/razorpay/<orgId>); we verify its signature, mark the
 // record paid and push-notify the whole team (applyPaymentLinkEvent).
 
+type PaymentMode = 'test' | 'live';
+
 interface StoredPaymentLink {
   id: string;
   shortUrl: string;
@@ -543,6 +551,24 @@ interface StoredPaymentLink {
   paymentMethod?: string;
   /** The Razorpay account it was created in: an organization id, or 'shared'. */
   account?: string;
+  /** The organization it belongs to (null: the original app, before organizations). Set on links made since the 2026-09 hardening. */
+  orgId?: string | null;
+  /**
+   * Test or live, from the keys it was made with. Missing on older links
+   * until a status check with that account's keys proves which (a test key
+   * can't read live links and the other way round); until then it counts as
+   * unknown and stays out of live totals.
+   */
+  mode?: PaymentMode;
+  currency?: string;
+  /** "rzp_live_…WXYZ": which key made it, for audits. */
+  keyIdHint?: string;
+  /** Razorpay's reference_id: unique per request (idempotency), used to find a link whose creation answer was lost. */
+  referenceId?: string;
+  /** The proforma invoice it collects against, if any. */
+  invoiceId?: string;
+  /** What was approved when it was made (amount, invoice totals, any override and who made it). Never changed afterwards. */
+  approved?: ApprovedAmount;
   /** When the link stops accepting payment (Razorpay's expire_by); unset: Razorpay's default. */
   expiresAt?: number;
   /** Last time the app asked Razorpay for this link's status (see reconcilePaymentLinks). */
@@ -571,16 +597,32 @@ function parseLinkExpiry(value: unknown): number | null | undefined {
  * change it or read its status. Links from before accounts were recorded
  * were all made in the shared account.
  */
-async function linkAccountKeys(env: Env, account: string | undefined): Promise<{ keyId: string; keySecret: string } | null> {
+async function linkAccountKeys(env: Env, link: Pick<StoredPaymentLink, 'account' | 'mode'>): Promise<{ keyId: string; keySecret: string; mode: PaymentMode | null } | null> {
+  const account = link.account;
+  let keys: { keyId: string; keySecret: string; mode: PaymentMode | null } | null = null;
   if (!account || account === 'shared') {
-    return env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET ? { keyId: env.RAZORPAY_KEY_ID, keySecret: env.RAZORPAY_KEY_SECRET } : null;
+    keys = env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET ? { keyId: env.RAZORPAY_KEY_ID, keySecret: env.RAZORPAY_KEY_SECRET, mode: keyMode(env.RAZORPAY_KEY_ID) } : null;
+  } else if (env.PLATFORM_DB) {
+    try {
+      keys = await razorpayCredentials(env, env.PLATFORM_DB, account);
+    } catch (e) {
+      console.error(JSON.stringify({ event: 'payment_keys_unavailable', account: account.slice(0, 64), reason: (e as Error).name }));
+      keys = null;
+    }
   }
-  if (!env.PLATFORM_DB) return null;
-  try {
-    return await razorpayCredentials(env, env.PLATFORM_DB, account);
-  } catch {
-    return null;
-  }
+  // The account's keys now are for the other mode (test keys replaced by
+  // live ones, say): they can't see this link, and must not be used as if
+  // they could. The link keeps its mode and account.
+  if (keys && link.mode && keys.mode && keys.mode !== link.mode) return null;
+  return keys;
+}
+
+/**
+ * An older link's mode, proven by reading it with its account's keys: test
+ * and live are separate at Razorpay, so a successful read settles it.
+ */
+function noteProvenMode(link: StoredPaymentLink, keys: { mode: PaymentMode | null }): void {
+  if (!link.mode && keys.mode) link.mode = keys.mode;
 }
 
 /** One payment, from Razorpay's Payments API, with the given account's keys. */
@@ -618,32 +660,59 @@ function applyRazorpayLinkState(record: StoredPaymentLink, entity: any): boolean
   return !wasPaid && record.status === 'paid';
 }
 
+/** A Razorpay key id's mode, or null when it isn't a Razorpay key id. */
+function keyMode(keyId: string | undefined): PaymentMode | null {
+  const m = /^rzp_(test|live)_/.exec(keyId ?? '');
+  return m ? m[1] as PaymentMode : null;
+}
+
+/** The account a new payment link is made in, or why none may be. */
+type LinkAccount = {
+  keyId: string; keySecret: string;
+  /** 'shared' (the original business, before organizations) or the organization id. */
+  account: string; orgId: string | null;
+  mode: PaymentMode;
+  /** Test-mode links are allowed for this account in this environment. */
+  testAllowed: boolean;
+};
+type LinkAccountRefusal = { error: string; code: string; status: number };
+
+/** Local development and tests: test-mode keys need no extra permission there. */
+const isDevelopment = (env: Env) => env.PLATFORM_ENV === 'development';
+
 /**
- * The Razorpay account the app's payment links use. When the control centre
- * points the app at an organization, only that organization's own verified
- * keys are used, never anything else: a business's money must not land in
- * another account. Otherwise the shared account (RAZORPAY_* secrets).
+ * The Razorpay account a NEW payment link is made in. Explicit, never chosen
+ * by a global setting:
+ *   - a request for an organization (/api/o/<org>/…): that organization's own
+ *     verified account, and nothing else, whichever storage it uses;
+ *   - the original app on its own (/api, no organization): only the shared
+ *     account in the RAZORPAY_* secrets, and only while LEGACY_PAYMENT_LINKS
+ *     is on (docs/PAYMENT_SECURITY.md has the cutoff).
+ * A business's money must never land in another business's account, so
+ * there is no fallback from one to the other.
  */
-async function appRazorpayAccount(env: Env): Promise<{ keyId: string; keySecret: string; account: string } | { error: string }> {
-  // An organization with its own storage takes payments into its own
-  // Razorpay account only: never the shared one, never another business's.
-  if (env.ORG_STORAGE === 'own' && env.ORG_ID && env.PLATFORM_DB) {
-    const own = await verifiedRazorpayKeys(env, env.PLATFORM_DB, env.ORG_ID);
-    if (!own) return { error: "This business's Razorpay account isn't connected yet. Ask us to connect it; no payment link was created." };
-    return { keyId: own.keyId, keySecret: own.keySecret, account: env.ORG_ID };
-  }
-  const orgId = env.PLATFORM_DB ? await getAppPaymentsOrg(env.PLATFORM_DB) : null;
-  if (orgId) {
-    const keys = await verifiedRazorpayKeys(env, env.PLATFORM_DB!, orgId);
-    if (!keys) {
-      return { error: "This business's own Razorpay account isn't ready: its keys need verifying in the control centre. No payment link was created." };
+async function linkAccountFor(env: Env): Promise<LinkAccount | LinkAccountRefusal> {
+  if (env.ORG_ID) {
+    const own = env.PLATFORM_DB ? await verifiedRazorpayKeys(env, env.PLATFORM_DB, env.ORG_ID) : null;
+    if (!own) {
+      return { status: 503, code: 'account_not_ready', error: "This business's Razorpay account isn't connected and verified yet. Ask us to connect it; no payment link was created." };
     }
-    return { keyId: keys.keyId, keySecret: keys.keySecret, account: orgId };
+    return {
+      keyId: own.keyId, keySecret: own.keySecret, account: env.ORG_ID, orgId: env.ORG_ID, mode: own.mode,
+      testAllowed: isDevelopment(env) || own.allowTestLinks,
+    };
   }
-  if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) {
-    return { error: 'Razorpay is not configured. Ask your admin to set the RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET secrets.' };
+  if (env.LEGACY_PAYMENT_LINKS !== 'on') {
+    return { status: 410, code: 'legacy_route_retired', error: 'Payment links are now made from your workspace. Sign out, sign in with your workspace account, and try again.' };
   }
-  return { keyId: env.RAZORPAY_KEY_ID, keySecret: env.RAZORPAY_KEY_SECRET, account: 'shared' };
+  const mode = keyMode(env.RAZORPAY_KEY_ID);
+  if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET || !mode) {
+    return { status: 503, code: 'account_not_ready', error: 'Razorpay is not configured. Ask your admin to set the RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET secrets.' };
+  }
+  return {
+    keyId: env.RAZORPAY_KEY_ID, keySecret: env.RAZORPAY_KEY_SECRET, account: 'shared', orgId: null, mode,
+    testAllowed: isDevelopment(env) || env.SHARED_RAZORPAY_ALLOW_TEST === 'on',
+  };
 }
 
 function formatRupees(paise: number): string {
@@ -736,63 +805,327 @@ async function handleBillingRecheck(ctx: Ctx): Promise<Response> {
   return billingReply(async () => reconciledReply(await recheckOrgPayment(ctx.env, caller.db, caller.orgId, id)));
 }
 
-async function handlePaymentLinkCreate(ctx: Ctx): Promise<Response> {
+/** A refusal as the API's usual error shape, with a machine-readable code. */
+const refuse = (r: { error: string; code: string; status: number }) => json({ error: r.error, code: r.code }, r.status);
+
+/**
+ * This workspace's payment-link requests by idempotency key: a double click,
+ * a retry after a timeout, or two tabs sending the same request make one
+ * link, not several.
+ */
+function ensurePaymentLinkRequests(db: D1Database): Promise<void> {
+  return runSetupOnce(db, 'paymentLinkRequests', () => db.prepare(`
+      CREATE TABLE IF NOT EXISTS payment_link_requests (
+        scope TEXT NOT NULL,
+        idem_key TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        reference_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        link_id TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, idem_key)
+      )
+    `).run());
+}
+
+/** Every payment link stored for this workspace. */
+async function storedLinks(ctx: Ctx): Promise<StoredPaymentLink[]> {
+  const list = await ctx.env.VAYU_KV.list({ prefix: 'payment:link:' });
+  const links: StoredPaymentLink[] = [];
+  for (const key of list.keys) {
+    const raw = await ctx.env.VAYU_KV.get(key.name);
+    if (raw) links.push(JSON.parse(raw));
+  }
+  return links;
+}
+
+/** The immutable record of what was approved when a link was made. */
+interface ApprovedAmount {
+  amountPaise: number;
+  currency: string;
+  invoiceId: string | null;
+  invoiceNumber: string | null;
+  invoiceTotalPaise: number | null;
+  taxRate: number | null;
+  taxPaise: number | null;
+  outstandingBeforePaise: number | null;
+  settlesInFull: boolean;
+  override: { kind: OverrideKind; reason: string } | null;
+  approvedBy: string;
+  approvedByName: string;
+  approvedAt: number;
+}
+
+interface LinkRequestBody {
+  amountPaise?: unknown; amount?: unknown; currency?: unknown; description?: string;
+  customerName?: string; customerPhone?: string; customerEmail?: string;
+  notifySms?: boolean; notifyEmail?: boolean;
+  /** When the link stops accepting payment (ms); omitted: Razorpay's default. */
+  expiresAt?: number;
+  /** 'test' confirms a test-mode link (refused for live accounts). */
+  mode?: unknown;
+  /** Pay against this proforma invoice: the amount defaults to what's outstanding. */
+  invoiceId?: unknown;
+  /** With invoiceId: this (smaller) amount settles the invoice. An override. */
+  settlesInFull?: unknown;
+  overrideReason?: unknown;
+}
+
+/**
+ * The amount for a new link, worked out on the server: for an invoice, from
+ * the invoice's own items and tax and what is still outstanding; otherwise
+ * the amount asked for. Overrides (more than outstanding, or a discount)
+ * need the workspace admin role and a reason.
+ */
+/** This workspace's invoice and its recomputed totals (another business's invoice isn't in this database). */
+async function linkInvoice(ctx: Ctx, invoiceId: unknown): Promise<{ id: string; invoice: InvoiceLike; totals: InvoiceTotals } | Response> {
+  const notFound = json({ error: 'Invoice not found', code: 'invoice_not_found' }, 404);
+  if (typeof invoiceId !== 'string' || invoiceId.length > 128) return notFound;
+  await ensureInvoicesTable(ctx.env.VAYU_DB);
+  const row = await ctx.env.VAYU_DB.prepare('SELECT data FROM invoices WHERE id = ?').bind(invoiceId).first<{ data: string }>();
+  let invoice: InvoiceLike | null = null;
+  try { invoice = row ? JSON.parse(row.data) as InvoiceLike : null; } catch { invoice = null; }
+  if (!invoice) return notFound;
+  if (invoice.status === 'Paid') return json({ error: 'This invoice is already marked paid.', code: 'invoice_paid' }, 409);
+  const totals = invoiceTotals(invoice);
+  if (!totals) return json({ error: "This invoice's total doesn't match its items and tax. Open it, check it and save it again.", code: 'invoice_total_mismatch' }, 409);
+  return { id: invoiceId, invoice, totals };
+}
+
+/** An override's record, or why it isn't allowed: workspace admins only, with a reason. */
+function approveOverride(session: SessionData, kind: OverrideKind, reasonText: unknown): { kind: OverrideKind; reason: string } | Response {
+  if (session.role !== ADMIN_ROLE_ID) {
+    const what = kind === 'above_outstanding' ? 'more than is outstanding' : 'less than the invoice as full settlement';
+    return json({ error: `Only a workspace admin can ask for ${what}.`, code: 'override_forbidden' }, 403);
+  }
+  const reason = overrideReason(reasonText);
+  if (!reason) return json({ error: 'Give a reason for the change (at least 5 characters); it is kept with the link.', code: 'override_reason_required' }, 400);
+  return { kind, reason };
+}
+
+const noInvoice = { invoiceId: null, invoiceNumber: null, invoiceTotalPaise: null, taxRate: null, taxPaise: null, outstandingBeforePaise: null, settlesInFull: false, override: null };
+
+/**
+ * The amount for a new link, worked out on the server: for an invoice, from
+ * the invoice's own items and tax and what is still outstanding; otherwise
+ * the amount asked for. Overrides (more than outstanding, or a discount)
+ * need the workspace admin role and a reason.
+ */
+async function approveAmount(ctx: Ctx, session: SessionData, body: LinkRequestBody, mode: PaymentMode): Promise<ApprovedAmount | Response> {
+  if (body.currency !== undefined && body.currency !== CURRENCY) return json({ error: 'Payment links are in rupees (INR) only.', code: 'unsupported_currency' }, 400);
+  const asked = requestedPaise(body);
+  if (asked.problem) return json(asked.problem, 400);
+  const base = { currency: CURRENCY, approvedBy: session.userId, approvedByName: session.name, approvedAt: Date.now() };
+  const settlesInFull = body.settlesInFull === true;
+  if (body.invoiceId === undefined || body.invoiceId === null || body.invoiceId === '') {
+    if (asked.paise === null) return json({ error: 'Enter the amount.', code: 'invalid_amount' }, 400);
+    if (settlesInFull) return json({ error: 'Only a link for an invoice can settle it.', code: 'invalid_request' }, 400);
+    return { ...base, ...noInvoice, amountPaise: asked.paise };
+  }
+  const found = await linkInvoice(ctx, body.invoiceId);
+  if (found instanceof Response) return found;
+  const { totals } = found;
+  const outstanding = outstandingPaise(totals.totalPaise, found.id, await storedLinks(ctx), mode);
+  const paise = asked.paise ?? outstanding;
+  if (paise === 0) return json({ error: 'Nothing is outstanding on this invoice: its links already cover the total.', code: 'nothing_outstanding' }, 409);
+  const kind = overrideNeeded(paise, outstanding, settlesInFull);
+  const override = kind ? approveOverride(session, kind, body.overrideReason) : null;
+  if (override instanceof Response) return override;
+  return {
+    ...base, amountPaise: paise, invoiceId: found.id, invoiceNumber: typeof found.invoice.invoiceNumber === 'string' ? found.invoice.invoiceNumber : null,
+    invoiceTotalPaise: totals.totalPaise, taxRate: totals.taxRate, taxPaise: totals.taxPaise, outstandingBeforePaise: outstanding, settlesInFull, override,
+  };
+}
+
+/** The link Razorpay made for a reference, if it made one. */
+async function linkByReference(env: Env, keys: { keyId: string; keySecret: string }, referenceId: string): Promise<any | null> {
+  const res = await razorpayLinkCall(env, keys, 'GET', `?reference_id=${encodeURIComponent(referenceId)}`).catch(() => null);
+  if (!res?.ok) return null;
+  const found = (Array.isArray(res.data?.payment_links) ? res.data.payment_links : []) as { reference_id?: string }[];
+  return found.find(l => l?.reference_id === referenceId) ?? null;
+}
+
+type Claim = { kind: 'go' } | { kind: 'done'; linkId: string } | { kind: 'refused'; response: Response };
+
+/** Takes the idempotency key for this request, or says why not / what it already made. */
+async function claimLinkRequest(db: D1Database, scope: string, key: string, fingerprint: string, referenceId: string): Promise<Claim> {
+  await ensurePaymentLinkRequests(db);
+  const now = Date.now();
+  const inserted = await db.prepare(
+    `INSERT INTO payment_link_requests (scope, idem_key, fingerprint, reference_id, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'pending', ?, ?) ON CONFLICT DO NOTHING`,
+  ).bind(scope, key, fingerprint, referenceId, now, now).run();
+  if ((inserted.meta?.changes ?? 0) > 0) return { kind: 'go' };
+  const existing = await db.prepare('SELECT fingerprint, status, link_id, updated_at FROM payment_link_requests WHERE scope = ? AND idem_key = ?')
+    .bind(scope, key).first<{ fingerprint: string; status: string; link_id: string | null; updated_at: number }>();
+  if (!existing) return { kind: 'go' };
+  if (existing.fingerprint !== fingerprint) {
+    return { kind: 'refused', response: json({ error: 'This request key was already used for a different payment link.', code: 'idempotency_key_reused' }, 422) };
+  }
+  if (existing.status === 'done' && existing.link_id) return { kind: 'done', linkId: existing.link_id };
+  if (existing.status === 'pending' && now - existing.updated_at < 60_000) {
+    return { kind: 'refused', response: json({ error: 'This payment link is still being made. Wait a moment.', code: 'request_in_progress' }, 409) };
+  }
+  // An earlier attempt failed or was cut off: take it over (only one taker wins).
+  const retaken = await db.prepare(
+    "UPDATE payment_link_requests SET status = 'pending', updated_at = ? WHERE scope = ? AND idem_key = ? AND updated_at = ?",
+  ).bind(now, scope, key, existing.updated_at).run();
+  return (retaken.meta?.changes ?? 0) > 0
+    ? { kind: 'go' }
+    : { kind: 'refused', response: json({ error: 'This payment link is still being made. Wait a moment.', code: 'request_in_progress' }, 409) };
+}
+
+const finishLinkRequest = (db: D1Database, scope: string, key: string, linkId: string | null) =>
+  db.prepare('UPDATE payment_link_requests SET status = ?, link_id = ?, updated_at = ? WHERE scope = ? AND idem_key = ?')
+    .bind(linkId ? 'done' : 'failed', linkId, Date.now(), scope, key).run();
+
+/**
+ * Makes the link at Razorpay with a reference unique to this request. When
+ * the answer is lost (timeout, network, a 5xx) or Razorpay says the
+ * reference was already used, the link is looked up by that reference
+ * instead of being made again.
+ */
+async function createAtRazorpay(env: Env, account: LinkAccount, payload: Record<string, unknown>, referenceId: string): Promise<{ entity: any } | { error: string; status: number }> {
+  let res: Response | null = null;
+  try {
+    res = await fetch(`${razorpayApiBase(env)}/v1/payment_links`, {
+      method: 'POST',
+      headers: { 'Authorization': basicAuthHeader(account.keyId, account.keySecret), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, reference_id: referenceId }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch {
+    res = null;
+  }
+  const data = res ? await res.json().catch(() => ({})) as any : null;
+  if (res?.ok && data?.id) return { entity: data };
+  const description = String(data?.error?.description ?? '');
+  const ambiguous = !res || res.status >= 500 || /reference/i.test(description);
+  if (ambiguous) {
+    const found = await linkByReference(env, account, referenceId);
+    if (found?.id) return { entity: found };
+    return { status: 502, error: "Razorpay didn't confirm the link. Try again: the same request won't make a second link." };
+  }
+  return { status: 502, error: description || `Razorpay error (${res?.status ?? 'no answer'})` };
+}
+
+/**
+ * GET /payments/account — which account new links are made in and its mode,
+ * so the Payments screen can say so before anyone makes a link. Never a key.
+ */
+async function handlePaymentAccount(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
-  const body = await ctx.request.json<{
-    amount?: number; description?: string;
-    customerName?: string; customerPhone?: string; customerEmail?: string;
-    notifySms?: boolean; notifyEmail?: boolean;
-    /** When the link stops accepting payment (ms); omitted: Razorpay's default. */
-    expiresAt?: number;
-  }>();
-  const amountPaise = Math.round(Number(body.amount) * 100);
-  if (!Number.isFinite(amountPaise) || amountPaise < 100) {
-    return err('A valid amount of at least ₹1 is required');
-  }
+  const account = await linkAccountFor(ctx.env);
+  if ('error' in account) return json({ ready: false, code: account.code, error: account.error });
+  return json({
+    ready: account.mode === 'live' || account.testAllowed,
+    account: account.orgId ? 'organization' : 'shared',
+    mode: account.mode,
+    testAllowed: account.testAllowed,
+    keyIdHint: maskKeyId(account.keyId),
+  });
+}
+
+/** The customer, description and validity of a new link, checked. */
+function linkDetails(body: LinkRequestBody): { customer: Record<string, string>; description: string; expiresAt: number | undefined } | Response {
   if (!body.customerName?.trim()) return err('Customer name is required');
   const expiresAt = parseLinkExpiry(body.expiresAt);
   if (expiresAt === null) return err('The link must stay valid for at least 20 minutes and at most 6 months');
+  const customer: Record<string, string> = { name: body.customerName.trim().slice(0, 100) };
+  if (body.customerPhone?.trim()) customer.contact = body.customerPhone.trim().slice(0, 20);
+  if (body.customerEmail?.trim()) customer.email = body.customerEmail.trim().slice(0, 120);
+  return { customer, description: body.description?.trim().slice(0, 240) || '', expiresAt };
+}
 
-  const razorpay = await appRazorpayAccount(ctx.env);
-  if ('error' in razorpay) return err(razorpay.error, 503);
+/** Null to go ahead and make the link; otherwise the answer (the link made earlier, or a refusal). */
+async function replayOrClaim(ctx: Ctx, scope: string, key: string, fingerprint: string, referenceId: string): Promise<Response | null> {
+  const claim = await claimLinkRequest(ctx.env.VAYU_DB, scope, key, fingerprint, referenceId);
+  if (claim.kind === 'refused') return claim.response;
+  if (claim.kind === 'done') {
+    const raw = await ctx.env.VAYU_KV.get(`payment:link:${claim.linkId}`);
+    if (raw) return json({ ...JSON.parse(raw), replayed: true }, 200);
+  }
+  return null;
+}
 
-  const customer: Record<string, string> = { name: body.customerName.trim() };
-  if (body.customerPhone?.trim()) customer.contact = body.customerPhone.trim();
-  if (body.customerEmail?.trim()) customer.email = body.customerEmail.trim();
+/** What Razorpay is asked to make: the approved amount, the customer, and how long it stays valid. */
+function razorpayLinkPayload(approved: ApprovedAmount, body: LinkRequestBody, details: { customer: Record<string, string>; description: string; expiresAt: number | undefined }, createdBy: string): Record<string, unknown> {
+  const { customer, description, expiresAt } = details;
+  const notes: Record<string, string> = { created_by: createdBy.slice(0, 100), app: 'vayu-webapp' };
+  if (approved.invoiceNumber) notes.invoice = approved.invoiceNumber.slice(0, 100);
+  return {
+    amount: approved.amountPaise,
+    currency: CURRENCY,
+    description: description || 'Payment',
+    customer,
+    notify: { sms: !!body.notifySms && !!customer.contact, email: !!body.notifyEmail && !!customer.email },
+    reminder_enable: true,
+    ...(expiresAt ? { expire_by: Math.floor(expiresAt / 1000) } : {}),
+    notes,
+  };
+}
 
-  const res = await fetch(`${razorpayApiBase(ctx.env)}/v1/payment_links`, {
-    method: 'POST',
-    headers: {
-      'Authorization': basicAuthHeader(razorpay.keyId, razorpay.keySecret),
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      amount: amountPaise,
-      currency: 'INR',
-      description: body.description?.trim() || 'Vayu Design',
-      customer,
-      notify: {
-        sms: !!body.notifySms && !!customer.contact,
-        email: !!body.notifyEmail && !!customer.email,
-      },
-      reminder_enable: true,
-      ...(expiresAt ? { expire_by: Math.floor(expiresAt / 1000) } : {}),
-      notes: { created_by: session.name, app: 'vayu-webapp' },
-    }),
+/** The activity entries for a new link, and a separate one for an override with its reason. */
+async function logLinkCreated(ctx: Ctx, session: SessionData, record: StoredPaymentLink, approved: ApprovedAmount): Promise<void> {
+  const testNote = record.mode === 'test' ? ' (TEST mode)' : '';
+  const invoiceNote = approved.invoiceNumber ? ` against invoice ${approved.invoiceNumber}` : '';
+  await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'created', 'payment link', record.id,
+    `Created payment link of ${formatRupees(approved.amountPaise)} for "${record.customerName}"${invoiceNote}${testNote}`);
+  if (approved.override) {
+    await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'updated', 'payment link', record.id,
+      `Amount override (${approved.override.kind === 'above_outstanding' ? 'more than outstanding' : 'settles for less'}): ${formatRupees(approved.amountPaise)} of ${formatRupees(approved.outstandingBeforePaise ?? 0)} outstanding. Reason: ${approved.override.reason}`);
+  }
+}
+
+/**
+ * POST /payments/link — a payment link, in the account this request is
+ * attributed to (linkAccountFor), for an amount the server has approved
+ * (approveAmount), at most once per Idempotency-Key.
+ */
+async function handlePaymentLinkCreate(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const body = await ctx.request.json<LinkRequestBody>().catch(() => null);
+  if (!body || typeof body !== 'object') return err('Invalid request');
+
+  const account = await linkAccountFor(ctx.env);
+  if ('error' in account) return refuse(account);
+  const modeRefusal = testModeRefusal(account, body.mode);
+  if (modeRefusal) return refuse(modeRefusal);
+
+  const approved = await approveAmount(ctx, session, body, account.mode);
+  if (approved instanceof Response) return approved;
+  const bounds = amountProblem(approved.amountPaise, maxPaise(ctx.env.PAYMENT_LINK_MAX_PAISE));
+  if (bounds) return json(bounds, 400);
+  const details = linkDetails(body);
+  if (details instanceof Response) return details;
+  const { customer, description, expiresAt } = details;
+
+  // One link per request key: the client sends the same key when it retries.
+  const scope = `${account.account}|${session.userId}`;
+  const key = idempotencyKey(ctx.request.headers.get('Idempotency-Key')) ?? crypto.randomUUID();
+  const fingerprint = await requestFingerprint({
+    account: account.account, mode: account.mode, amountPaise: approved.amountPaise, invoiceId: approved.invoiceId,
+    settlesInFull: approved.settlesInFull, customer, description, expiresAt: expiresAt ?? null,
   });
+  const referenceId = await referenceIdFor(scope, key);
+  const earlier = await replayOrClaim(ctx, scope, key, fingerprint, referenceId);
+  if (earlier) return earlier;
 
-  const data = await res.json() as any;
-  if (!res.ok) {
-    const reason = data?.error?.description || `Razorpay error (${res.status})`;
-    return err(reason, 502);
+  const made = await createAtRazorpay(ctx.env, account, razorpayLinkPayload(approved, body, details, session.name), referenceId);
+  if ('error' in made) {
+    await finishLinkRequest(ctx.env.VAYU_DB, scope, key, null);
+    return json({ error: made.error, code: 'provider_error' }, made.status);
   }
 
+  const data = made.entity;
   const record: StoredPaymentLink = {
     id: data.id,
     shortUrl: data.short_url,
-    amount: amountPaise,
-    description: body.description?.trim() || '',
+    amount: approved.amountPaise,
+    description,
     customerName: customer.name,
     customerPhone: customer.contact || '',
     customerEmail: customer.email || '',
@@ -800,12 +1133,20 @@ async function handlePaymentLinkCreate(ctx: Ctx): Promise<Response> {
     createdAt: Date.now(),
     createdBy: session.userId,
     createdByName: session.name,
-    account: razorpay.account,
+    account: account.account,
+    orgId: account.orgId,
+    mode: account.mode,
+    currency: CURRENCY,
+    keyIdHint: maskKeyId(account.keyId),
+    referenceId,
+    invoiceId: approved.invoiceId ?? undefined,
+    approved,
     expiresAt: Number(data.expire_by) > 0 ? Number(data.expire_by) * 1000 : expiresAt,
   };
   await ctx.env.VAYU_KV.put(`payment:link:${record.id}`, JSON.stringify(record));
-  await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'created', 'payment link', record.id,
-    `Created payment link of ${formatRupees(amountPaise)} for "${record.customerName}"`);
+  await finishLinkRequest(ctx.env.VAYU_DB, scope, key, record.id);
+  await logLinkCreated(ctx, session, record, approved);
+  queueHubNotify(ctx, [{ entity: 'payments', id: record.id, op: 'put' }]);
   return json(record, 201);
 }
 
@@ -844,11 +1185,12 @@ function reconcilePaymentLinks(ctx: Ctx, links: StoredPaymentLink[]): void {
   ctx.execCtx.waitUntil((async () => {
     let changed = false;
     await Promise.all(due.map(async link => {
-      const keys = await linkAccountKeys(ctx.env, link.account);
+      const keys = await linkAccountKeys(ctx.env, link);
       if (!keys) return;
       const res = await razorpayLinkCall(ctx.env, keys, 'GET', `/${encodeURIComponent(link.id)}`).catch(() => null);
       if (!res?.ok) return;
       const before = `${link.status}|${link.expiresAt}`;
+      noteProvenMode(link, keys);
       const nowPaid = applyRazorpayLinkState(link, res.data);
       link.checkedAt = Date.now();
       await ctx.env.VAYU_KV.put(`payment:link:${link.id}`, JSON.stringify(link));
@@ -897,7 +1239,7 @@ async function loadPaymentLink(ctx: Ctx): Promise<StoredPaymentLink | Response> 
  */
 async function cancelOpenLink(ctx: Ctx, link: StoredPaymentLink): Promise<Response | null> {
   if (!OPEN_LINK_STATUSES.has(link.status)) return null;
-  const keys = await linkAccountKeys(ctx.env, link.account);
+  const keys = await linkAccountKeys(ctx.env, link);
   if (!keys) return err("The Razorpay account this link was made in isn't connected, so it can't be cancelled. Nothing was deleted.", 503);
   const cancel = await razorpayLinkCall(ctx.env, keys, 'POST', `/${encodeURIComponent(link.id)}/cancel`);
   if (cancel.ok) return null;
@@ -948,11 +1290,12 @@ async function handlePaymentLinkDetails(ctx: Ctx): Promise<Response> {
   if (!raw) return err('Payment link not found', 404);
   const link = JSON.parse(raw) as StoredPaymentLink;
 
-  const keys = await linkAccountKeys(ctx.env, link.account);
+  const keys = await linkAccountKeys(ctx.env, link);
   if (!keys) return json({ link, checked: false, reason: "The Razorpay account this link was made in isn't connected." });
   const res = await razorpayLinkCall(ctx.env, keys, 'GET', `/${encodeURIComponent(link.id)}`).catch(() => null);
   if (!res?.ok) return json({ link, checked: false, reason: "Couldn't reach Razorpay. Showing what was last recorded." });
 
+  noteProvenMode(link, keys);
   const nowPaid = applyRazorpayLinkState(link, res.data);
   const paymentIds: string[] = (Array.isArray(res.data?.payments) ? res.data.payments : [])
     .map((p: any) => p?.payment_id).filter((v: unknown): v is string => typeof v === 'string' && !!v).slice(0, 10);
@@ -985,7 +1328,7 @@ async function handlePaymentLinkUpdate(ctx: Ctx): Promise<Response> {
   const expiresAt = parseLinkExpiry(body.expiresAt);
   if (!expiresAt) return err('The link must stay valid for at least 20 minutes and at most 6 months');
   if (!OPEN_LINK_STATUSES.has(link.status)) return err('Only a link that is still waiting for payment can be changed', 409);
-  const keys = await linkAccountKeys(ctx.env, link.account);
+  const keys = await linkAccountKeys(ctx.env, link);
   if (!keys) return err("The Razorpay account this link was made in isn't connected.", 503);
   const res = await razorpayLinkCall(ctx.env, keys, 'PATCH', `/${encodeURIComponent(link.id)}`, { expire_by: Math.floor(expiresAt / 1000) });
   if (!res.ok) return err(res.data?.error?.description || `Razorpay couldn't change the link (${res.status})`, 502);
@@ -1027,7 +1370,7 @@ async function handlePaymentWebhook(ctx: Ctx): Promise<Response> {
     return err('Invalid signature', 401);
   }
 
-  await applyPaymentLinkEvent(ctx, JSON.parse(rawBody));
+  await applyPaymentLinkEvent(ctx, JSON.parse(rawBody), 'shared');
   return json({ received: true });
 }
 
@@ -1037,28 +1380,43 @@ async function handlePaymentWebhook(ctx: Ctx): Promise<Response> {
  * push and activity entry. Idempotent (retries change nothing and notify
  * once), so it can run for every delivery of an event.
  */
-async function applyPaymentLinkEvent(ctx: Ctx, event: any): Promise<void> {
+const STATUS_BY_EVENT: Record<string, string> = {
+  'payment_link.paid': 'paid',
+  'payment_link.partially_paid': 'partially_paid',
+  'payment_link.expired': 'expired',
+  'payment_link.cancelled': 'cancelled',
+};
+/**
+ * Applies one verified Razorpay event to the app's payment link records:
+ * status, and for a payment the paid time, payment id and method, plus one
+ * push and activity entry. Idempotent (retries change nothing and notify
+ * once), so it can run for every delivery of an event.
+ *
+ * `receivingAccount` is the account whose webhook secret verified the event
+ * ('shared' or an organization id). A record made in any other account is
+ * left alone: one account's events never change another's links, and test
+ * and live never mix (each is its own account at Razorpay).
+ */
+async function applyPaymentLinkEvent(ctx: Ctx, event: any, receivingAccount: string): Promise<void> {
   const plink = event?.payload?.payment_link?.entity;
   if (!plink?.id) return;
+  const incoming = STATUS_BY_EVENT[event.event];
+  if (!incoming) return;
 
   const kvKey = `payment:link:${plink.id}`;
   const raw = await ctx.env.VAYU_KV.get(kvKey);
   const record: StoredPaymentLink | null = raw ? JSON.parse(raw) : null;
-
-  const statusByEvent: Record<string, string> = {
-    'payment_link.paid': 'paid',
-    'payment_link.partially_paid': 'partially_paid',
-    'payment_link.expired': 'expired',
-    'payment_link.cancelled': 'cancelled',
-  };
-  const newStatus = statusByEvent[event.event];
-  if (!newStatus) return;
+  if (record && (record.account ?? 'shared') !== receivingAccount) {
+    console.warn(JSON.stringify({ event: 'payment_event_account_mismatch', link: String(plink.id).slice(0, 40), receivingAccount: receivingAccount.slice(0, 64) }));
+    return;
+  }
 
   // Razorpay retries webhooks — don't re-notify a link we already marked paid.
   const alreadyPaid = record?.status === 'paid';
 
   // Links created outside the app (e.g. Razorpay dashboard) still get a
-  // record on payment, so the history stays complete.
+  // record on payment, so the history stays complete. Its mode is unknown
+  // until a status check with this account's keys proves it.
   const updated: StoredPaymentLink = record ?? {
     id: plink.id,
     shortUrl: plink.short_url || '',
@@ -1067,13 +1425,18 @@ async function applyPaymentLinkEvent(ctx: Ctx, event: any): Promise<void> {
     customerName: plink.customer?.name || '',
     customerPhone: plink.customer?.contact || '',
     customerEmail: plink.customer?.email || '',
-    status: newStatus,
+    status: incoming,
     createdAt: plink.created_at ? plink.created_at * 1000 : Date.now(),
     createdBy: '',
     createdByName: '',
+    account: receivingAccount,
+    orgId: receivingAccount === 'shared' ? null : receivingAccount,
+    currency: typeof plink.currency === 'string' ? plink.currency : CURRENCY,
   };
+  const newStatus = nextLinkStatus(record?.status, incoming);
+  if (record && newStatus === record.status && event.event !== 'payment_link.paid') return;
   updated.status = newStatus;
-  if (event.event === 'payment_link.paid') {
+  if (event.event === 'payment_link.paid' && !alreadyPaid) {
     const payment = event?.payload?.payment?.entity;
     updated.paidAt = Date.now();
     updated.paymentId = payment?.id || '';
@@ -4146,11 +4509,15 @@ async function explainSignedOut(response: Response, request: Request, env: Env):
 }
 
 /**
- * Razorpay events for an organization's own account. A payment link lives
- * where it was made: in the organization's own workspace, or, for the
- * organization chosen for the original app's links, in the original storage.
- * Unknown links (made on Razorpay's dashboard) are recorded in the workspace
- * the account belongs to.
+ * Razorpay events verified with an organization's own webhook secret. They
+ * only ever touch links made in that organization's account:
+ *   - in its workspace (its own storage, or the original storage when it is
+ *     the organization connected to it);
+ *   - or, for links made before 2026-09 while the control centre pointed the
+ *     original app at this account, in the original storage — found by the
+ *     link's own record saying it was made in this account, never by the
+ *     old global setting.
+ * Unknown links (made on Razorpay's dashboard) are recorded in its workspace.
  */
 async function routeOrgPaymentEvent(request: Request, env: Env, execCtx: ExecutionContext, orgId: string, event: unknown): Promise<void> {
   if (!env.PLATFORM_DB) return;
@@ -4158,15 +4525,16 @@ async function routeOrgPaymentEvent(request: Request, env: Env, execCtx: Executi
   const at = (target: Env): Ctx => ({ request, env: target, url, path: url.pathname, method: request.method, execCtx });
   const org = await env.PLATFORM_DB.prepare('SELECT id, app_storage FROM organizations WHERE id = ?')
     .bind(orgId).first<{ id: string; app_storage: 'own' | 'original' }>();
-  const own = org?.app_storage === 'own' ? orgStorageEnv(env, org) : null;
-  const forOriginalApp = orgId === await getAppPaymentsOrg(env.PLATFORM_DB);
-  if (!own) {
-    if (forOriginalApp) await applyPaymentLinkEvent(at(env), event);
-    return;
-  }
+  if (!org) return;
+  const home = orgStorageEnv(env, org);
   const linkId = (event as { payload?: { payment_link?: { entity?: { id?: string } } } })?.payload?.payment_link?.entity?.id;
-  const inOwn = linkId ? (await own.VAYU_KV.get(`payment:link:${linkId}`)) !== null : false;
-  await applyPaymentLinkEvent(at(inOwn || !forOriginalApp ? own : env), event);
+  if (org.app_storage === 'own' && linkId && (await home.VAYU_KV.get(`payment:link:${linkId}`)) === null) {
+    const legacy = await env.VAYU_KV.get(`payment:link:${linkId}`);
+    let madeHere = false;
+    try { madeHere = !!legacy && (JSON.parse(legacy) as StoredPaymentLink).account === orgId; } catch { madeHere = false; }
+    if (madeHere) { await applyPaymentLinkEvent(at(env), event, orgId); return; }
+  }
+  await applyPaymentLinkEvent(at(home), event, orgId);
 }
 
 // ── Removed features ────────────────────────────────────────────────────────
@@ -4343,6 +4711,7 @@ const routes: Route[] = [
 
   // Razorpay payment links
   { method: 'POST', match: isExact('/payments/link'), handler: handlePaymentLinkCreate },
+  { method: 'GET', match: isExact('/payments/account'), handler: handlePaymentAccount },
   { method: 'GET', match: isExact('/payments/links'), handler: handlePaymentLinksList },
   { method: 'GET', match: isExact('/plan'), handler: handlePlanUsage },
   { method: 'GET', match: isExact('/billing'), handler: handleBillingGet },
@@ -4610,12 +4979,22 @@ export default {
     return response;
   },
 
-  /** Every 10 minutes: send notices that are due, including earlier failures. */
+  /**
+   * Every 10 minutes: send notices that are due (including earlier failures),
+   * and carry on a started payment-key rotation one batch at a time. Each job
+   * fails on its own; one failing never stops the others.
+   */
   async scheduled(_controller: ScheduledController, env: Env, execCtx: ExecutionContext): Promise<void> {
-    if (!env.PLATFORM_DB || !emailConfigured(env)) return;
-    execCtx.waitUntil(deliverOutbox(env, env.PLATFORM_DB, 50).then(
-      r => { if (r.sent || r.failed) console.log(`outbox: ${r.sent} sent, ${r.failed} failed`); },
-      e => console.error('scheduled outbox delivery failed', e),
-    ));
+    const db = env.PLATFORM_DB;
+    if (!db) return;
+    if (emailConfigured(env)) {
+      execCtx.waitUntil(deliverOutbox(env, db, 50).then(
+        r => { if (r.sent || r.failed) console.log(`outbox: ${r.sent} sent, ${r.failed} failed`); },
+        e => console.error('scheduled outbox delivery failed', e),
+      ));
+    }
+    if (secretsConfigured(env)) {
+      execCtx.waitUntil(runRotationBatch(env, db, null).catch(e => console.error('scheduled key rotation batch failed', e)));
+    }
   },
 };
