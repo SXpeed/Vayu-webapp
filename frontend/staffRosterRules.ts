@@ -93,6 +93,24 @@ export function shiftFieldErrors(s: Pick<StaffShift, 'kind' | 'storeId' | 'date'
 export type Conflict = { type: 'overlap'; otherId: string } | { type: 'leave'; leaveId: string };
 
 /** Every problem that blocks publishing, by shift id. Days off and open shifts never conflict. */
+/** A shift's span in minutes from a fixed day, so shifts on different days compare. */
+function spanOf(s: StaffShift): [number, number] {
+    const start = dayNumber(s.date) * 1440 + s.startMin;
+    return [start, start + shiftLengthMin(s)];
+}
+
+/** Every pair of one person's shifts that overlap in time. */
+function overlappingPairs(list: StaffShift[]): [StaffShift, StaffShift][] {
+    const pairs: [StaffShift, StaffShift][] = [];
+    const spans = list.map(spanOf);
+    for (let i = 0; i < list.length; i++) {
+        for (let j = i + 1; j < list.length; j++) {
+            if (spans[i][0] < spans[j][1] && spans[j][0] < spans[i][1]) pairs.push([list[i], list[j]]);
+        }
+    }
+    return pairs;
+}
+
 export function findConflicts(shifts: StaffShift[], leaves: StaffLeave[]): Map<string, Conflict[]> {
     const out = new Map<string, Conflict[]>();
     const add = (id: string, c: Conflict) => { const list = out.get(id) ?? []; list.push(c); out.set(id, list); };
@@ -104,13 +122,9 @@ export function findConflicts(shifts: StaffShift[], leaves: StaffLeave[]): Map<s
         byEmployee.set(s.employeeId, list);
     }
     for (const list of byEmployee.values()) {
-        for (let i = 0; i < list.length; i++) {
-            for (let j = i + 1; j < list.length; j++) {
-                const a = list[i], b = list[j];
-                const a0 = dayNumber(a.date) * 1440 + a.startMin, a1 = a0 + shiftLengthMin(a);
-                const b0 = dayNumber(b.date) * 1440 + b.startMin, b1 = b0 + shiftLengthMin(b);
-                if (a0 < b1 && b0 < a1) { add(a.id, { type: 'overlap', otherId: b.id }); add(b.id, { type: 'overlap', otherId: a.id }); }
-            }
+        for (const [a, b] of overlappingPairs(list)) {
+            add(a.id, { type: 'overlap', otherId: b.id });
+            add(b.id, { type: 'overlap', otherId: a.id });
         }
         for (const s of list) {
             const leave = leaves.find(l => l.status === 'approved' && l.employeeId === s.employeeId && s.date >= l.from && s.date <= l.to);

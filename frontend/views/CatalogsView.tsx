@@ -30,6 +30,8 @@ import { useIsDesktop } from '../hooks/useMediaQuery';
 import { IfCan } from '../components/Layout';
 import { ViewingRoomsPanel } from './ViewingRoomsPanel';
 
+
+const artworkCount = (n: number): string => `${n} ${n === 1 ? 'artwork' : 'artworks'}`;
 export const THEME_INFO: { id: CatalogTheme; name: string; desc: string; bg: string; fg: string; accent: string }[] = [
     { id: 1, name: 'Classic', desc: 'White & gradient', bg: '#ffffff', fg: '#1a1a1a', accent: '#e0e0e0' },
     { id: 2, name: 'Linen', desc: 'Warm paper, soft rounded photos and a shadow', bg: '#eee6da', fg: '#342c26', accent: '#a0522d' },
@@ -372,7 +374,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                         <div className="flex-1 flex flex-col px-1.5 pt-3 pb-1 min-w-0">
                             <h3 className="font-serif text-[15px] leading-snug text-[var(--neu-text)] line-clamp-2">{catalog.name}</h3>
                             <p className="mt-1 text-[10.5px] uppercase tracking-wider text-[var(--neu-text-dim)]">
-                                {catalog.source === 'uploaded' ? 'Uploaded' : `${catalog.artworkIds.length} ${catalog.artworkIds.length === 1 ? 'artwork' : 'artworks'}`}
+                                {catalog.source === 'uploaded' ? 'Uploaded' : artworkCount(catalog.artworkIds.length)}
                             </p>
                             {catalog.description && (
                                 <p className="mt-1 text-[11px] text-[var(--neu-text-dim)] line-clamp-2">{catalog.description}</p>

@@ -28,7 +28,7 @@ export function useHashRoute(): [Route, (section: string, id?: string) => void] 
         return () => window.removeEventListener('hashchange', on);
     }, []);
     const go = useCallback((section: string, id?: string) => {
-        const next = `#/${encodeURIComponent(section)}${id ? `/${encodeURIComponent(id)}` : ''}`;
+        const next = `#/${encodeURIComponent(section)}${id ? '/' + encodeURIComponent(id) : ''}`;
         if (location.hash !== next) location.hash = next;
     }, []);
     return [route, go];
@@ -78,6 +78,12 @@ export const PageHeader: React.FC<{
     </header>
 );
 
+/** Padding under a section's header, or all round when it has none; none at all when flush. */
+function sectionBodyClass(flush: boolean, hasHeader: boolean): string {
+    if (flush) return '';
+    return hasHeader ? 'px-5 lg:px-6 pb-5 lg:pb-6' : 'px-5 lg:px-6 py-5 lg:py-6';
+}
+
 /** A titled card: the app's Card with its small-caps SectionTitle. */
 export const Section: React.FC<{
     title?: React.ReactNode; description?: React.ReactNode; actions?: React.ReactNode;
@@ -94,7 +100,7 @@ export const Section: React.FC<{
                 {actions && <div className="flex flex-wrap items-center gap-2 shrink-0">{actions}</div>}
             </header>
         )}
-        <div className={flush ? '' : `px-5 lg:px-6 ${title || actions ? 'pb-5 lg:pb-6' : 'py-5 lg:py-6'}`}>{children}</div>
+        <div className={sectionBodyClass(flush, !!(title || actions))}>{children}</div>
     </section>
 );
 
@@ -103,12 +109,14 @@ export const Section: React.FC<{
  * Fixed height and single lines, so the placeholder and the real tile are
  * the same size and nothing moves when data lands.
  */
+const TONE_INK = { bad: 'text-[var(--ac-bad)]', warn: 'text-[var(--ac-warn)]', ok: 'text-[var(--ac-ok)]' } as const;
+
 export const StatTile: React.FC<{
     icon?: React.ReactNode; label: string; value: React.ReactNode; foot?: React.ReactNode;
     tone?: 'ok' | 'warn' | 'bad'; onClick?: () => void;
     meter?: { share: number; tone: 'ok' | 'warn' | 'bad' };
 }> = ({ icon, label, value, foot, tone, onClick, meter }) => {
-    const ink = tone === 'bad' ? 'text-[var(--ac-bad)]' : tone === 'warn' ? 'text-[var(--ac-warn)]' : tone === 'ok' ? 'text-[var(--ac-ok)]' : 'text-gray-900 dark:text-white';
+    const ink = tone ? TONE_INK[tone] : 'text-gray-900 dark:text-white';
     const body = (
         <>
             <span className="flex items-center gap-2 min-w-0">
@@ -237,12 +245,17 @@ export const Detail: React.FC<{ label: string; children?: React.ReactNode }> = (
     </div>
 );
 
+// First match wins: Windows before Mac, and Edge before Chrome before Safari
+// (their user agents name the others too).
+const OS_NAMES: [RegExp, string][] = [[/windows/i, 'Windows'], [/mac os/i, 'Mac'], [/iphone|ipad/i, 'iPhone / iPad'], [/android/i, 'Android'], [/linux/i, 'Linux']];
+const BROWSER_NAMES: [RegExp, string][] = [[/edg\//i, 'Edge'], [/chrome\//i, 'Chrome'], [/safari\//i, 'Safari'], [/firefox\//i, 'Firefox']];
+
 /** "Chrome on Windows" from a user-agent string. */
 export function device(ua: string | null): { label: string; phone: boolean } {
     if (!ua) return { label: 'Unknown device', phone: false };
     const phone = /iphone|android|mobile/i.test(ua);
-    const os = /windows/i.test(ua) ? 'Windows' : /mac os/i.test(ua) ? 'Mac' : /iphone|ipad/i.test(ua) ? 'iPhone / iPad' : /android/i.test(ua) ? 'Android' : /linux/i.test(ua) ? 'Linux' : 'Device';
-    const browser = /edg\//i.test(ua) ? 'Edge' : /chrome\//i.test(ua) ? 'Chrome' : /safari\//i.test(ua) ? 'Safari' : /firefox\//i.test(ua) ? 'Firefox' : 'Browser';
+    const os = OS_NAMES.find(([re]) => re.test(ua))?.[1] ?? 'Device';
+    const browser = BROWSER_NAMES.find(([re]) => re.test(ua))?.[1] ?? 'Browser';
     return { label: `${browser} on ${os}`, phone };
 }
 

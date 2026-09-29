@@ -83,7 +83,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUserId, onClose }
         setPurgeAll(false);
         setIsPurging(true);
         try {
-            await apiCall(`/deleted-items${all || !target ? '' : `/${target.id}`}`, { method: 'DELETE' });
+            await apiCall(`/deleted-items${all || !target ? '' : '/' + target.id}`, { method: 'DELETE' });
             setItems(prev => (all ? [] : prev.filter(i => i.id !== target?.id)));
         } catch (e) {
             setError((e as Error).message);

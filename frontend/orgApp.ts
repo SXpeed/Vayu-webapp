@@ -108,12 +108,11 @@ const planMemo = new Map<string, { at: number; active: boolean; sectionsOff: Sec
 
 /**
  * Plan modules that switch a whole app section on or off (planFields.ts).
- * Only the Roster so far: the older modules are shown on plans but not yet
+ * Only the staff roster so far: the older modules are shown on plans but not yet
  * enforced (docs/PLANS.md), and switching them on now would lock
  * organizations out of screens they use today.
  */
 export const PLAN_GATED_SECTIONS: { module: string; section: SectionId }[] = [
-  { module: 'roster', section: 'roster' },
   { module: 'staffRoster', section: 'schedule' },
 ];
 

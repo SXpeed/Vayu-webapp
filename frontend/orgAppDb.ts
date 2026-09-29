@@ -10,7 +10,7 @@ import type { Env } from './workerEnv';
 type Bindable = string | number | null | ArrayBuffer;
 
 /** D1 accepts booleans and treats undefined as an error; SQLite storage wants plain values. */
-function bindable(value: unknown): Bindable {
+function bindable(value: unknown): Bindable { // NOSONAR: a SQL value is a number, string, blob or NULL by nature
   if (value === undefined || value === null) return null;
   if (typeof value === 'boolean') return value ? 1 : 0;
   if (typeof value === 'bigint') return Number(value);

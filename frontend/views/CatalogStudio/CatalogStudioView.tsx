@@ -619,7 +619,7 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                                                 type="button"
                                                 onClick={() => updateOption('logoSelection', opt)}
                                                 aria-pressed={selected}
-                                                aria-label={`Use ${custom ? `logo ${i + 1}` : caption.toLowerCase()}`}
+                                                aria-label={`Use ${custom ? 'logo ' + (i + 1) : caption.toLowerCase()}`}
                                                 className={`w-full rounded-xl p-2.5 text-left active-scale transition-shadow ${selected ? 'neu-inset ring-1 ring-gold-500/60' : 'neu-raised-sm'}`}
                                             >
                                                 <span className="block w-full aspect-[16/10] rounded-lg neu-inset overflow-hidden flex items-center justify-center p-2">
@@ -964,7 +964,7 @@ const stepDetail = (progress: CatalogPdfProgress): string => {
                 : 'Starting it up…';
         case 'pages': {
             const page = Math.min(progress.done + 1, progress.total);
-            return `Page ${page} of ${progress.total}${progress.title ? ` · ${progress.title}` : ''}`;
+            return `Page ${page} of ${progress.total}${progress.title ? ' · ' + progress.title : ''}`;
         }
         case 'assembling':
             return 'Putting the pages together';
@@ -1635,6 +1635,78 @@ const PdfText: React.FC<{
     </span>
 );
 
+/** Page 0's text rows, stepping y exactly as drawPage0Text does. */
+function page0Rows(art: PlannedPage['art'], options: PdfOptions, catalogName: string, ink: string, gold: string): React.ReactNode[] {
+    const rows: React.ReactNode[] = [];
+    let y = 258;
+    if (options.showCatalogName) {
+        rows.push(<PdfText key="cat" x={13} y={y} pt={12} color={gold} italic>{catalogName}</PdfText>);
+        y += 6;
+    }
+    y += 2;
+    if (options.showTitle) {
+        rows.push(<PdfText key="title" x={13} y={y} pt={20} color={ink} spacingMm={2.2}>{(art.title || '').toUpperCase()}</PdfText>);
+        y += 9;
+    }
+    if (options.showTitleNote && art.medium) {
+        rows.push(
+            <React.Fragment key="med">
+                <PdfText x={13} y={y} pt={14} color={gold}>MEDIUM</PdfText>
+                <PdfText x={46} y={y} pt={16} color={ink}>{art.medium}</PdfText>
+            </React.Fragment>,
+        );
+        y += 9;
+    }
+    if (options.showDimensions && art.dimensions) {
+        rows.push(
+            <React.Fragment key="dim">
+                <PdfText x={13} y={y} pt={14} color={gold}>DIMENSIONS</PdfText>
+                <PdfText x={46} y={y} pt={16} color={ink}>{art.dimensions} inch</PdfText>
+                <PdfText x={106} y={y} pt={14} color={gold}>|</PdfText>
+                <PdfText x={114} y={y} pt={14} color={gold}>ITEM CODE</PdfText>
+                <PdfText x={144} y={y} pt={16} color={ink}>{art.customId || ''}</PdfText>
+            </React.Fragment>,
+        );
+        y += 9;
+    }
+    if (options.showPrice) {
+        const price = `${Number(art.price || 0).toLocaleString('en-IN')}${art.plusGst ? ' +GST' : ''}`;
+        rows.push(
+            <React.Fragment key="price">
+                <PdfText x={13} y={y} pt={14} color={gold}>PRICE</PdfText>
+                <PdfText x={46} y={y} pt={16} color={ink}>{price}</PdfText>
+            </React.Fragment>,
+        );
+    }
+    return rows;
+}
+
+/** The page's picture in its box, styled by the theme; a placeholder when there is none. */
+const PageImage: React.FC<{ img?: string; alt: string; ink: string; line: string; rounded: boolean; framed: boolean; shadow: boolean }> = ({ img, alt, ink, line, rounded, framed, shadow }) => {
+    if (!img) {
+        return (
+            <span className="flex flex-col items-center gap-1 opacity-40" style={{ color: ink, fontSize: cqw(4) }}>
+                <ImageIcon style={{ width: cqw(14), height: cqw(14) }} strokeWidth={1.2} />
+                <span style={{ fontFamily: 'inherit' }}>No image</span>
+            </span>
+        );
+    }
+    return (
+        <img
+            key={img}
+            src={img}
+            alt={alt}
+            className="max-w-full max-h-full object-contain"
+            style={{
+                borderRadius: rounded ? cqw(3) : undefined,
+                // Gallery's hairline frame (0.3mm in the PDF).
+                outline: framed ? `max(1px, ${cqw(0.3)}) solid ${line}` : undefined,
+                filter: shadow ? 'drop-shadow(0 1.4cqw 2.2cqw rgba(0,0,0,0.32))' : undefined,
+            }}
+        />
+    );
+};
+
 /**
  * One page exactly as the generator lays it out (see drawSinglePage and
  * drawPage0Text / drawPage1Text in CatalogsView): image box above a hairline
@@ -1668,52 +1740,10 @@ const PagePreview: React.FC<{
     const rounded = THEME_STYLES[themeId].roundedImages && !cutout;
     const framed = THEME_STYLES[themeId].framedImages && !cutout;
 
-    // Page 0 text rows, stepping y exactly as drawPage0Text does.
-    const rows: React.ReactNode[] = [];
-    if (page.pageIndex === 0) {
-        let y = 258;
-        if (options.showCatalogName) {
-            rows.push(<PdfText key="cat" x={13} y={y} pt={12} color={gold} italic>{catalogName}</PdfText>);
-            y += 6;
-        }
-        y += 2;
-        if (options.showTitle) {
-            rows.push(<PdfText key="title" x={13} y={y} pt={20} color={ink} spacingMm={2.2}>{(art.title || '').toUpperCase()}</PdfText>);
-            y += 9;
-        }
-        if (options.showTitleNote && art.medium) {
-            rows.push(
-                <React.Fragment key="med">
-                    <PdfText x={13} y={y} pt={14} color={gold}>MEDIUM</PdfText>
-                    <PdfText x={46} y={y} pt={16} color={ink}>{art.medium}</PdfText>
-                </React.Fragment>,
-            );
-            y += 9;
-        }
-        if (options.showDimensions && art.dimensions) {
-            rows.push(
-                <React.Fragment key="dim">
-                    <PdfText x={13} y={y} pt={14} color={gold}>DIMENSIONS</PdfText>
-                    <PdfText x={46} y={y} pt={16} color={ink}>{art.dimensions} inch</PdfText>
-                    <PdfText x={106} y={y} pt={14} color={gold}>|</PdfText>
-                    <PdfText x={114} y={y} pt={14} color={gold}>ITEM CODE</PdfText>
-                    <PdfText x={144} y={y} pt={16} color={ink}>{art.customId || ''}</PdfText>
-                </React.Fragment>,
-            );
-            y += 9;
-        }
-        if (options.showPrice) {
-            const price = `${Number(art.price || 0).toLocaleString('en-IN')}${art.plusGst ? ' +GST' : ''}`;
-            rows.push(
-                <React.Fragment key="price">
-                    <PdfText x={13} y={y} pt={14} color={gold}>PRICE</PdfText>
-                    <PdfText x={46} y={y} pt={16} color={ink}>{price}</PdfText>
-                </React.Fragment>,
-            );
-        }
-    }
+    const rows = page.pageIndex === 0 ? page0Rows(art, options, catalogName, ink, gold) : [];
 
-    const img = page.imgUrl ? (hiRes ? page.imgUrl : getThumbUrl(page.imgUrl)) : undefined;
+    let img: string | undefined;
+    if (page.imgUrl) img = hiRes ? page.imgUrl : getThumbUrl(page.imgUrl);
 
     return (
         <div
@@ -1725,25 +1755,7 @@ const PagePreview: React.FC<{
                 className="absolute flex items-center justify-center"
                 style={{ left: pctW(2), top: pctH(2), width: pctW(206), height: pctH(imgBoxH) }}
             >
-                {img ? (
-                    <img
-                        key={img}
-                        src={img}
-                        alt={art.title}
-                        className="max-w-full max-h-full object-contain"
-                        style={{
-                            borderRadius: rounded ? cqw(3) : undefined,
-                            // Gallery's hairline frame (0.3mm in the PDF).
-                            outline: framed ? `max(1px, ${cqw(0.3)}) solid ${line}` : undefined,
-                            filter: imageShadow ? 'drop-shadow(0 1.4cqw 2.2cqw rgba(0,0,0,0.32))' : undefined,
-                        }}
-                    />
-                ) : (
-                    <span className="flex flex-col items-center gap-1 opacity-40" style={{ color: ink, fontSize: cqw(4) }}>
-                        <ImageIcon style={{ width: cqw(14), height: cqw(14) }} strokeWidth={1.2} />
-                        <span style={{ fontFamily: 'inherit' }}>No image</span>
-                    </span>
-                )}
+                <PageImage img={img} alt={art.title} ink={ink} line={line} rounded={rounded} framed={framed} shadow={imageShadow} />
             </div>
 
             {/* Logo — the generator's own box (placement, offsets, size); letter mark as fallback */}

@@ -45,8 +45,11 @@ const fmtNumber = (n: number, unit?: 'MB') => {
 };
 const fmtDate = (ts: number) => new Date(ts).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 
-const share = (row: UsageRow): number | null =>
-    row.used === null || row.limit === null ? null : row.limit === 0 ? (row.used > 0 ? 1 : 0) : row.used / row.limit;
+function share(row: UsageRow): number | null {
+    if (row.used === null || row.limit === null) return null;
+    if (row.limit === 0) return row.used > 0 ? 1 : 0;
+    return row.used / row.limit;
+}
 
 /** The plan's state in words, and whether it needs attention. */
 const statusText = (info: PlanInfo): { text: string; tone: 'ok' | 'warn' | 'bad' } => {

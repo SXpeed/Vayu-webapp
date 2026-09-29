@@ -86,6 +86,98 @@ function mapRole(user: LegacyUser, ownerEmail: string | null): 'owner' | 'admin'
  * Reads everything, reports what would happen and — unless this is a dry run —
  * writes it into the organization.
  */
+/** The organization to import into: it must exist and be active, with both storages available. */
+async function importTarget(env: Env, db: D1Database, orgId: string): Promise<DurableObjectStub<OrgStore>> {
+  const org = await db.prepare('SELECT status FROM organizations WHERE id = ?').bind(orgId).first<{ status: string }>();
+  if (!org) throw new OrgError(404, 'org_not_found', 'Organization not found.');
+  if (org.status !== 'active') throw new OrgError(409, 'org_not_active', 'The organization must be active to import into it.');
+  if (!env.ORG_STORE) throw new OrgError(503, 'store_unavailable', 'Organization storage is not configured in this environment.');
+  if (!env.VAYU_DB) throw new OrgError(503, 'legacy_unavailable', 'The original database is not available in this environment.');
+  return env.ORG_STORE.get(env.ORG_STORE.idFromName(orgId)) as DurableObjectStub<OrgStore>;
+}
+
+interface UserImport {
+  db: D1Database; orgId: string; ownerEmail: string | null; existingOwner: boolean; dryRun: boolean; actor: Actor; report: ImportReport;
+}
+
+/**
+ * One original-app user: counted in the report, and (unless a dry run) given
+ * a platform account with their password, if they have none yet, and a
+ * membership. Only one owner is created here; if the organization already
+ * has one, the legacy admin becomes an admin instead.
+ */
+async function importLegacyUser(run: UserImport, user: LegacyUser): Promise<void> {
+  const { db, orgId, report } = run;
+  const email = user.email?.trim().toLowerCase();
+  if (!email || !user.id) {
+    report.warnings.push(`Skipped a user record without an id or email.`);
+    return;
+  }
+  const role = mapRole(user, run.ownerEmail);
+  if (role === 'owner') report.users.owner = email;
+
+  const existing = await db.prepare('SELECT id FROM "user" WHERE email = ?').bind(email).first<{ id: string }>();
+  const userId = existing?.id ?? user.id;
+  if (!existing) report.users.created += 1;
+  else {
+    report.users.matchedExisting += 1;
+    if (existing.id !== user.id) report.warnings.push(`${email} already has a platform account with a different id; its membership will use the existing account.`);
+  }
+  const alreadyMember = !!(await db.prepare('SELECT 1 FROM memberships WHERE org_id = ? AND user_id = ?').bind(orgId, userId).first());
+  if (!alreadyMember) report.users.memberships += 1;
+  if (run.dryRun) return;
+
+  const statements = existing ? [] : newAccountStatements(db, user, email, report);
+  if (!alreadyMember) {
+    const finalRole = role === 'owner' && run.existingOwner ? 'admin' : role;
+    statements.push(
+      db.prepare(`INSERT OR IGNORE INTO memberships (id, org_id, user_id, role, status, created_at, created_by, updated_at)
+                  VALUES (?, ?, ?, ?, 'active', ?, ?, ?)`)
+        .bind(crypto.randomUUID(), orgId, userId, finalRole, Date.now(), run.actor.userId, Date.now()),
+    );
+  }
+  if (statements.length) await db.batch(statements);
+}
+
+/** A platform account for someone new, with their original password when there is one. */
+function newAccountStatements(db: D1Database, user: LegacyUser, email: string, report: ImportReport): D1PreparedStatement[] {
+  const nowIso = new Date().toISOString();
+  const statements = [
+    db.prepare('INSERT OR IGNORE INTO "user" (id, name, email, emailVerified, createdAt, updatedAt, twoFactorEnabled) VALUES (?, ?, ?, 0, ?, ?, 0)')
+      .bind(user.id, user.name?.slice(0, 120) || email, email, nowIso, nowIso),
+  ];
+  const hash = legacyPasswordHash(user);
+  if (!hash) {
+    report.warnings.push(`${email} has no stored password; they will need a new one.`);
+    return statements;
+  }
+  statements.push(
+    db.prepare("INSERT OR IGNORE INTO account (id, accountId, providerId, userId, password, createdAt, updatedAt) VALUES (?, ?, 'credential', ?, ?, ?, ?)")
+      .bind(crypto.randomUUID(), user.id, user.id, hash, nowIso, nowIso),
+  );
+  return statements;
+}
+
+/** Counts each business table and, unless a dry run, copies its rows in pages. */
+async function importBusinessRows(legacy: D1Database, store: DurableObjectStub<OrgStore>, report: ImportReport, dryRun: boolean): Promise<void> {
+  const before = await store.counts();
+  for (const table of TABLES) {
+    const source = await tableCount(legacy, table);
+    if (source === null) {
+      report.warnings.push(`Table "${table}" does not exist in the original database; skipped.`);
+      continue;
+    }
+    report.tables[table] = { source, inserted: 0, alreadyThere: before[table] ?? 0 };
+    if (dryRun) continue;
+    for (let offset = 0; offset < source; offset += PAGE) {
+      const { results } = await legacy.prepare(`SELECT * FROM ${table} LIMIT ? OFFSET ?`).bind(PAGE, offset).all();
+      if (!results?.length) break;
+      const outcome = await store.importRows(table, results as Record<string, unknown>[]);
+      report.tables[table].inserted += outcome.inserted;
+    }
+  }
+}
+
 export async function importLegacyWorkspace(
   env: Env,
   db: D1Database,
@@ -96,13 +188,7 @@ export async function importLegacyWorkspace(
   const dryRun = body.dryRun !== false; // anything but an explicit false is a dry run
   const ownerEmail = typeof body.ownerEmail === 'string' ? body.ownerEmail.trim().toLowerCase() : null;
 
-  const org = await db.prepare('SELECT status FROM organizations WHERE id = ?').bind(orgId).first<{ status: string }>();
-  if (!org) throw new OrgError(404, 'org_not_found', 'Organization not found.');
-  if (org.status !== 'active') throw new OrgError(409, 'org_not_active', 'The organization must be active to import into it.');
-  if (!env.ORG_STORE) throw new OrgError(503, 'store_unavailable', 'Organization storage is not configured in this environment.');
-  if (!env.VAYU_DB) throw new OrgError(503, 'legacy_unavailable', 'The original database is not available in this environment.');
-
-  const store = env.ORG_STORE.get(env.ORG_STORE.idFromName(orgId)) as DurableObjectStub<OrgStore>;
+  const store = await importTarget(env, db, orgId);
   const report: ImportReport = {
     mode: dryRun ? 'dry_run' : 'run',
     orgId,
@@ -128,84 +214,14 @@ export async function importLegacyWorkspace(
       report.warnings.push(`No existing user has the email ${ownerEmail}; nobody would be made owner by it.`);
     }
 
-    const existingOwner = await db.prepare(
+    const existingOwner = !!(await db.prepare(
       "SELECT 1 FROM memberships WHERE org_id = ? AND role = 'owner' AND status = 'active'",
-    ).bind(orgId).first();
-
-    for (const user of legacyUsers) {
-      const email = user.email?.trim().toLowerCase();
-      if (!email || !user.id) {
-        report.warnings.push(`Skipped a user record without an id or email.`);
-        continue;
-      }
-      const role = mapRole(user, ownerEmail);
-      if (role === 'owner') report.users.owner = email;
-
-      const existing = await db.prepare('SELECT id FROM "user" WHERE email = ?').bind(email).first<{ id: string }>();
-      const userId = existing?.id ?? user.id;
-      if (existing) {
-        report.users.matchedExisting += 1;
-        if (existing.id !== user.id) {
-          report.warnings.push(`${email} already has a platform account with a different id; its membership will use the existing account.`);
-        }
-      } else {
-        report.users.created += 1;
-      }
-
-      const alreadyMember = await db.prepare('SELECT 1 FROM memberships WHERE org_id = ? AND user_id = ?')
-        .bind(orgId, userId).first();
-      if (!alreadyMember) report.users.memberships += 1;
-
-      if (dryRun) continue;
-
-      const nowIso = new Date().toISOString();
-      const statements: D1PreparedStatement[] = [];
-      if (!existing) {
-        statements.push(
-          db.prepare('INSERT OR IGNORE INTO "user" (id, name, email, emailVerified, createdAt, updatedAt, twoFactorEnabled) VALUES (?, ?, ?, 0, ?, ?, 0)')
-            .bind(user.id, user.name?.slice(0, 120) || email, email, nowIso, nowIso),
-        );
-        const hash = legacyPasswordHash(user);
-        if (hash) {
-          statements.push(
-            db.prepare("INSERT OR IGNORE INTO account (id, accountId, providerId, userId, password, createdAt, updatedAt) VALUES (?, ?, 'credential', ?, ?, ?, ?)")
-              .bind(crypto.randomUUID(), user.id, user.id, hash, nowIso, nowIso),
-          );
-        } else {
-          report.warnings.push(`${email} has no stored password; they will need a new one.`);
-        }
-      }
-      if (!alreadyMember) {
-        // Only one owner is created here; if the organization already has one,
-        // the legacy admin becomes an admin instead.
-        const finalRole = role === 'owner' && existingOwner ? 'admin' : role;
-        statements.push(
-          db.prepare(`INSERT OR IGNORE INTO memberships (id, org_id, user_id, role, status, created_at, created_by, updated_at)
-                      VALUES (?, ?, ?, ?, 'active', ?, ?, ?)`)
-            .bind(crypto.randomUUID(), orgId, userId, finalRole, Date.now(), actor.userId, Date.now()),
-        );
-      }
-      if (statements.length) await db.batch(statements);
-    }
+    ).bind(orgId).first());
+    const run: UserImport = { db, orgId, ownerEmail, existingOwner, dryRun, actor, report };
+    for (const user of legacyUsers) await importLegacyUser(run, user);
 
     // ── Business rows ────────────────────────────────────────────────────
-    const before = await store.counts();
-    for (const table of TABLES) {
-      const source = await tableCount(env.VAYU_DB, table);
-      if (source === null) {
-        report.warnings.push(`Table "${table}" does not exist in the original database; skipped.`);
-        continue;
-      }
-      report.tables[table] = { source, inserted: 0, alreadyThere: before[table] ?? 0 };
-      if (dryRun || source === 0) continue;
-
-      for (let offset = 0; offset < source; offset += PAGE) {
-        const { results } = await env.VAYU_DB.prepare(`SELECT * FROM ${table} LIMIT ? OFFSET ?`).bind(PAGE, offset).all();
-        if (!results?.length) break;
-        const outcome = await store.importRows(table, results as Record<string, unknown>[]);
-        report.tables[table].inserted += outcome.inserted;
-      }
-    }
+    await importBusinessRows(env.VAYU_DB as D1Database, store, report, dryRun);
 
     if (!dryRun) {
       await db.batch([

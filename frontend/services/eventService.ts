@@ -46,3 +46,9 @@ export const eventService = {
         });
     },
 };
+
+/** An event's start as shown in lists: "All day" when it starts at midnight, else the time. */
+export function eventTimeLabel(date: number): string {
+    const d = new Date(date);
+    return d.getHours() === 0 && d.getMinutes() === 0 ? 'All day' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}

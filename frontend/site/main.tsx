@@ -14,7 +14,9 @@ if (!root) throw new Error('Could not find root element to mount to');
 
 ReactDOM.createRoot(root).render(
     <React.StrictMode>
-        {page === 'signup' ? <Signup /> : page === 'legal' ? <Legal /> : <Landing />}
+        {page === 'signup' && <Signup />}
+        {page === 'legal' && <Legal />}
+        {page !== 'signup' && page !== 'legal' && <Landing />}
         <Toaster position="top-center" />
     </React.StrictMode>,
 );

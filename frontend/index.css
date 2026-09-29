@@ -1316,56 +1316,6 @@ html.kb-open .neu-dock-scrim {
     }
 }
 
-/* ── Roster (curated showcase) ──────────────────────────────────────────────
- * Pieces sit on a studio backdrop, the way a gallery shoot presents them,
- * inside the same raised tile + recessed well as the rest of the app. The
- * backdrop is chosen per section by its curator. */
-@layer components {
-    .roster-backdrop-studio {
-        background: radial-gradient(120% 90% at 50% 30%, #2c3d66 0%, #1c2a4a 55%, #131c33 100%);
-    }
-
-    .roster-backdrop-ivory {
-        background: radial-gradient(120% 90% at 50% 30%, #fbf7ef 0%, #f1eadb 60%, #e6dcc7 100%);
-    }
-
-    .roster-backdrop-charcoal {
-        background: radial-gradient(120% 90% at 50% 30%, #3b3e45 0%, #2a2c31 55%, #1c1d21 100%);
-    }
-
-    /* The heart over a photo: the page surface, raised, always a tap target. */
-    .roster-photo-btn {
-        position: absolute;
-        z-index: 30;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 2rem;
-        height: 2rem;
-        border-radius: 9999px;
-        color: var(--neu-text-dim);
-        background: color-mix(in srgb, var(--neu-bg) 90%, transparent);
-        box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.22), inset 0 1px 0 var(--neu-highlight);
-        transition: color 0.2s ease, transform 0.2s ease;
-    }
-
-    .roster-photo-btn[aria-pressed="true"] {
-        color: #d4485a;
-    }
-
-    /* Presenting: the whole screen is the backdrop. */
-    .roster-stage {
-        background: radial-gradient(110% 80% at 50% 38%, #25365c 0%, #172340 55%, #0d1426 100%);
-        color: #eef1f6;
-    }
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .roster-photo-btn {
-        transition: none;
-    }
-}
-
 /* ── Staff roster ────────────────────────────────────────────────────────────
  * Each store gets a pale tint (sage, slate blue, clay, lilac, teal, sand) so a
  * week reads at a glance; the store's name is always printed too, so colour

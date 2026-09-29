@@ -140,7 +140,7 @@ export const NotificationsPanel: React.FC<{ onChange?: () => void }> = ({ onChan
     }, []);
     useEffect(() => { load(); }, [load]);
 
-    const save = async (e: React.FormEvent) => {
+    const save = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
         setBusy('email');
         try {
@@ -159,6 +159,12 @@ export const NotificationsPanel: React.FC<{ onChange?: () => void }> = ({ onChan
 
     const shown = useMemo(() => (data?.notifications ?? []).filter(n => filter === 'all' || n.status === filter), [data, filter]);
     const total = data ? Object.values(data.counts).reduce((a, b) => a + b, 0) : 0;
+
+    const noticeWord = total === 1 ? 'notice' : 'notices';
+    const noticeCount = (f: string): number | undefined => {
+        if (!data) return undefined;
+        return f === 'all' ? total : data.counts[f];
+    };
 
     return (
         <div className="space-y-6">
@@ -184,17 +190,19 @@ export const NotificationsPanel: React.FC<{ onChange?: () => void }> = ({ onChan
                 )}
             </Section>
 
-            <Section title="Outbox" description={data ? `${total} notice${total === 1 ? '' : 's'} in total.` : undefined}>
+            <Section title="Outbox" description={data ? `${total} ${noticeWord} in total.` : undefined}>
                 <div className="mb-4 max-w-full overflow-x-auto">
                     <Segmented
                         value={filter}
                         onChange={setFilter}
-                        options={NOTICE_FILTERS.map(f => ({ value: f, label: f === 'all' ? 'All' : f[0].toUpperCase() + f.slice(1), count: f === 'all' ? (data ? total : undefined) : data?.counts[f] }))}
+                        options={NOTICE_FILTERS.map(f => ({ value: f, label: f === 'all' ? 'All' : f[0].toUpperCase() + f.slice(1), count: noticeCount(f) }))}
                     />
                 </div>
-                {!data ? <SkeletonRows rows={4} /> : shown.length === 0 ? (
+                {!data && <SkeletonRows rows={4} />}
+                {data && shown.length === 0 && (
                     <EmptyState icon={<Mail size={20} />} title={filter === 'all' ? 'The outbox is empty' : `Nothing ${filter}`} />
-                ) : (
+                )}
+                {data && shown.length > 0 && (
                     <ul className="ac-divide -mx-2">
                         {shown.map(n => (
                             <li key={n.id} className="px-2 py-2.5 grid items-center gap-x-3 gap-y-2 grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,1fr)_auto_6rem]">

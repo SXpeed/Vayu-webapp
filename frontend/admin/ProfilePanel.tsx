@@ -108,7 +108,7 @@ const DetailsCard: React.FC<{ name: string; email: string; onSaved: (name: strin
     const dirty = trimmed !== name;
     const valid = trimmed.length >= 2 && trimmed.length <= 80;
 
-    const save = async (e: React.FormEvent) => {
+    const save = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
         if (!dirty || !valid) return;
         setBusy(true);
@@ -150,7 +150,7 @@ const PasswordCard: React.FC<{ hasPassword: boolean; onChanged: () => void }> = 
     const mismatch = again.length > 0 && again !== next;
     const ready = current.length > 0 && next.length >= 10 && next === again;
 
-    const save = async (e: React.FormEvent) => {
+    const save = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
         if (!ready) return;
         setBusy(true);
@@ -215,7 +215,7 @@ const TwoFactorCard: React.FC<{ on: boolean; dialogs: ReturnType<typeof useDialo
         setSetup({ secret: new URL(data.totpURI).searchParams.get('secret') ?? '', codes: data.backupCodes });
     };
 
-    const confirm = async (e: React.FormEvent) => {
+    const confirm = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
         setBusy(true);
         const { error } = await authClient.twoFactor.verifyTotp({ code: code.trim() });
@@ -251,7 +251,7 @@ const TwoFactorCard: React.FC<{ on: boolean; dialogs: ReturnType<typeof useDialo
     return (
         <Section title="Two-factor authentication" actions={<StatusPill tone={on ? 'ok' : 'warn'}>{on ? 'On' : 'Off'}</StatusPill>}
             description="A 6-digit code from an authenticator app, on top of your password. Required for everyone who uses this control centre.">
-            {setup ? (
+            {setup && (
                 <form onSubmit={confirm} className="space-y-4">
                     <Field label="1. Add this key to your authenticator app" hint="Choose “enter a setup key”, time-based.">
                         <CopyValue value={setup.secret} mono />
@@ -267,7 +267,8 @@ const TwoFactorCard: React.FC<{ on: boolean; dialogs: ReturnType<typeof useDialo
                         <Button type="submit" variant="primary" disabled={busy || code.trim().length < 6}>Turn on</Button>
                     </div>
                 </form>
-            ) : on ? (
+            )}
+            {!setup && on && (
                 <div className="space-y-4">
                     {codes && (
                         <Field label="Your new backup codes" hint="Save them now. They are not shown again.">
@@ -279,7 +280,8 @@ const TwoFactorCard: React.FC<{ on: boolean; dialogs: ReturnType<typeof useDialo
                         <Button variant="danger" onClick={turnOff} disabled={busy}>Turn off</Button>
                     </div>
                 </div>
-            ) : (
+            )}
+            {!setup && !on && (
                 <Button variant="primary" onClick={start} disabled={busy} icon={<ShieldCheck size={15} />}>Set up two-factor</Button>
             )}
         </Section>

@@ -24,7 +24,7 @@ export interface Actor {
   ip: string | null;
 }
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/;
 
 function str(v: unknown, field: string, { min = 1, max = 200 } = {}): string {
   if (typeof v !== 'string') throw new OrgError(400, 'invalid', `${field} is required.`);
@@ -41,7 +41,7 @@ function oneOf<T extends string>(v: unknown, allowed: readonly T[], field: strin
 }
 
 export function slugify(name: string): string {
-  return name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'org';
+  return name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48) || 'org';
 }
 
 function isUniqueViolation(e: unknown): boolean {
@@ -200,17 +200,20 @@ export async function addMember(db: D1Database, orgId: string, body: Record<stri
   return getOrganization(db, orgId);
 }
 
+/** Refuses when the organization's plan has no seat left. */
+async function requireSeat(db: D1Database, orgId: string): Promise<void> {
+  const seats = await seatUsage(db, orgId);
+  if (seats.remaining === null || seats.remaining >= 1) return;
+  const members = seats.limit === 1 ? 'member' : 'members';
+  throw new OrgError(409, 'seat_limit', `This organization's plan allows ${seats.limit} ${members} and ${seats.used} are already enabled.`);
+}
+
 export async function updateMember(db: D1Database, orgId: string, membershipId: string, body: Record<string, unknown>, actor: Actor) {
   const current = await db.prepare('SELECT role, status FROM memberships WHERE id = ? AND org_id = ?')
     .bind(membershipId, orgId).first<{ role: string; status: string }>();
   if (!current) throw new OrgError(404, 'member_not_found', 'Member not found in this organization.');
   // Re-enabling someone takes a seat, so it is checked like adding one.
-  if (current.status === 'disabled' && body.status === 'active') {
-    const seats = await seatUsage(db, orgId);
-    if (seats.remaining !== null && seats.remaining < 1) {
-      throw new OrgError(409, 'seat_limit', `This organization's plan allows ${seats.limit} member${seats.limit === 1 ? '' : 's'} and ${seats.used} are already enabled.`);
-    }
-  }
+  if (current.status === 'disabled' && body.status === 'active') await requireSeat(db, orgId);
   const role = body.role === undefined ? current.role : oneOf(body.role, ORG_ROLES, 'Role');
   const status = body.status === undefined ? current.status : oneOf(body.status, ['active', 'disabled'] as const, 'Status');
   if (role === current.role && status === current.status) return getOrganization(db, orgId);

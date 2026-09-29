@@ -230,7 +230,7 @@ class RealtimeService {
     private scheduleReconnect(gen: number, delayMs?: number): void {
         if (gen !== this.generation) return;
         clearTimeout(this.reconnectTimer);
-        const delay = delayMs ?? Math.min(BACKOFF_BASE_MS * 2 ** this.attempts, BACKOFF_MAX_MS) * (0.5 + Math.random());
+        const delay = delayMs ?? Math.min(BACKOFF_BASE_MS * 2 ** this.attempts, BACKOFF_MAX_MS) * (0.5 + crypto.getRandomValues(new Uint32Array(1))[0] / 2 ** 32);
         this.attempts = Math.min(this.attempts + 1, 10);
         this.reconnectTimer = setTimeout(() => { void this.connect(gen); }, delay);
     }

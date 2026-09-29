@@ -86,33 +86,44 @@ async function displayStatus(db: D1Database, row: Row): Promise<string> {
   return 'active';
 }
 
-function readFields(body: Record<string, unknown>): Record<string, string | number | null> {
-  const out: Record<string, string | number | null> = {};
+/** A stored field: a count, text, or NULL. */
+type FieldValue = string | number | null;
+
+function readFields(body: Record<string, unknown>): Record<string, FieldValue> {
+  const out: Record<string, FieldValue> = {};
   for (const [key, column] of Object.entries(BODY_TO_COLUMN)) {
-    if (!(key in body)) continue;
-    const v = body[key];
-    if (column === 'expected_employees' || column === 'expected_stores') {
-      if (v === null || v === '' || v === undefined) { out[column] = null; continue; }
-      const n = Number(v);
-      if (!Number.isInteger(n) || n < 0 || n > 1_000_000) throw new OrgError(400, 'invalid', `${key} must be a whole number.`);
-      out[column] = n;
-    } else if (column === 'billing_cycle') {
-      if (v !== 'monthly' && v !== 'annual') throw new OrgError(400, 'invalid', 'Billing cycle must be monthly or annual.');
-      out[column] = v;
-    } else {
-      const s = typeof v === 'string' ? v.trim() : '';
-      const max = TEXT_FIELDS[column] ?? 200;
-      if (s.length > max) throw new OrgError(400, 'invalid', `${key} must be at most ${max} characters.`);
-      out[column] = column === 'country' ? s.toUpperCase() : s;
-    }
+    if (key in body) out[column] = readField(key, column, body[key]);
   }
+  checkFieldFormats(out);
+  return out;
+}
+
+/** One field's value as stored: a count, the billing cycle, or trimmed text within its length. */
+function readField(key: string, column: string, v: unknown): FieldValue { // NOSONAR: a column holds a number, text or NULL
+  if (column === 'expected_employees' || column === 'expected_stores') {
+    if (v === null || v === '' || v === undefined) return null;
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 0 || n > 1_000_000) throw new OrgError(400, 'invalid', `${key} must be a whole number.`);
+    return n;
+  }
+  if (column === 'billing_cycle') {
+    if (v !== 'monthly' && v !== 'annual') throw new OrgError(400, 'invalid', 'Billing cycle must be monthly or annual.');
+    return v;
+  }
+  const s = typeof v === 'string' ? v.trim() : '';
+  const max = TEXT_FIELDS[column] ?? 200;
+  if (s.length > max) throw new OrgError(400, 'invalid', `${key} must be at most ${max} characters.`);
+  return column === 'country' ? s.toUpperCase() : s;
+}
+
+/** The fields whose text must follow a format. */
+function checkFieldFormats(out: Record<string, FieldValue>): void {
   if (out.business_type && !(BUSINESS_TYPES as readonly string[]).includes(String(out.business_type))) {
     throw new OrgError(400, 'invalid', `Business type must be one of: ${BUSINESS_TYPES.join(', ')}.`);
   }
   if (out.country && !/^[A-Z]{2}$/.test(String(out.country))) throw new OrgError(400, 'invalid', 'Country must be a two-letter code, e.g. IN.');
   if (out.website && !/^https?:\/\/[^\s]+$/i.test(String(out.website))) throw new OrgError(400, 'invalid', 'Website must start with http:// or https://.');
   if (out.phone && !/^[+()\d\s-]{6,40}$/.test(String(out.phone))) throw new OrgError(400, 'invalid', 'Enter a valid phone number.');
-  return out;
 }
 
 async function openApplication(db: D1Database, userId: string): Promise<Row | null> {
@@ -174,7 +185,7 @@ export async function saveMyApplication(db: D1Database, userId: string, body: Re
   const columns = Object.keys(fields);
   if (columns.length) {
     await db.prepare(
-      `UPDATE applications SET ${columns.map(c => `${c} = ?`).join(', ')}, updated_at = ? WHERE id = ? AND user_id = ?`,
+      `UPDATE applications SET ${columns.map(c => c + ' = ?').join(', ')}, updated_at = ? WHERE id = ? AND user_id = ?`,
     ).bind(...columns.map(c => fields[c]), now, row.id, userId).run();
     if (row.review_status === 'pending_review') {
       await event(db, row.id, { actorUserId: userId, actorKind: 'applicant', action: 'corrected', message: 'Details corrected while under review.' }).run();
@@ -344,6 +355,40 @@ export async function changeRequestedPlan(db: D1Database, id: string, body: Reco
  * Approves and provisions. Safe to call again: after a failure it resumes
  * from where it stopped; after success it changes nothing.
  */
+/**
+ * Which plan version to approve with: the one chosen now, else the latest
+ * published version of the plan the applicant asked for.
+ */
+async function approvalVersion(db: D1Database, row: Record<string, unknown>, body: Record<string, unknown>): Promise<string> {
+  let versionId = typeof body.planVersionId === 'string' ? body.planVersionId : (row.approved_plan_version_id as string | null);
+  if (!versionId) {
+    const latest = await db.prepare(
+      `SELECT v.id FROM plan_versions v JOIN plans p ON p.id = v.plan_id
+       WHERE p.key = ? AND v.status = 'published' ORDER BY v.version DESC LIMIT 1`,
+    ).bind(row.requested_plan_key).first<{ id: string }>();
+    versionId = latest?.id ?? null;
+  }
+  if (!versionId) throw new OrgError(400, 'invalid_plan', 'Choose a published plan version to approve with.');
+  return versionId;
+}
+
+/** Claims the application for approval: only one approval can move it out of review, and only that one is recorded. */
+async function claimApproval(db: D1Database, id: string, versionId: string, exception: string | null, actor: Actor): Promise<void> {
+  const now = Date.now();
+  const [claim] = await db.batch([
+    db.prepare(
+      `UPDATE applications SET review_status = 'approved', provisioning_status = 'provisioning',
+         approved_plan_version_id = ?, billing_exception_reason = ?, decided_at = ?, decided_by = ?, updated_at = ?
+       WHERE id = ? AND review_status IN ('pending_review','needs_information')`,
+    ).bind(versionId, exception, now, actor.userId, now, id),
+  ]);
+  if ((claim?.meta?.changes ?? 0) !== 1) return;
+  await db.batch([
+    event(db, id, { actorUserId: actor.userId, actorKind: 'provider_admin', action: 'approved', message: exception ? `Approved with a billing exception: ${exception}` : 'Approved.' }),
+    auditStmt(db, { actorUserId: actor.userId, actorKind: 'provider_admin', action: 'application.approve', targetType: 'application', targetId: id, details: { planVersionId: versionId, billingException: exception }, ip: actor.ip }),
+  ]);
+}
+
 export async function approveApplication(env: Env, db: D1Database, id: string, body: Record<string, unknown>, actor: Actor) {
   let row = await requireApp(db, id);
   if (row.review_status === 'approved' && row.provisioning_status === 'provisioned') return getApplication(db, id);
@@ -354,34 +399,9 @@ export async function approveApplication(env: Env, db: D1Database, id: string, b
   const waive = body.waivePayment === true;
   const exception = waive ? message(body.reason, 'The billing exception reason') : null;
 
-  // Which plan version: the one chosen now, else the latest published
-  // version of the plan the applicant asked for.
-  let versionId = typeof body.planVersionId === 'string' ? body.planVersionId : (row.approved_plan_version_id as string | null);
-  if (!versionId) {
-    const latest = await db.prepare(
-      `SELECT v.id FROM plan_versions v JOIN plans p ON p.id = v.plan_id
-       WHERE p.key = ? AND v.status = 'published' ORDER BY v.version DESC LIMIT 1`,
-    ).bind(row.requested_plan_key).first<{ id: string }>();
-    versionId = latest?.id ?? null;
-  }
-  if (!versionId) throw new OrgError(400, 'invalid_plan', 'Choose a published plan version to approve with.');
-
-  // Claim it. Only one approval can move it out of review.
+  const versionId = await approvalVersion(db, row, body);
   if (row.review_status !== 'approved') {
-    const now = Date.now();
-    const [claim] = await db.batch([
-      db.prepare(
-        `UPDATE applications SET review_status = 'approved', provisioning_status = 'provisioning',
-           approved_plan_version_id = ?, billing_exception_reason = ?, decided_at = ?, decided_by = ?, updated_at = ?
-         WHERE id = ? AND review_status IN ('pending_review','needs_information')`,
-      ).bind(versionId, exception, now, actor.userId, now, id),
-    ]);
-    if ((claim?.meta?.changes ?? 0) === 1) {
-      await db.batch([
-        event(db, id, { actorUserId: actor.userId, actorKind: 'provider_admin', action: 'approved', message: exception ? `Approved with a billing exception: ${exception}` : 'Approved.' }),
-        auditStmt(db, { actorUserId: actor.userId, actorKind: 'provider_admin', action: 'application.approve', targetType: 'application', targetId: id, details: { planVersionId: versionId, billingException: exception }, ip: actor.ip }),
-      ]);
-    }
+    await claimApproval(db, id, versionId, exception, actor);
     row = await requireApp(db, id);
   }
 

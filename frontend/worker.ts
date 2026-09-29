@@ -3,7 +3,6 @@ import {
   ADMIN_ROLE_ID, STAFF_ROLE_ID, atLeast, normalizePermissions, withoutSections,
   type AccessLevel, type Permissions, type RoleDef, type SectionId,
 } from './permissions';
-import { ROSTER_ARCHIVE_ENTITY, ensureRosterTables, rosterRoutes } from './roster';
 import { staffRosterRoutes } from './staffRoster';
 import { salesRoutes } from './sales';
 import {
@@ -244,44 +243,56 @@ interface AccessRule {
  * settings, deleted items) have no section: their handlers do their own
  * checks.
  */
-function accessRule(path: string, method: string): AccessRule | null {
-  const read = method === 'GET';
-  const level: AccessLevel = read ? 'view' : 'edit';
-  const under = (prefix: string) => path === prefix || path.startsWith(`${prefix}/`) || path.startsWith(`${prefix}?`);
+/** Attendance: your own check-in/out and history need "view"; managing the team and stores needs "edit". */
+const ATTENDANCE_OWN = new Set(['/attendance/me', '/attendance/check-in', '/attendance/check-out']);
+const ATTENDANCE_OWN_READS = new Set(['/attendance/stores', '/attendance/records']);
 
-  if (under('/artworks')) {
-    // Collections, catalogs, inquiries, invoices and sales all show artworks.
-    return { section: 'inventory', level, readableBy: read ? ['collections', 'catalogs', 'roster', 'inquiries', 'invoices', 'sales'] : undefined };
-  }
-  if (under('/collections')) return { section: 'collections', level };
-  // Hearting a piece is personal: browsing the roster is enough. Everything
-  // else that changes it is curating, which needs "edit".
+type AccessEntry =
+  | { prefixes: string[]; section: SectionId; readableBy?: SectionId[] }
+  | { prefixes: string[]; rule: (path: string, method: string) => AccessRule | null };
+
+/**
+ * Route prefixes and the section that guards them; the first match wins, so
+ * a longer prefix comes before a shorter one. `readableBy`: other sections
+ * whose screens read this data too. A few routes have a rule of their own.
+ */
+const ACCESS_TABLE: AccessEntry[] = [
+  // Collections, catalogs, inquiries, invoices and sales all show artworks.
+  { prefixes: ['/artworks'], section: 'inventory', readableBy: ['collections', 'catalogs', 'inquiries', 'invoices', 'sales'] },
+  { prefixes: ['/collections'], section: 'collections' },
   // Staff roster: asking for (or withdrawing) your own leave only needs
   // "view"; deciding on leave and everything else that changes it, "edit".
-  if (under('/staff-roster/leaves')) return { section: 'schedule', level: method === 'PATCH' ? 'edit' : 'view' };
-  if (under('/staff-roster')) return { section: 'schedule', level };
-  if (under('/roster/favorites')) return { section: 'roster', level: 'view' };
-  if (under('/roster')) return { section: 'roster', level };
-  if (under('/catalogs')) return { section: 'catalogs', level };
+  { prefixes: ['/staff-roster/leaves'], rule: (_path, method) => ({ section: 'schedule', level: method === 'PATCH' ? 'edit' : 'view' }) },
+  { prefixes: ['/staff-roster'], section: 'schedule' },
+  { prefixes: ['/catalogs'], section: 'catalogs' },
   // Private viewing rooms are shared catalogs. (/viewing/:token is the
   // client's side: no account, checked by its own handlers.)
-  if (under('/viewing-rooms')) return { section: 'catalogs', level };
-  if (under('/contacts')) return { section: 'contacts', level, readableBy: read ? ['inquiries', 'invoices', 'payments'] : undefined };
-  if (under('/inquiries') || under('/inquiry-messages')) return { section: 'inquiries', level };
-  if (under('/invoices')) return { section: 'invoices', level };
-  if (under('/payments/webhook')) return null; // Razorpay calls this, no session
-  if (under('/payments')) return { section: 'payments', level };
-  if (under('/sales')) return { section: 'sales', level };
-  if (under('/events') || under('/holidays')) return { section: 'calendar', level };
-  if (under('/conversations') || under('/messages')) return { section: 'messages', level };
-  if (under('/activity-logs')) return read ? { section: 'activity', level: 'view' } : null;
-  if (under('/attendance')) {
-    // Own check-in/out and history need "view"; managing the team and stores needs "edit".
-    const own = path === '/attendance/me' || path === '/attendance/check-in' || path === '/attendance/check-out'
-      || (read && (path === '/attendance/stores' || path === '/attendance/records'));
-    return { section: 'attendance', level: own ? 'view' : 'edit' };
-  }
-  return null;
+  { prefixes: ['/viewing-rooms'], section: 'catalogs' },
+  { prefixes: ['/contacts'], section: 'contacts', readableBy: ['inquiries', 'invoices', 'payments'] },
+  { prefixes: ['/inquiries', '/inquiry-messages'], section: 'inquiries' },
+  { prefixes: ['/invoices'], section: 'invoices' },
+  { prefixes: ['/payments/webhook'], rule: () => null }, // Razorpay calls this, no session
+  { prefixes: ['/payments'], section: 'payments' },
+  { prefixes: ['/sales'], section: 'sales' },
+  { prefixes: ['/events', '/holidays'], section: 'calendar' },
+  { prefixes: ['/conversations', '/messages'], section: 'messages' },
+  { prefixes: ['/activity-logs'], rule: (_path, method) => (method === 'GET' ? { section: 'activity', level: 'view' } : null) },
+  {
+    prefixes: ['/attendance'],
+    rule: (path, method) => {
+      const own = ATTENDANCE_OWN.has(path) || (method === 'GET' && ATTENDANCE_OWN_READS.has(path));
+      return { section: 'attendance', level: own ? 'view' : 'edit' };
+    },
+  },
+];
+
+function accessRule(path: string, method: string): AccessRule | null {
+  const under = (prefix: string) => path === prefix || path.startsWith(`${prefix}/`) || path.startsWith(`${prefix}?`);
+  const entry = ACCESS_TABLE.find(e => e.prefixes.some(under));
+  if (!entry) return null;
+  if ('rule' in entry) return entry.rule(path, method);
+  const read = method === 'GET';
+  return { section: entry.section, level: read ? 'view' : 'edit', readableBy: read ? entry.readableBy : undefined };
 }
 
 /** Router gate: a 403 response when the caller's role doesn't allow this route. */
@@ -864,7 +875,7 @@ async function announcePaymentReceived(ctx: Ctx, link: StoredPaymentLink): Promi
   ]);
 }
 
-const PAYMENT_LINK_PATH = /^\/payments\/links\/(plink_[A-Za-z0-9_]{6,40})$/;
+const PAYMENT_LINK_PATH = /^\/payments\/links\/(plink_\w{6,40})$/;
 
 async function loadPaymentLink(ctx: Ctx): Promise<StoredPaymentLink | Response> {
   const id = PAYMENT_LINK_PATH.exec(ctx.path)?.[1];
@@ -879,32 +890,40 @@ async function loadPaymentLink(ctx: Ctx): Promise<StoredPaymentLink | Response> 
  * team no longer sees; if it was paid in the meantime it is kept. A paid
  * link's payment stays in Razorpay; only the app's record goes.
  */
+/**
+ * Cancels a link that can still be paid, so nobody pays it after it is
+ * gone. A refusal comes back as the response to send (and nothing is
+ * deleted); null means the link can go.
+ */
+async function cancelOpenLink(ctx: Ctx, link: StoredPaymentLink): Promise<Response | null> {
+  if (!OPEN_LINK_STATUSES.has(link.status)) return null;
+  const keys = await linkAccountKeys(ctx.env, link.account);
+  if (!keys) return err("The Razorpay account this link was made in isn't connected, so it can't be cancelled. Nothing was deleted.", 503);
+  const cancel = await razorpayLinkCall(ctx.env, keys, 'POST', `/${encodeURIComponent(link.id)}/cancel`);
+  if (cancel.ok) return null;
+  // Already paid, expired or cancelled at Razorpay? Then it can't be cancelled.
+  const current = await razorpayLinkCall(ctx.env, keys, 'GET', `/${encodeURIComponent(link.id)}`);
+  if (!current.ok) return err(cancel.data?.error?.description || `Razorpay couldn't cancel the link (${cancel.status}). Nothing was deleted.`, 502);
+  const nowPaid = applyRazorpayLinkState(link, current.data);
+  if (link.status === 'paid' || link.status === 'partially_paid') {
+    await ctx.env.VAYU_KV.put(`payment:link:${link.id}`, JSON.stringify(link));
+    if (nowPaid) await announcePaymentReceived(ctx, link);
+    queueHubNotify(ctx, [{ entity: 'payments', id: link.id, op: 'put' }]);
+    return err('This link has just been paid, so it was kept.', 409);
+  }
+  if (OPEN_LINK_STATUSES.has(link.status)) {
+    return err(cancel.data?.error?.description || "Razorpay couldn't cancel the link. Nothing was deleted.", 502);
+  }
+  return null;
+}
+
 async function handlePaymentLinkDelete(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
   const link = await loadPaymentLink(ctx);
   if (link instanceof Response) return link;
-
-  if (OPEN_LINK_STATUSES.has(link.status)) {
-    const keys = await linkAccountKeys(ctx.env, link.account);
-    if (!keys) return err("The Razorpay account this link was made in isn't connected, so it can't be cancelled. Nothing was deleted.", 503);
-    const cancel = await razorpayLinkCall(ctx.env, keys, 'POST', `/${encodeURIComponent(link.id)}/cancel`);
-    if (!cancel.ok) {
-      // Already paid, expired or cancelled at Razorpay? Then it can't be cancelled.
-      const current = await razorpayLinkCall(ctx.env, keys, 'GET', `/${encodeURIComponent(link.id)}`);
-      if (!current.ok) return err(cancel.data?.error?.description || `Razorpay couldn't cancel the link (${cancel.status}). Nothing was deleted.`, 502);
-      const nowPaid = applyRazorpayLinkState(link, current.data);
-      if (link.status === 'paid' || link.status === 'partially_paid') {
-        await ctx.env.VAYU_KV.put(`payment:link:${link.id}`, JSON.stringify(link));
-        if (nowPaid) await announcePaymentReceived(ctx, link);
-        queueHubNotify(ctx, [{ entity: 'payments', id: link.id, op: 'put' }]);
-        return err('This link has just been paid, so it was kept.', 409);
-      }
-      if (OPEN_LINK_STATUSES.has(link.status)) {
-        return err(cancel.data?.error?.description || "Razorpay couldn't cancel the link. Nothing was deleted.", 502);
-      }
-    }
-  }
+  const refused = await cancelOpenLink(ctx, link);
+  if (refused) return refused;
 
   await ctx.env.VAYU_KV.delete(`payment:link:${link.id}`);
   await logActivity(ctx.env.VAYU_DB, session.userId, session.name, 'deleted', 'payment link', link.id,
@@ -923,7 +942,7 @@ async function handlePaymentLinkDelete(ctx: Ctx): Promise<Response> {
 async function handlePaymentLinkDetails(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
-  const id = /^\/payments\/links\/(plink_[A-Za-z0-9_]{6,40})\/details$/.exec(ctx.path)?.[1];
+  const id = /^\/payments\/links\/(plink_\w{6,40})\/details$/.exec(ctx.path)?.[1];
   if (!id) return err('Payment link not found', 404);
   const raw = await ctx.env.VAYU_KV.get(`payment:link:${id}`);
   if (!raw) return err('Payment link not found', 404);
@@ -1439,6 +1458,26 @@ async function handleAuthUsersDelete(ctx: Ctx): Promise<Response> {
   return json({ success: true });
 }
 
+/** A new email for a user, moving the email index; refused if another user has it. */
+async function changeUserEmail(kv: KVNamespace, userId: string, current: string, requested: string | undefined): Promise<{ email: string } | Response> {
+  const email = requested ? requested.toLowerCase().trim() : current;
+  if (email === current) return { email };
+  const holder = await kv.get(`auth:email:${email}`);
+  if (holder && holder !== userId) return err('A user with this email already exists', 409);
+  await kv.delete(`auth:email:${current}`);
+  await kv.put(`auth:email:${email}`, userId);
+  return { email };
+}
+
+/** A new role for a user: it must exist, and an admin can't take their own admin role away. */
+async function changeUserRole(kv: KVNamespace, session: SessionData, userId: string, current: string, requested: string | undefined): Promise<{ role: string } | Response> {
+  if (requested === undefined || requested === current) return { role: current };
+  const roles = await getRoles(kv);
+  if (!roles.some(r => r.id === requested)) return err('That role does not exist', 400);
+  if (userId === session.userId && current === ADMIN_ROLE_ID) return err("You can't remove your own admin role", 400);
+  return { role: requested };
+}
+
 async function handleAuthUsersUpdate(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
@@ -1453,23 +1492,12 @@ async function handleAuthUsersUpdate(ctx: Ctx): Promise<Response> {
   };
   const editLimit = parseMaxDevices(maxDevices);
   if (!editLimit.ok) return err('Max devices must be a whole number from 1 to 10');
-  // If email is changing, check for conflicts and update the email index
-  const newEmail = email ? email.toLowerCase().trim() : existing.email;
-  if (newEmail !== existing.email) {
-    const existingId = await ctx.env.VAYU_KV.get(`auth:email:${newEmail}`);
-    if (existingId && existingId !== userId) return err('A user with this email already exists', 409);
-    await ctx.env.VAYU_KV.delete(`auth:email:${existing.email}`);
-    await ctx.env.VAYU_KV.put(`auth:email:${newEmail}`, userId);
-  }
-  let resolvedRole = existing.role;
-  if (role !== undefined && role !== existing.role) {
-    const roles = await getRoles(ctx.env.VAYU_KV);
-    if (!roles.some(r => r.id === role)) return err('That role does not exist', 400);
-    if (userId === session.userId && existing.role === ADMIN_ROLE_ID) {
-      return err("You can't remove your own admin role", 400);
-    }
-    resolvedRole = role;
-  }
+  const emailChange = await changeUserEmail(ctx.env.VAYU_KV, userId, existing.email, email);
+  if (emailChange instanceof Response) return emailChange;
+  const newEmail = emailChange.email;
+  const roleChange = await changeUserRole(ctx.env.VAYU_KV, session, userId, existing.role, role);
+  if (roleChange instanceof Response) return roleChange;
+  const resolvedRole = roleChange.role;
   if (password && password.length < MIN_PASSWORD_LENGTH) return err(PASSWORD_TOO_SHORT);
   const updated: StoredUser = {
     ...existing,
@@ -1503,13 +1531,13 @@ async function requireAdmin(ctx: Ctx): Promise<SessionData | Response> {
   return session;
 }
 
-function readRoleName(value: unknown, roles: RoleDef[], exceptId?: string): string | Response {
+function readRoleName(value: unknown, roles: RoleDef[], exceptId?: string): { name: string } | Response {
   const name = typeof value === 'string' ? value.trim().slice(0, 40) : '';
   if (!name) return err('Give the role a name', 400);
   if (roles.some(r => r.id !== exceptId && r.name.toLowerCase() === name.toLowerCase())) {
     return err('A role with that name already exists', 409);
   }
-  return name;
+  return { name };
 }
 
 async function handleRolesList(ctx: Ctx): Promise<Response> {
@@ -1523,15 +1551,15 @@ async function handleRolesCreate(ctx: Ctx): Promise<Response> {
   if (session instanceof Response) return session;
   const body = await ctx.request.json() as { name?: unknown; permissions?: unknown };
   const roles = await getRoles(ctx.env.VAYU_KV);
-  const name = readRoleName(body.name, roles);
-  if (name instanceof Response) return name;
+  const read = readRoleName(body.name, roles);
+  if (read instanceof Response) return read;
   const role: RoleDef = {
     id: `role_${Date.now()}_${crypto.randomUUID().slice(0, 6)}`,
-    name,
+    name: read.name,
     permissions: normalizePermissions(body.permissions),
   };
   await saveRoles(ctx.env.VAYU_KV, [...roles, role]);
-  logEntityChange(ctx, session, 'created', 'role', role.id, `Created role "${name}"`);
+  logEntityChange(ctx, session, 'created', 'role', role.id, `Created role "${role.name}"`);
   return json(role, 201);
 }
 
@@ -1544,15 +1572,15 @@ async function handleRolesUpdate(ctx: Ctx): Promise<Response> {
   const existing = roles.find(r => r.id === roleId);
   if (!existing) return err('Role not found', 404);
   const body = await ctx.request.json() as { name?: unknown; permissions?: unknown };
-  const name = body.name === undefined ? existing.name : readRoleName(body.name, roles, roleId);
-  if (name instanceof Response) return name;
+  const read = body.name === undefined ? { name: existing.name } : readRoleName(body.name, roles, roleId);
+  if (read instanceof Response) return read;
   const updated: RoleDef = {
     ...existing,
-    name,
+    name: read.name,
     permissions: body.permissions === undefined ? existing.permissions : normalizePermissions(body.permissions),
   };
   await saveRoles(ctx.env.VAYU_KV, roles.map(r => (r.id === roleId ? updated : r)));
-  logEntityChange(ctx, session, 'updated', 'role', roleId, `Updated role "${name}"`);
+  logEntityChange(ctx, session, 'updated', 'role', roleId, `Updated role "${updated.name}"`);
   return json(updated);
 }
 
@@ -1828,31 +1856,49 @@ async function handleConversationsList(ctx: Ctx): Promise<Response> {
   return json(convos.filter(c => c.participantIds.includes(session.userId)));
 }
 
+/** A new conversation's id and members: a sane id, and the writer among its members (admins excepted). */
+function conversationShapeProblem(session: SessionData, conv: { id?: unknown; participantIds?: unknown }): Response | null {
+  if (!conv.id || !conv.participantIds) return err('id and participantIds are required');
+  if (typeof conv.id !== 'string' || conv.id.length > 128) return err('Invalid conversation id');
+  const members = Array.isArray(conv.participantIds) ? conv.participantIds : null;
+  if (!members || (!members.includes(session.userId) && session.role !== ADMIN_ROLE_ID)) {
+    return err('You can only start chats you are part of', 403);
+  }
+  return null;
+}
+
+/**
+ * A private room is created by an admin, as a group they are in. Once it
+ * exists, it stays private with the same creator, and only its managers
+ * may write it again (privateRooms.ts).
+ */
+function privateRoomProblem(
+  session: SessionData, conv: { isGroup?: unknown; participantIds: string[] },
+  existing: Awaited<ReturnType<typeof conversationAccess>>, isPrivate: boolean,
+): Response | null {
+  if (existing) return existing.isPrivate && !managesConversation(session, existing) ? err(NOT_A_MANAGER, 403) : null;
+  if (!isPrivate) return null;
+  if (session.role !== ADMIN_ROLE_ID) return err('Only admins can create private rooms', 403);
+  if (!conv.isGroup) return err('A private room is a group conversation');
+  if (!conv.participantIds.includes(session.userId)) return err('You must be in the private room you create');
+  return null;
+}
+
 async function handleConversationsCreate(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
   const body = await ctx.request.json();
   const conv = body as any;
-  if (!conv.id || !conv.participantIds) return err('id and participantIds are required');
-  if (typeof conv.id !== 'string' || conv.id.length > 128) return err('Invalid conversation id');
-  if (!Array.isArray(conv.participantIds) || (!conv.participantIds.includes(session.userId) && session.role !== ADMIN_ROLE_ID)) {
-    return err('You can only start chats you are part of', 403);
-  }
+  const shapeProblem = conversationShapeProblem(session, conv);
+  if (shapeProblem) return shapeProblem;
   // This is an upsert, so an id that already exists belongs to that
   // conversation: only its own members may write it again (a retried
   // create). Anyone else would replace it and make themselves a member.
   const existing = await conversationAccess(ctx.env.VAYU_DB, conv.id);
   if (existing && !inConversation(session, existing)) return err(NOT_A_MEMBER, 403);
-  // A private room is created by an admin, as a group they are in. Once it
-  // exists, it stays private with the same creator, and only its managers
-  // may write it again (privateRooms.ts).
   const isPrivate = existing ? existing.isPrivate : conv.isPrivate === true;
-  if (isPrivate && !existing) {
-    if (session.role !== ADMIN_ROLE_ID) return err('Only admins can create private rooms', 403);
-    if (!conv.isGroup) return err('A private room is a group conversation');
-    if (!conv.participantIds.includes(session.userId)) return err('You must be in the private room you create');
-  }
-  if (existing?.isPrivate && !managesConversation(session, existing)) return err(NOT_A_MANAGER, 403);
+  const privateProblem = privateRoomProblem(session, conv, existing, isPrivate);
+  if (privateProblem) return privateProblem;
   const createdBy = existing ? existing.createdBy : session.userId;
   await ensurePrivateRoomColumns(ctx.env.VAYU_DB);
   await ensureChangeLogTable(ctx.env.VAYU_DB);
@@ -2326,6 +2372,44 @@ const RESTORABLE_TABLES: Record<string, string> = {
 };
 
 /** POST /deleted-items/:id/restore — puts an archived record back into its table. Admin only. */
+/** An archived row's snapshot, or null when it has none (or it can't be read). */
+function archivedPayload(row: Record<string, unknown>): Record<string, unknown> | null {
+  if (!row.payload) return null;
+  try { return JSON.parse(row.payload as string) as Record<string, unknown>; } catch { return null; }
+}
+
+/** Puts back a KV-backed user: the login and the email lookup. A refusal comes back as the response. */
+async function restoreArchivedUser(kv: KVNamespace, payload: Record<string, unknown>): Promise<Response | null> {
+  const userId = String(payload.id || '');
+  if (!userId || !payload.email) return err('Archived user snapshot is incomplete');
+  const emailKey = `auth:email:${payload.email}`;
+  if (await kv.get(emailKey)) return err('A user with this email already exists', 409);
+  if (await kv.get(`auth:user:${userId}`)) return err('This user already exists', 409);
+  await kv.put(`auth:user:${userId}`, JSON.stringify(payload));
+  await kv.put(emailKey, userId);
+  const countRaw = await kv.get('auth:count');
+  await kv.put('auth:count', String((countRaw ? Number.parseInt(countRaw, 10) : 0) + 1));
+  return null;
+}
+
+/** Puts back a row into its table. A refusal comes back as the response. */
+async function restoreArchivedRow(ctx: Ctx, session: SessionData, entity: string, payload: Record<string, unknown>): Promise<Response | null> {
+  const table = RESTORABLE_TABLES[entity];
+  if (!table) return err(`Cannot restore entity type "${entity}"`);
+  const cols = Object.keys(payload).filter(k => typeof payload[k] !== 'object' || payload[k] === null);
+  if (cols.length === 0 || !payload.id) return err('Archived snapshot is incomplete');
+  const existing = await ctx.env.VAYU_DB.prepare(`SELECT id FROM ${table} WHERE id = ?`).bind(String(payload.id)).first();
+  if (existing) return err('An item with this id already exists — restore aborted', 409);
+  await ctx.env.VAYU_DB.batch([
+    ctx.env.VAYU_DB.prepare(
+      `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`
+    ).bind(...cols.map(c => (payload[c] === undefined ? null : payload[c]) as string | number | null)),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, entity, String(payload.id), 'put', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, [{ entity, id: String(payload.id), op: 'put' }]);
+  return null;
+}
+
 async function handleDeletedItemsRestore(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
@@ -2337,50 +2421,12 @@ async function handleDeletedItemsRestore(ctx: Ctx): Promise<Response> {
   const row = await ctx.env.VAYU_DB.prepare('SELECT * FROM deleted_items WHERE id = ?').bind(id).first();
   if (!row) return err('Archived item not found', 404);
   const entity = row.entity as string;
-  let payload: Record<string, unknown> | null = null;
-  try { payload = row.payload ? JSON.parse(row.payload as string) : null; } catch { payload = null; }
+  const payload = archivedPayload(row);
   if (!payload) return err('Archived item has no restorable snapshot');
-
-  if (entity === 'user') {
-    // KV-backed users: restore the login and email lookup.
-    const userId = String(payload.id || '');
-    if (!userId || !payload.email) return err('Archived user snapshot is incomplete');
-    const emailKey = `auth:email:${payload.email}`;
-    const existingForEmail = await ctx.env.VAYU_KV.get(emailKey);
-    if (existingForEmail) return err('A user with this email already exists', 409);
-    const existingUser = await ctx.env.VAYU_KV.get(`auth:user:${userId}`);
-    if (existingUser) return err('This user already exists', 409);
-    await ctx.env.VAYU_KV.put(`auth:user:${userId}`, JSON.stringify(payload));
-    await ctx.env.VAYU_KV.put(emailKey, userId);
-    const countRaw = await ctx.env.VAYU_KV.get('auth:count');
-    await ctx.env.VAYU_KV.put('auth:count', String((countRaw ? Number.parseInt(countRaw, 10) : 0) + 1));
-  } else if (entity === ROSTER_ARCHIVE_ENTITY) {
-    // Roster sections aren't in change_log (roster.ts): a signal is enough.
-    const sectionId = String(payload.id || '');
-    const cols = Object.keys(payload).filter(k => /^[a-z_]+$/.test(k) && (typeof payload![k] !== 'object' || payload![k] === null));
-    if (!sectionId || cols.length === 0) return err('Archived snapshot is incomplete');
-    await ensureRosterTables(ctx.env.VAYU_DB);
-    const existing = await ctx.env.VAYU_DB.prepare('SELECT id FROM roster_sections WHERE id = ?').bind(sectionId).first();
-    if (existing) return err('An item with this id already exists — restore aborted', 409);
-    await ctx.env.VAYU_DB.prepare(
-      `INSERT INTO roster_sections (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`,
-    ).bind(...cols.map(c => payload![c] as string | number | null)).run();
-    queueHubNotify(ctx, [{ entity: 'roster', id: sectionId, op: 'put' }]);
-  } else {
-    const table = RESTORABLE_TABLES[entity];
-    if (!table) return err(`Cannot restore entity type "${entity}"`);
-    const cols = Object.keys(payload).filter(k => typeof payload![k] !== 'object' || payload![k] === null);
-    if (cols.length === 0 || !payload.id) return err('Archived snapshot is incomplete');
-    const existing = await ctx.env.VAYU_DB.prepare(`SELECT id FROM ${table} WHERE id = ?`).bind(String(payload.id)).first();
-    if (existing) return err('An item with this id already exists — restore aborted', 409);
-    await ctx.env.VAYU_DB.batch([
-      ctx.env.VAYU_DB.prepare(
-        `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`
-      ).bind(...cols.map(c => (payload![c] === undefined ? null : payload![c]) as string | number | null)),
-      changeLogStmt(ctx.env.VAYU_DB, ctx.env, entity, String(payload.id), 'put', { actorId: session.userId }),
-    ]);
-    queueHubNotify(ctx, [{ entity, id: String(payload.id), op: 'put' }]);
-  }
+  const refused = entity === 'user'
+    ? await restoreArchivedUser(ctx.env.VAYU_KV, payload)
+    : await restoreArchivedRow(ctx, session, entity, payload);
+  if (refused) return refused;
 
   await ctx.env.VAYU_DB.prepare('DELETE FROM deleted_items WHERE id = ?').bind(id).run();
   logEntityChange(ctx, session, 'updated', entity, String(payload.id || id), `Restored deleted ${entity} from archive`);
@@ -2394,23 +2440,17 @@ async function handleDeletedItemsPurge(ctx: Ctx): Promise<Response> {
   if (session.role !== 'admin') return err('Forbidden', 403);
   await ensureDeletedItemsTable(ctx.env.VAYU_DB);
   const id = ctx.path.slice('/deleted-items'.length).replace(/^\//, '');
+  // Permanent removal: now the uploaded files go too.
+  const rows = id
+    ? [await ctx.env.VAYU_DB.prepare('SELECT * FROM deleted_items WHERE id = ?').bind(id).first()].filter(r => r !== null)
+    : ((await ctx.env.VAYU_DB.prepare('SELECT * FROM deleted_items').all()).results || []);
+  for (const row of rows as Record<string, unknown>[]) {
+    await cleanupArchivedFiles(ctx.env.VAYU_R2, row.entity as string, archivedPayload(row));
+  }
   if (id) {
-    const row = await ctx.env.VAYU_DB.prepare('SELECT * FROM deleted_items WHERE id = ?').bind(id).first();
-    if (row) {
-      let payload: Record<string, unknown> | null = null;
-      try { payload = row.payload ? JSON.parse(row.payload as string) : null; } catch { payload = null; }
-      // Permanent removal — now the uploaded files go too.
-      await cleanupArchivedFiles(ctx.env.VAYU_R2, row.entity as string, payload);
-    }
     await ctx.env.VAYU_DB.prepare('DELETE FROM deleted_items WHERE id = ?').bind(id).run();
     logEntityChange(ctx, session, 'deleted', 'deleted item', id, 'Permanently purged an archived item');
   } else {
-    const rows = await ctx.env.VAYU_DB.prepare('SELECT * FROM deleted_items').all();
-    for (const row of (rows.results || []) as Record<string, unknown>[]) {
-      let payload: Record<string, unknown> | null = null;
-      try { payload = row.payload ? JSON.parse(row.payload as string) : null; } catch { payload = null; }
-      await cleanupArchivedFiles(ctx.env.VAYU_R2, row.entity as string, payload);
-    }
     await ctx.env.VAYU_DB.prepare('DELETE FROM deleted_items').run();
     logEntityChange(ctx, session, 'deleted', 'deleted items', '', 'Purged the entire deleted-items archive');
   }
@@ -3332,6 +3372,32 @@ function ensureAttendanceTable(db: D1Database): Promise<void> {
 }
 
 /** Shared pre-flight validation for check-in AND check-out. */
+/** The submitted position, if it is a real one and precise enough to check the geofence. */
+function gpsFix(body: { lat?: unknown; lng?: unknown; accuracy?: unknown }): { lat: number; lng: number } | Response {
+  const lat = typeof body.lat === 'number' ? body.lat : Number.NaN;
+  const lng = typeof body.lng === 'number' ? body.lng : Number.NaN;
+  const accuracy = typeof body.accuracy === 'number' ? body.accuracy : Number.NaN;
+  const onEarth = Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+  if (!onEarth) return err('GPS coordinates are required — enable location and retry', 422);
+  if (!Number.isFinite(accuracy) || accuracy <= 0 || accuracy > MAX_GPS_ACCURACY) {
+    return err('GPS accuracy too low — move to an open area and retry', 422);
+  }
+  return { lat, lng };
+}
+
+/**
+ * Wi-Fi strategy, a per-store toggle. Off: GPS and internet are enough (mobile
+ * data allowed). On: the employee must be on the approved store Wi-Fi.
+ */
+function storeWifiProblem(store: { wifiRequired: boolean; wifiSsid: string }, body: { connectionType?: unknown; wifiSsid?: unknown }): Response | null {
+  if (!store.wifiRequired) return null;
+  if (body.connectionType !== 'wifi') return err('Please connect to the store Wi-Fi before checking in', 422);
+  const approved = store.wifiSsid.trim().toLowerCase();
+  const reported = String(body.wifiSsid || '').trim().toLowerCase();
+  if (!approved || reported !== approved) return err('You are not on the approved store Wi-Fi network', 422);
+  return null;
+}
+
 async function validateAttendanceContext(
   ctx: Ctx,
   session: SessionData,
@@ -3339,15 +3405,9 @@ async function validateAttendanceContext(
 ): Promise<{ ok: true; store: any } | { ok: false; response: Response }> {
   const storeId = typeof body.storeId === 'string' ? body.storeId : '';
   if (!storeId) return { ok: false, response: err('Store is required', 400) };
-  const lat = typeof body.lat === 'number' ? body.lat : Number.NaN;
-  const lng = typeof body.lng === 'number' ? body.lng : Number.NaN;
-  const accuracy = typeof body.accuracy === 'number' ? body.accuracy : Number.NaN;
-  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-    return { ok: false, response: err('GPS coordinates are required — enable location and retry', 422) };
-  }
-  if (!Number.isFinite(accuracy) || accuracy <= 0 || accuracy > MAX_GPS_ACCURACY) {
-    return { ok: false, response: err('GPS accuracy too low — move to an open area and retry', 422) };
-  }
+  const fix = gpsFix(body);
+  if (fix instanceof Response) return { ok: false, response: fix };
+  const { lat, lng } = fix;
 
   await ensureStoresTable(ctx.env.VAYU_DB);
   await ensureAttendanceTable(ctx.env.VAYU_DB);
@@ -3369,19 +3429,8 @@ async function validateAttendanceContext(
     return { ok: false, response: err('You are outside the store', 422) };
   }
 
-  // Wi-Fi strategy — per-store toggle. OFF: GPS + internet is enough (mobile
-  // data allowed). ON: the employee must be on the approved store Wi-Fi.
-  if (store.wifiRequired) {
-    if (body.connectionType !== 'wifi') {
-      return { ok: false, response: err('Please connect to the store Wi-Fi before checking in', 422) };
-    }
-    const approved = store.wifiSsid.trim().toLowerCase();
-    const reported = String(body.wifiSsid || '').trim().toLowerCase();
-    if (!approved || reported !== approved) {
-      return { ok: false, response: err('You are not on the approved store Wi-Fi network', 422) };
-    }
-  }
-
+  const wifi = storeWifiProblem(store, body);
+  if (wifi) return { ok: false, response: wifi };
   return { ok: true, store };
 }
 
@@ -3823,10 +3872,45 @@ async function handleViewingRoomsCreate(ctx: Ctx): Promise<Response> {
     JSON.stringify(input.artworkIds), input.showPrices ? 1 : 0, secret.hash, secret.salt, secret.grantKey,
     expiresAt, session.userId, session.name, now, now).run();
   logEntityChange(ctx, session, 'created', 'viewing_room', id,
-    `Created private room "${input.name}"${input.clientName ? ` for ${input.clientName}` : ''} (${input.artworkIds.length} artworks)`);
+    `Created private room "${input.name}"${input.clientName ? ' for ' + input.clientName : ''} (${input.artworkIds.length} artworks)`);
   const row = await db.prepare('SELECT * FROM viewing_rooms WHERE id = ?').bind(id).first();
   // The passcode is only ever shown now (and when a new one is made).
   return json({ ...staffRoom(row!), passcode: secret.passcode }, 201);
+}
+
+interface RoomUpdate { sets: string[]; binds: unknown[]; changes: string[] }
+
+/**
+ * Adds the requested changes to a private room's UPDATE (columns, values and
+ * words for the activity log). Gives the new passcode, if one was made, or
+ * the reason a change can't be made.
+ */
+async function gatherRoomChanges(db: D1Database, body: Record<string, unknown>, now: number, u: RoomUpdate): Promise<{ passcode?: string } | { problem: string }> {
+  if (body.details) {
+    const input = await readRoomInput(db, body.details as Record<string, unknown>);
+    if (typeof input === 'string') return { problem: input };
+    u.sets.push('name = ?', 'client_name = ?', 'client_phone = ?', 'client_email = ?', 'message = ?', 'artwork_ids = ?', 'show_prices = ?');
+    u.binds.push(input.name, input.clientName, input.clientPhone, input.clientEmail, input.message, JSON.stringify(input.artworkIds), input.showPrices ? 1 : 0);
+    u.changes.push('details');
+  }
+  if (typeof body.isActive === 'boolean') {
+    u.sets.push('is_active = ?');
+    u.binds.push(body.isActive ? 1 : 0);
+    u.changes.push(body.isActive ? 'switched on' : 'switched off');
+  }
+  if (body.expiresInDays !== undefined) {
+    const expiresAt = expiryFrom(body.expiresInDays, now);
+    if (!expiresAt) return { problem: `Choose how long the link works: ${EXPIRY_DAY_CHOICES.join(', ')} days` };
+    u.sets.push('expires_at = ?');
+    u.binds.push(expiresAt);
+    u.changes.push(`link valid ${body.expiresInDays} more days`);
+  }
+  if (body.newPasscode !== true) return {};
+  const secret = await passcodeColumns();
+  u.sets.push('passcode_hash = ?', 'passcode_salt = ?', 'grant_key = ?');
+  u.binds.push(secret.hash, secret.salt, secret.grantKey);
+  u.changes.push('new passcode');
+  return { passcode: secret.passcode };
 }
 
 async function handleViewingRoomsUpdate(ctx: Ctx): Promise<Response> {
@@ -3840,36 +3924,11 @@ async function handleViewingRoomsUpdate(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json().catch(() => null) as Record<string, unknown> | null;
   if (!body) return err('Send the change as JSON');
   const now = Date.now();
-  const sets: string[] = [];
-  const binds: unknown[] = [];
-  const changes: string[] = [];
-  if (body.details) {
-    const input = await readRoomInput(db, body.details as Record<string, unknown>);
-    if (typeof input === 'string') return err(input);
-    sets.push('name = ?', 'client_name = ?', 'client_phone = ?', 'client_email = ?', 'message = ?', 'artwork_ids = ?', 'show_prices = ?');
-    binds.push(input.name, input.clientName, input.clientPhone, input.clientEmail, input.message, JSON.stringify(input.artworkIds), input.showPrices ? 1 : 0);
-    changes.push('details');
-  }
-  if (typeof body.isActive === 'boolean') {
-    sets.push('is_active = ?');
-    binds.push(body.isActive ? 1 : 0);
-    changes.push(body.isActive ? 'switched on' : 'switched off');
-  }
-  if (body.expiresInDays !== undefined) {
-    const expiresAt = expiryFrom(body.expiresInDays, now);
-    if (!expiresAt) return err(`Choose how long the link works: ${EXPIRY_DAY_CHOICES.join(', ')} days`);
-    sets.push('expires_at = ?');
-    binds.push(expiresAt);
-    changes.push(`link valid ${body.expiresInDays} more days`);
-  }
-  let passcode: string | undefined;
-  if (body.newPasscode === true) {
-    const secret = await passcodeColumns();
-    passcode = secret.passcode;
-    sets.push('passcode_hash = ?', 'passcode_salt = ?', 'grant_key = ?');
-    binds.push(secret.hash, secret.salt, secret.grantKey);
-    changes.push('new passcode');
-  }
+  const update: RoomUpdate = { sets: [], binds: [], changes: [] };
+  const gathered = await gatherRoomChanges(db, body, now, update);
+  if ('problem' in gathered) return err(gathered.problem);
+  const { passcode } = gathered;
+  const { sets, binds, changes } = update;
   if (sets.length === 0) return err('Nothing to change');
   sets.push('updated_at = ?');
   binds.push(now, id);
@@ -4059,15 +4118,86 @@ function makeInquiryNumber(): string {
   return `INQ-${new Date().getFullYear()}-${String(random % 1000).padStart(3, '0')}`;
 }
 
+// ── Request dispatch ────────────────────────────────────────────────────────
+
+/** Runs the route this request names: rate limit, access check, handler; or 404. */
+async function dispatch(ctx: Ctx, env: Env, orgUser: string | null | undefined): Promise<Response> {
+  // Inside an organization, its account and team routes come first (orgTeam.ts).
+  const route = (env.ORG_ID ? orgAppRoutes : routes).find(r => r.method === ctx.method && r.match(ctx.path));
+  if (!route) return json({ error: 'Not found' }, 404);
+  // Floods and enumeration from one device: far above normal use.
+  const device = bearerToken(ctx.request) ?? orgUser;
+  if (device && !(await underLimit(env.API_LIMITER, `device:${device.slice(0, 32)}`))) {
+    return tooMany('Too many requests. Slow down and try again in a minute.');
+  }
+  const denied = await checkAccess(ctx);
+  return denied ?? route.handler(ctx);
+}
+
+/**
+ * A device signed out by the device limit learns why, so the app can say so
+ * instead of failing with a bare "Unauthorized".
+ */
+async function explainSignedOut(response: Response, request: Request, env: Env): Promise<Response> {
+  if (response.status !== 401) return response;
+  const token = bearerToken(request);
+  const reason = token ? await revokedReason(env.VAYU_KV, token).catch(() => null) : null;
+  return reason ? json({ error: 'Unauthorized', reason }, 401) : response;
+}
+
+/**
+ * Razorpay events for an organization's own account. A payment link lives
+ * where it was made: in the organization's own workspace, or, for the
+ * organization chosen for the original app's links, in the original storage.
+ * Unknown links (made on Razorpay's dashboard) are recorded in the workspace
+ * the account belongs to.
+ */
+async function routeOrgPaymentEvent(request: Request, env: Env, execCtx: ExecutionContext, orgId: string, event: unknown): Promise<void> {
+  if (!env.PLATFORM_DB) return;
+  const url = new URL(request.url);
+  const at = (target: Env): Ctx => ({ request, env: target, url, path: url.pathname, method: request.method, execCtx });
+  const org = await env.PLATFORM_DB.prepare('SELECT id, app_storage FROM organizations WHERE id = ?')
+    .bind(orgId).first<{ id: string; app_storage: 'own' | 'original' }>();
+  const own = org?.app_storage === 'own' ? orgStorageEnv(env, org) : null;
+  const forOriginalApp = orgId === await getAppPaymentsOrg(env.PLATFORM_DB);
+  if (!own) {
+    if (forOriginalApp) await applyPaymentLinkEvent(at(env), event);
+    return;
+  }
+  const linkId = (event as { payload?: { payment_link?: { entity?: { id?: string } } } })?.payload?.payment_link?.entity?.id;
+  const inOwn = linkId ? (await own.VAYU_KV.get(`payment:link:${linkId}`)) !== null : false;
+  await applyPaymentLinkEvent(at(inOwn || !forOriginalApp ? own : env), event);
+}
+
+// ── Removed features ────────────────────────────────────────────────────────
+
+/**
+ * The Showcase (curated sections of pieces, with favourites) was removed on
+ * 2026-09-29, and at the owner's request its saved data goes with it: its two
+ * tables, and its sections archived in Deleted items (which nothing can
+ * restore any more). Each workspace's database is cleaned on its next
+ * request, once per isolate; DROP ... IF EXISTS makes a repeat harmless.
+ * Safe to delete once every workspace has been used since.
+ */
+function eraseShowcaseData(db: D1Database): Promise<void> {
+  return runSetupOnce(db, 'showcaseErased', async () => {
+    await db.prepare('DROP TABLE IF EXISTS roster_sections').run();
+    await db.prepare('DROP TABLE IF EXISTS roster_favorites').run();
+    try {
+      await db.prepare("DELETE FROM deleted_items WHERE entity = 'roster_section'").run();
+    } catch (e) {
+      // No archive in this database yet: nothing to remove.
+      if (!/no such table/i.test((e as Error).message)) throw e;
+    }
+  });
+}
+
 // ── Route table ─────────────────────────────────────────────────────────────
 
 const isExact = (p: string) => (path: string) => path === p;
 const isPrefix = (p: string) => (path: string) => path.startsWith(p);
 
 const routes: Route[] = [
-  // Roster (roster.ts)
-  ...rosterRoutes({ logChange: logEntityChange, archive: archiveDeletedAsync, notify: queueHubNotify }),
-
   // Staff roster (staffRoster.ts)
   ...staffRosterRoutes({
     people: userRecords,
@@ -4077,7 +4207,7 @@ const routes: Route[] = [
       return results.map(r => ({ id: String(r.id), name: String(r.name) }));
     },
     canManage: (ctx, session) => sessionCan(ctx, session, 'schedule', 'edit'),
-    push: (ctx, userIds, payload) => ctx.execCtx.waitUntil(sendPushToUsers(ctx.env, userIds, payload).catch(e => console.error('Roster push failed:', e))),
+    push: (ctx, userIds, payload) => ctx.execCtx.waitUntil(sendPushToUsers(ctx.env, userIds, payload).catch(e => console.error('Staff roster push failed:', e))),
     logChange: logEntityChange,
     notify: queueHubNotify,
   }),
@@ -4219,7 +4349,7 @@ const routes: Route[] = [
   { method: 'POST', match: isExact('/billing/checkout'), handler: handleBillingCheckout },
   { method: 'POST', match: isExact('/billing/confirm'), handler: handleBillingConfirm },
   { method: 'POST', match: (p) => BILLING_RECHECK_PATH.test(p), handler: handleBillingRecheck },
-  { method: 'GET', match: (p) => /^\/payments\/links\/plink_[A-Za-z0-9_]{6,40}\/details$/.test(p), handler: handlePaymentLinkDetails },
+  { method: 'GET', match: (p) => /^\/payments\/links\/plink_\w{6,40}\/details$/.test(p), handler: handlePaymentLinkDetails },
   { method: 'DELETE', match: (p) => PAYMENT_LINK_PATH.test(p), handler: handlePaymentLinkDelete },
   { method: 'PATCH', match: (p) => PAYMENT_LINK_PATH.test(p), handler: handlePaymentLinkUpdate },
   { method: 'POST', match: isExact('/payments/webhook'), handler: handlePaymentWebhook },
@@ -4440,19 +4570,7 @@ export default {
       // the organization chosen for the original app's links, in the original
       // storage. Unknown links (made on Razorpay's dashboard) are recorded in
       // the workspace the account belongs to.
-      onPaymentEvent: async (orgId, event) => {
-        if (!env.PLATFORM_DB) return;
-        const url = new URL(request.url);
-        const at = (target: Env): Ctx => ({ request, env: target, url, path: url.pathname, method: request.method, execCtx });
-        const org = await env.PLATFORM_DB.prepare('SELECT id, app_storage FROM organizations WHERE id = ?')
-          .bind(orgId).first<{ id: string; app_storage: 'own' | 'original' }>();
-        const own = org?.app_storage === 'own' ? orgStorageEnv(env, org) : null;
-        const forOriginalApp = orgId === await getAppPaymentsOrg(env.PLATFORM_DB);
-        if (!own && !forOriginalApp) return;
-        const linkId = (event as { payload?: { payment_link?: { entity?: { id?: string } } } })?.payload?.payment_link?.entity?.id;
-        const inOwn = own && linkId ? (await own.VAYU_KV.get(`payment:link:${linkId}`)) !== null : false;
-        await applyPaymentLinkEvent(at(own && (inOwn || !forOriginalApp) ? own : env), event);
-      },
+      onPaymentEvent: (orgId, event) => routeOrgPaymentEvent(request, env, execCtx, orgId, event),
     });
     if (early) return early;
     if (request.method === 'OPTIONS') {
@@ -4472,45 +4590,19 @@ export default {
     // use them; everything downstream keeps using ctx.env unchanged.
     const tracked = trackedEnv(request, env);
     const ctx: Ctx = { request, env: tracked, url, path, method: request.method, execCtx };
+    execCtx.waitUntil(eraseShowcaseData(env.VAYU_DB).catch(e => console.error('Showcase data erase failed:', e)));
 
-    let response = json({ error: 'Internal error' }, 500);
-    let route = 'unmatched';
+    const route = normalizeRoute(path);
+    let response: Response;
     try {
-      let matched = false;
-      // Inside an organization, its account and team routes come first (orgTeam.ts).
-      for (const r of (env.ORG_ID ? orgAppRoutes : routes)) {
-        if (r.method === ctx.method && r.match(path)) {
-          route = normalizeRoute(path);
-          matched = true;
-          // Floods and enumeration from one device: far above normal use.
-          const device = bearerToken(request) ?? orgUser;
-          if (device && !(await underLimit(env.API_LIMITER, `device:${device.slice(0, 32)}`))) {
-            response = tooMany('Too many requests. Slow down and try again in a minute.');
-            break;
-          }
-          const denied = await checkAccess(ctx);
-          if (denied) { response = denied; break; }
-          response = await r.handler(ctx);
-          break;
-        }
-      }
-      if (!matched) {
-        route = normalizeRoute(path);
-        response = json({ error: 'Not found' }, 404);
-      }
+      response = await dispatch(ctx, env, orgUser);
     } catch (e) {
       // The details go to the logs, not to the caller: internal messages can
       // reveal table names, queries or other internals.
       console.error(`Unhandled error on ${request.method} ${route}:`, e);
       response = json({ error: 'Something went wrong. Please try again.' }, 500);
     }
-    // A device signed out by the device limit learns why, so the app can
-    // say so instead of failing with a bare "Unauthorized".
-    if (response.status === 401) {
-      const token = bearerToken(request);
-      const reason = token ? await revokedReason(env.VAYU_KV, token).catch(() => null) : null;
-      if (reason) response = json({ error: 'Unauthorized', reason }, 401);
-    }
+    response = await explainSignedOut(response, request, env);
     // 101 marks the WebSocket upgrade; everything else is an ordinary call.
     execCtx.waitUntil(Promise.resolve().then(() =>
       writeAnalytics(env, execCtx, request, route, response.status, Date.now() - startedAt, response.status === 101),

@@ -25,21 +25,28 @@ export class SecretsUnavailable extends Error {}
 
 const keyCache = new Map<string, Promise<CryptoKey>>();
 
-function importKey(raw: string | undefined): Promise<CryptoKey> {
+/** The key's 32 bytes, or SecretsUnavailable saying what is wrong with it. */
+function keyBytes(raw: string | undefined): Uint8Array {
   if (!raw) throw new SecretsUnavailable('PAYMENT_SECRETS_KEY is not set');
   let bytes: Uint8Array;
   try { bytes = unb64(raw.trim()); } catch { throw new SecretsUnavailable('PAYMENT_SECRETS_KEY is not valid base64'); }
   if (bytes.length !== 32) throw new SecretsUnavailable('PAYMENT_SECRETS_KEY must be 32 bytes');
-  let key = keyCache.get(raw);
+  return bytes;
+}
+
+function importKey(raw: string | undefined): Promise<CryptoKey> {
+  const bytes = keyBytes(raw);
+  const cacheKey = String(raw);
+  let key = keyCache.get(cacheKey);
   if (!key) {
     key = crypto.subtle.importKey('raw', bytes, 'AES-GCM', false, ['encrypt', 'decrypt']);
-    keyCache.set(raw, key);
+    keyCache.set(cacheKey, key);
   }
   return key;
 }
 
 export function secretsConfigured(env: Env): boolean {
-  try { importKey(env.PAYMENT_SECRETS_KEY); return true; } catch { return false; }
+  try { keyBytes(env.PAYMENT_SECRETS_KEY); return true; } catch { return false; }
 }
 
 export async function encryptSecret(env: Env, context: string, plaintext: string): Promise<string> {

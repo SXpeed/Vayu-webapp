@@ -318,6 +318,21 @@ export async function handleSync(ctx: Ctx): Promise<Response> {
 
 // ── Snapshot mode ───────────────────────────────────────────────────────────
 
+/**
+ * The rows of a snapshot page this person may see: conversations and their
+ * messages only for their members (private rooms stay private from admins).
+ * Everything else is already limited by the role, or (own attendance) by the SQL.
+ */
+async function visibleRows(ctx: Ctx, session: SessionData, entity: SyncEntity, rows: Record<string, unknown>[], isAdmin: boolean): Promise<Record<string, unknown>[]> {
+  if (entity === 'conversation') return rows.filter(row => mayUseConversation(session.userId, isAdmin, roomAccessOf(row)));
+  if (entity !== 'message') return rows;
+  const rooms = await conversationMemberships(ctx, rows.map(r => String(r.conversation_id)));
+  return rows.filter(row => {
+    const room = rooms.get(String(row.conversation_id));
+    return !!room && mayUseConversation(session.userId, isAdmin, room);
+  });
+}
+
 async function snapshot(
   ctx: Ctx, session: SessionData, entityName: string,
   params: URLSearchParams, limit: number, isAdmin: boolean,
@@ -344,7 +359,7 @@ async function snapshot(
   const binds: (string | number)[] = [afterId, limit + 1];
 
   const ownAttendance = entity === 'attendance' && !isAdmin && !await canManageAttendance(ctx, session);
-  if (entity === 'attendance' && ownAttendance) {
+  if (ownAttendance) {
     sql = `SELECT * FROM ${table} WHERE id > ? AND employee_id = ? ORDER BY id LIMIT ?`;
     binds.splice(1, 0, session.userId);
   }
@@ -356,26 +371,9 @@ async function snapshot(
   rows = rows.slice(0, limit);
   const after = rows.length > 0 ? String(rows[rows.length - 1].id) : afterId;
 
-  // Visibility filtering. afterId always advances past every raw row so a
-  // filtered row can't stall the pagination.
+  // afterId always advances past every raw row so a filtered row can't stall the pagination.
   const map = ENTITY_MAPPERS[entity];
-  const records: unknown[] = [];
-  if (entity === 'conversation') {
-    for (const row of rows) {
-      if (mayUseConversation(session.userId, isAdmin, roomAccessOf(row))) records.push(map(row));
-    }
-  } else if (entity === 'message') {
-    const rooms = await conversationMemberships(ctx, rows.map(r => String(r.conversation_id)));
-    for (const row of rows) {
-      const room = rooms.get(String(row.conversation_id));
-      if (room && mayUseConversation(session.userId, isAdmin, room)) records.push(map(row));
-    }
-  } else if (entity === 'attendance' && ownAttendance) {
-    for (const row of rows) records.push(map(row)); // already filtered in SQL
-  } else {
-    for (const row of rows) records.push(map(row));
-  }
-
+  const records = (await visibleRows(ctx, session, entity, rows, isAdmin)).map(map);
   return json({ mode: 'snapshot', entity, cursor, records, hasMore, afterId: after });
 }
 

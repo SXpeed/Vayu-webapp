@@ -118,7 +118,7 @@ const PasscodeForm: React.FC<{ token: string; onOpened: (d: Opened) => void; onG
     const [passcode, setPasscode] = useState('');
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
-    const submit = async (e: React.FormEvent) => {
+    const submit = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
         if (busy) return;
         setBusy(true);
@@ -311,7 +311,7 @@ const InterestForm: React.FC<{ token: string; pass: string; artworks: RoomArtwor
     const [message, setMessage] = useState('');
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
-    const submit = async (e: React.FormEvent) => {
+    const submit = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
         if (busy) return;
         setBusy(true);

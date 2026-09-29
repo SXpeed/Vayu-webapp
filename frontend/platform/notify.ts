@@ -33,7 +33,7 @@ export async function getNotificationSettings(db: D1Database): Promise<Notificat
 
 export async function updateNotificationSettings(db: D1Database, body: Record<string, unknown>, actor: Actor) {
   const raw = typeof body.providerEmail === 'string' ? body.providerEmail.trim().toLowerCase() : '';
-  if (raw && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) throw new OrgError(400, 'invalid', 'Enter a valid email address, or leave it empty.');
+  if (raw && !/^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/.test(raw)) throw new OrgError(400, 'invalid', 'Enter a valid email address, or leave it empty.');
   const next: NotificationSettings = { providerEmail: raw || null };
   await db.batch([
     db.prepare(

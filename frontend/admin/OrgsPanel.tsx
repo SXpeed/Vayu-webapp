@@ -3,9 +3,9 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Building2, ChevronDown, CreditCard, Gauge, Layers, LayoutGrid, Plus, UserPlus, Users } from 'lucide-react';
+import { Building2, ChevronDown, CreditCard, Gauge, Layers, Plus, UserPlus, Users } from 'lucide-react';
 import { Button, Card, Field, Input, Select } from '../components/ui';
-import { Avatar, Detail, EmptyState, PageHeader, STAT_TILE_H, Section, Skeleton, SkeletonRows, StatTile, StatusPill, useDialogs } from './kit';
+import { Avatar, Detail, EmptyState, PageHeader, STAT_TILE_H, Section, Skeleton, SkeletonRows, StatTile, StatusPill, useDialogs, type Tone } from './kit';
 import { api, guarded as sharedGuarded, timeAgo, type ApiError, type Reauth } from './api';
 import { FEATURE_FIELDS, LIMIT_FIELDS, MODULE_FIELDS } from '../platform/planFields';
 import { AppDataCard } from './AppDataCard';
@@ -32,6 +32,19 @@ interface Razorpay {
     status?: string; lastVerifiedAt?: number | null; lastError?: string | null; updatedAt?: number;
     /** The app's payment links are created in this account. */
     usedByApp?: boolean;
+}
+
+/** A Razorpay connection at a glance: verified, failing, or saved but not checked yet. */
+function connectionTone(rz: Razorpay | null): Tone {
+    if (!rz?.connected) return 'neutral';
+    if (rz.status === 'verified') return 'ok';
+    return rz.lastError ? 'bad' : 'warn';
+}
+
+function connectionLabel(rz: Razorpay | null): string {
+    if (!rz) return '—';
+    if (!rz.connected) return 'Not connected';
+    return `${rz.mode === 'live' ? 'Live' : 'Test'} · ${rz.status ?? 'saved'}`;
 }
 
 const BUSINESS_TYPES: [string, string][] = [
@@ -61,7 +74,7 @@ const OrgList: React.FC<{ onOpen: (id: string) => void }> = ({ onOpen }) => {
 
     const load = useCallback(async () => {
         try {
-            const r = await api<{ organizations: OrgRow[] }>(`/admin/orgs${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+            const r = await api<{ organizations: OrgRow[] }>(`/admin/orgs${q ? '?q=' + encodeURIComponent(q) : ''}`);
             setOrgs(r.organizations);
         } catch (e) { toast.error((e as ApiError).message); }
     }, [q]);
@@ -77,9 +90,11 @@ const OrgList: React.FC<{ onOpen: (id: string) => void }> = ({ onOpen }) => {
             </div>
             {creating === 'user' && <NewAccountForm onDone={() => setCreating(null)} />}
             {creating === 'org' && <NewOrgForm onDone={(id) => { setCreating(null); if (id) onOpen(id); else load(); }} />}
-            {!orgs ? <SkeletonRows rows={6} /> : orgs.length === 0 ? (
+            {!orgs && <SkeletonRows rows={6} />}
+            {orgs?.length === 0 && (
                 <EmptyState icon={<Building2 size={20} />} title={q ? 'No matches' : 'No organizations yet'} body={q ? undefined : 'Approve an application, or create one here.'} />
-            ) : (
+            )}
+            {orgs?.length ? (
                 <ul className="ac-divide -mx-2">
                     {orgs.map(o => (
                         <li key={o.id}>
@@ -99,7 +114,7 @@ const OrgList: React.FC<{ onOpen: (id: string) => void }> = ({ onOpen }) => {
                         </li>
                     ))}
                 </ul>
-            )}
+            ) : null}
         </Card>
     );
 };
@@ -114,7 +129,7 @@ const NewAccountForm: React.FC<{ onDone: () => void }> = ({ onDone }) => {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState(randomPassword);
     const [busy, setBusy] = useState(false);
-    const submit = async (e: React.FormEvent) => {
+    const submit = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
         setBusy(true);
         try {
@@ -141,7 +156,7 @@ const NewOrgForm: React.FC<{ onDone: (id?: string) => void }> = ({ onDone }) => 
     const [ownerEmail, setOwnerEmail] = useState('');
     const [isDemo, setIsDemo] = useState(false);
     const [busy, setBusy] = useState(false);
-    const submit = async (e: React.FormEvent) => {
+    const submit = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
         setBusy(true);
         try {
@@ -189,8 +204,11 @@ interface PlanOption { id: string; name: string; versionId: string; version: num
 const BILLING_LABEL: Record<string, string> = { free: 'Free', trial: 'Trial', paid: 'Paid', manual: 'Manual billing', custom: 'Custom' };
 const fmtLimit = (n: number | null | undefined) => (n === null || n === undefined ? 'Unlimited' : n.toLocaleString());
 
-const OrgDetailView: React.FC<{ orgId: string; reauth: Reauth; onBack: () => void }> = ({ orgId, reauth, onBack }) => {
-    const dialogs = useDialogs();
+/**
+ * An organization with its plan and payments account. Everything arrives
+ * together, so the page appears once instead of growing card by card.
+ */
+function useOrgDetail(orgId: string) {
     const [org, setOrg] = useState<OrgDetail | null>(null);
     const [sub, setSub] = useState<Entitlements | null>(null);
     const [rz, setRz] = useState<Razorpay | null>(null);
@@ -220,38 +238,83 @@ const OrgDetailView: React.FC<{ orgId: string; reauth: Reauth; onBack: () => voi
         try { setRz(await api<Razorpay>(rzPath)); } catch (e) { toast.error((e as ApiError).message); }
     }, [rzPath]);
 
-    if (failed) {
-        return (
-            <div className="space-y-6">
-                <PageHeader back={{ label: 'All organizations', onClick: onBack }} title="Organization" />
-                <Section>
-                    <EmptyState icon={<Building2 size={20} />} title="Could not load this organization" body={failed}
-                        action={<Button onClick={loadAll}>Try again</Button>} />
-                </Section>
-            </div>
-        );
-    }
+    return { org, setOrg, sub, rz, setRz, failed, rzPath, loadAll, reloadSub, reloadRz };
+}
 
-    if (!org) {
-        return (
-            <div className="space-y-6" aria-busy="true">
-                {/* The real header and tile sizes, so nothing moves when the data lands. */}
-                <PageHeader
-                    back={{ label: 'All organizations', onClick: onBack }}
-                    title={<Skeleton inline className="inline-block align-middle h-5 w-64 max-w-full" />}
-                    description={<Skeleton inline className="inline-block align-middle h-3 w-56 max-w-full" />}
-                    actions={<Skeleton className="h-10 w-24 rounded-xl" />}
-                />
-                <div className={TILE_GRID}>
-                    {[0, 1, 2, 3].map(i => <Skeleton key={i} className={`${TILE_H} rounded-2xl`} />)}
-                </div>
-                <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)] items-start">
-                    <div className="space-y-6"><Skeleton className="h-80 rounded-2xl" /><Skeleton className="h-64 rounded-2xl" /></div>
-                    <div className="space-y-6"><Skeleton className="h-72 rounded-2xl" /><Skeleton className="h-48 rounded-2xl" /></div>
-                </div>
-            </div>
-        );
-    }
+const OrgLoadFailed: React.FC<{ message: string; onBack: () => void; onRetry: () => void }> = ({ message, onBack, onRetry }) => (
+    <div className="space-y-6">
+        <PageHeader back={{ label: 'All organizations', onClick: onBack }} title="Organization" />
+        <Section>
+            <EmptyState icon={<Building2 size={20} />} title="Could not load this organization" body={message}
+                action={<Button onClick={onRetry}>Try again</Button>} />
+        </Section>
+    </div>
+);
+
+/** The real header and tile sizes, so nothing moves when the data lands. */
+const OrgSkeleton: React.FC<{ onBack: () => void }> = ({ onBack }) => (
+    <div className="space-y-6" aria-busy="true">
+        <PageHeader
+            back={{ label: 'All organizations', onClick: onBack }}
+            title={<Skeleton inline className="inline-block align-middle h-5 w-64 max-w-full" />}
+            description={<Skeleton inline className="inline-block align-middle h-3 w-56 max-w-full" />}
+            actions={<Skeleton className="h-10 w-24 rounded-xl" />}
+        />
+        <div className={TILE_GRID}>
+            {[0, 1, 2, 3].map(i => <Skeleton key={i} className={`${TILE_H} rounded-2xl`} />)}
+        </div>
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)] items-start">
+            <div className="space-y-6"><Skeleton className="h-80 rounded-2xl" /><Skeleton className="h-64 rounded-2xl" /></div>
+            <div className="space-y-6"><Skeleton className="h-72 rounded-2xl" /><Skeleton className="h-48 rounded-2xl" /></div>
+        </div>
+    </div>
+);
+
+/** Under the subscription tile: a waiver, the trial's end, or whether access is on. */
+function subscriptionFoot(sub: Entitlements | null): string {
+    if (sub?.subscription.paymentWaived) return 'Payment waived';
+    if (sub?.subscription.trialEndsAt) return `Trial ends ${new Date(sub.subscription.trialEndsAt).toLocaleDateString()}`;
+    return sub?.active ? 'Access on' : 'Access off';
+}
+
+function razorpayFoot(rz: Razorpay | null): string {
+    if (!rz?.connected) return 'Razorpay not linked';
+    return rz.hasWebhookSecret ? 'Webhook secret set' : 'No webhook secret';
+}
+
+/** Seats used as a share of the limit, the words under the tile, and the meter's colour (amber from 85%). */
+function seatsInfo(seats: Entitlements['seats'] | undefined): { share: number; note: string; tone: 'ok' | 'warn' | 'bad' } {
+    const share = seats?.limit ? Math.min(1, seats.used / seats.limit) : 0;
+    if (!seats) return { share, note: '', tone: 'ok' };
+    if (seats.overLimit) return { share, note: 'Over the limit', tone: 'bad' };
+    return { share, note: seats.remaining === null ? 'No seat limit' : `${seats.remaining} left`, tone: share >= 0.85 ? 'warn' : 'ok' };
+}
+
+/** At a glance: the plan, the subscription, seats and the payments account. */
+const GlanceTiles: React.FC<{ sub: Entitlements | null; rz: Razorpay | null }> = ({ sub, rz }) => {
+    const seats = sub?.seats;
+    const { share: seatShare, note: seatsNote, tone: seatTone } = seatsInfo(seats);
+    const rzFoot = razorpayFoot(rz);
+    const subFoot = subscriptionFoot(sub);
+    const planFoot = sub?.plan ? BILLING_LABEL[sub.plan.billingType] ?? sub.plan.billingType : 'No plan assigned';
+    return (
+        <div className={TILE_GRID}>
+            <Tile icon={<Layers size={15} />} label="Plan" value={sub?.plan ? `${sub.plan.name} v${sub.plan.version}` : 'Default limits'} foot={planFoot} />
+            <Tile icon={<Gauge size={15} />} label="Subscription" value={sub ? <StatusPill status={sub.subscription.status} /> : '—'} foot={subFoot} />
+            <Tile icon={<Users size={15} />} label="Seats"
+                value={seats ? <span className="tabular-nums">{seats.used}<span className="ac-faint text-base"> / {seats.limit ?? '∞'}</span></span> : '—'}
+                foot={seats ? <span className={seats.overLimit ? 'text-[var(--ac-bad)]' : ''}>{seatsNote}</span> : ''}
+                meter={seats?.limit ? { share: seatShare, tone: seatTone } : undefined} />
+            <Tile icon={<CreditCard size={15} />} label="Payments" value={<StatusPill tone={connectionTone(rz)}>{connectionLabel(rz)}</StatusPill>} foot={rzFoot} />
+        </div>
+    );
+};
+
+const OrgDetailView: React.FC<{ orgId: string; reauth: Reauth; onBack: () => void }> = ({ orgId, reauth, onBack }) => {
+    const dialogs = useDialogs();
+    const { org, setOrg, sub, rz, setRz, failed, rzPath, loadAll, reloadSub, reloadRz } = useOrgDetail(orgId);
+    if (failed) return <OrgLoadFailed message={failed} onBack={onBack} onRetry={loadAll} />;
+    if (!org) return <OrgSkeleton onBack={onBack} />;
 
     const setStatus = async (status: 'active' | 'suspended') => {
         const reason = await dialogs.prompt(status === 'suspended'
@@ -261,11 +324,6 @@ const OrgDetailView: React.FC<{ orgId: string; reauth: Reauth; onBack: () => voi
         const next = await guarded(reauth, () => api<OrgDetail>(`/admin/orgs/${orgId}/status`, { method: 'POST', ...json({ status, reason }) }));
         if (next) { setOrg(next); toast.success(status === 'suspended' ? 'Suspended' : 'Reactivated'); }
     };
-
-    const seats = sub?.seats;
-    const seatShare = seats && seats.limit ? Math.min(1, seats.used / seats.limit) : 0;
-    const rzTone = !rz?.connected ? 'neutral' : rz.status === 'verified' ? 'ok' : rz.lastError ? 'bad' : 'warn';
-    const rzLabel = !rz ? '—' : !rz.connected ? 'Not connected' : `${rz.mode === 'live' ? 'Live' : 'Test'} · ${rz.status ?? 'saved'}`;
 
     return (
         <div className="space-y-6">
@@ -281,24 +339,7 @@ const OrgDetailView: React.FC<{ orgId: string; reauth: Reauth; onBack: () => voi
             />
 
             {/* At a glance: the four things worth checking first. */}
-            <div className={TILE_GRID}>
-                <Tile icon={<Layers size={15} />} label="Plan"
-                    value={sub?.plan ? `${sub.plan.name} v${sub.plan.version}` : 'Default limits'}
-                    foot={sub?.plan ? BILLING_LABEL[sub.plan.billingType] ?? sub.plan.billingType : 'No plan assigned'} />
-                <Tile icon={<Gauge size={15} />} label="Subscription"
-                    value={sub ? <StatusPill status={sub.subscription.status} /> : '—'}
-                    foot={sub?.subscription.paymentWaived ? 'Payment waived'
-                        : sub?.subscription.trialEndsAt ? `Trial ends ${new Date(sub.subscription.trialEndsAt).toLocaleDateString()}` : sub?.active ? 'Access on' : 'Access off'} />
-                <Tile icon={<Users size={15} />} label="Seats"
-                    value={seats ? <span className="tabular-nums">{seats.used}<span className="ac-faint text-base"> / {seats.limit ?? '∞'}</span></span> : '—'}
-                    foot={seats ? <span className={seats.overLimit ? 'text-[var(--ac-bad)]' : ''}>
-                        {seats.overLimit ? 'Over the limit' : seats.remaining === null ? 'No seat limit' : `${seats.remaining} left`}
-                    </span> : ''}
-                    meter={seats?.limit ? { share: seatShare, tone: seats.overLimit ? 'bad' : seatShare >= 0.85 ? 'warn' : 'ok' } : undefined} />
-                <Tile icon={<CreditCard size={15} />} label="Payments"
-                    value={<StatusPill tone={rzTone}>{rzLabel}</StatusPill>}
-                    foot={rz?.connected ? (rz.hasWebhookSecret ? 'Webhook secret set' : 'No webhook secret') : 'Razorpay not linked'} />
-            </div>
+            <GlanceTiles sub={sub} rz={rz} />
 
             <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)] items-start">
                 <div className="space-y-6 min-w-0">
@@ -357,7 +398,7 @@ const MembersCard: React.FC<{ org: OrgDetail; onChange: (o: OrgDetail) => void }
         patch(m, { status: m.status === 'active' ? 'disabled' : 'active' });
     };
 
-    const add = async (e: React.FormEvent) => {
+    const add = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
         try {
             onChange(await api<OrgDetail>(`/admin/orgs/${org.id}/members`, { method: 'POST', ...json({ email, role }) }));
@@ -497,33 +538,6 @@ const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; on
         act('/entitlements', { key: 'maxMembers', value: value.trim() === '' ? null : Number(value), reason });
     };
 
-    /**
-     * The Roster for this organization only, whatever its plan says: a
-     * module override. It takes effect in the app within a minute (at once
-     * on the server that handled this change).
-     */
-    const rosterOn = info.limits.modules.roster !== false;
-    const rosterOverridden = 'roster' in info.overrides;
-    const switchRoster = async () => {
-        const reason = await dialogs.prompt({
-            title: rosterOn ? 'Switch the Showcase off for this organization?' : 'Switch the Showcase on for this organization?',
-            body: rosterOn
-                ? 'Nobody in the organization can open it, admins included. Its sections and favourites stay stored and come back if it is switched on again.'
-                : 'Everyone whose role can browse the Showcase sees it again. This overrides the plan for this organization only.',
-            label: 'Reason (recorded in the audit log)', minLength: 3,
-            confirmLabel: rosterOn ? 'Switch off' : 'Switch on', danger: rosterOn,
-        });
-        if (!reason) return;
-        act('/entitlements', { key: 'roster', value: !rosterOn, reason });
-    };
-    const followPlanForRoster = async () => {
-        if (!(await dialogs.confirm({ title: 'Use the plan’s Showcase setting?', body: 'Removes this organization’s exception, so its plan decides again.', confirmLabel: 'Use the plan' }))) return;
-        setBusy(true);
-        const next = await guarded(reauth, () => api<Entitlements>(`/admin/orgs/${orgId}/entitlements/roster`, { method: 'DELETE' }));
-        setBusy(false);
-        if (next) { toast.success('Updated'); onChanged(); }
-    };
-
     const limits = info.limits.limits;
     const overridden = new Set(Object.keys(info.overrides));
     const included = [
@@ -560,25 +574,6 @@ const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; on
                     ))}
             </div>
 
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl neu-inset px-3.5 py-3">
-                <div className="flex items-center gap-2.5 min-w-0">
-                    <LayoutGrid size={16} className="shrink-0 ac-faint" />
-                    <div className="min-w-0">
-                        <p className="text-[13px] font-medium">
-                            Showcase <span className="ml-1 align-middle"><StatusPill tone={rosterOn ? 'ok' : 'bad'}>{rosterOn ? 'On' : 'Off'}</StatusPill></span>
-                            {rosterOverridden && <span className="ml-1.5 align-middle"><StatusPill tone="warn">override</StatusPill></span>}
-                        </p>
-                        <p className="text-[11.5px] ac-faint">
-                            {rosterOverridden ? 'Set for this organization only.' : 'Follows the plan.'} Who can curate it is set by each role in the app.
-                        </p>
-                    </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                    {rosterOverridden && <Button onClick={followPlanForRoster} disabled={busy}>Use the plan</Button>}
-                    <Button onClick={switchRoster} disabled={busy}>{rosterOn ? 'Switch off' : 'Switch on'}</Button>
-                </div>
-            </div>
-
             <div className="mt-6 rounded-2xl neu-inset p-3.5 space-y-3">
                 <div className="flex flex-wrap gap-2 items-end">
                     <Field label="Change plan" htmlFor="sub-plan" className="flex-1 min-w-[min(100%,15rem)]">
@@ -610,27 +605,61 @@ const AppLinksStatus: React.FC<{ info: Razorpay }> = ({ info }) => {
     return <span className="ac-muted">{verified ? 'Not used by the app' : 'Verify the keys to use this account for the app'}</span>;
 };
 
-const RazorpayCard: React.FC<{ path: string; info: Razorpay; reauth: Reauth; onChange: (r: Razorpay) => void; onReload: () => void }> = ({ path, info, reauth, onChange, onReload }) => {
-    const dialogs = useDialogs();
-    const [editing, setEditing] = useState(false);
+/** A connected account: its key, mode, status, webhook secret and whether the app's links use it. */
+const RazorpayDetails: React.FC<{ info: Razorpay }> = ({ info }) => (
+    <dl className="grid grid-cols-2 gap-x-5 gap-y-4">
+        <Detail label="Key"><span className="font-mono text-[12px]">{info.keyIdHint}</span></Detail>
+        <Detail label="Mode">{info.mode === 'live' ? 'Live' : 'Test'}</Detail>
+        <Detail label="Status"><StatusPill tone={connectionTone(info)}>{info.status ?? 'saved'}</StatusPill></Detail>
+        <Detail label="Last verified">{info.lastVerifiedAt ? timeAgo(info.lastVerifiedAt) : 'Never'}</Detail>
+        <div className="col-span-2">
+            <Detail label="Webhook secret">{info.hasWebhookSecret ? 'Set' : <span className="text-[var(--ac-warn)]">Not set: payment updates will not arrive</span>}</Detail>
+        </div>
+        {info.lastError && <p className="col-span-2 text-[13px] text-[var(--ac-bad)] break-words">{info.lastError}</p>}
+        <div className="col-span-2">
+            <Detail label="App payment links"><AppLinksStatus info={info} /></Detail>
+        </div>
+    </dl>
+);
+
+/** New keys for the account. The secrets are never shown again once saved. */
+const RazorpayKeysForm: React.FC<{ path: string; reauth: Reauth; hasWebhookSecret: boolean; onSaved: (next: Razorpay) => void; onCancel: () => void }> = ({ path, reauth, hasWebhookSecret, onSaved, onCancel }) => {
     const [keyId, setKeyId] = useState('');
     const [keySecret, setKeySecret] = useState('');
     const [webhookSecret, setWebhookSecret] = useState('');
     const [busy, setBusy] = useState(false);
-
-    const save = async (e: React.FormEvent) => {
+    const save = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
         setBusy(true);
         const next = await guarded(reauth, () => api<Razorpay>(path, { method: 'PUT', ...json({ keyId, keySecret, webhookSecret }) }));
         setBusy(false);
-        if (next) {
-            onChange(next);
-            setEditing(false);
-            setKeySecret('');
-            setWebhookSecret('');
-            toast.success('Razorpay keys saved. Verify them next.');
-        }
+        if (!next) return;
+        onSaved(next);
+        toast.success('Razorpay keys saved. Verify them next.');
     };
+    return (
+        <form onSubmit={save} className="mt-4 grid gap-3 rounded-2xl neu-inset p-3.5">
+            <Field label="Key ID" htmlFor="rz-id" hint="rzp_test_… for testing, rzp_live_… for real payments.">
+                <Input id="rz-id" required value={keyId} onChange={e => setKeyId(e.target.value)} autoComplete="off" />
+            </Field>
+            <Field label="Key secret" htmlFor="rz-secret">
+                <Input id="rz-secret" type="password" required value={keySecret} onChange={e => setKeySecret(e.target.value)} autoComplete="off" />
+            </Field>
+            <Field label="Webhook secret" htmlFor="rz-wh" hint={hasWebhookSecret ? 'Leave blank to keep the current one.' : 'The secret you type when creating the webhook in Razorpay.'}>
+                <Input id="rz-wh" type="password" value={webhookSecret} onChange={e => setWebhookSecret(e.target.value)} autoComplete="off" />
+            </Field>
+            <div className="flex flex-wrap gap-2">
+                <Button type="submit" variant="primary" disabled={busy}>{busy ? 'Saving…' : 'Save keys'}</Button>
+                <Button type="button" onClick={onCancel}>Cancel</Button>
+            </div>
+        </form>
+    );
+};
+
+const RazorpayCard: React.FC<{ path: string; info: Razorpay; reauth: Reauth; onChange: (r: Razorpay) => void; onReload: () => void }> = ({ path, info, reauth, onChange, onReload }) => {
+    const dialogs = useDialogs();
+    const [editing, setEditing] = useState(false);
+    const [busy, setBusy] = useState(false);
 
     const verify = async () => {
         setBusy(true);
@@ -664,19 +693,7 @@ const RazorpayCard: React.FC<{ path: string; info: Razorpay; reauth: Reauth; onC
             description="Payments this organization collects go to its own Razorpay account, never the platform's. Secrets are stored encrypted and never shown again."
             actions={<CreditCard size={16} className="ac-faint" />}>
             {info.connected ? (
-                <dl className="grid grid-cols-2 gap-x-5 gap-y-4">
-                    <Detail label="Key"><span className="font-mono text-[12px]">{info.keyIdHint}</span></Detail>
-                    <Detail label="Mode">{info.mode === 'live' ? 'Live' : 'Test'}</Detail>
-                    <Detail label="Status"><StatusPill tone={info.status === 'verified' ? 'ok' : info.lastError ? 'bad' : 'warn'}>{info.status ?? 'saved'}</StatusPill></Detail>
-                    <Detail label="Last verified">{info.lastVerifiedAt ? timeAgo(info.lastVerifiedAt) : 'Never'}</Detail>
-                    <div className="col-span-2">
-                        <Detail label="Webhook secret">{info.hasWebhookSecret ? 'Set' : <span className="text-[var(--ac-warn)]">Not set: payment updates will not arrive</span>}</Detail>
-                    </div>
-                    {info.lastError && <p className="col-span-2 text-[13px] text-[var(--ac-bad)] break-words">{info.lastError}</p>}
-                    <div className="col-span-2">
-                        <Detail label="App payment links"><AppLinksStatus info={info} /></Detail>
-                    </div>
-                </dl>
+                <RazorpayDetails info={info} />
             ) : (
                 <EmptyState compact icon={<CreditCard size={20} />} title="No Razorpay account linked" body="Link one when this organization wants to take payments from its customers." />
             )}
@@ -693,21 +710,8 @@ const RazorpayCard: React.FC<{ path: string; info: Razorpay; reauth: Reauth; onC
             </details>
 
             {editing ? (
-                <form onSubmit={save} className="mt-4 grid gap-3 rounded-2xl neu-inset p-3.5">
-                    <Field label="Key ID" htmlFor="rz-id" hint="rzp_test_… for testing, rzp_live_… for real payments.">
-                        <Input id="rz-id" required value={keyId} onChange={e => setKeyId(e.target.value)} autoComplete="off" />
-                    </Field>
-                    <Field label="Key secret" htmlFor="rz-secret">
-                        <Input id="rz-secret" type="password" required value={keySecret} onChange={e => setKeySecret(e.target.value)} autoComplete="off" />
-                    </Field>
-                    <Field label="Webhook secret" htmlFor="rz-wh" hint={info.hasWebhookSecret ? 'Leave blank to keep the current one.' : 'The secret you type when creating the webhook in Razorpay.'}>
-                        <Input id="rz-wh" type="password" value={webhookSecret} onChange={e => setWebhookSecret(e.target.value)} autoComplete="off" />
-                    </Field>
-                    <div className="flex flex-wrap gap-2">
-                        <Button type="submit" variant="primary" disabled={busy}>{busy ? 'Saving…' : 'Save keys'}</Button>
-                        <Button type="button" onClick={() => setEditing(false)}>Cancel</Button>
-                    </div>
-                </form>
+                <RazorpayKeysForm path={path} reauth={reauth} hasWebhookSecret={!!info.hasWebhookSecret}
+                    onSaved={next => { onChange(next); setEditing(false); }} onCancel={() => setEditing(false)} />
             ) : (
                 <div className="mt-4 flex flex-wrap gap-2">
                     <Button variant={info.connected ? 'default' : 'primary'} onClick={() => setEditing(true)}>{info.connected ? 'Replace keys' : 'Connect Razorpay'}</Button>

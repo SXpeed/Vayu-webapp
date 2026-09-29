@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Check, Image as ImageIcon, Info } from 'lucide-react';
-import type { Artwork, ArtworkStatus, RosterBackdrop } from '../types';
+import type { Artwork, ArtworkStatus } from '../types';
 import { getThumbUrl } from '../services/storageService';
 import { SearchBar } from './SearchBar';
 import { Pill } from './ui';
@@ -19,20 +19,11 @@ interface ArtworkPickerProps {
     detail?: (art: Artwork) => string;
     /** Offer the Available / Reserved / Sold filters (off where only one status is listed). */
     statusFilters?: boolean;
-    /** A Showcase section's own backdrop; otherwise the one chosen in Profile. */
-    backdrop?: RosterBackdrop;
     /** Scroll inside a tall box instead of growing the page (forms with more below). */
     scroll?: boolean;
     searchPlaceholder?: string;
     className?: string;
 }
-
-const BACKDROP: Record<RosterBackdrop, string> = {
-    studio: 'roster-backdrop-studio',
-    ivory: 'roster-backdrop-ivory',
-    charcoal: 'roster-backdrop-charcoal',
-    none: 'neu-inset',
-};
 
 const STATUSES: ArtworkStatus[] = ['Available', 'Reserved', 'Sold'];
 
@@ -41,12 +32,12 @@ const matches = (art: Artwork, q: string) =>
 
 /**
  * Choosing artworks for a catalog, collection, inquiry, proforma, viewing
- * room or Roster section: a search, filters, and a grid of tiles — the photo
+ * room or sale: a search, filters, and a grid of tiles — the photo
  * on a studio backdrop, a check in the corner, the title and one detail line
  * under it. Tapping a tile adds or removes it.
  */
 export const ArtworkPicker: React.FC<ArtworkPickerProps> = ({
-    artworks, selected, onToggle, onAddMany, onInfo, detail, statusFilters = true, backdrop,
+    artworks, selected, onToggle, onAddMany, onInfo, detail, statusFilters = true,
     scroll = false, searchPlaceholder = 'Search by title, ID or artist…', className = '',
 }) => {
     const [query, setQuery] = useState('');
@@ -60,7 +51,6 @@ export const ArtworkPicker: React.FC<ArtworkPickerProps> = ({
     }), [artworks, filter, selected, q]);
 
     const notYetChosen = shown.filter(a => !selected.has(a.id)).map(a => a.id);
-    const fit = backdrop === 'none' ? 'object-cover' : 'object-contain p-1.5';
 
     return (
         <div className={`space-y-3 ${className}`}>
@@ -94,11 +84,11 @@ export const ArtworkPicker: React.FC<ArtworkPickerProps> = ({
                                     <button type="button" onClick={() => onToggle(art.id)} aria-pressed={on}
                                         aria-label={`${on ? 'Remove' : 'Add'} ${art.title}`}
                                         className={`w-full text-left rounded-2xl p-1.5 active-scale transition-shadow ${on ? 'neu-inset ring-1 ring-gold-500/60' : 'neu-raised-sm'}`}>
-                                        <span className={`relative block aspect-square rounded-xl overflow-hidden ${backdrop ? BACKDROP[backdrop] : 'tile-backdrop'}`}>
+                                        <span className="relative block aspect-square rounded-xl overflow-hidden tile-backdrop">
                                             {art.imageUrls?.[0] ? (
-                                                <img src={getThumbUrl(art.imageUrls[0])} alt="" loading="lazy" decoding="async" className={`w-full h-full ${fit}`} />
+                                                <img src={getThumbUrl(art.imageUrls[0])} alt="" loading="lazy" decoding="async" className="w-full h-full object-contain p-1.5" />
                                             ) : (
-                                                <span className={`w-full h-full flex items-center justify-center ${backdrop ? 'text-white/40' : 'tile-backdrop-icon'}`}><ImageIcon size={18} strokeWidth={1} /></span>
+                                                <span className="w-full h-full flex items-center justify-center tile-backdrop-icon"><ImageIcon size={18} strokeWidth={1} /></span>
                                             )}
                                             <span className={`absolute top-1 right-1 w-5 h-5 rounded-full flex items-center justify-center ${on ? 'neu-accent' : 'bg-black/25'}`}>
                                                 {on && <Check size={11} strokeWidth={3} className="text-white" />}

@@ -79,11 +79,13 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ authUser, canMan
         setRefreshing(false);
     };
 
+    const idleSubtitle = canManage ? 'Team attendance by day and month' : 'Check in and your history';
+
     return (
         <PageRoot width="wide">
             <PageHeader
                 title="Attendance"
-                subtitle={openRecord ? 'You are checked in' : canManage ? 'Team attendance by day and month' : 'Check in and your history'}
+                subtitle={openRecord ? 'You are checked in' : idleSubtitle}
                 onBack={onBack}
                 actions={<GhostIconButton onClick={() => { void refresh(); }} label="Refresh" icon={<RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />} disabled={refreshing} />}
             >

@@ -51,7 +51,7 @@ function setArray<T>(key: string, data: T[]): void {
 }
 
 /** One date range of the sales ledger, as last loaded (shown when offline). */
-export interface SavedSalesPage { from: string; to: string; sales: Sale[]; summary: SalesSummary; savedAt: number }
+export interface SavedSalesPage { from: string; to: string; sales: Sale[]; summary: SalesSummary; allTags?: string[]; savedAt: number }
 
 /** A sale recorded while offline: uploaded, and given its number, when the server can be reached. */
 export interface PendingSale { id: string; input: SaleInput; savedAt: number; /** Why the server refused it, if it did. */ error?: string }

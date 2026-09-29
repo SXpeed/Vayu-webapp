@@ -57,11 +57,11 @@ test('entity visibility mirrors the REST read rules', () => {
     assert.equal(access.canReadPayments(perms.normalizePermissions({ payments: 'view' })), true);
     assert.equal(access.canReadPayments(none), false);
 
-    // A Roster-only role reads the artworks the Roster shows, nothing else.
-    const rosterOnly = perms.normalizePermissions({ roster: 'view' });
-    assert.deepEqual([...access.readableEntities(rosterOnly)], ['artwork']);
-    assert.equal(access.canReadRoster(rosterOnly), true);
-    assert.equal(access.canReadRoster(none), false);
+    // A Sales-only role reads the artworks its picker offers, nothing else.
+    const salesOnly = perms.normalizePermissions({ sales: 'view' });
+    assert.deepEqual([...access.readableEntities(salesOnly)], ['artwork']);
+    assert.equal(access.canReadSales(salesOnly), true);
+    assert.equal(access.canReadSales(none), false);
     // An unknown role falls back to no access.
     assert.equal(access.readableEntities(access.permissionsForRoles([], 'deleted-role')).size, 0);
 });
@@ -200,19 +200,21 @@ test('device limits: defaults, admin exemption, validation, labels', async () =>
     assert.equal(d.deviceLabel(null), 'Browser');
 });
 
-test('roster permissions: Staff browse by default, gaps take the fallback, the plan can close a section', () => {
-    assert.equal(perms.STAFF_DEFAULT_PERMISSIONS.roster, 'view');
-    // A Staff role saved before the Roster existed has no roster key: it gets the Staff default, not "none".
+test('section permissions: gaps take the fallback, removed sections drop out, the plan can close a section', () => {
+    // A Staff role saved before a section existed has no key for it: it gets the Staff default, not "none".
     const savedBefore = { ...perms.STAFF_DEFAULT_PERMISSIONS };
-    delete savedBefore.roster;
-    assert.equal(perms.normalizePermissions(savedBefore, perms.STAFF_DEFAULT_PERMISSIONS).roster, 'view');
-    assert.equal(perms.normalizePermissions(savedBefore).roster, 'none', 'custom roles: nothing unless chosen');
-    assert.equal(perms.normalizePermissions({ roster: 'edit' }, perms.STAFF_DEFAULT_PERMISSIONS).roster, 'edit', 'a saved choice wins');
+    delete savedBefore.schedule;
+    assert.equal(perms.normalizePermissions(savedBefore, perms.STAFF_DEFAULT_PERMISSIONS).schedule, 'view');
+    assert.equal(perms.normalizePermissions(savedBefore).schedule, 'none', 'custom roles: nothing unless chosen');
+    assert.equal(perms.normalizePermissions({ schedule: 'edit' }, perms.STAFF_DEFAULT_PERMISSIONS).schedule, 'edit', 'a saved choice wins');
+    // Roles saved while the Showcase existed still carry its key; it is dropped, not kept.
+    assert.equal('roster' in perms.normalizePermissions({ roster: 'edit', inventory: 'view' }), false);
+    assert.equal(perms.SECTION_IDS.includes('roster'), false);
 
-    const closed = perms.withoutSections(perms.ADMIN_PERMISSIONS, ['roster']);
-    assert.equal(closed.roster, 'none');
+    const closed = perms.withoutSections(perms.ADMIN_PERMISSIONS, ['schedule']);
+    assert.equal(closed.schedule, 'none');
     assert.equal(closed.inventory, 'edit');
-    assert.equal(perms.ADMIN_PERMISSIONS.roster, 'edit', 'the shared admin set is not changed');
+    assert.equal(perms.ADMIN_PERMISSIONS.schedule, 'edit', 'the shared admin set is not changed');
     assert.equal(perms.withoutSections(perms.ADMIN_PERMISSIONS, []), perms.ADMIN_PERMISSIONS);
 });
 

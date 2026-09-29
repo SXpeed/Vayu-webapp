@@ -38,7 +38,7 @@ export const InvitePanel: React.FC<{ roles: RoleDef[]; RoleSelect: React.FC<{ va
     }, []);
     useEffect(load, [load]);
 
-    const send = async (e: React.FormEvent) => {
+    const send = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
         setError('');
         setManualLink(null);

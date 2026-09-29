@@ -32,7 +32,7 @@ const FILE_COOKIE_RE = new RegExp(String.raw`(?:^|;\s*)${FILE_COOKIE}=([a-f0-9]{
 
 /** The capability token carried by this request's cookie, if any. */
 export function fileCookieToken(ctx: Ctx): string | null {
-  const match = (ctx.request.headers.get('Cookie') ?? '').match(FILE_COOKIE_RE);
+  const match = FILE_COOKIE_RE.exec(ctx.request.headers.get('Cookie') ?? '');
   return match ? match[1] : null;
 }
 

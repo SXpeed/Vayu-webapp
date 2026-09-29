@@ -55,14 +55,17 @@ carry a short reason, kept with it for your records.
 Enforced now: **employee seats** (atomically, tested under parallel requests)
 and **products / inventory items** (a create is refused at the limit).
 
-The **Roster** module is enforced too: switched off (by the plan, or for one
-organization with Organizations → Plan and limits → Roster), nobody in that
-organization can open it, admins included. The server refuses its routes
-(`403 module_off`) and `/auth/me` lists it in `sectionsOff`, so the app hides
-it. Who can browse or curate it is a per-role permission inside the app. The
-gate lives in `orgApp.ts` (`PLAN_GATED_SECTIONS`); the other modules are not
-gated there, because switching them on now would lock organizations out of
-screens they already use.
+The **Staff roster** module is enforced too: switched off by the plan (or by an
+entitlement override for one organization), nobody in that organization can
+open it, admins included. The server refuses its routes (`403 module_off`) and
+`/auth/me` lists it in `sectionsOff`, so the app hides it. Who can view or
+manage it is a per-role permission inside the app. The gate lives in
+`orgApp.ts` (`PLAN_GATED_SECTIONS`); the other modules are not gated there,
+because switching them on now would lock organizations out of screens they
+already use.
+
+The Showcase (curated sections, formerly "Roster") was removed on 2026-09-29,
+with its module and its saved data.
 
 Defined and stored, but not yet checked at write time: guest accounts (guest
 access does not exist yet), collections, catalogs, stores, customer records,

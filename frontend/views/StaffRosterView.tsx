@@ -7,7 +7,7 @@ import { Button, EmptyState, GhostIconButton, PageBody, PageHeader, PageRoot, Pr
 import { useAppChrome } from '../components/Layout';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { realtimeService } from '../services/realtimeService';
-import { staffRosterService, type StaffRosterData } from '../services/staffRosterService';
+import { staffRosterService, type StaffRosterData, type WeekInfo, type WeekStatus } from '../services/staffRosterService';
 import { addDays, defaultBreakMin, mondayOf, paidMin, weekDates, weekdayIdx, type StaffShift } from '../staffRosterRules';
 import { DayAgenda, PhoneWeek, WeekGrid } from './staffRoster/WeekViews';
 import { ByStoreView, MonthView, RequestsView } from './staffRoster/OtherViews';
@@ -27,6 +27,159 @@ const STATUS_CLS = {
     changed: 'sr-warn-box',
 } as const;
 
+type Tile = { Icon: React.ElementType; label: string; value: React.ReactNode; sub: string; alert?: boolean };
+
+/** The four figures above the roster: the team's week for managers, your own for everyone else. */
+function summaryTiles(manage: boolean, data: StaffRosterData | null, work: StaffShift[], openCount: number, pendingCount: number, me: string): Tile[] {
+    const open: Tile = { Icon: AlertTriangle, label: 'Open shifts', value: openCount, sub: openCount ? 'need someone' : 'all covered', alert: openCount > 0 };
+    if (!manage) {
+        const mine = work.filter(s => s.employeeId === me);
+        return [
+            { Icon: CalendarClock, label: 'Your shifts', value: mine.length, sub: 'this week' },
+            { Icon: Users, label: 'Your hours', value: hoursText(mine.reduce((a, s) => a + paidMin(s), 0)), sub: 'paid' },
+            open,
+            { Icon: Leaf, label: 'Your requests', value: pendingCount, sub: 'waiting' },
+        ];
+    }
+    const staffed = work.filter(s => s.employeeId);
+    return [
+        { Icon: Users, label: 'Staff scheduled', value: new Set(staffed.map(s => s.employeeId)).size, sub: `of ${data?.people.length ?? 0} · ${hoursText(staffed.reduce((a, s) => a + paidMin(s), 0))} h` },
+        { Icon: StoreIcon, label: 'Stores', value: data?.stores.length ?? 0, sub: data?.stores.map(s => s.name).slice(0, 3).join(', ') || 'none yet' },
+        open,
+        { Icon: Leaf, label: 'Pending leave', value: pendingCount, sub: pendingCount === 1 ? 'request' : 'requests' },
+    ];
+}
+
+/** Managers: the week's status (phones, where the badge is hidden) or what the page is for. Everyone else: when it was published. */
+function rosterSubtitle(manage: boolean, isPhone: boolean, status: WeekStatus, needCover: number, published: WeekInfo | undefined): string {
+    if (manage) {
+        // Phones hide the status badge, so the subtitle carries it there.
+        const cover = needCover ? needCover + ' to cover' : 'all covered';
+        return isPhone ? `${STATUS_TEXT[status]} · ${cover}` : 'Plan shifts and keep every store covered';
+    }
+    if (!published?.publishedAt) return 'This week isn’t published yet';
+    const by = published.publishedByName ? ' by ' + published.publishedByName : '';
+    return `Published ${new Date(published.publishedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}${by}`;
+}
+
+/** The view tabs, and moving through weeks (or months). */
+const RosterNav: React.FC<{ view: View; tabs: [View, string][]; weekStart: string; onView: (v: View) => void; onMove: (by: number) => void; onToday: () => void }> = ({ view, tabs: TABS, weekStart, onView, onMove, onToday }) => (
+    <div className="flex flex-wrap items-center gap-2">
+        <div className="flex gap-1 p-1 rounded-full neu-inset overflow-x-auto no-scrollbar max-w-full" role="tablist" aria-label="View">
+            {TABS.map(([k, label]) => (
+                <button key={k} type="button" role="tab" aria-selected={view === k} onClick={() => onView(k)}
+                    className={`shrink-0 rounded-full px-3.5 py-1.5 text-[12px] font-semibold whitespace-nowrap ${view === k ? 'neu-raised-sm text-gold-700 dark:text-gold-300' : 'text-[var(--neu-text-dim)]'}`}>
+                    {label}
+                </button>
+            ))}
+        </div>
+        {view !== 'requests' && (
+            <div className="flex items-center gap-1.5 ml-auto max-sm:w-full">
+                <button type="button" onClick={() => onMove(-1)} aria-label={view === 'month' ? 'Previous month' : 'Previous week'} className="neu-icon-btn-sm active-scale"><ChevronLeft size={15} /></button>
+                <span className="flex-1 sm:flex-none sm:min-w-[10.5rem] text-center text-[13px] font-semibold tabular-nums" aria-live="polite">{rangeLabel(weekStart)}</span>
+                <button type="button" onClick={() => onMove(1)} aria-label={view === 'month' ? 'Next month' : 'Next week'} className="neu-icon-btn-sm active-scale"><ChevronRight size={15} /></button>
+                <button type="button" onClick={onToday} className="neu-pill shrink-0">Today</button>
+            </div>
+        )}
+    </div>
+);
+
+const SummaryTiles: React.FC<{ tiles: Tile[] }> = ({ tiles }) => (
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
+            {tiles.map(t => (
+                <div key={t.label} className="neu-card p-3 lg:p-4">
+                    <div className="flex items-center gap-2 mb-1.5">
+                        <t.Icon size={14} className="text-gold-500 shrink-0" />
+                        <span className="text-[10.5px] font-semibold uppercase tracking-widest text-gray-700 dark:text-gray-300 truncate">{t.label}</span>
+                    </div>
+                    <p className={`text-xl lg:text-2xl font-serif tabular-nums ${'alert' in t && t.alert ? 'sr-bad-text' : 'text-gray-900 dark:text-white'}`}>
+                        {t.value}<span className="ml-1.5 font-sans text-[11.5px] text-[var(--neu-text-dim)]">{t.sub}</span>
+                    </p>
+                </div>
+            ))}
+        </div>
+    </div>
+);
+
+/** Store, role and name filters, and (on the week) the week / day layout. */
+const RosterFilters: React.FC<{
+    view: View; filters: Filters; stores: { id: string; name: string }[]; titles: string[]; layout: 'grid' | 'day';
+    onFilters: (patch: Partial<Filters>) => void; onLayout: (l: 'grid' | 'day') => void;
+}> = ({ view, filters, stores, titles, layout, onFilters, onLayout }) => (
+    <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+            <label className="sr-only" htmlFor="sr-store">Store</label>
+            <Select id="sr-store" value={filters.storeId} onChange={e => onFilters({ storeId: e.target.value })} className="!w-auto !rounded-full !py-2 flex-1 sm:flex-none min-w-[8rem]">
+                <option value="all">All stores</option>
+                {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </Select>
+            <label className="sr-only" htmlFor="sr-title">Role</label>
+            <Select id="sr-title" value={filters.title} onChange={e => onFilters({ title: e.target.value })} className="!w-auto !rounded-full !py-2 flex-1 sm:flex-none min-w-[8rem]">
+                <option value="all">All roles</option>
+                {titles.map(t => <option key={t} value={t}>{t}</option>)}
+            </Select>
+            <SearchBar value={filters.q} onChange={q => onFilters({ q })} placeholder="Search people" className="flex-[1_1_12rem] sm:max-w-xs" />
+            {view === 'week' && (
+                <div className="flex gap-1 p-1 rounded-full neu-inset ml-auto" role="group" aria-label="Week layout">
+                    {(['grid', 'day'] as const).map(k => (
+                        <button key={k} type="button" aria-pressed={layout === k} onClick={() => onLayout(k)}
+                            className={`rounded-full px-3 py-1 text-[12px] ${layout === k ? 'neu-raised-sm text-gold-700 dark:text-gold-300 font-semibold' : 'text-[var(--neu-text-dim)]'}`}>
+                            {k === 'grid' ? 'Week' : 'Day'}
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    </div>
+);
+
+/** The store colours and marks, whether every shift is covered, and the publishing notice switch. */
+const RosterLegend: React.FC<{
+    stores: { id: string; name: string }[]; storeClass: (id: string) => string; needCover: number; manage: boolean; status: WeekStatus;
+    notify: boolean; onNotify: (v: boolean) => void; onReviewOpen: () => void;
+}> = ({ stores, storeClass, needCover, manage, status, notify, onNotify, onReviewOpen }) => (
+    <div className="neu-card p-3.5 flex flex-wrap items-center gap-x-5 gap-y-3 text-[12px]">
+        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1.5 text-[var(--neu-text-dim)]" aria-label="Legend">
+            {stores.map(s => (
+                <span key={s.id} className="inline-flex items-center gap-1.5"><i className={`w-5 h-3.5 rounded border ${storeClass(s.id)}`} aria-hidden="true" />{s.name}</span>
+            ))}
+            <span className="inline-flex items-center gap-1.5"><i className="w-5 h-3.5 rounded border sr-leave" aria-hidden="true" />Approved leave</span>
+            <span className="inline-flex items-center gap-1.5"><i className="w-5 h-3.5 rounded border sr-pending" aria-hidden="true" />Leave requested</span>
+            <span className="inline-flex items-center gap-1.5"><i className="w-5 h-3.5 rounded border sr-off" aria-hidden="true" />Day off</span>
+            <span className="inline-flex items-center gap-1.5"><i className="w-5 h-3.5 rounded border-[1.5px] sr-open" aria-hidden="true" />Open shift</span>
+        </div>
+        <div className="flex items-center gap-2">
+            <strong className={needCover ? 'sr-open-text' : 'text-green-700 dark:text-green-400'}>
+                {needCover ? coverNote(needCover) : 'Every shift is covered'}
+            </strong>
+            {manage && needCover > 0 && <button type="button" onClick={onReviewOpen} className="text-[11px] font-semibold uppercase tracking-wider text-gold-700 dark:text-gold-300 active-scale">Review open shifts</button>}
+        </div>
+        {manage && (
+            <span className="inline-flex items-center gap-2 text-[var(--neu-text-dim)]"><Toggle checked={notify} onChange={() => onNotify(!notify)} label="Notify staff when publishing" />Notify staff when publishing</span>
+        )}
+        <p className="basis-full text-[11.5px] text-[var(--neu-text-dim)]">
+            {manage ? <>Status: <strong className="text-[var(--neu-text)]">{STATUS_TEXT[status]}</strong>. </> : null}
+            Hours are paid hours: shift length minus the unpaid break (60 min on shifts of 6 hours or more, else 30 min, unless changed). Weeks over 48 paid hours are marked.
+        </p>
+    </div>
+);
+
+type Common = Parameters<typeof WeekGrid>[0];
+
+/** The roster in the chosen view. */
+const RosterBody: React.FC<{
+    view: View; layout: 'grid' | 'day'; isPhone: boolean; common: Common; dayIdx: number; weekStart: string;
+    onDay: (i: number) => void; onOpenDay: (i: number) => void; onPickDay: (date: string) => void; onChanged: () => void; onReview: () => void;
+}> = ({ view, layout, isPhone, common, dayIdx, weekStart, onDay, onOpenDay, onPickDay, onChanged, onReview }) => {
+    const { data, d, filters, onEdit, onNew } = common;
+    if (view === 'month') return <MonthView data={data} d={d} monthOf={addDays(weekStart, 3)} filters={filters} onPickDay={onPickDay} />;
+    if (view === 'store') return <ByStoreView data={data} d={d} weekStart={weekStart} filters={filters} onEdit={onEdit} onNew={onNew} />;
+    if (view === 'requests') return <RequestsView data={data} d={d} onChanged={onChanged} onReview={onReview} />;
+    if (layout === 'day') return <DayAgenda {...common} dayIdx={dayIdx} onDay={onDay} />;
+    return isPhone ? <PhoneWeek {...common} onOpenDay={onOpenDay} /> : <WeekGrid {...common} />;
+};
+
 /** First and last day to load: the week, or the whole month grid around it. */
 function rangeFor(view: View, weekStart: string): [string, string] {
     if (view !== 'month') return [weekStart, addDays(weekStart, 6)];
@@ -42,6 +195,8 @@ function rangeFor(view: View, weekStart: string): [string, string] {
  * shifts and days off, decide on leave and publish each week; everyone else
  * sees the published weeks and can ask for leave.
  */
+
+const coverNote = (n: number): string => (n > 1 ? `${n} shifts need coverage` : `${n} shift needs coverage`);
 export const StaffRosterView: React.FC = () => {
     const { can, navigate } = useAppChrome();
     const isPhone = useMediaQuery('(max-width: 767px)');
@@ -85,7 +240,7 @@ export const StaffRosterView: React.FC = () => {
     const manage = !!data?.canManage;
     const week = useMemo(() => (data ? data.shifts.filter(s => inWeek(s, weekStart)) : []), [data, weekStart]);
     const status = data?.weeks[weekStart]?.status ?? 'draft';
-    const titles = useMemo(() => [...new Set((data?.people ?? []).map(p => p.title).filter(Boolean))].sort(), [data]);
+    const titles = useMemo(() => [...new Set((data?.people ?? []).map(p => p.title).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [data]);
 
     // ── Actions ──────────────────────────────────────────────────────────
     const done = () => { setOverlay(null); void load(); };
@@ -121,21 +276,9 @@ export const StaffRosterView: React.FC = () => {
     const openCount = work.filter(s => !s.employeeId).length;
     const leaveHits = data && d ? week.filter(s => (d.conflicts.get(s.id) ?? []).some(c => c.type === 'leave')).length : 0;
     const needCover = openCount + leaveHits;
-    const needCoverLabel = () => (needCover ? `${needCover} to cover` : 'all covered');
     const pendingCount = data ? data.leaves.filter(l => l.status === 'pending' && (manage || l.employeeId === data.me)).length : 0;
-    const myWork = work.filter(s => s.employeeId === data?.me);
 
-    const tiles = manage ? [
-        { Icon: Users, label: 'Staff scheduled', value: new Set(work.filter(s => s.employeeId).map(s => s.employeeId)).size, sub: `of ${data?.people.length ?? 0} · ${hoursText(work.filter(s => s.employeeId).reduce((a, s) => a + paidMin(s), 0))} h` },
-        { Icon: StoreIcon, label: 'Stores', value: data?.stores.length ?? 0, sub: data?.stores.map(s => s.name).slice(0, 3).join(', ') || 'none yet' },
-        { Icon: AlertTriangle, label: 'Open shifts', value: openCount, sub: openCount ? 'need someone' : 'all covered', alert: openCount > 0 },
-        { Icon: Leaf, label: 'Pending leave', value: pendingCount, sub: pendingCount === 1 ? 'request' : 'requests' },
-    ] : [
-        { Icon: CalendarClock, label: 'Your shifts', value: myWork.length, sub: 'this week' },
-        { Icon: Users, label: 'Your hours', value: hoursText(myWork.reduce((a, s) => a + paidMin(s), 0)), sub: 'paid' },
-        { Icon: AlertTriangle, label: 'Open shifts', value: openCount, sub: openCount ? 'need someone' : 'all covered', alert: openCount > 0 },
-        { Icon: Leaf, label: 'Your requests', value: pendingCount, sub: 'waiting' },
-    ];
+    const tiles = summaryTiles(manage, data, work, openCount, pendingCount, data?.me ?? '');
 
     const csv = () => {
         if (!data || !d) return '';
@@ -145,33 +288,17 @@ export const StaffRosterView: React.FC = () => {
 
     // ── Layout ───────────────────────────────────────────────────────────
     const TABS: [View, string][] = [['week', 'Week'], ['month', 'Month'], ['store', 'By store'], ['requests', pendingCount ? `Requests (${pendingCount})` : 'Requests']];
-    const publishedInfo = data?.weeks[weekStart];
-    // Phones hide the status badge, so the subtitle carries it there.
-    let subtitle = isPhone ? `${STATUS_TEXT[status]} · ${needCoverLabel()}` : 'Plan shifts and keep every store covered';
-    if (!manage) {
-        subtitle = publishedInfo?.publishedAt
-            ? `Published ${new Date(publishedInfo.publishedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}${publishedInfo.publishedByName ? ` by ${publishedInfo.publishedByName}` : ''}`
-            : 'This week isn’t published yet';
-    }
+    const subtitle = rosterSubtitle(manage, isPhone, status, needCover, data?.weeks[weekStart]);
 
-    let body: React.ReactNode;
+    const common = data && d ? { data, d, dates, filters, onEdit: manage ? edit : undefined, onNew: manage ? newShift : undefined } : null;
+    const openDayView = (date: string) => { setWeekStart(mondayOf(date)); setDayIdx(weekdayIdx(date)); setView('week'); setLayout('day'); };
+    let body: React.ReactNode = <div className="py-20 flex justify-center text-[var(--neu-text-dim)]"><Loader2 size={22} className="animate-spin" /></div>;
     if (error && !data) {
         body = <EmptyState icon={<CalendarClock size={22} strokeWidth={1.5} />} title="The roster didn’t load" message={error} action={<Button onClick={() => { void load(); }}>Try again</Button>} />;
-    } else if (!data || !d) {
-        body = <div className="py-20 flex justify-center text-[var(--neu-text-dim)]"><Loader2 size={22} className="animate-spin" /></div>;
-    } else {
-        const common = { data, d, dates, filters, onEdit: manage ? edit : undefined, onNew: manage ? newShift : undefined };
-        if (view === 'week') {
-            if (layout === 'day') body = <DayAgenda {...common} dayIdx={dayIdx} onDay={setDayIdx} />;
-            else if (isPhone) body = <PhoneWeek {...common} onOpenDay={i => { setDayIdx(i); setLayout('day'); }} />;
-            else body = <WeekGrid {...common} />;
-        } else if (view === 'month') {
-            body = <MonthView data={data} d={d} monthOf={addDays(weekStart, 3)} filters={filters} onPickDay={date => { setWeekStart(mondayOf(date)); setDayIdx(weekdayIdx(date)); setView('week'); setLayout('day'); }} />;
-        } else if (view === 'store') {
-            body = <ByStoreView data={data} d={d} weekStart={weekStart} filters={filters} onEdit={manage ? edit : undefined} onNew={manage ? newShift : undefined} />;
-        } else {
-            body = <RequestsView data={data} d={d} onChanged={() => { void load(); }} onReview={() => { setView('week'); setOverlay({ kind: 'open' }); }} />;
-        }
+    } else if (common) {
+        body = <RosterBody view={view} layout={layout} isPhone={isPhone} common={common} dayIdx={dayIdx} weekStart={weekStart}
+            onDay={setDayIdx} onOpenDay={i => { setDayIdx(i); setLayout('day'); }} onPickDay={openDayView}
+            onChanged={() => { void load(); }} onReview={() => { setView('week'); setOverlay({ kind: 'open' }); }} />;
     }
 
     return (
@@ -190,24 +317,7 @@ export const StaffRosterView: React.FC = () => {
                     </>
                 ) : undefined}
             >
-                <div className="flex flex-wrap items-center gap-2">
-                    <div className="flex gap-1 p-1 rounded-full neu-inset overflow-x-auto no-scrollbar max-w-full" role="tablist" aria-label="View">
-                        {TABS.map(([k, label]) => (
-                            <button key={k} type="button" role="tab" aria-selected={view === k} onClick={() => setView(k)}
-                                className={`shrink-0 rounded-full px-3.5 py-1.5 text-[12px] font-semibold whitespace-nowrap ${view === k ? 'neu-raised-sm text-gold-700 dark:text-gold-300' : 'text-[var(--neu-text-dim)]'}`}>
-                                {label}
-                            </button>
-                        ))}
-                    </div>
-                    {view !== 'requests' && (
-                        <div className="flex items-center gap-1.5 ml-auto max-sm:w-full">
-                            <button type="button" onClick={() => moveWeek(-1)} aria-label={view === 'month' ? 'Previous month' : 'Previous week'} className="neu-icon-btn-sm active-scale"><ChevronLeft size={15} /></button>
-                            <span className="flex-1 sm:flex-none sm:min-w-[10.5rem] text-center text-[13px] font-semibold tabular-nums" aria-live="polite">{rangeLabel(weekStart)}</span>
-                            <button type="button" onClick={() => moveWeek(1)} aria-label={view === 'month' ? 'Next month' : 'Next week'} className="neu-icon-btn-sm active-scale"><ChevronRight size={15} /></button>
-                            <button type="button" onClick={goToday} className="neu-pill shrink-0">Today</button>
-                        </div>
-                    )}
-                </div>
+                <RosterNav view={view} tabs={TABS} weekStart={weekStart} onView={setView} onMove={moveWeek} onToday={goToday} />
             </PageHeader>
 
             <PageBody space="lg">
@@ -219,75 +329,18 @@ export const StaffRosterView: React.FC = () => {
                     </div>
                 )}
 
-                {view !== 'requests' && (
-                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
-                        {tiles.map(t => (
-                            <div key={t.label} className="neu-card p-3 lg:p-4">
-                                <div className="flex items-center gap-2 mb-1.5">
-                                    <t.Icon size={14} className="text-gold-500 shrink-0" />
-                                    <span className="text-[10.5px] font-semibold uppercase tracking-widest text-gray-700 dark:text-gray-300 truncate">{t.label}</span>
-                                </div>
-                                <p className={`text-xl lg:text-2xl font-serif tabular-nums ${'alert' in t && t.alert ? 'sr-bad-text' : 'text-gray-900 dark:text-white'}`}>
-                                    {t.value}<span className="ml-1.5 font-sans text-[11.5px] text-[var(--neu-text-dim)]">{t.sub}</span>
-                                </p>
-                            </div>
-                        ))}
-                    </div>
-                )}
+                {view !== 'requests' && <SummaryTiles tiles={tiles} />}
 
                 {view !== 'requests' && view !== 'month' && (
-                    <div className="flex flex-wrap items-center gap-2">
-                        <label className="sr-only" htmlFor="sr-store">Store</label>
-                        <Select id="sr-store" value={filters.storeId} onChange={e => setFilters(f => ({ ...f, storeId: e.target.value }))} className="!w-auto !rounded-full !py-2 flex-1 sm:flex-none min-w-[8rem]">
-                            <option value="all">All stores</option>
-                            {data?.stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                        </Select>
-                        <label className="sr-only" htmlFor="sr-title">Role</label>
-                        <Select id="sr-title" value={filters.title} onChange={e => setFilters(f => ({ ...f, title: e.target.value }))} className="!w-auto !rounded-full !py-2 flex-1 sm:flex-none min-w-[8rem]">
-                            <option value="all">All roles</option>
-                            {titles.map(t => <option key={t} value={t}>{t}</option>)}
-                        </Select>
-                        <SearchBar value={filters.q} onChange={q => setFilters(f => ({ ...f, q }))} placeholder="Search people" className="flex-[1_1_12rem] sm:max-w-xs" />
-                        {view === 'week' && (
-                            <div className="flex gap-1 p-1 rounded-full neu-inset ml-auto" role="group" aria-label="Week layout">
-                                {(['grid', 'day'] as const).map(k => (
-                                    <button key={k} type="button" aria-pressed={layout === k} onClick={() => setLayout(k)}
-                                        className={`rounded-full px-3 py-1 text-[12px] ${layout === k ? 'neu-raised-sm text-gold-700 dark:text-gold-300 font-semibold' : 'text-[var(--neu-text-dim)]'}`}>
-                                        {k === 'grid' ? 'Week' : 'Day'}
-                                    </button>
-                                ))}
-                            </div>
-                        )}
-                    </div>
+                    <RosterFilters view={view} filters={filters} stores={data?.stores ?? []} titles={titles} layout={layout}
+                        onFilters={patch => setFilters(f => ({ ...f, ...patch }))} onLayout={setLayout} />
                 )}
 
                 {body}
 
-                {data && view !== 'requests' && (
-                    <div className="neu-card p-3.5 flex flex-wrap items-center gap-x-5 gap-y-3 text-[12px]">
-                        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1.5 text-[var(--neu-text-dim)]" aria-label="Legend">
-                            {data.stores.map(s => (
-                                <span key={s.id} className="inline-flex items-center gap-1.5"><i className={`w-5 h-3.5 rounded border ${d?.storeClass(s.id)}`} aria-hidden="true" />{s.name}</span>
-                            ))}
-                            <span className="inline-flex items-center gap-1.5"><i className="w-5 h-3.5 rounded border sr-leave" aria-hidden="true" />Approved leave</span>
-                            <span className="inline-flex items-center gap-1.5"><i className="w-5 h-3.5 rounded border sr-pending" aria-hidden="true" />Leave requested</span>
-                            <span className="inline-flex items-center gap-1.5"><i className="w-5 h-3.5 rounded border sr-off" aria-hidden="true" />Day off</span>
-                            <span className="inline-flex items-center gap-1.5"><i className="w-5 h-3.5 rounded border-[1.5px] sr-open" aria-hidden="true" />Open shift</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <strong className={needCover ? 'sr-open-text' : 'text-green-700 dark:text-green-400'}>
-                                {needCover ? `${needCover} shift${needCover > 1 ? 's' : ''} need${needCover > 1 ? '' : 's'} coverage` : 'Every shift is covered'}
-                            </strong>
-                            {manage && needCover > 0 && <button type="button" onClick={() => setOverlay({ kind: 'open' })} className="text-[11px] font-semibold uppercase tracking-wider text-gold-700 dark:text-gold-300 active-scale">Review open shifts</button>}
-                        </div>
-                        {manage && (
-                            <span className="inline-flex items-center gap-2 text-[var(--neu-text-dim)]"><Toggle checked={notify} onChange={() => setNotify(!notify)} label="Notify staff when publishing" />Notify staff when publishing</span>
-                        )}
-                        <p className="basis-full text-[11.5px] text-[var(--neu-text-dim)]">
-                            {manage ? <>Status: <strong className="text-[var(--neu-text)]">{STATUS_TEXT[status]}</strong>. </> : null}
-                            Hours are paid hours: shift length minus the unpaid break (60 min on shifts of 6 hours or more, else 30 min, unless changed). Weeks over 48 paid hours are marked.
-                        </p>
-                    </div>
+                {data && d && view !== 'requests' && (
+                    <RosterLegend stores={data.stores} storeClass={d.storeClass} needCover={needCover} manage={manage} status={status}
+                        notify={notify} onNotify={setNotify} onReviewOpen={() => setOverlay({ kind: 'open' })} />
                 )}
             </PageBody>
 

@@ -250,7 +250,7 @@ export class OrgStore extends DurableObject<Env> {
    * Timestamps follow the record's own created_at, so imported history keeps
    * its dates instead of jumping to today.
    */
-  private static fillFor(name: string, meta: { type: string }, row: Record<string, unknown>): SqlStorageValue {
+  private static fillFor(name: string, meta: { type: string }, row: Record<string, unknown>): SqlStorageValue { // NOSONAR: a column default is a number or text, by its type
     if (name === 'version') return 1;
     if (name.endsWith('_at')) return (typeof row.created_at === 'number' ? row.created_at : Date.now()) as number;
     if (meta.type.includes('INT') || meta.type.includes('REAL') || meta.type.includes('NUM')) return 0;
@@ -273,27 +273,41 @@ export class OrgStore extends DurableObject<Env> {
     let inserted = 0;
     let alreadyThere = 0;
     for (const row of rows) {
-      const values = new Map<string, SqlStorageValue>();
-      for (const [name, meta] of columns) {
-        if (name in row && row[name] !== undefined) values.set(name, row[name] as SqlStorageValue);
-        else if (meta.notNull && !meta.hasDefault) values.set(name, OrgStore.fillFor(name, meta, row));
-      }
-      if (values.size === 0) continue;
-      const names = [...values.keys()];
-      try {
-        sql.exec(
-          `INSERT INTO ${table} (${names.map(c => `"${c}"`).join(', ')}) VALUES (${names.map(() => '?').join(', ')})`,
-          ...names.map(c => values.get(c) as SqlStorageValue),
-        );
-        inserted += 1;
-      } catch (e) {
-        // Only "this row is already here" is expected; anything else (a
-        // missing column, a bad value) must be visible, not swallowed.
-        if (/UNIQUE constraint failed/i.test(String((e as Error)?.message ?? e))) alreadyThere += 1;
-        else throw new OrgStoreError('invalid', `Importing into ${table} failed: ${(e as Error)?.message ?? e}`);
-      }
+      const outcome = this.importRow(sql, table, columns, row);
+      if (outcome === 'inserted') inserted += 1;
+      else if (outcome === 'already') alreadyThere += 1;
     }
     return { inserted, alreadyThere };
+  }
+
+  /** The row's values, with required columns it lacks filled in. */
+  private static rowValues(columns: Map<string, { type: string; notNull: boolean; hasDefault: boolean }>, row: Record<string, unknown>): Map<string, SqlStorageValue> {
+    const values = new Map<string, SqlStorageValue>();
+    for (const [name, meta] of columns) {
+      if (name in row && row[name] !== undefined) values.set(name, row[name] as SqlStorageValue);
+      else if (meta.notNull && !meta.hasDefault) values.set(name, OrgStore.fillFor(name, meta, row));
+    }
+    return values;
+  }
+
+  /**
+   * Inserts one row. Only "this row is already here" is expected; anything
+   * else (a missing column, a bad value) must be visible, not swallowed.
+   */
+  private importRow(sql: SqlStorage, table: string, columns: Map<string, { type: string; notNull: boolean; hasDefault: boolean }>, row: Record<string, unknown>): 'inserted' | 'already' | 'empty' {
+    const values = OrgStore.rowValues(columns, row);
+    if (values.size === 0) return 'empty';
+    const names = [...values.keys()];
+    try {
+      sql.exec(
+        `INSERT INTO ${table} (${names.map(c => '"' + c + '"').join(', ')}) VALUES (${names.map(() => '?').join(', ')})`,
+        ...names.map(c => values.get(c) as SqlStorageValue),
+      );
+      return 'inserted';
+    } catch (e) {
+      if (/UNIQUE constraint failed/i.test(String((e as Error)?.message ?? e))) return 'already';
+      throw new OrgStoreError('invalid', `Importing into ${table} failed: ${(e as Error)?.message ?? e}`);
+    }
   }
 
   /** Row counts per table, for verifying an import. */

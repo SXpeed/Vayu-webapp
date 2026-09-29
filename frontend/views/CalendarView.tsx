@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { CalendarEvent } from '../types';
 import { apiCall } from '../services/apiClient';
-import { eventColor } from '../services/eventService';
+import { eventColor, eventTimeLabel } from '../services/eventService';
 import { ChevronLeft, ChevronRight, ChevronDown, X, CalendarDays } from 'lucide-react';
 import { PageRoot, PageHeader, Button } from '../components/ui';
 
@@ -42,6 +42,18 @@ function buildMonthGrid(year: number, month: number): Array<CalendarCell | null>
     return cells;
 }
 
+
+/** A day cell's background: chosen, today (its own look per view), or plain. */
+function dayCellClass(selected: boolean, today: boolean, todayClass: string): string {
+    if (selected) return 'bg-gold-500/15 ring-1 ring-gold-500/70';
+    return today ? todayClass : 'neu-hoverable';
+}
+
+/** A day number's colour: holidays in red, today in bold. */
+function dayNumberClass(holiday: boolean, today: boolean, plainClass: string): string {
+    if (holiday) return 'text-red-600 dark:text-red-400';
+    return today ? 'text-brand-900 dark:text-gold-400 font-bold' : plainClass;
+}
 export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) => {
     const today = useMemo(() => new Date(), []);
     const [viewYear, setViewYear] = useState(today.getFullYear());
@@ -196,20 +208,16 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) =>
                     const isTodayCell = isToday(cell.date);
                     const holiday = holidayOn(cell.date);
                     const dayEvents = eventsOnDay(cell.date);
-                    const selectedCls = isSelected
-                        ? 'bg-gold-500/15 ring-1 ring-gold-500/70'
-                        : isTodayCell
-                            ? 'neu-inset ring-1 ring-gray-300/70 dark:ring-gray-600/70'
-                            : 'neu-hoverable';
+                    const selectedCls = dayCellClass(isSelected, isTodayCell, 'neu-inset ring-1 ring-gray-300/70 dark:ring-gray-600/70');
                     return (
                         <button
                             key={dayKey(cell.date)}
                             type="button"
                             onClick={() => setSelectedDate(dayStart)}
-                            aria-label={`${cell.date.getDate()} ${MONTHS[viewMonth]}${holiday ? `, ${holiday}` : ''}${dayEvents.length ? `, ${dayEvents.length} event(s)` : ''}`}
+                            aria-label={`${cell.date.getDate()} ${MONTHS[viewMonth]}${holiday ? ', ' + holiday : ''}${dayEvents.length ? ', ' + dayEvents.length + ' event(s)' : ''}`}
                             className={`aspect-square w-full flex flex-col items-center justify-start pt-[3px] rounded-lg transition-colors ${selectedCls}`}
                         >
-                            <span className={`text-[11px] leading-none font-medium ${holiday ? 'text-red-600 dark:text-red-400' : isTodayCell ? 'text-brand-900 dark:text-gold-400 font-bold' : 'text-gray-900 dark:text-gray-100'}`}>
+                            <span className={`text-[11px] leading-none font-medium ${dayNumberClass(!!holiday, isTodayCell, 'text-gray-900 dark:text-gray-100')}`}>
                                 {cell.date.getDate()}
                             </span>
                             {holiday && (
@@ -297,26 +305,22 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) =>
                                                     key={dayKey(cell.date)}
                                                     type="button"
                                                     onClick={() => setSelectedDate(dayStart)}
-                                                    aria-label={`${cell.date.getDate()} ${MONTHS[m]}${holiday ? `, ${holiday}` : ''}${dayEvents.length ? `, ${dayEvents.length} event(s)` : ''}`}
-                                                    className={`h-6 rounded-[3px] flex flex-col items-center justify-center transition-colors ${isSel
-                                                        ? 'bg-gold-500/15 ring-1 ring-gold-500/70'
-                                                        : isTodayCell
-                                                            ? 'neu-inset'
-                                                            : 'neu-hoverable'
-                                                        }`}
+                                                    aria-label={`${cell.date.getDate()} ${MONTHS[m]}${holiday ? ', ' + holiday : ''}${dayEvents.length ? ', ' + dayEvents.length + ' event(s)' : ''}`}
+                                                    className={`h-6 rounded-[3px] flex flex-col items-center justify-center transition-colors ${dayCellClass(isSel, isTodayCell, 'neu-inset')}`}
                                                 >
-                                                    <span className={`text-[9px] leading-none font-medium ${holiday ? 'text-red-600 dark:text-red-400' : isTodayCell ? 'text-brand-900 dark:text-gold-400 font-bold' : 'text-gray-800 dark:text-gray-200'}`}>
+                                                    <span className={`text-[9px] leading-none font-medium ${dayNumberClass(!!holiday, isTodayCell, 'text-gray-800 dark:text-gray-200')}`}>
                                                         {cell.date.getDate()}
                                                     </span>
-                                                    {dayEvents.length > 0 ? (
+                                                    {dayEvents.length > 0 && (
                                                         <span className="flex items-center gap-[1px] mt-[1px]">
                                                             {dayEvents.slice(0, 3).map(ev => (
                                                                 <span key={ev.id} className="w-[3px] h-[3px] rounded-full" style={{ backgroundColor: eventColor(ev) }} />
                                                             ))}
                                                         </span>
-                                                    ) : holiday ? (
+                                                    )}
+{dayEvents.length === 0 && !!holiday && (
                                                         <span className="w-[3px] h-[3px] rounded-full bg-red-500 mt-[1px]" />
-                                                    ) : null}
+                                                    )}
                                                 </button>
                                             );
                                         })}
@@ -363,9 +367,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) =>
                                     <p className="text-[11px] text-gray-700 dark:text-gray-300 uppercase tracking-wider mt-0.5">
                                         {isRange
                                             ? fmtRange(selectedDate, ev)
-                                            : (new Date(ev.date).getHours() === 0 && new Date(ev.date).getMinutes() === 0
-                                                ? 'All day'
-                                                : new Date(ev.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}
+                                            : eventTimeLabel(ev.date)}
                                         {ev.createdByName ? ` • by ${ev.createdByName}` : ''}
                                     </p>
                                 </div>
@@ -433,15 +435,10 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) =>
                                         key={dayKey(cell.date)}
                                         type="button"
                                         onClick={() => setSelectedDate(dayStart)}
-                                        aria-label={`${cell.date.getDate()} ${MONTHS[openMonth]}${holiday ? `, ${holiday}` : ''}${dayEvents.length ? `, ${dayEvents.length} event(s)` : ''}`}
-                                        className={`aspect-square w-full flex flex-col items-center justify-start pt-1.5 rounded-xl transition-colors ${isSel
-                                            ? 'bg-gold-500/15 ring-1 ring-gold-500/70'
-                                            : isTodayCell
-                                                ? 'neu-inset ring-1 ring-gray-300/70 dark:ring-gray-600/70'
-                                                : 'neu-hoverable'
-                                            }`}
+                                        aria-label={`${cell.date.getDate()} ${MONTHS[openMonth]}${holiday ? ', ' + holiday : ''}${dayEvents.length ? ', ' + dayEvents.length + ' event(s)' : ''}`}
+                                        className={`aspect-square w-full flex flex-col items-center justify-start pt-1.5 rounded-xl transition-colors ${dayCellClass(isSel, isTodayCell, 'neu-inset ring-1 ring-gray-300/70 dark:ring-gray-600/70')}`}
                                     >
-                                        <span className={`text-sm leading-none font-medium ${holiday ? 'text-red-600 dark:text-red-400' : isTodayCell ? 'text-brand-900 dark:text-gold-400 font-bold' : 'text-gray-900 dark:text-gray-100'}`}>
+                                        <span className={`text-sm leading-none font-medium ${dayNumberClass(!!holiday, isTodayCell, 'text-gray-900 dark:text-gray-100')}`}>
                                             {cell.date.getDate()}
                                         </span>
                                         {holiday && (

@@ -42,6 +42,47 @@ const MAX_PAGES_PER_RUN = 50;
 /** After a 404 the flag may be switched on later; look again after this. */
 const UNAVAILABLE_RETRY_MS = 30 * 60_000;
 
+/**
+ * Takes a full copy: the boundary cursor first, so changes made meanwhile
+ * are picked up by the next incremental pass. Gives that cursor (saved), or
+ * why the run ends (offline, or the account changed meanwhile).
+ */
+async function takeFullCopy(options: DeltaSyncOptions): Promise<{ cursor: number } | 'unavailable' | 'stale'> {
+    const boundary = await options.fetchPage(null);
+    if (boundary === null) return 'unavailable';
+    if (!options.isCurrent()) return 'stale';
+    await options.fullLoad();
+    if (!options.isCurrent()) return 'stale';
+    options.saveCursor(boundary.cursor);
+    return { cursor: boundary.cursor };
+}
+
+/** Applies one page of changes and saves its cursor: the outcome when the run is over, null to fetch the next page. */
+async function applyPage(options: DeltaSyncOptions, page: SyncPage): Promise<SyncOutcome | null> {
+    const changes = page.changes ?? [];
+    if (changes.length) await options.applyChanges(changes);
+    if (!options.isCurrent()) return 'stale';
+    options.saveCursor(page.cursor);
+    return page.hasMore ? null : 'synced';
+}
+
+/**
+ * One fetched page: the outcome when the run ends, else the cursor to go on
+ * from. A rejected cursor takes a full copy, once per run.
+ */
+async function handlePage(options: DeltaSyncOptions, page: SyncPage | null, resynced: boolean): Promise<{ outcome: SyncOutcome } | { cursor: number; resynced: boolean }> {
+    if (page === null) return { outcome: 'unavailable' };
+    if (!options.isCurrent()) return { outcome: 'stale' };
+    if (!page.resyncRequired) {
+        const outcome = await applyPage(options, page);
+        return outcome ? { outcome } : { cursor: page.cursor, resynced };
+    }
+    options.clearCursor();
+    if (resynced) throw new Error('Sync cursor rejected twice in one run');
+    const copy = await takeFullCopy(options);
+    return typeof copy === 'string' ? { outcome: copy } : { cursor: copy.cursor, resynced: true };
+}
+
 export function createDeltaSync(options: DeltaSyncOptions, now: () => number = Date.now) {
     let inFlight: Promise<SyncOutcome> | null = null;
     let again = false;
@@ -52,40 +93,16 @@ export function createDeltaSync(options: DeltaSyncOptions, now: () => number = D
         let cursor = options.loadCursor();
         let resynced = false;
 
-        const takeFullCopy = async (): Promise<SyncOutcome | null> => {
-            const boundary = await options.fetchPage(null);
-            if (boundary === null) return 'unavailable';
-            if (!options.isCurrent()) return 'stale';
-            await options.fullLoad();
-            if (!options.isCurrent()) return 'stale';
-            cursor = boundary.cursor;
-            options.saveCursor(cursor);
-            return null;
-        };
-
         if (cursor === null) {
-            const outcome = await takeFullCopy();
-            if (outcome) return outcome;
+            const copy = await takeFullCopy(options);
+            if (typeof copy === 'string') return copy;
+            cursor = copy.cursor;
         }
 
         for (let pages = 0; pages < MAX_PAGES_PER_RUN; pages++) {
-            const page = await options.fetchPage(cursor);
-            if (page === null) return 'unavailable';
-            if (!options.isCurrent()) return 'stale';
-            if (page.resyncRequired) {
-                options.clearCursor();
-                if (resynced) throw new Error('Sync cursor rejected twice in one run');
-                resynced = true;
-                const outcome = await takeFullCopy();
-                if (outcome) return outcome;
-                continue;
-            }
-            const changes = page.changes ?? [];
-            if (changes.length) await options.applyChanges(changes);
-            if (!options.isCurrent()) return 'stale';
-            cursor = page.cursor;
-            options.saveCursor(cursor);
-            if (!page.hasMore) return 'synced';
+            const step = await handlePage(options, await options.fetchPage(cursor), resynced);
+            if ('outcome' in step) return step.outcome;
+            ({ cursor, resynced } = step);
         }
         return 'synced'; // the next run continues from the saved cursor
     };

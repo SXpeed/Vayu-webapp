@@ -27,7 +27,7 @@ type Dataset = 'artworks' | 'messages' | 'collections' | 'catalogs' | 'inquiries
  * would refuse.
  */
 const DATASET_READERS: Record<Dataset, SectionId[]> = {
-    artworks: ['inventory', 'collections', 'catalogs', 'roster', 'inquiries', 'invoices', 'sales'],
+    artworks: ['inventory', 'collections', 'catalogs', 'inquiries', 'invoices', 'sales'],
     messages: ['messages'],
     collections: ['collections'],
     catalogs: ['catalogs'],
@@ -80,6 +80,22 @@ const whenAllowed = <T,>(allowed: boolean, load: () => Promise<T[]>): Promise<T[
  * inquiries, conversations, messages, inquiryMessages, teamMembers),
  * loadData, D1 migration, BroadcastChannel sync, and polling effects.
  */
+/** Not yet synced on this device: its invoices may exist only here. */
+function firstInvoiceSync(): boolean {
+    try { return !localStorage.getItem(INVOICES_MIGRATED_KEY); } catch { return false; }
+}
+
+/** Uploads the invoices only this device has; gives back the ones the server took. */
+async function uploadDeviceOnlyInvoices(remote: Invoice[]): Promise<Invoice[]> {
+    const onServer = new Set(remote.map(i => i.id));
+    const uploaded: Invoice[] = [];
+    for (const inv of await db.getInvoices()) {
+        if (onServer.has(inv.id)) continue;
+        try { uploaded.push(await invoiceService.saveInvoice(inv)); } catch (err) { console.warn('Could not upload invoice', inv.invoiceNumber, err); }
+    }
+    return uploaded;
+}
+
 export function useEntityData(
     authUser: AuthUser | null,
     authUserRef: React.RefObject<AuthUser | null>,
@@ -128,14 +144,8 @@ export function useEntityData(
     const syncInvoices = useCallback(async (): Promise<Invoice[]> => {
         const remote = await invoiceService.getInvoices();
         const canEdit = makeCan(permissionsOf(authUserRef.current))('invoices', 'edit');
-        let firstSync = false;
-        try { firstSync = !localStorage.getItem(INVOICES_MIGRATED_KEY); } catch { /* private mode */ }
-        if (firstSync && canEdit) {
-            const onServer = new Set(remote.map(i => i.id));
-            for (const inv of await db.getInvoices()) {
-                if (onServer.has(inv.id)) continue;
-                try { remote.push(await invoiceService.saveInvoice(inv)); } catch (err) { console.warn('Could not upload invoice', inv.invoiceNumber, err); }
-            }
+        if (canEdit && firstInvoiceSync()) {
+            remote.push(...await uploadDeviceOnlyInvoices(remote));
             try { localStorage.setItem(INVOICES_MIGRATED_KEY, '1'); } catch { /* private mode */ }
         }
         // Mirror the server list on the device for offline use.
@@ -412,6 +422,7 @@ export function useEntityData(
         const selected = datasets[currentView];
         if (!selected) return;
         const pollMs = currentView === 'messaging' || currentView === 'inquiry' ? 60_000 : 120_000;
+        const staleAfterMs = realtimeService.connected ? SAFETY_SYNC_MS : SWITCH_STALE_MS;
         const scheduler = createRefreshScheduler({
             // One /api/sync request covers every dataset; without it, reload
             // just this screen's lists.
@@ -428,9 +439,7 @@ export function useEntityData(
             // sync on arrival only when the data may be stale: while the
             // realtime socket is up, every change already triggers a delta
             // pass, so switching screens must not cost a request each time.
-            initialDelayMs: currentView === 'home'
-                ? 120_000
-                : Math.max(0, (realtimeService.connected ? SAFETY_SYNC_MS : SWITCH_STALE_MS) - (Date.now() - lastSyncAtRef.current)),
+            initialDelayMs: currentView === 'home' ? 120_000 : Math.max(0, staleAfterMs - (Date.now() - lastSyncAtRef.current)),
             enabled: () => document.visibilityState === 'visible' && navigator.onLine,
         });
         const refresh = () => { void scheduler.request(); };

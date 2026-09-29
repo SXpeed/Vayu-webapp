@@ -162,29 +162,77 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
     }
 
     type ShiftInput = Omit<StaffShift, 'id'>;
-    function readShift(raw: Record<string, unknown>, people: Set<string>, stores: Set<string>): ShiftInput | string {
+    /** A shift's start, end and break in minutes (a day off has none), or why they can't be used. */
+    function shiftTimes(kind: ShiftKind, raw: Record<string, unknown>): { startMin: number; endMin: number; breakMin: number } | { problem: string } {
+        if (kind === 'off') return { startMin: 0, endMin: 0, breakMin: 0 };
+        const startMin = intIn(raw.startMin, 0, 1439);
+        const endMin = intIn(raw.endMin, 0, 1439);
+        const breakMin = intIn(raw.breakMin, 0, 180);
+        if (startMin === null || endMin === null) return { problem: 'Enter a start and an end time.' };
+        if (breakMin === null) return { problem: 'A break can be 0 to 180 minutes.' };
+        return { startMin, endMin, breakMin };
+    }
+
+    /** The shift a request describes, or why it can't be saved. */
+    function readShift(raw: Record<string, unknown>, people: Set<string>, stores: Set<string>): { shift: ShiftInput } | { problem: string } {
         const kind: ShiftKind = raw.kind === 'off' ? 'off' : 'shift';
         const employeeId = typeof raw.employeeId === 'string' && raw.employeeId ? raw.employeeId : null;
-        if (employeeId && !people.has(employeeId)) return 'That person is not on this team.';
-        if (kind === 'off' && !employeeId) return 'A day off needs a person.';
+        if (employeeId && !people.has(employeeId)) return { problem: 'That person is not on this team.' };
+        if (kind === 'off' && !employeeId) return { problem: 'A day off needs a person.' };
         const storeId = kind === 'shift' && typeof raw.storeId === 'string' && raw.storeId ? raw.storeId : null;
-        if (storeId && !stores.has(storeId)) return 'That store no longer exists.';
-        const startMin = kind === 'off' ? 0 : intIn(raw.startMin, 0, 1439);
-        const endMin = kind === 'off' ? 0 : intIn(raw.endMin, 0, 1439);
-        const breakMin = kind === 'off' ? 0 : intIn(raw.breakMin, 0, 180);
-        if (startMin === null || endMin === null) return 'Enter a start and an end time.';
-        if (breakMin === null) return 'A break can be 0 to 180 minutes.';
+        if (storeId && !stores.has(storeId)) return { problem: 'That store no longer exists.' };
+        const times = shiftTimes(kind, raw);
+        if ('problem' in times) return times;
         const shift: ShiftInput = {
-            kind, employeeId, storeId, date: String(raw.date ?? ''), startMin, endMin, breakMin,
+            kind, employeeId, storeId, date: String(raw.date ?? ''), ...times,
             role: kind === 'off' ? '' : cleanText(raw.role, 60), note: cleanText(raw.note, 200),
         };
         const errors = shiftFieldErrors(shift);
-        return errors.length ? errors[0] : shift;
+        return errors.length ? { problem: errors[0] } : { shift };
     }
 
     async function lookups(ctx: Ctx) {
         const [people, stores] = await Promise.all([deps.people(ctx), deps.stores(ctx)]);
         return { people, stores, peopleIds: new Set(people.map(p => p.id)), storeIds: new Set(stores.map(s => s.id)) };
+    }
+
+    /** The weeks these dates touch: published, changed since, or draft. */
+    async function loadWeeks(db: D1Database, from: string, to: string) {
+        const weekStarts: string[] = [];
+        for (let w = mondayOf(from); w <= to; w = addDays(w, 7)) weekStarts.push(w);
+        const weekRows = (await db.prepare(`SELECT * FROM staff_weeks WHERE week_start IN (${weekStarts.map(() => '?').join(',')})`)
+            .bind(...weekStarts).all()).results || [];
+        const weeks: Record<string, WeekInfo> = {};
+        for (const w of weekStarts) weeks[w] = { status: 'draft', publishedAt: null, publishedByName: '' };
+        for (const r of weekRows) {
+            weeks[String(r.week_start)] = { status: Number(r.changed) ? 'changed' : 'published', publishedAt: Number(r.published_at), publishedByName: String(r.published_by_name ?? '') };
+        }
+        return { weeks, weekRows };
+    }
+
+    /** The live plan, for managers. The day before too: an overnight shift can run into the range. */
+    async function planShifts(db: D1Database, from: string, to: string): Promise<StaffShift[]> {
+        return ((await db.prepare('SELECT * FROM staff_shifts WHERE date >= ? AND date <= ? ORDER BY date, start_min')
+            .bind(addDays(from, -1), to).all()).results || []).map(r => rowToShift(r as Record<string, unknown>));
+    }
+
+    /** What everyone else sees: the published snapshots of these weeks. */
+    function publishedShifts(weekRows: Record<string, unknown>[], from: string, to: string): StaffShift[] {
+        const shifts: StaffShift[] = [];
+        for (const r of weekRows) {
+            try {
+                const snap = JSON.parse(String(r.snapshot)) as StaffShift[];
+                shifts.push(...snap.filter(s => s.date >= addDays(from, -1) && s.date <= to));
+            } catch { /* an unreadable snapshot shows nothing */ }
+        }
+        return shifts;
+    }
+
+    /** Others' leave shows only once approved, and never with its reason. */
+    function othersLeaveHidden(leaves: StaffLeave[], me: string, from: string, to: string): StaffLeave[] {
+        return leaves
+            .filter(l => l.employeeId === me || (l.status === 'approved' && l.from <= to && l.to >= from))
+            .map(l => (l.employeeId === me ? l : { ...l, reason: '', type: 'Leave' }));
     }
 
     /** GET /staff-roster?from=&to= — everything a screen needs for these dates. */
@@ -202,38 +250,12 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
         const titles = new Map(((await db.prepare('SELECT employee_id, title FROM staff_titles').all()).results || [])
             .map(r => [String(r.employee_id), String(r.title)]));
 
-        const weekStarts: string[] = [];
-        for (let w = mondayOf(from); w <= to; w = addDays(w, 7)) weekStarts.push(w);
-        const weekRows = (await db.prepare(`SELECT * FROM staff_weeks WHERE week_start IN (${weekStarts.map(() => '?').join(',')})`)
-            .bind(...weekStarts).all()).results || [];
-        const weeks: Record<string, WeekInfo> = {};
-        for (const w of weekStarts) weeks[w] = { status: 'draft', publishedAt: null, publishedByName: '' };
-        for (const r of weekRows) {
-            weeks[String(r.week_start)] = { status: Number(r.changed) ? 'changed' : 'published', publishedAt: Number(r.published_at), publishedByName: String(r.published_by_name ?? '') };
-        }
-
-        let shifts: StaffShift[];
-        if (manage) {
-            // The day before too: an overnight shift can run into the range.
-            shifts = ((await db.prepare('SELECT * FROM staff_shifts WHERE date >= ? AND date <= ? ORDER BY date, start_min')
-                .bind(addDays(from, -1), to).all()).results || []).map(r => rowToShift(r as Record<string, unknown>));
-        } else {
-            shifts = [];
-            for (const r of weekRows) {
-                try {
-                    const snap = JSON.parse(String(r.snapshot)) as StaffShift[];
-                    shifts.push(...snap.filter(s => s.date >= addDays(from, -1) && s.date <= to));
-                } catch { /* an unreadable snapshot shows nothing */ }
-            }
-        }
-
+        const { weeks, weekRows } = await loadWeeks(db, from, to);
+        const shifts = manage ? await planShifts(db, from, to) : publishedShifts(weekRows, from, to);
         const leaveRows = ((await db.prepare(
             `SELECT * FROM staff_leaves WHERE (from_date <= ? AND to_date >= ?) OR status = 'pending' OR employee_id = ? ORDER BY requested_at DESC LIMIT 500`,
         ).bind(to, from, session.userId).all()).results || []).map(r => rowToLeave(r as Record<string, unknown>));
-        const leaves = manage ? leaveRows : leaveRows
-            // Others' leave shows only once approved, and never with its reason.
-            .filter(l => l.employeeId === session.userId || (l.status === 'approved' && l.from <= to && l.to >= from))
-            .map(l => (l.employeeId === session.userId ? l : { ...l, reason: '', type: 'Leave' }));
+        const leaves = manage ? leaveRows : othersLeaveHidden(leaveRows, session.userId, from, to);
 
         return json({
             canManage: manage,
@@ -245,34 +267,56 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
         });
     };
 
+    /**
+     * A shift replaces that person's day off; a day off replaces an earlier
+     * one, but never a shift (refused). Gives the statement clearing the old
+     * day off, if any.
+     */
+    async function replacedDayOff(db: D1Database, s: ShiftInput): Promise<D1PreparedStatement | Response | null> {
+        const clear = () => db.prepare("DELETE FROM staff_shifts WHERE kind = 'off' AND employee_id = ? AND date = ?").bind(s.employeeId, s.date);
+        if (s.kind === 'shift') return s.employeeId ? clear() : null;
+        const busy = await db.prepare("SELECT 1 FROM staff_shifts WHERE kind = 'shift' AND employee_id = ? AND date = ?").bind(s.employeeId, s.date).first();
+        if (busy) return err('That person already has a shift that day. Remove it first, then mark the day off.', 409);
+        return clear();
+    }
+
+    /** The shifts a save sends: at least one, at most MAX_SHIFTS_PER_SAVE, each valid. */
+    async function readShiftList(ctx: Ctx, raw: Record<string, unknown> | null): Promise<{ shifts: ShiftInput[] } | { problem: string }> {
+        const list = Array.isArray(raw?.shifts) ? raw.shifts as Record<string, unknown>[] : null;
+        if (!list?.length) return { problem: 'Nothing to save.' };
+        if (list.length > MAX_SHIFTS_PER_SAVE) return { problem: `Save at most ${MAX_SHIFTS_PER_SAVE} at once.` };
+        const { peopleIds, storeIds } = await lookups(ctx);
+        const shifts: ShiftInput[] = [];
+        for (const item of list) {
+            const one = readShift(item && typeof item === 'object' ? item : {}, peopleIds, storeIds);
+            if ('problem' in one) return one;
+            shifts.push(one.shift);
+        }
+        return { shifts };
+    }
+
+    /** "Added a shift on 3 Oct and 2 more" */
+    function addedShiftsText(created: ShiftInput[]): string {
+        const what = created[0].kind === 'off' ? 'Marked a day off' : 'Added a shift';
+        const more = created.length > 1 ? ' and ' + (created.length - 1) + ' more' : '';
+        return `${what} on ${fmtDay(created[0].date)}${more}`;
+    }
+
     /** POST /staff-roster/shifts { shifts: [...] } — one shift, or the same shift on several days. */
     const createShifts: Handler = async (ctx) => {
         const session = await caller(ctx);
         if (session instanceof Response) return session;
         const db = ctx.env.VAYU_DB;
-        const raw = await body(ctx);
-        const list = Array.isArray(raw?.shifts) ? raw.shifts as Record<string, unknown>[] : null;
-        if (!list?.length) return err('Nothing to save.');
-        if (list.length > MAX_SHIFTS_PER_SAVE) return err(`Save at most ${MAX_SHIFTS_PER_SAVE} at once.`);
-        const { peopleIds, storeIds } = await lookups(ctx);
-        const inputs: ShiftInput[] = [];
-        for (const item of list) {
-            const input = readShift(item && typeof item === 'object' ? item : {}, peopleIds, storeIds);
-            if (typeof input === 'string') return err(input);
-            inputs.push(input);
-        }
+        const read = await readShiftList(ctx, await body(ctx));
+        if ('problem' in read) return err(read.problem);
+        const inputs = read.shifts;
         const now = Date.now();
         const created = inputs.map(s => ({ ...s, id: newId('sh') }));
         const stmts: D1PreparedStatement[] = [];
         for (const s of created) {
-            // A shift replaces that person's day off; a day off replaces nothing.
-            if (s.kind === 'shift' && s.employeeId) {
-                stmts.push(db.prepare("DELETE FROM staff_shifts WHERE kind = 'off' AND employee_id = ? AND date = ?").bind(s.employeeId, s.date));
-            } else if (s.kind === 'off') {
-                const busy = await db.prepare("SELECT 1 FROM staff_shifts WHERE kind = 'shift' AND employee_id = ? AND date = ?").bind(s.employeeId, s.date).first();
-                if (busy) return err('That person already has a shift that day. Remove it first, then mark the day off.', 409);
-                stmts.push(db.prepare("DELETE FROM staff_shifts WHERE kind = 'off' AND employee_id = ? AND date = ?").bind(s.employeeId, s.date));
-            }
+            const replaced = await replacedDayOff(db, s);
+            if (replaced instanceof Response) return replaced;
+            if (replaced) stmts.push(replaced);
             stmts.push(db.prepare(
                 `INSERT INTO staff_shifts (id, kind, employee_id, store_id, date, start_min, end_min, break_min, role, note, created_at, updated_at, updated_by)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -280,8 +324,7 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
         }
         await db.batch(stmts);
         await markChanged(db, created.map(s => s.date));
-        deps.logChange(ctx, session, 'created', 'shift', created[0].id,
-            `${created[0].kind === 'off' ? 'Marked a day off' : 'Added a shift'} on ${fmtDay(created[0].date)}${created.length > 1 ? ` and ${created.length - 1} more` : ''}`);
+        deps.logChange(ctx, session, 'created', 'shift', created[0].id, addedShiftsText(created));
         signal(ctx, created[0].id);
         return json(created, 201);
     };
@@ -297,8 +340,9 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
         const raw = await body(ctx);
         if (!raw) return err('Invalid request body');
         const { peopleIds, storeIds } = await lookups(ctx);
-        const s = readShift({ ...raw, kind: existing.kind }, peopleIds, storeIds);
-        if (typeof s === 'string') return err(s);
+        const read = readShift({ ...raw, kind: existing.kind }, peopleIds, storeIds);
+        if ('problem' in read) return err(read.problem);
+        const s = read.shift;
         const stmts = [db.prepare(
             `UPDATE staff_shifts SET employee_id = ?, store_id = ?, date = ?, start_min = ?, end_min = ?, break_min = ?, role = ?, note = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
         ).bind(s.employeeId, s.storeId, s.date, s.startMin, s.endMin, s.breakMin, s.role, s.note, Date.now(), session.userId, id)];
@@ -367,6 +411,21 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
         return json({ weekStart, status: 'published', publishedAt: now, publishedByName: session.name, notified: notified.length });
     };
 
+    /** Asked for yourself: pending. Recorded by a manager for someone else (`decidedBy`): approved at once. */
+    function newLeave(fields: Pick<StaffLeave, 'employeeId' | 'from' | 'to' | 'type' | 'reason'>, decidedBy: string | null, now: number): StaffLeave {
+        return {
+            id: newId('lv'), ...fields, requestedAt: now,
+            status: decidedBy ? 'approved' : 'pending',
+            decidedAt: decidedBy ? now : null, decidedByName: decidedBy ?? '',
+        };
+    }
+
+    function leaveDatesProblem(from: string, to: string): string | null {
+        if (!isIsoDate(from) || !isIsoDate(to)) return 'Choose the first and last day.';
+        if (to < from) return 'The last day is before the first day.';
+        return (toTs(to) - toTs(from)) / 86_400_000 >= MAX_LEAVE_DAYS ? `Leave can be up to ${MAX_LEAVE_DAYS} days at a time.` : null;
+    }
+
     /** POST /staff-roster/leaves — for yourself (pending), or, as a manager, for someone else (approved). */
     const requestLeave: Handler = async (ctx) => {
         const session = await caller(ctx);
@@ -376,21 +435,17 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
         if (!raw) return err('Invalid request body');
         const employeeId = typeof raw.employeeId === 'string' && raw.employeeId ? raw.employeeId : session.userId;
         const forSomeoneElse = employeeId !== session.userId;
-        const manage = await deps.canManage(ctx, session);
-        if (forSomeoneElse && !manage) return err('You can only ask for leave for yourself.', 403);
-        if (forSomeoneElse && !(await lookups(ctx)).peopleIds.has(employeeId)) return err('That person is not on this team.');
+        if (forSomeoneElse) {
+            if (!(await deps.canManage(ctx, session))) return err('You can only ask for leave for yourself.', 403);
+            if (!(await lookups(ctx)).peopleIds.has(employeeId)) return err('That person is not on this team.');
+        }
         const from = String(raw.from ?? ''), to = String(raw.to ?? '');
-        if (!isIsoDate(from) || !isIsoDate(to)) return err('Choose the first and last day.');
-        if (to < from) return err('The last day is before the first day.');
-        if ((toTs(to) - toTs(from)) / 86_400_000 >= MAX_LEAVE_DAYS) return err(`Leave can be up to ${MAX_LEAVE_DAYS} days at a time.`);
+        const datesProblem = leaveDatesProblem(from, to);
+        if (datesProblem) return err(datesProblem);
         const type = (LEAVE_TYPES as readonly string[]).includes(String(raw.type)) ? String(raw.type) : 'Other';
         const reason = cleanText(raw.reason, 300);
         const now = Date.now();
-        const leave: StaffLeave = {
-            id: newId('lv'), employeeId, from, to, type, reason,
-            status: forSomeoneElse ? 'approved' : 'pending', requestedAt: now,
-            decidedAt: forSomeoneElse ? now : null, decidedByName: forSomeoneElse ? session.name : '',
-        };
+        const leave = newLeave({ employeeId, from, to, type, reason }, forSomeoneElse ? session.name : null, now);
         await db.prepare(
             `INSERT INTO staff_leaves (id, employee_id, from_date, to_date, type, reason, status, requested_at, requested_by, decided_at, decided_by, decided_by_name)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

@@ -159,7 +159,7 @@ export interface PublicPlan {
     priceMonthly: number; priceAnnual: number; trialDays: number;
     /** A limited-time offer running now. */
     offer?: { percentOff: number; label: string; endsAt: number } | null;
-    highlights: { limits: Record<string, number | null>; modules: Record<string, boolean>; features: Record<string, boolean> };
+    highlights: { limits: Partial<Record<string, number | null>>; modules: Record<string, boolean>; features: Record<string, boolean> };
 }
 
 export function usePublicPlans(): PublicPlan[] | null {

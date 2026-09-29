@@ -10,7 +10,6 @@ export const VIEW_SECTION: Partial<Record<ViewState, SectionId>> = {
     artworks: 'inventory',
     collections: 'collections',
     catalogs: 'catalogs',
-    roster: 'roster',
     contacts: 'contacts',
     inquiry: 'inquiries',
     invoice: 'invoices',

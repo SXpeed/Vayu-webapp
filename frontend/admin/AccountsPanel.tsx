@@ -32,7 +32,7 @@ export const AccountsPanel: React.FC<{ reauth: Reauth; routeId?: string; go: (se
     const [rows, setRows] = useState<AccountRow[] | null>(null);
 
     const load = useCallback(async (term: string) => {
-        try { setRows((await api<{ accounts: AccountRow[] }>(`/admin/accounts${term ? `?q=${encodeURIComponent(term)}` : ''}`)).accounts); }
+        try { setRows((await api<{ accounts: AccountRow[] }>(`/admin/accounts${term ? '?q=' + encodeURIComponent(term) : ''}`)).accounts); }
         catch (e) { toast.error((e as ApiError).message); }
     }, []);
     // Debounced; the current rows stay until new ones arrive, so nothing flashes.
@@ -46,9 +46,11 @@ export const AccountsPanel: React.FC<{ reauth: Reauth; routeId?: string; go: (se
                     <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 ac-faint pointer-events-none" />
                     <Input className="!pl-9" placeholder="Search by name or email…" value={q} onChange={e => setQ(e.target.value)} />
                 </div>
-                {!rows ? <SkeletonRows rows={7} /> : rows.length === 0 ? (
+                {!rows && <SkeletonRows rows={7} />}
+                {rows?.length === 0 && (
                     <EmptyState icon={<Users size={20} />} title="No accounts match" />
-                ) : (
+                )}
+                {rows?.length ? (
                     <ul className="ac-divide -mx-2">
                         {rows.map(r => (
                             <li key={r.id}>
@@ -71,7 +73,7 @@ export const AccountsPanel: React.FC<{ reauth: Reauth; routeId?: string; go: (se
                             </li>
                         ))}
                     </ul>
-                )}
+                ) : null}
             </Section>
             <AccountDrawer id={routeId} reauth={reauth} onClose={() => go('accounts')} onOpenOrg={id => go('orgs', id)} onChanged={() => load(q.trim())} />
         </div>

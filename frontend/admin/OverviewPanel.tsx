@@ -53,7 +53,11 @@ const Tile: React.FC<{ icon: React.ReactNode; label: string; value: number; hint
 );
 
 
-export const OverviewPanel: React.FC<{ navigate: Navigate }> = ({ navigate }) => {
+/**
+ * The overview and health figures, refreshed every REFRESH_MS while the page
+ * is visible (and on coming back to it). A manual refresh says when it fails.
+ */
+function useOverview() {
     const [data, setData] = useState<Overview | null>(null);
     const [health, setHealth] = useState<Health | null>(null);
     const [refreshing, setRefreshing] = useState(false);
@@ -87,6 +91,50 @@ export const OverviewPanel: React.FC<{ navigate: Navigate }> = ({ navigate }) =>
         const clock = window.setInterval(() => tick(t => t + 1), 15_000);
         return () => { window.clearInterval(timer.current); window.clearInterval(clock); document.removeEventListener('visibilitychange', onVisible); };
     }, [load]);
+
+    return { data, health, refreshing, load };
+}
+
+/** "3 applications", "1 application" */
+const count = (n: number, one: string, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+
+interface Attention { key: string; tone: 'bad' | 'warn' | 'info'; icon: React.ReactNode; text: string; action: string; go: () => void }
+
+/** What needs the provider now, most urgent first. */
+function attentionItems(data: Overview, healthIssues: number, mailText: string, navigate: Navigate): Attention[] {
+    const pending = data.applications.pending_review ?? 0;
+    const awaitingPayment = data.subscriptions.payment_required ?? 0;
+    const notices = data.notifications.pending ?? 0;
+    const items: (Attention | false)[] = [
+        !!data.failedSetups && { key: 'setup', tone: 'bad', icon: <Wrench size={16} />, text: `${count(data.failedSetups, 'approved workspace')} failed to set up`, action: 'Retry', go: () => navigate('applications') },
+        !!pending && { key: 'review', tone: 'warn', icon: <ClipboardList size={16} />, text: `${count(pending, 'application')} waiting for your decision`, action: 'Review', go: () => navigate('applications') },
+        !!awaitingPayment && { key: 'pay', tone: 'warn', icon: <CreditCard size={16} />, text: `${count(awaitingPayment, 'organization')} approved but awaiting payment`, action: 'Open', go: () => navigate('orgs') },
+        !!data.trialsEndingThisWeek && { key: 'trial', tone: 'info', icon: <Hourglass size={16} />, text: `${count(data.trialsEndingThisWeek, 'trial')} end this week`, action: 'Open', go: () => navigate('orgs') },
+        !!notices && { key: 'mail', tone: 'info', icon: <Mail size={16} />, text: mailText, action: 'View', go: () => navigate('notifications') },
+        !!healthIssues && { key: 'health', tone: 'warn', icon: <AlertTriangle size={16} />, text: `${count(healthIssues, 'configuration item')} need attention`, action: 'Check', go: () => navigate('health') },
+    ];
+    return items.filter((a): a is Attention => a !== false);
+}
+
+const AttentionList: React.FC<{ items: Attention[] }> = ({ items }) => {
+    if (items.length === 0) return <p className="flex items-center gap-2 text-sm text-[var(--ac-ok)]"><CheckCircle2 size={17} /> Nothing needs you right now.</p>;
+    return (
+        <ul className="space-y-2">
+            {items.map(a => (
+                <li key={a.key}>
+                    <button type="button" onClick={a.go} className="ac-row w-full flex items-center gap-3 px-2 py-2 text-left">
+                        <span className={`w-8 h-8 rounded-[10px] neu-inset flex items-center justify-center shrink-0 ${TONE_TEXT[a.tone]}`}>{a.icon}</span>
+                        <span className="flex-1 min-w-0 text-sm">{a.text}</span>
+                        <span className="text-[12px] text-[var(--ac-accent)] font-medium inline-flex items-center gap-1 shrink-0">{a.action} <ArrowRight size={13} /></span>
+                    </button>
+                </li>
+            ))}
+        </ul>
+    );
+};
+
+export const OverviewPanel: React.FC<{ navigate: Navigate }> = ({ navigate }) => {
+    const { data, health, refreshing, load } = useOverview();
 
     const header = (
         <PageHeader
@@ -122,35 +170,14 @@ export const OverviewPanel: React.FC<{ navigate: Navigate }> = ({ navigate }) =>
     const notices = data.notifications.pending ?? 0;
     const healthIssues = (health?.checks ?? []).filter(c => !c.ok && c.name !== 'Google sign-in');
     const mail = noticeCopy(notices, !!data.emailConfigured);
-
-    const attention: { key: string; tone: 'bad' | 'warn' | 'info'; icon: React.ReactNode; text: string; action: string; go: () => void }[] = [];
-    if (data.failedSetups) attention.push({ key: 'setup', tone: 'bad', icon: <Wrench size={16} />, text: `${data.failedSetups} approved workspace${data.failedSetups === 1 ? '' : 's'} failed to set up`, action: 'Retry', go: () => navigate('applications') });
-    if (pending) attention.push({ key: 'review', tone: 'warn', icon: <ClipboardList size={16} />, text: `${pending} application${pending === 1 ? '' : 's'} waiting for your decision`, action: 'Review', go: () => navigate('applications') });
-    if (awaitingPayment) attention.push({ key: 'pay', tone: 'warn', icon: <CreditCard size={16} />, text: `${awaitingPayment} organization${awaitingPayment === 1 ? '' : 's'} approved but awaiting payment`, action: 'Open', go: () => navigate('orgs') });
-    if (data.trialsEndingThisWeek) attention.push({ key: 'trial', tone: 'info', icon: <Hourglass size={16} />, text: `${data.trialsEndingThisWeek} trial${data.trialsEndingThisWeek === 1 ? '' : 's'} end this week`, action: 'Open', go: () => navigate('orgs') });
-    if (notices) attention.push({ key: 'mail', tone: 'info', icon: <Mail size={16} />, text: mail.text, action: 'View', go: () => navigate('notifications') });
-    if (healthIssues.length) attention.push({ key: 'health', tone: 'warn', icon: <AlertTriangle size={16} />, text: `${healthIssues.length} configuration item${healthIssues.length === 1 ? '' : 's'} need attention`, action: 'Check', go: () => navigate('health') });
+    const attention = attentionItems(data, healthIssues.length, mail.text, navigate);
 
     return (
         <div className="space-y-6">
             {header}
 
             <Section title="Needs attention">
-                {attention.length === 0 ? (
-                    <p className="flex items-center gap-2 text-sm text-[var(--ac-ok)]"><CheckCircle2 size={17} /> Nothing needs you right now.</p>
-                ) : (
-                    <ul className="space-y-2">
-                        {attention.map(a => (
-                            <li key={a.key}>
-                                <button type="button" onClick={a.go} className="ac-row w-full flex items-center gap-3 px-2 py-2 text-left">
-                                    <span className={`w-8 h-8 rounded-[10px] neu-inset flex items-center justify-center shrink-0 ${TONE_TEXT[a.tone]}`}>{a.icon}</span>
-                                    <span className="flex-1 min-w-0 text-sm">{a.text}</span>
-                                    <span className="text-[12px] text-[var(--ac-accent)] font-medium inline-flex items-center gap-1 shrink-0">{a.action} <ArrowRight size={13} /></span>
-                                </button>
-                            </li>
-                        ))}
-                    </ul>
-                )}
+                <AttentionList items={attention} />
             </Section>
 
             <div className={TILE_GRID}>

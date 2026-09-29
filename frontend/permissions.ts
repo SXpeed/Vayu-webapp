@@ -13,7 +13,7 @@
 export type AccessLevel = 'none' | 'view' | 'edit';
 
 export type SectionId =
-    | 'inventory' | 'collections' | 'catalogs' | 'roster' | 'contacts' | 'inquiries' | 'invoices'
+    | 'inventory' | 'collections' | 'catalogs' | 'contacts' | 'inquiries' | 'invoices'
     | 'payments' | 'sales' | 'calendar' | 'messages' | 'attendance' | 'schedule' | 'activity';
 
 export interface SectionDef {
@@ -28,10 +28,6 @@ export const SECTIONS: SectionDef[] = [
     { id: 'inventory', label: 'Inventory', description: 'Artworks, prices and photos' },
     { id: 'collections', label: 'Collections', description: 'Grouped artworks' },
     { id: 'catalogs', label: 'Catalogs', description: 'Catalog PDFs and the catalog builder' },
-    {
-        id: 'roster', label: 'Showcase', description: 'Curated sections of pieces. Curate arranges its sections and pieces',
-        levelLabels: { view: 'Browse', edit: 'Curate' },
-    },
     { id: 'contacts', label: 'Contacts', description: 'Client phone numbers and emails' },
     { id: 'inquiries', label: 'Inquiries', description: 'Customer inquiries and their chats' },
     { id: 'invoices', label: 'Proforma invoices', description: 'Proforma invoices (stored on each device)' },
@@ -76,11 +72,11 @@ export const ADMIN_PERMISSIONS: Permissions = all('edit');
 
 /**
  * Staff starts exactly as regular users worked before roles existed: every
- * data section, their own attendance, no activity log. The Roster came later:
- * staff browse it, and curating it is given by role. Likewise Sales: staff
- * see the figures, and recording sales is given by role (the accounts team).
+ * data section, their own attendance, no activity log. Sections added later
+ * start at "view" for staff: the staff roster (planning it is given by role)
+ * and Sales (recording sales is given by role, to the accounts team).
  */
-export const STAFF_DEFAULT_PERMISSIONS: Permissions = { ...all('edit'), roster: 'view', attendance: 'view', schedule: 'view', sales: 'view', activity: 'none' };
+export const STAFF_DEFAULT_PERMISSIONS: Permissions = { ...all('edit'), attendance: 'view', schedule: 'view', sales: 'view', activity: 'none' };
 
 export const BUILT_IN_ROLES: RoleDef[] = [
     { id: ADMIN_ROLE_ID, name: 'Admin', builtIn: true, permissions: ADMIN_PERMISSIONS },

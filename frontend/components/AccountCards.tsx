@@ -39,7 +39,7 @@ export const PasswordCard: React.FC = () => {
     const [error, setError] = useState('');
     if (!currentWorkspace()) return null;
 
-    const save = async (e: React.FormEvent) => {
+    const save = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
         setError('');
         if (next.length < 10) { setError('Choose a new password of at least 10 characters.'); return; }

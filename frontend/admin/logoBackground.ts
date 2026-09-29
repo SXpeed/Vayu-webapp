@@ -132,20 +132,24 @@ function removeBackground(img: ImageData): ImageData {
 }
 
 /** Trims to the visible logo plus a margin, padded up to the minimum size. */
-function trim(img: ImageData): HTMLCanvasElement {
+/** The box around the pixels that aren't (nearly) transparent; the whole image when none are. */
+function visibleBounds(img: ImageData): { x0: number; y0: number; x1: number; y1: number } {
     const { data, width: w, height: h } = img;
     let x0 = w, y0 = h, x1 = -1, y1 = -1;
     for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
-            if (data[(y * w + x) * 4 + 3] > 12) {
-                if (x < x0) x0 = x;
-                if (x > x1) x1 = x;
-                if (y < y0) y0 = y;
-                if (y > y1) y1 = y;
-            }
+            if (data[(y * w + x) * 4 + 3] <= 12) continue;
+            x0 = Math.min(x0, x);
+            x1 = Math.max(x1, x);
+            y0 = Math.min(y0, y);
+            y1 = Math.max(y1, y);
         }
     }
-    if (x1 < 0) { x0 = 0; y0 = 0; x1 = w - 1; y1 = h - 1; } // nothing visible: keep it all
+    return x1 < 0 ? { x0: 0, y0: 0, x1: w - 1, y1: h - 1 } : { x0, y0, x1, y1 };
+}
+
+function trim(img: ImageData): HTMLCanvasElement {
+    const { x0, y0, x1, y1 } = visibleBounds(img);
     const pad = Math.round(Math.max(x1 - x0, y1 - y0) * 0.06);
     const cw = Math.max(MIN_SIDE, x1 - x0 + 1 + pad * 2);
     const ch = Math.max(MIN_SIDE, y1 - y0 + 1 + pad * 2);

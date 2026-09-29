@@ -21,7 +21,7 @@ import { DeletePlanButton, MoveOrgsForm, OfferSection, RepriceForm, type Offer }
 interface FieldDef { key: string; label: string; hint: string; nullable?: boolean; max?: number; period?: string; default: unknown; alwaysOn?: boolean; enforced?: boolean }
 interface PlanSchema { limits: FieldDef[]; modules: FieldDef[]; features: FieldDef[]; billingTypes: string[] }
 
-interface Limits { limits: Record<string, number | null>; modules: Record<string, boolean>; features: Record<string, boolean>; integrations: string[] }
+interface Limits { limits: Partial<Record<string, number | null>>; modules: Record<string, boolean>; features: Record<string, boolean>; integrations: string[] }
 
 interface PlanRow {
     id: string; key: string; name: string; description: string; status: string; is_public: number; sort_order: number;
@@ -59,7 +59,60 @@ const parse = (json: string | null | undefined): Limits | null => {
 const money = (minor: number, currency = 'INR') =>
     new Intl.NumberFormat('en-IN', { style: 'currency', currency, maximumFractionDigits: 0 }).format(minor / 100);
 
-const limitText = (v: number | null | undefined) => (v === null ? 'Unlimited' : v === undefined ? '—' : v.toLocaleString('en-IN'));
+/** Each limit's field as the editor starts it: from the version (a limit added since has none), or the default. */
+function draftLimits(schema: PlanSchema, l: Limits | null): Record<string, LimitDraft> {
+    return Object.fromEntries(schema.limits.map(f => {
+        const v: number | null | undefined = l ? l.limits?.[f.key] : (f.default as number | null);
+        return [f.key, { unlimited: v === null && !!f.nullable, value: v === null || v === undefined ? '' : String(v) }];
+    }));
+}
+
+/** Each module and feature switch as the editor starts it; always-on ones stay on. */
+function draftFlags(schema: PlanSchema, l: Limits | null): Record<string, boolean> {
+    return Object.fromEntries([...schema.modules, ...schema.features].map(f => {
+        const group = schema.modules.includes(f) ? 'modules' : 'features';
+        const v = l ? l[group]?.[f.key] : (f.default as boolean);
+        return [f.key, f.alwaysOn || !!v];
+    }));
+}
+
+/** Rupees as typed (commas allowed) in paise. */
+const toMinor = (s: string) => Math.round((Number(s.replace(/,/g, '')) || 0) * 100);
+
+/** The version to save: prices only for paid plans, trial days for trial and paid ones. */
+function versionBody(schema: PlanSchema, f: { billing: string; monthly: string; annual: string; trial: string; notes: string }, limits: Record<string, LimitDraft>, flags: Record<string, boolean>) {
+    const paid = f.billing === 'paid';
+    return {
+        billingType: f.billing, currency: 'INR',
+        priceMonthly: paid ? toMinor(f.monthly) : 0,
+        priceAnnual: paid ? toMinor(f.annual) : 0,
+        trialDays: f.billing === 'trial' || paid ? Number(f.trial) || 0 : 0,
+        notes: f.notes,
+        limits: {
+            limits: Object.fromEntries(schema.limits.map(x => [x.key, limitValue(limits[x.key], !!x.nullable)])),
+            modules: Object.fromEntries(schema.modules.map(x => [x.key, !!flags[x.key]])),
+            features: Object.fromEntries(schema.features.map(x => [x.key, !!flags[x.key]])),
+        },
+    };
+}
+
+/** A limit as typed in the editor: null for unlimited, undefined while empty. */
+function typedLimit(d: { unlimited: boolean; value: string }): number | null | undefined {
+    if (d.unlimited) return null;
+    return d.value === '' ? undefined : Number(d.value);
+}
+
+/** The value saved for a limit: an empty field means unlimited where allowed, else 1. */
+function limitValue(d: { unlimited: boolean; value: string } | undefined, nullable: boolean): number | null {
+    if (d?.unlimited) return null;
+    if (!d || d.value === '') return nullable ? null : 1;
+    return Number(d.value);
+}
+
+const limitText = (v: number | null | undefined): string => {
+    if (v === null) return 'Unlimited';
+    return v === undefined ? '—' : v.toLocaleString('en-IN');
+};
 
 function priceLine(type: string | null, monthly: number | null, annual: number | null, trial: number | null, currency: string | null) {
     if (!type) return 'Not published yet';
@@ -126,15 +179,18 @@ const PlanList: React.FC<{ onOpen: (id: string) => void }> = ({ onOpen }) => {
                 ]} />
             )}
 
-            {!plans ? <SkeletonCards count={3} height={232} /> : plans.length === 0 ? (
+            {!plans && <SkeletonCards count={3} height={232} />}
+            {plans?.length === 0 && (
                 <Section>
                     <EmptyState icon={<Layers size={20} />} title="No plans yet"
                         body="Organizations without a plan get conservative default limits. Create a plan to sell."
                         action={<button type="button" className="neu-button neu-button-primary" onClick={create}><Plus size={16} /> Create the first plan</button>} />
                 </Section>
-            ) : shown.length === 0 ? (
+            )}
+            {!!plans?.length && shown.length === 0 && (
                 <Section><EmptyState title="Nothing here" body="No plans match this filter." /></Section>
-            ) : (
+            )}
+            {shown.length > 0 && (
                 <div className="ac-grid-fit ac-enter-soft" style={{ ['--ac-min' as string]: '17rem' }}>
                     {shown.map(p => {
                         const limits = parse(p.published_limits);
@@ -238,10 +294,11 @@ const PlanDetailView: React.FC<{ planId: string; reauth: Reauth; onBack: () => v
     }
 
     const publishVersion = async (v: PlanVersion) => {
+        const orgWord = current?.organizations === 1 ? 'organization' : 'organizations';
         const ok = await dialogs.confirm({
             title: `Publish version ${v.version}?`,
             body: current
-                ? `New organizations get version ${v.version}. The ${current.organizations} organization${current.organizations === 1 ? '' : 's'} on version ${current.version} stay on it until you move them.`
+                ? `New organizations get version ${v.version}. The ${current.organizations} ${orgWord} on version ${current.version} stay on it until you move them.`
                 : 'It becomes the version new organizations are given. Once published it cannot be edited.',
             confirmLabel: 'Publish',
         });
@@ -477,6 +534,36 @@ const VersionCard: React.FC<{
 
 interface LimitDraft { unlimited: boolean; value: string }
 
+/**
+ * Billing type, prices and trial days. Fields stay in the layout and are
+ * disabled when they do not apply, so switching type never shifts the form.
+ */
+const BillingFields: React.FC<{
+    billing: string; monthly: string; annual: string; trial: string;
+    onBilling: (v: string) => void; onMonthly: (v: string) => void; onAnnual: (v: string) => void; onTrial: (v: string) => void;
+}> = ({ billing, monthly, annual, trial, onBilling, onMonthly, onAnnual, onTrial }) => {
+    const paid = billing === 'paid';
+    const hasTrial = billing === 'trial' || paid;
+    const notCharged = paid ? '' : 'Not charged';
+    return (
+        <Section title="Billing">
+            <Segmented value={billing} onChange={onBilling} options={BILLING.map(b => ({ value: b.value, label: b.label }))} />
+            <p className="mt-2 text-[12px] ac-muted">{BILLING.find(b => b.value === billing)?.hint}</p>
+            <div className="mt-4 ac-grid-fit" style={{ ['--ac-min' as string]: '11rem' }}>
+                <Field label="Monthly price (₹)" htmlFor="ve-m">
+                    <Input id="ve-m" inputMode="decimal" disabled={!paid} value={paid ? monthly : ''} placeholder={notCharged} onChange={e => onMonthly(e.target.value)} />
+                </Field>
+                <Field label="Yearly price (₹)" htmlFor="ve-a">
+                    <Input id="ve-a" inputMode="decimal" disabled={!paid} value={paid ? annual : ''} placeholder={notCharged} onChange={e => onAnnual(e.target.value)} />
+                </Field>
+                <Field label="Trial days" htmlFor="ve-t">
+                    <Input id="ve-t" inputMode="numeric" disabled={!hasTrial} value={hasTrial ? trial : ''} placeholder="No trial" onChange={e => onTrial(e.target.value.replace(/[^\d]/g, ''))} />
+                </Field>
+            </div>
+        </Section>
+    );
+};
+
 const BILLING: { value: string; label: string; hint: string }[] = [
     { value: 'free', label: 'Free', hint: 'No charge. Goes live on assignment.' },
     { value: 'trial', label: 'Trial', hint: 'Free for a set number of days.' },
@@ -509,21 +596,15 @@ const VersionEditor: React.FC<{
         setAnnual(base ? String((base.price_annual ?? 0) / 100) : '9990');
         setTrial(String(base?.trial_days ?? 14));
         setNotes(state?.mode === 'edit' ? base?.notes ?? '' : '');
-        setLimits(Object.fromEntries(schema.limits.map(f => {
-            // A version saved before a limit existed has no value for it.
-            const v: number | null | undefined = l ? l.limits?.[f.key] : (f.default as number | null);
-            return [f.key, { unlimited: v === null && !!f.nullable, value: v === null || v === undefined ? '' : String(v) }];
-        })));
-        setFlags(Object.fromEntries([...schema.modules, ...schema.features].map(f => {
-            const group = schema.modules.includes(f) ? 'modules' : 'features';
-            const v = l ? l[group]?.[f.key] : (f.default as boolean);
-            return [f.key, f.alwaysOn ? true : !!v];
-        })));
+        setLimits(draftLimits(schema, l));
+        setFlags(draftFlags(schema, l));
         setTouched(false);
     }, [open, state, schema]);
 
     const was = current ? parse(current.limits) : null;
-    const title = state?.mode === 'edit' ? `Edit draft version ${state.base.version}` : state?.base ? `New version from v${state.base.version}` : 'New version';
+    let title = state?.base ? `New version from v${state.base.version}` : 'New version';
+    if (state?.mode === 'edit') title = `Edit draft version ${state.base.version}`;
+    const saveLabel = state?.mode === 'edit' ? 'Save draft' : 'Create draft';
 
     const close = async () => {
         if (touched && !(await dialogs.confirm({ title: 'Discard changes?', body: 'What you changed in this version will be lost.', confirmLabel: 'Discard', danger: true }))) return;
@@ -532,22 +613,7 @@ const VersionEditor: React.FC<{
 
     const save = async () => {
         if (!schema) return;
-        const toMinor = (s: string) => Math.round((Number(s.replace(/,/g, '')) || 0) * 100);
-        const body = {
-            billingType: billing, currency: 'INR',
-            priceMonthly: billing === 'paid' ? toMinor(monthly) : 0,
-            priceAnnual: billing === 'paid' ? toMinor(annual) : 0,
-            trialDays: billing === 'trial' || billing === 'paid' ? Number(trial) || 0 : 0,
-            notes,
-            limits: {
-                limits: Object.fromEntries(schema.limits.map(f => {
-                    const d = limits[f.key];
-                    return [f.key, d?.unlimited ? null : d?.value === '' ? (f.nullable ? null : 1) : Number(d?.value)];
-                })),
-                modules: Object.fromEntries(schema.modules.map(f => [f.key, !!flags[f.key]])),
-                features: Object.fromEntries(schema.features.map(f => [f.key, !!flags[f.key]])),
-            },
-        };
+        const body = versionBody(schema, { billing, monthly, annual, trial, notes }, limits, flags);
         setBusy(true);
         try {
             const plan = state?.mode === 'edit'
@@ -570,34 +636,20 @@ const VersionEditor: React.FC<{
                 <>
                     <button type="button" className="neu-button" onClick={close}>Cancel</button>
                     <button type="button" className="neu-button neu-button-primary" disabled={busy || !schema} onClick={save}>
-                        <Check size={16} /> {busy ? 'Saving…' : state?.mode === 'edit' ? 'Save draft' : 'Create draft'}
+                        <Check size={16} /> {busy ? 'Saving…' : saveLabel}
                     </button>
                 </>
             }>
             {!schema ? <SkeletonCards count={4} height={80} /> : (
                 <>
-                    <Section title="Billing">
-                        <Segmented value={billing} onChange={change(setBilling)} options={BILLING.map(b => ({ value: b.value, label: b.label }))} />
-                        <p className="mt-2 text-[12px] ac-muted">{BILLING.find(b => b.value === billing)?.hint}</p>
-                        {/* Fields stay in the layout and are disabled when they do not apply, so switching type never shifts the form. */}
-                        <div className="mt-4 ac-grid-fit" style={{ ['--ac-min' as string]: '11rem' }}>
-                            <Field label="Monthly price (₹)" htmlFor="ve-m">
-                                <Input id="ve-m" inputMode="decimal" disabled={billing !== 'paid'} value={billing === 'paid' ? monthly : ''} placeholder={billing === 'paid' ? '' : 'Not charged'} onChange={e => change(setMonthly)(e.target.value)} />
-                            </Field>
-                            <Field label="Yearly price (₹)" htmlFor="ve-a">
-                                <Input id="ve-a" inputMode="decimal" disabled={billing !== 'paid'} value={billing === 'paid' ? annual : ''} placeholder={billing === 'paid' ? '' : 'Not charged'} onChange={e => change(setAnnual)(e.target.value)} />
-                            </Field>
-                            <Field label="Trial days" htmlFor="ve-t">
-                                <Input id="ve-t" inputMode="numeric" disabled={billing !== 'trial' && billing !== 'paid'} value={billing === 'trial' || billing === 'paid' ? trial : ''} placeholder="No trial" onChange={e => change(setTrial)(e.target.value.replace(/[^\d]/g, ''))} />
-                            </Field>
-                        </div>
-                    </Section>
+                    <BillingFields billing={billing} monthly={monthly} annual={annual} trial={trial}
+                        onBilling={change(setBilling)} onMonthly={change(setMonthly)} onAnnual={change(setAnnual)} onTrial={change(setTrial)} />
 
                     <Section title="Limits" description={was ? `Compared with the live version ${current?.version}.` : undefined}>
                         <div className="ac-grid-fit" style={{ ['--ac-min' as string]: '15rem' }}>
                             {schema.limits.map(f => {
                                 const d = limits[f.key] ?? { unlimited: false, value: '' };
-                                const value = d.unlimited ? null : d.value === '' ? undefined : Number(d.value);
+                                const value = typedLimit(d);
                                 const before = was?.limits?.[f.key];
                                 const changed = was !== null && value !== undefined && value !== before;
                                 return (

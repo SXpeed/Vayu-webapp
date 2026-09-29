@@ -9,6 +9,8 @@ export interface SalesPage {
     to: string;
     sales: Sale[];
     summary: SalesSummary;
+    /** Every tag in use, most recent first (suggestions and filters). */
+    allTags: string[];
 }
 
 /** A range of the ledger as a screen shows it. */
@@ -69,8 +71,8 @@ export const salesService = {
         } catch (e) {
             if (!unreachable(e)) throw e;
             const saved = db.getSavedSalesPage(from, to);
-            if (saved) return { from, to, sales: saved.sales, summary: saved.summary, pending, offline: true, savedAt: saved.savedAt };
-            return { from, to, sales: [], summary: summarize([]), pending, offline: true, savedAt: null };
+            if (saved) return { from, to, sales: saved.sales, summary: saved.summary, allTags: saved.allTags ?? [], pending, offline: true, savedAt: saved.savedAt };
+            return { from, to, sales: [], summary: summarize([]), allTags: [], pending, offline: true, savedAt: null };
         }
     },
 

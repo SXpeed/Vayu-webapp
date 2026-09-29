@@ -39,22 +39,24 @@ export const DEFAULT_BRANDING: Branding = {
 
 let cached: { value: Branding; at: number } | null = null;
 
+/** Stored branding, each field checked; the defaults for anything missing or unreadable. */
+function parseBranding(raw: string): Branding {
+  let parsed: Partial<Branding>;
+  try { parsed = JSON.parse(raw) as Partial<Branding>; } catch { return DEFAULT_BRANDING; }
+  const text = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+  return {
+    appName: text(parsed.appName)?.trim() || DEFAULT_BRANDING.appName,
+    tagline: text(parsed.tagline) ?? '',
+    logoKey: text(parsed.logoKey),
+    logoVersion: typeof parsed.logoVersion === 'number' ? parsed.logoVersion : 0,
+    accentColor: text(parsed.accentColor),
+  };
+}
+
 export async function getBranding(db: D1Database): Promise<Branding> {
   if (cached && Date.now() - cached.at < CACHE_MS) return cached.value;
   const row = await db.prepare('SELECT value FROM platform_settings WHERE key = ?').bind(KEY).first<{ value: string }>();
-  let value = DEFAULT_BRANDING;
-  if (row) {
-    try {
-      const parsed = JSON.parse(row.value) as Partial<Branding>;
-      value = {
-        appName: typeof parsed.appName === 'string' && parsed.appName.trim() ? parsed.appName.trim() : DEFAULT_BRANDING.appName,
-        tagline: typeof parsed.tagline === 'string' ? parsed.tagline : '',
-        logoKey: typeof parsed.logoKey === 'string' ? parsed.logoKey : null,
-        logoVersion: typeof parsed.logoVersion === 'number' ? parsed.logoVersion : 0,
-        accentColor: typeof parsed.accentColor === 'string' ? parsed.accentColor : null,
-      };
-    } catch { value = DEFAULT_BRANDING; }
-  }
+  const value = row ? parseBranding(row.value) : DEFAULT_BRANDING;
   cached = { value, at: Date.now() };
   return value;
 }
@@ -83,8 +85,9 @@ export async function updateBranding(db: D1Database, body: Record<string, unknow
   const appName = body.appName === undefined ? current.appName : String(body.appName).trim();
   if (appName.length < 2 || appName.length > 40) throw new OrgError(400, 'invalid', 'The name must be 2–40 characters.');
   const tagline = body.tagline === undefined ? current.tagline : String(body.tagline).trim().slice(0, 80);
-  const accentColor = body.accentColor === undefined ? current.accentColor
-    : (body.accentColor === null || body.accentColor === '' ? null : String(body.accentColor).trim());
+  const clearsAccent = body.accentColor === null || body.accentColor === '';
+  const sentAccent = clearsAccent ? null : String(body.accentColor).trim();
+  const accentColor = body.accentColor === undefined ? current.accentColor : sentAccent;
   if (accentColor !== null && !/^#[0-9a-fA-F]{6}$/.test(accentColor)) {
     throw new OrgError(400, 'invalid', 'The accent colour must be a hex value like #b8860b.');
   }
@@ -104,38 +107,45 @@ interface ImageInfo { type: string; width: number; height: number }
  * Reads the format and size from the file's own bytes. A file that does not
  * start like a PNG, JPEG or WebP is refused, whatever it claims to be.
  */
-export function inspectImage(bytes: Uint8Array): ImageInfo | null {
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  // PNG: signature, then an IHDR chunk with width and height.
-  if (bytes.length > 24 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
-    return { type: 'image/png', width: view.getUint32(16), height: view.getUint32(20) };
-  }
-  // JPEG: walk the segments to the frame header that carries the size.
-  if (bytes.length > 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
-    let i = 2;
-    while (i + 9 < bytes.length) {
-      if (bytes[i] !== 0xff) { i++; continue; }
-      const marker = bytes[i + 1];
-      const length = view.getUint16(i + 2);
-      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
-        return { type: 'image/jpeg', height: view.getUint16(i + 5), width: view.getUint16(i + 7) };
-      }
-      i += 2 + length;
-    }
-    return null;
-  }
-  // WebP: RIFF container, VP8/VP8L/VP8X payload.
-  if (bytes.length > 30 && String.fromCodePoint(...bytes.slice(0, 4)) === 'RIFF' && String.fromCodePoint(...bytes.slice(8, 12)) === 'WEBP') {
-    const fourcc = String.fromCodePoint(...bytes.slice(12, 16));
-    if (fourcc === 'VP8X') return { type: 'image/webp', width: 1 + (bytes[24] | (bytes[25] << 8) | (bytes[26] << 16)), height: 1 + (bytes[27] | (bytes[28] << 8) | (bytes[29] << 16)) };
-    if (fourcc === 'VP8 ') return { type: 'image/webp', width: view.getUint16(26, true) & 0x3fff, height: view.getUint16(28, true) & 0x3fff };
-    if (fourcc === 'VP8L') {
-      const b = bytes[21] | (bytes[22] << 8) | (bytes[23] << 16) | (bytes[24] << 24);
-      return { type: 'image/webp', width: (b & 0x3fff) + 1, height: ((b >> 14) & 0x3fff) + 1 };
-    }
+/** PNG: signature, then an IHDR chunk with width and height. */
+function pngSize(bytes: Uint8Array, view: DataView): ImageInfo | null {
+  const isPng = bytes.length > 24 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+  return isPng ? { type: 'image/png', width: view.getUint32(16), height: view.getUint32(20) } : null;
+}
+
+/** A JPEG start-of-frame marker (the one carrying the size): C0–CF except DHT, JPG and DAC. */
+const isFrameMarker = (marker: number) => marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+
+/** JPEG: walk the segments to the frame header that carries the size. */
+function jpegSize(bytes: Uint8Array, view: DataView): ImageInfo | null {
+  let i = 2;
+  while (i + 9 < bytes.length) {
+    if (bytes[i] !== 0xff) { i++; continue; }
+    if (isFrameMarker(bytes[i + 1])) return { type: 'image/jpeg', height: view.getUint16(i + 5), width: view.getUint16(i + 7) };
+    i += 2 + view.getUint16(i + 2);
   }
   return null;
 }
+
+/** WebP: RIFF container, VP8/VP8L/VP8X payload. */
+function webpSize(bytes: Uint8Array, view: DataView): ImageInfo | null {
+  const tag = (from: number) => String.fromCodePoint(...bytes.slice(from, from + 4));
+  if (bytes.length <= 30 || tag(0) !== 'RIFF' || tag(8) !== 'WEBP') return null;
+  const fourcc = tag(12);
+  if (fourcc === 'VP8X') return { type: 'image/webp', width: 1 + (bytes[24] | (bytes[25] << 8) | (bytes[26] << 16)), height: 1 + (bytes[27] | (bytes[28] << 8) | (bytes[29] << 16)) };
+  if (fourcc === 'VP8 ') return { type: 'image/webp', width: view.getUint16(26, true) & 0x3fff, height: view.getUint16(28, true) & 0x3fff };
+  if (fourcc !== 'VP8L') return null;
+  const b = bytes[21] | (bytes[22] << 8) | (bytes[23] << 16) | (bytes[24] << 24);
+  return { type: 'image/webp', width: (b & 0x3fff) + 1, height: ((b >> 14) & 0x3fff) + 1 };
+}
+
+export function inspectImage(bytes: Uint8Array): ImageInfo | null {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (bytes.length > 4 && bytes[0] === 0xff && bytes[1] === 0xd8) return jpegSize(bytes, view);
+  return pngSize(bytes, view) ?? webpSize(bytes, view);
+}
+
+const LOGO_EXTENSIONS: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
 
 /** Reads and checks an uploaded logo: the raw image is the request body. */
 async function readLogo(env: Env, request: Request): Promise<{ bytes: Uint8Array; info: ImageInfo; extension: string }> {
@@ -155,7 +165,7 @@ async function readLogo(env: Env, request: Request): Promise<{ bytes: Uint8Array
   }
   if (info.width < MIN_PX || info.height < MIN_PX) throw new OrgError(400, 'invalid', `The logo must be at least ${MIN_PX}×${MIN_PX} pixels.`);
   if (info.width > MAX_PX || info.height > MAX_PX) throw new OrgError(400, 'invalid', `The logo must be at most ${MAX_PX}×${MAX_PX} pixels.`);
-  const extension = info.type === 'image/png' ? 'png' : info.type === 'image/jpeg' ? 'jpg' : 'webp';
+  const extension = LOGO_EXTENSIONS[info.type] ?? 'webp';
   return { bytes, info, extension };
 }
 

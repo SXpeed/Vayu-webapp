@@ -59,7 +59,7 @@ import type { Env } from '../workerEnv';
 import { AUTH_BASE_PATH, getAuth, resolveAuthOrigin, type PlatformAuth } from './auth';
 import {
   SettingsError, getEffectiveLoginMethods, getStoredLoginMethods, googleConfigured,
-  parseLoginMethods, rememberLoginMethods, saveLoginMethodsStmt, validateLoginMethods,
+  parseLoginMethods, rememberLoginMethods, saveLoginMethodsStmt, validateLoginMethods, type LoginMethods,
 } from './settings';
 import { auditStmt } from './audit';
 import {
@@ -131,6 +131,270 @@ async function requireProviderAdmin(env: Env, db: D1Database, auth: PlatformAuth
 
 const FRESH_SESSION_MS = 30 * 60_000;
 
+/** One provider-admin request, with what every admin route needs to hand. */
+interface AdminCtx {
+  env: Env; db: D1Database; request: Request; url: URL; path: string; method: string;
+  admin: { userId: string; email: string; role: string; sessionCreatedAt: number };
+  actor: Actor;
+  /** Signed in within FRESH_SESSION_MS: required for the most sensitive changes. */
+  fresh: boolean;
+}
+
+/** An admin route: its path (exact, or a pattern whose groups reach `run`), its methods, and whether it needs a fresh sign-in. */
+interface AdminRoute {
+  path: string | RegExp;
+  methods: string[];
+  fresh?: boolean;
+  run: (c: AdminCtx, match: RegExpExecArray | null) => Promise<Response>;
+}
+
+const needFresh = () => fail(403, 'reauth_required', 'Sign in again to do this.');
+
+/** A JSON object from the request body, or {} when it isn't one. */
+async function objectBody(request: Request): Promise<Record<string, unknown>> {
+  const b = await request.json().catch(() => null);
+  return (b && typeof b === 'object' ? b : {}) as Record<string, unknown>;
+}
+
+/** The route matching this request, and its pattern's match; null when none does. */
+function findAdminRoute(table: AdminRoute[], path: string, method: string): { route: AdminRoute; match: RegExpExecArray | null } | null {
+  for (const route of table) {
+    if (!route.methods.includes(method)) continue;
+    if (typeof route.path === 'string') {
+      if (route.path === path) return { route, match: null };
+      continue;
+    }
+    const match = route.path.exec(path);
+    if (match) return { route, match };
+  }
+  return null;
+}
+
+/** Runs a table's matching route, turning expected errors into replies. Null when no route matches. */
+async function runAdminTable(table: AdminRoute[], c: AdminCtx): Promise<Response | null> {
+  const found = findAdminRoute(table, c.path, c.method);
+  if (!found) return null;
+  if (found.route.fresh && !c.fresh) return needFresh();
+  try {
+    return await found.route.run(c, found.match);
+  } catch (e) {
+    if (e instanceof OrgError) return fail(e.status, e.code, e.message);
+    if (e instanceof SecretsUnavailable) return fail(503, 'secrets_unavailable', 'Payment credential storage is not configured.');
+    throw e;
+  }
+}
+
+const hasGoogleLinked = async (c: AdminCtx) =>
+  !!(await c.db.prepare("SELECT 1 FROM account WHERE userId = ? AND providerId = 'google'").bind(c.admin.userId).first());
+
+async function saveLoginMethods(c: AdminCtx): Promise<Response> {
+  let next;
+  try {
+    next = parseLoginMethods(await c.request.json().catch(() => null));
+    validateLoginMethods(next, { googleConfigured: googleConfigured(c.env), actorHasGoogle: await hasGoogleLinked(c) });
+  } catch (e) {
+    if (e instanceof SettingsError) return fail(400, e.code, e.message);
+    throw e;
+  }
+  const before = await getStoredLoginMethods(c.db);
+  await c.db.batch([
+    saveLoginMethodsStmt(c.db, next, c.admin.userId),
+    auditStmt(c.db, {
+      actorUserId: c.admin.userId, actorKind: 'provider_admin', action: 'settings.login_methods.update',
+      targetType: 'platform_settings', targetId: 'login_methods', details: { before, after: next },
+      ip: c.request.headers.get('cf-connecting-ip'),
+    }),
+  ]);
+  rememberLoginMethods(next);
+  return reply({ stored: next, effective: await getEffectiveLoginMethods(c.env, c.db) });
+}
+
+const SETTINGS_ROUTES: AdminRoute[] = [
+  {
+    path: '/admin/settings/login-methods', methods: ['GET'],
+    run: async (c) => {
+      const origin = resolveAuthOrigin(c.env, c.url);
+      return reply({
+        stored: await getStoredLoginMethods(c.db),
+        effective: await getEffectiveLoginMethods(c.env, c.db),
+        googleConfigured: googleConfigured(c.env),
+        googleRedirectUri: origin ? `${origin}${AUTH_BASE_PATH}/callback/google` : null,
+        actorHasGoogle: await hasGoogleLinked(c),
+      });
+    },
+  },
+  {
+    path: '/admin/settings/login-methods', methods: ['PUT'],
+    run: (c) => (c.fresh ? saveLoginMethods(c) : Promise.resolve(fail(403, 'reauth_required', 'Sign in again to change login methods.'))),
+  },
+  { path: '/admin/settings/branding', methods: ['GET'], run: async (c) => reply(await getBranding(c.db)) },
+  {
+    path: '/admin/settings/branding', methods: ['PATCH'],
+    run: async (c) => reply(await updateBranding(c.db, await c.request.json().catch(() => ({})) as Record<string, unknown>, { userId: c.actor.userId, ip: c.actor.ip })),
+  },
+  { path: '/admin/settings/branding/logo', methods: ['POST'], run: async (c) => reply(await uploadLogo(c.env, c.db, c.request, { userId: c.actor.userId, ip: c.actor.ip })) },
+  {
+    path: '/admin/audit', methods: ['GET'],
+    run: async (c) => {
+      const limit = Math.min(Math.max(Number(c.url.searchParams.get('limit')) || 50, 1), 200);
+      const { results } = await c.db.prepare(
+        `SELECT a.id, a.at, a.actor_kind, a.action, a.target_type, a.target_id, a.org_id, a.details, u.email AS actor_email
+         FROM platform_audit a LEFT JOIN "user" u ON u.id = a.actor_user_id
+         ORDER BY a.at DESC LIMIT ?`,
+      ).bind(limit).all();
+      return reply({ entries: results });
+    },
+  },
+];
+
+const billingWebhookUrl = (c: AdminCtx) => `${c.env.API_ORIGIN || resolveAuthOrigin(c.env, c.url)}/api/v2/webhooks/billing/razorpay`;
+
+const BILLING_ROUTES: AdminRoute[] = [
+  { path: '/admin/billing/razorpay', methods: ['GET'], run: async (c) => reply(await describeBillingAccount(c.env, c.db, billingWebhookUrl(c))) },
+  {
+    path: '/admin/billing/razorpay', methods: ['PUT'], fresh: true,
+    run: async (c) => {
+      await connectBillingAccount(c.env, c.db, await jsonBody(c.request), c.actor);
+      return reply(await describeBillingAccount(c.env, c.db, billingWebhookUrl(c)));
+    },
+  },
+  {
+    path: '/admin/billing/razorpay', methods: ['DELETE'], fresh: true,
+    run: async (c) => {
+      await disconnectBillingAccount(c.db, c.actor);
+      return reply(await describeBillingAccount(c.env, c.db, billingWebhookUrl(c)));
+    },
+  },
+  { path: '/admin/billing/razorpay', methods: ['POST', 'PATCH'], fresh: true, run: async () => fail(405, 'method_not_allowed', 'Not allowed') },
+  { path: '/admin/billing/razorpay/verify', methods: ['POST'], run: async (c) => reply(await verifyBillingAccount(c.env, c.db, c.actor)) },
+  { path: '/admin/billing/payments', methods: ['GET'], run: async (c) => reply(await listAllPayments(c.db, c.url.searchParams)) },
+  {
+    path: /^\/admin\/billing\/payments\/([A-Za-z0-9-]{1,64})\/recheck$/, methods: ['POST'],
+    run: async (c, m) => {
+      const out = await recheckAnyPayment(c.env, c.db, m![1]);
+      return reply({ payment: paymentView(out.payment, 'provider'), checked: out.checked, applied: out.applied, reason: out.reason ?? null });
+    },
+  },
+];
+
+const ID = '[A-Za-z0-9-]{1,64}';
+const planPath = (rest = '') => new RegExp(`^/admin/plans/(${ID})${rest}$`);
+
+const PLAN_ROUTES: AdminRoute[] = [
+  // Everything a plan can control, so the editor never drifts from the server's validation.
+  { path: '/admin/plans/schema', methods: ['GET'], run: async () => reply(PLAN_SCHEMA) },
+  { path: '/admin/plans', methods: ['GET'], run: async (c) => reply({ plans: await listPlans(c.db) }) },
+  { path: '/admin/plans', methods: ['POST'], run: async (c) => reply(await createPlan(c.db, await objectBody(c.request), c.actor), 201) },
+  { path: planPath(), methods: ['GET'], run: async (c, m) => reply(await getPlan(c.db, m![1])) },
+  { path: planPath(), methods: ['PATCH'], run: async (c, m) => reply(await updatePlan(c.db, m![1], await objectBody(c.request), c.actor)) },
+  {
+    path: planPath(), methods: ['DELETE'], fresh: true,
+    run: async (c, m) => { await deletePlan(c.db, m![1], c.actor); return reply({ deleted: true }); },
+  },
+  {
+    path: planPath('/offer'), methods: ['PUT'],
+    run: async (c, m) => { await setOffer(c.db, m![1], await objectBody(c.request), c.actor); return reply(await getPlan(c.db, m![1])); },
+  },
+  {
+    path: planPath('/offer'), methods: ['DELETE'],
+    run: async (c, m) => { await removeOffer(c.db, m![1], c.actor); return reply(await getPlan(c.db, m![1])); },
+  },
+  {
+    path: planPath(`/versions/(${ID})/reprice`), methods: ['POST'], fresh: true,
+    run: async (c, m) => reply(await repriceVersion(c.db, m![1], m![2], await objectBody(c.request), c.actor)),
+  },
+  {
+    path: planPath(`/versions/(${ID})/move`), methods: ['POST'], fresh: true,
+    run: async (c, m) => reply(await moveVersionOrganizations(c.db, m![1], m![2], await objectBody(c.request), c.actor)),
+  },
+  { path: planPath('/versions'), methods: ['POST'], run: async (c, m) => reply(await createPlanVersion(c.db, m![1], await objectBody(c.request), c.actor), 201) },
+  {
+    path: planPath(`/versions/(${ID})`), methods: ['PATCH'],
+    run: async (c, m) => reply(await updatePlanVersion(c.db, m![1], m![2], await objectBody(c.request), c.actor)),
+  },
+];
+
+const orgPath = (rest = '') => new RegExp(`^/admin/orgs/(${ID})${rest}$`);
+const orgWebhookUrl = (c: AdminCtx, orgId: string) => `${c.env.API_ORIGIN || resolveAuthOrigin(c.env, c.url)}/api/v2/webhooks/razorpay/${orgId}`;
+
+/** A dry run by default; a real run needs a recent sign-in. */
+async function dryRunOrFresh(c: AdminCtx, orgId: string, run: (env: Env, db: D1Database, orgId: string, body: Record<string, unknown>, actor: Actor) => Promise<unknown>): Promise<Response> {
+  const b = await objectBody(c.request);
+  if (b.dryRun === false && !c.fresh) return needFresh();
+  return reply(await run(c.env, c.db, orgId, b, c.actor));
+}
+
+const ORG_ROUTES: AdminRoute[] = [
+  { path: '/admin/users', methods: ['POST'], run: async (c) => reply(await createUserAccount(c.db, await objectBody(c.request), c.actor), 201) },
+  { path: '/admin/orgs', methods: ['GET'], run: async (c) => reply({ organizations: await listOrganizations(c.db, c.url.searchParams) }) },
+  { path: '/admin/orgs', methods: ['POST'], run: async (c) => reply(await createOrganization(c.db, await objectBody(c.request), c.actor), 201) },
+  {
+    path: orgPath(), methods: ['GET'],
+    run: async (c, m) => {
+      const [org, branding] = await Promise.all([getOrganization(c.db, m![1]), getOrgBranding(c.db, m![1])]);
+      return reply({ ...org, logoUrl: orgLogoUrl(m![1], branding) });
+    },
+  },
+  { path: orgPath('/logo'), methods: ['POST'], run: async (c, m) => reply({ logoUrl: orgLogoUrl(m![1], await uploadOrgLogo(c.env, c.db, m![1], c.request, c.actor)) }) },
+  { path: orgPath('/logo'), methods: ['DELETE'], run: async (c, m) => reply({ logoUrl: orgLogoUrl(m![1], await removeOrgLogo(c.db, m![1], c.actor)) }) },
+  { path: orgPath('/status'), methods: ['POST'], fresh: true, run: async (c, m) => reply(await setOrganizationStatus(c.db, m![1], await objectBody(c.request), c.actor)) },
+  { path: orgPath('/members'), methods: ['POST'], run: async (c, m) => reply(await addMember(c.db, m![1], await objectBody(c.request), c.actor), 201) },
+  { path: orgPath(`/members/(${ID})`), methods: ['PATCH'], run: async (c, m) => reply(await updateMember(c.db, m![1], m![2], await objectBody(c.request), c.actor)) },
+  {
+    path: orgPath('/payments/razorpay'), methods: ['GET'],
+    run: async (c, m) => { await getOrganization(c.db, m![1]); return reply(await describeRazorpay(c.db, m![1], orgWebhookUrl(c, m![1]))); },
+  },
+  {
+    path: orgPath('/payments/razorpay'), methods: ['PUT'], fresh: true,
+    run: async (c, m) => { await connectRazorpay(c.env, c.db, m![1], await objectBody(c.request), c.actor); return reply(await describeRazorpay(c.db, m![1], orgWebhookUrl(c, m![1]))); },
+  },
+  {
+    path: orgPath('/payments/razorpay'), methods: ['DELETE'], fresh: true,
+    run: async (c, m) => { await disconnectRazorpay(c.db, m![1], c.actor); return reply(await describeRazorpay(c.db, m![1], orgWebhookUrl(c, m![1]))); },
+  },
+  {
+    // Which account the app's payment links use: this organization's (POST)
+    // or, if it was this one, back to the shared account (DELETE).
+    path: orgPath('/payments/razorpay/app'), methods: ['POST', 'DELETE'], fresh: true,
+    run: async (c, m) => {
+      await setAppPaymentsOrg(c.db, c.method === 'POST' ? m![1] : null, c.actor);
+      return reply(await describeRazorpay(c.db, m![1], orgWebhookUrl(c, m![1])));
+    },
+  },
+  { path: orgPath('/payments/razorpay/verify'), methods: ['POST'], run: async (c, m) => reply(await verifyRazorpay(c.env, c.db, m![1], c.actor)) },
+  {
+    path: orgPath('/subscription'), methods: ['GET'],
+    run: async (c, m) => {
+      const [entitlements, seats] = await Promise.all([resolveEntitlements(c.db, m![1]), seatUsage(c.db, m![1])]);
+      return reply({ ...entitlements, seats });
+    },
+  },
+  { path: orgPath('/subscription'), methods: ['POST'], fresh: true, run: async (c, m) => reply(await setSubscription(c.db, m![1], await objectBody(c.request), c.actor)) },
+  { path: orgPath('/subscription/extend'), methods: ['POST'], run: async (c, m) => reply(await extendSubscription(c.db, m![1], await objectBody(c.request), c.actor)) },
+  { path: orgPath('/subscription/extend-trial'), methods: ['POST'], run: async (c, m) => reply(await extendTrial(c.db, m![1], await objectBody(c.request), c.actor)) },
+  {
+    path: orgPath('/entitlements'), methods: ['POST'], fresh: true,
+    run: async (c, m) => {
+      const next = await setOverride(c.db, m![1], await objectBody(c.request), c.actor);
+      forgetPlanActive(m![1]); // a module switched here applies at once on this isolate
+      return reply(next);
+    },
+  },
+  {
+    path: orgPath('/entitlements/(.+)'), methods: ['DELETE'], fresh: true,
+    run: async (c, m) => {
+      const next = await removeOverride(c.db, m![1], m![2].slice(0, 40), c.actor);
+      forgetPlanActive(m![1]);
+      return reply(next);
+    },
+  },
+  { path: orgPath('/import-legacy'), methods: ['GET'], run: async (c, m) => reply({ imports: await listImports(c.db, m![1]) }) },
+  { path: orgPath('/import-legacy'), methods: ['POST'], run: (c, m) => dryRunOrFresh(c, m![1], importLegacyWorkspace) },
+  // Which data this organization works on in the app (originalApp.ts).
+  { path: orgPath('/app-storage'), methods: ['POST'], fresh: true, run: async (c, m) => reply(await setAppStorage(c.db, m![1], await objectBody(c.request), c.actor)) },
+  { path: orgPath('/import-original-people'), methods: ['POST'], run: (c, m) => dryRunOrFresh(c, m![1], importOriginalPeople) },
+];
+
 async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request: Request, url: URL, path: string): Promise<Response> {
   const gate = await requireProviderAdmin(env, db, auth, request, url);
   if (!gate.ok) return gate.response;
@@ -141,278 +405,16 @@ async function handleAdmin(env: Env, db: D1Database, auth: PlatformAuth, request
     return reply({ userId: admin.userId, email: admin.email, role: admin.role });
   }
 
-  const center = await handleCenterRoute(env, db, request, url, path, {
-    userId: admin.userId,
-    role: admin.role,
-    ip: request.headers.get('cf-connecting-ip'),
-    fresh: Date.now() - admin.sessionCreatedAt <= FRESH_SESSION_MS,
-  });
+  const fresh = Date.now() - admin.sessionCreatedAt <= FRESH_SESSION_MS;
+  const ip = request.headers.get('cf-connecting-ip');
+  const center = await handleCenterRoute(env, db, request, url, path, { userId: admin.userId, role: admin.role, ip, fresh });
   if (center) return center;
 
-  if (path === '/admin/settings/login-methods' && method === 'GET') {
-    const stored = await getStoredLoginMethods(db);
-    const effective = await getEffectiveLoginMethods(env, db);
-    const origin = resolveAuthOrigin(env, url);
-    const linked = await db.prepare(
-      "SELECT 1 FROM account WHERE userId = ? AND providerId = 'google'",
-    ).bind(admin.userId).first();
-    return reply({
-      stored,
-      effective,
-      googleConfigured: googleConfigured(env),
-      googleRedirectUri: origin ? `${origin}${AUTH_BASE_PATH}/callback/google` : null,
-      actorHasGoogle: !!linked,
-    });
+  const c: AdminCtx = { env, db, request, url, path, method, admin, actor: { userId: admin.userId, ip }, fresh };
+  for (const table of [SETTINGS_ROUTES, BILLING_ROUTES, PLAN_ROUTES, ORG_ROUTES]) {
+    const out = await runAdminTable(table, c);
+    if (out) return out;
   }
-
-  if (path === '/admin/settings/login-methods' && method === 'PUT') {
-    if (Date.now() - admin.sessionCreatedAt > FRESH_SESSION_MS) {
-      return fail(403, 'reauth_required', 'Sign in again to change login methods.');
-    }
-    let next;
-    try {
-      next = parseLoginMethods(await request.json().catch(() => null));
-      const linked = await db.prepare(
-        "SELECT 1 FROM account WHERE userId = ? AND providerId = 'google'",
-      ).bind(admin.userId).first();
-      validateLoginMethods(next, { googleConfigured: googleConfigured(env), actorHasGoogle: !!linked });
-    } catch (e) {
-      if (e instanceof SettingsError) return fail(400, e.code, e.message);
-      throw e;
-    }
-    const before = await getStoredLoginMethods(db);
-    await db.batch([
-      saveLoginMethodsStmt(db, next, admin.userId),
-      auditStmt(db, {
-        actorUserId: admin.userId, actorKind: 'provider_admin', action: 'settings.login_methods.update',
-        targetType: 'platform_settings', targetId: 'login_methods', details: { before, after: next },
-        ip: request.headers.get('cf-connecting-ip'),
-      }),
-    ]);
-    rememberLoginMethods(next);
-    return reply({ stored: next, effective: await getEffectiveLoginMethods(env, db) });
-  }
-
-  if (path === '/admin/settings/branding' && method === 'GET') {
-    return reply(await getBranding(db));
-  }
-
-  if (path === '/admin/settings/branding' && method === 'PATCH') {
-    try {
-      return reply(await updateBranding(db, await request.json().catch(() => ({})) as Record<string, unknown>, {
-        userId: admin.userId, ip: request.headers.get('cf-connecting-ip'),
-      }));
-    } catch (e) {
-      if (e instanceof OrgError) return fail(e.status, e.code, e.message);
-      throw e;
-    }
-  }
-
-  if (path === '/admin/settings/branding/logo' && method === 'POST') {
-    try {
-      return reply(await uploadLogo(env, db, request, { userId: admin.userId, ip: request.headers.get('cf-connecting-ip') }));
-    } catch (e) {
-      if (e instanceof OrgError) return fail(e.status, e.code, e.message);
-      throw e;
-    }
-  }
-
-  if (path === '/admin/audit' && method === 'GET') {
-    const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 200);
-    const { results } = await db.prepare(
-      `SELECT a.id, a.at, a.actor_kind, a.action, a.target_type, a.target_id, a.org_id, a.details, u.email AS actor_email
-       FROM platform_audit a LEFT JOIN "user" u ON u.id = a.actor_user_id
-       ORDER BY a.at DESC LIMIT ?`,
-    ).bind(limit).all();
-    return reply({ entries: results });
-  }
-
-  if (path.startsWith('/admin/billing/')) {
-    const actor: Actor = { userId: admin.userId, ip: request.headers.get('cf-connecting-ip') };
-    const fresh = Date.now() - admin.sessionCreatedAt <= FRESH_SESSION_MS;
-    const webhookUrl = `${env.API_ORIGIN || resolveAuthOrigin(env, url)}/api/v2/webhooks/billing/razorpay`;
-    try {
-      if (path === '/admin/billing/razorpay') {
-        if (method === 'GET') return reply(await describeBillingAccount(env, db, webhookUrl));
-        if (!fresh) return fail(403, 'reauth_required', 'Sign in again to do this.');
-        if (method === 'PUT') await connectBillingAccount(env, db, await jsonBody(request), actor);
-        else if (method === 'DELETE') await disconnectBillingAccount(db, actor);
-        else return fail(405, 'method_not_allowed', 'Not allowed');
-        return reply(await describeBillingAccount(env, db, webhookUrl));
-      }
-      if (path === '/admin/billing/razorpay/verify' && method === 'POST') {
-        return reply(await verifyBillingAccount(env, db, actor));
-      }
-      if (path === '/admin/billing/payments' && method === 'GET') {
-        return reply(await listAllPayments(db, url.searchParams));
-      }
-      const recheck = /^\/admin\/billing\/payments\/([A-Za-z0-9-]{1,64})\/recheck$/.exec(path);
-      if (recheck && method === 'POST') {
-        const out = await recheckAnyPayment(env, db, recheck[1]);
-        return reply({ payment: paymentView(out.payment, 'provider'), checked: out.checked, applied: out.applied, reason: out.reason ?? null });
-      }
-    } catch (e) {
-      if (e instanceof OrgError) return fail(e.status, e.code, e.message);
-      if (e instanceof SecretsUnavailable) return fail(503, 'secrets_unavailable', 'Payment credential storage is not configured.');
-      throw e;
-    }
-    return fail(404, 'not_found', 'Not found');
-  }
-
-  const planRoute = /^\/admin\/plans(?:\/([A-Za-z0-9-]{1,64})(\/.*)?)?$/.exec(path);
-  if (planRoute) {
-    const actor: Actor = { userId: admin.userId, ip: request.headers.get('cf-connecting-ip') };
-    const planBody = async () => {
-      const b = await request.json().catch(() => null);
-      return (b && typeof b === 'object' ? b : {}) as Record<string, unknown>;
-    };
-    try {
-      const planId = planRoute[1];
-      const rest = planRoute[2] ?? '';
-      const versionAction = /^\/versions\/([A-Za-z0-9-]{1,64})\/(reprice|move)$/.exec(rest);
-      const planFresh = Date.now() - admin.sessionCreatedAt <= FRESH_SESSION_MS;
-      if (planId === 'schema' && method === 'GET') {
-        // Everything a plan can control, so the editor never drifts from the
-        // server's validation.
-        return reply(PLAN_SCHEMA);
-      }
-      if (!planId) {
-        if (method === 'GET') return reply({ plans: await listPlans(db) });
-        if (method === 'POST') return reply(await createPlan(db, await planBody(), actor), 201);
-      } else if (rest === '' && method === 'GET') {
-        return reply(await getPlan(db, planId));
-      } else if (rest === '' && method === 'PATCH') {
-        return reply(await updatePlan(db, planId, await planBody(), actor));
-      } else if (rest === '' && method === 'DELETE') {
-        if (!planFresh) return fail(403, 'reauth_required', 'Sign in again to do this.');
-        await deletePlan(db, planId, actor);
-        return reply({ deleted: true });
-      } else if (rest === '/offer' && method === 'PUT') {
-        await setOffer(db, planId, await planBody(), actor);
-        return reply(await getPlan(db, planId));
-      } else if (rest === '/offer' && method === 'DELETE') {
-        await removeOffer(db, planId, actor);
-        return reply(await getPlan(db, planId));
-      } else if (versionAction && method === 'POST') {
-        if (!planFresh) return fail(403, 'reauth_required', 'Sign in again to do this.');
-        if (versionAction[2] === 'reprice') return reply(await repriceVersion(db, planId, versionAction[1], await planBody(), actor));
-        return reply(await moveVersionOrganizations(db, planId, versionAction[1], await planBody(), actor));
-      } else if (rest === '/versions' && method === 'POST') {
-        return reply(await createPlanVersion(db, planId, await planBody(), actor), 201);
-      } else if (rest.startsWith('/versions/') && method === 'PATCH') {
-        const vid = rest.slice('/versions/'.length);
-        if (!/^[A-Za-z0-9-]{1,64}$/.test(vid)) return fail(404, 'not_found', 'Not found');
-        return reply(await updatePlanVersion(db, planId, vid, await planBody(), actor));
-      }
-    } catch (e) {
-      if (e instanceof OrgError) return fail(e.status, e.code, e.message);
-      throw e;
-    }
-  }
-
-  const orgRoute = /^\/admin\/orgs(?:\/([A-Za-z0-9-]{1,64})(\/.*)?)?$/.exec(path);
-  if (orgRoute || path === '/admin/users') {
-    const actor: Actor = { userId: admin.userId, ip: request.headers.get('cf-connecting-ip') };
-    const fresh = Date.now() - admin.sessionCreatedAt <= FRESH_SESSION_MS;
-    const needFresh = () => fail(403, 'reauth_required', 'Sign in again to do this.');
-    const body = async () => {
-      const b = await request.json().catch(() => null);
-      return (b && typeof b === 'object' ? b : {}) as Record<string, unknown>;
-    };
-    try {
-      if (path === '/admin/users' && method === 'POST') {
-        return reply(await createUserAccount(db, await body(), actor), 201);
-      }
-      const orgId = orgRoute?.[1];
-      const rest = orgRoute?.[2] ?? '';
-      if (!orgId) {
-        if (method === 'GET') return reply({ organizations: await listOrganizations(db, url.searchParams) });
-        if (method === 'POST') return reply(await createOrganization(db, await body(), actor), 201);
-      } else if (rest === '' && method === 'GET') {
-        const [org, branding] = await Promise.all([getOrganization(db, orgId), getOrgBranding(db, orgId)]);
-        return reply({ ...org, logoUrl: orgLogoUrl(orgId, branding) });
-      } else if (rest === '/logo' && (method === 'POST' || method === 'DELETE')) {
-        const branding = method === 'POST'
-          ? await uploadOrgLogo(env, db, orgId, request, actor)
-          : await removeOrgLogo(db, orgId, actor);
-        return reply({ logoUrl: orgLogoUrl(orgId, branding) });
-      } else if (rest === '/status' && method === 'POST') {
-        if (!fresh) return needFresh();
-        return reply(await setOrganizationStatus(db, orgId, await body(), actor));
-      } else if (rest === '/members' && method === 'POST') {
-        return reply(await addMember(db, orgId, await body(), actor), 201);
-      } else if (rest.startsWith('/members/') && method === 'PATCH') {
-        const mid = rest.slice('/members/'.length);
-        if (!/^[A-Za-z0-9-]{1,64}$/.test(mid)) return fail(404, 'not_found', 'Not found');
-        return reply(await updateMember(db, orgId, mid, await body(), actor));
-      } else if (rest === '/payments/razorpay') {
-        const origin = env.API_ORIGIN || resolveAuthOrigin(env, url);
-        const webhookUrl = `${origin}/api/v2/webhooks/razorpay/${orgId}`;
-        if (method === 'GET') {
-          await getOrganization(db, orgId);
-          return reply(await describeRazorpay(db, orgId, webhookUrl));
-        }
-        if (!fresh) return needFresh();
-        if (method === 'PUT') {
-          await connectRazorpay(env, db, orgId, await body(), actor);
-          return reply(await describeRazorpay(db, orgId, webhookUrl));
-        }
-        if (method === 'DELETE') {
-          await disconnectRazorpay(db, orgId, actor);
-          return reply(await describeRazorpay(db, orgId, webhookUrl));
-        }
-      } else if (rest === '/payments/razorpay/app' && (method === 'POST' || method === 'DELETE')) {
-        // Which account the app's payment links use: this organization's
-        // (POST) or, if it was this one, back to the shared account (DELETE).
-        if (!fresh) return needFresh();
-        await setAppPaymentsOrg(db, method === 'POST' ? orgId : null, actor);
-        const origin = env.API_ORIGIN || resolveAuthOrigin(env, url);
-        return reply(await describeRazorpay(db, orgId, `${origin}/api/v2/webhooks/razorpay/${orgId}`));
-      } else if (rest === '/subscription' && method === 'GET') {
-        const [entitlements, seats] = await Promise.all([resolveEntitlements(db, orgId), seatUsage(db, orgId)]);
-        return reply({ ...entitlements, seats });
-      } else if (rest === '/subscription' && method === 'POST') {
-        if (!fresh) return needFresh();
-        return reply(await setSubscription(db, orgId, await body(), actor));
-      } else if (rest === '/subscription/extend' && method === 'POST') {
-        return reply(await extendSubscription(db, orgId, await body(), actor));
-      } else if (rest === '/subscription/extend-trial' && method === 'POST') {
-        return reply(await extendTrial(db, orgId, await body(), actor));
-      } else if (rest === '/entitlements' && method === 'POST') {
-        if (!fresh) return needFresh();
-        const next = await setOverride(db, orgId, await body(), actor);
-        forgetPlanActive(orgId); // a module switched here applies at once on this isolate
-        return reply(next);
-      } else if (rest.startsWith('/entitlements/') && method === 'DELETE') {
-        if (!fresh) return needFresh();
-        const next = await removeOverride(db, orgId, rest.slice('/entitlements/'.length).slice(0, 40), actor);
-        forgetPlanActive(orgId);
-        return reply(next);
-      } else if (rest === '/import-legacy' && method === 'GET') {
-        return reply({ imports: await listImports(db, orgId) });
-      } else if (rest === '/import-legacy' && method === 'POST') {
-        // Dry run by default; a real import needs a recent sign-in.
-        const b = await body();
-        if (b.dryRun === false && !fresh) return needFresh();
-        return reply(await importLegacyWorkspace(env, db, orgId, b, actor));
-      } else if (rest === '/payments/razorpay/verify' && method === 'POST') {
-        return reply(await verifyRazorpay(env, db, orgId, actor));
-      } else if (rest === '/app-storage' && method === 'POST') {
-        // Which data this organization works on in the app (originalApp.ts).
-        if (!fresh) return needFresh();
-        return reply(await setAppStorage(db, orgId, await body(), actor));
-      } else if (rest === '/import-original-people' && method === 'POST') {
-        const b = await body();
-        if (b.dryRun === false && !fresh) return needFresh();
-        return reply(await importOriginalPeople(env, db, orgId, b, actor));
-      }
-    } catch (e) {
-      if (e instanceof OrgError) return fail(e.status, e.code, e.message);
-      if (e instanceof SecretsUnavailable) return fail(503, 'secrets_unavailable', 'Payment credential storage is not configured.');
-      throw e;
-    }
-  }
-
   return fail(404, 'not_found', 'Not found');
 }
 
@@ -458,6 +460,100 @@ async function handleInvitationRoute(env: Env, db: D1Database, auth: PlatformAut
   return fail(405, 'method_not_allowed', 'Not allowed');
 }
 
+/**
+ * Webhooks: plan payments into the platform's own account (billing.ts), and
+ * each organization's Razorpay events, authenticated by its own signing
+ * secret rather than a session. A failure answers 500, so Razorpay retries
+ * and the retry finishes the work.
+ */
+async function handleWebhook(env: Env, db: D1Database, request: Request, path: string, hooks: PlatformHooks): Promise<Response | null> {
+  const hook = /^\/webhooks\/razorpay\/([A-Za-z0-9-]{1,64})$/.exec(path);
+  if (path !== '/webhooks/billing/razorpay' && !hook) return null;
+  if (request.method !== 'POST') return fail(405, 'method_not_allowed', 'Use POST');
+  try {
+    if (!hook) {
+      const out = await receiveBillingWebhook(env, db, request);
+      return reply(out.body, out.status);
+    }
+    const out = await receiveRazorpayWebhook(env, db, hook[1], request);
+    if (out.status === 200 && out.event !== undefined) await hooks.onPaymentEvent?.(hook[1], out.event);
+    return reply(out.body, out.status);
+  } catch (e) {
+    console.error(hook ? 'razorpay webhook failed' : 'billing webhook failed', e);
+    return fail(500, 'internal', 'Something went wrong.');
+  }
+}
+
+const cachedFor = (res: Response, header: string): Response => { res.headers.set('Cache-Control', header); return res; };
+
+/** Pages anyone may read: branding, logos, public plans and the login methods. */
+async function handlePublic(env: Env, db: D1Database, request: Request, path: string, methods: LoginMethods): Promise<Response | null> {
+  if (request.method !== 'GET') return null;
+  if (path === '/public/branding') return cachedFor(reply(await publicBranding(db)), 'public, max-age=60');
+  if (path === '/public/branding/logo') return serveLogo(env, db);
+  const orgLogo = /^\/public\/orgs\/([A-Za-z0-9-]{1,64})\/logo$/.exec(path);
+  if (orgLogo) return serveOrgLogo(env, db, orgLogo[1]);
+  // Public: only published, public plans, and only what a price card needs.
+  if (path === '/public/plans') return cachedFor(reply({ plans: await publicPlans(db) }), 'public, max-age=60');
+  if (path === '/public/login-methods') return reply({ emailPassword: methods.emailPassword, google: methods.google });
+  return null;
+}
+
+/** The signed-in person's own things: their organizations and their devices. */
+async function handleMe(db: D1Database, auth: PlatformAuth, request: Request, path: string): Promise<Response | null> {
+  try {
+    if (path === '/me/orgs' && request.method === 'GET') {
+      const organizations = await listMyOrganizations(db, auth, request) as { id: string }[];
+      const logos = await orgLogoUrls(db, organizations.map(o => o.id));
+      return reply({ organizations: organizations.map(o => ({ ...o, logoUrl: logos.get(o.id) ?? null })) });
+    }
+    if (path === '/me/sessions' && request.method === 'GET') return reply({ sessions: await listMySessions(db, auth, request) });
+    if (path === '/me/sessions/signout' && request.method === 'POST') {
+      const b = await jsonBody(request);
+      const id = typeof b.id === 'string' && b.id ? b.id : undefined;
+      return reply({ signedOut: await signOutMySessions(db, auth, request, id) });
+    }
+  } catch (e) {
+    if (e instanceof OrgAccessError) return fail(e.status, e.code, e.message);
+    throw e;
+  }
+  return null;
+}
+
+/**
+ * An organization's own business data. resolveOrgContext checks the session,
+ * the membership and the organization's status before any database is
+ * opened; it never falls back to another organization.
+ */
+async function handleOrgData(env: Env, db: D1Database, auth: PlatformAuth, request: Request, path: string, url: URL): Promise<Response | null> {
+  const org = /^\/org\/([A-Za-z0-9-]{1,64})(\/.*)?$/.exec(path);
+  if (!org) return null;
+  try {
+    const ctx = await resolveOrgContext(env, db, auth, request, org[1]);
+    return reply(await handleOrgRequest(ctx, request, org[2] ?? '', url));
+  } catch (e) {
+    if (e instanceof OrgAccessError) return fail(e.status, e.code, e.message);
+    throw e;
+  }
+}
+
+/** Everything that needs the sign-in layer, in order. */
+async function handleSignedInArea(env: Env, db: D1Database, request: Request, url: URL, path: string, origin: string): Promise<Response> {
+  const methods = await getEffectiveLoginMethods(env, db);
+  const auth = await getAuth(env, db, origin, methods);
+  if (path.startsWith('/auth/')) return cachedFor(await auth.handler(request), 'no-store');
+  const pub = await handlePublic(env, db, request, path, methods);
+  if (pub) return pub;
+  if (path.startsWith('/admin/')) return handleAdmin(env, db, auth, request, url, path);
+  const apply = await handleApplyRoute(db, auth, request, path, { requireVerifiedEmail: emailConfigured(env) });
+  if (apply) return apply;
+  const invitation = await handleInvitationRoute(env, db, auth, request, path);
+  if (invitation) return invitation;
+  return (await handleMe(db, auth, request, path))
+    ?? (await handleOrgData(env, db, auth, request, path, url))
+    ?? fail(404, 'not_found', 'Not found');
+}
+
 async function routePlatformRequest(request: Request, env: Env, hooks: PlatformHooks): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith('/api/v2/')) return null;
@@ -467,119 +563,13 @@ async function routePlatformRequest(request: Request, env: Env, hooks: PlatformH
   if (!db || !env.BETTER_AUTH_SECRET || env.BETTER_AUTH_SECRET.length < 32) {
     return fail(503, 'platform_unavailable', 'The platform is not configured in this environment.');
   }
-
-  // Plan payments into the platform's own account (billing.ts).
-  if (path === '/webhooks/billing/razorpay') {
-    if (request.method !== 'POST') return fail(405, 'method_not_allowed', 'Use POST');
-    try {
-      const out = await receiveBillingWebhook(env, db, request);
-      return reply(out.body, out.status);
-    } catch (e) {
-      // 500: Razorpay retries, and the retry finishes the work.
-      console.error('billing webhook failed', e);
-      return fail(500, 'internal', 'Something went wrong.');
-    }
-  }
-
-  // Payment-provider webhooks: authenticated by the organization's own
-  // signing secret, not by a session, so they skip the auth layer.
-  const hook = /^\/webhooks\/razorpay\/([A-Za-z0-9-]{1,64})$/.exec(path);
-  if (hook) {
-    if (request.method !== 'POST') return fail(405, 'method_not_allowed', 'Use POST');
-    try {
-      const out = await receiveRazorpayWebhook(env, db, hook[1], request);
-      // A failure here answers 500, so Razorpay retries and the retry applies it.
-      if (out.status === 200 && out.event !== undefined) await hooks.onPaymentEvent?.(hook[1], out.event);
-      return reply(out.body, out.status);
-    } catch (e) {
-      console.error('razorpay webhook failed', e);
-      return fail(500, 'internal', 'Something went wrong.');
-    }
-  }
+  const webhook = await handleWebhook(env, db, request, path, hooks);
+  if (webhook) return webhook;
 
   const origin = resolveAuthOrigin(env, url);
   if (!origin) return fail(403, 'unknown_origin', 'This address is not allowed to sign in.');
-
   try {
-    const methods = await getEffectiveLoginMethods(env, db);
-    const auth = await getAuth(env, db, origin, methods);
-
-    if (path.startsWith('/auth/')) {
-      const res = await auth.handler(request);
-      res.headers.set('Cache-Control', 'no-store');
-      return res;
-    }
-    if (path === '/public/branding' && request.method === 'GET') {
-      const res = reply(await publicBranding(db));
-      res.headers.set('Cache-Control', 'public, max-age=60');
-      return res;
-    }
-    if (path === '/public/branding/logo' && request.method === 'GET') {
-      return await serveLogo(env, db);
-    }
-    const orgLogo = /^\/public\/orgs\/([A-Za-z0-9-]{1,64})\/logo$/.exec(path);
-    if (orgLogo && request.method === 'GET') {
-      return await serveOrgLogo(env, db, orgLogo[1]);
-    }
-    if (path === '/public/plans' && request.method === 'GET') {
-      // Public: only published, public plans, and only what a price card needs.
-      const res = reply({ plans: await publicPlans(db) });
-      res.headers.set('Cache-Control', 'public, max-age=60');
-      return res;
-    }
-    if (path === '/public/login-methods' && request.method === 'GET') {
-      return reply({
-        emailPassword: methods.emailPassword,
-        google: methods.google,
-      });
-    }
-    if (path.startsWith('/admin/')) return await handleAdmin(env, db, auth, request, url, path);
-
-    const apply = await handleApplyRoute(db, auth, request, path, { requireVerifiedEmail: emailConfigured(env) });
-    if (apply) return apply;
-
-    const invitation = await handleInvitationRoute(env, db, auth, request, path);
-    if (invitation) return invitation;
-
-    if (path === '/me/orgs' && request.method === 'GET') {
-      try {
-        const organizations = await listMyOrganizations(db, auth, request) as { id: string }[];
-        const logos = await orgLogoUrls(db, organizations.map(o => o.id));
-        return reply({ organizations: organizations.map(o => ({ ...o, logoUrl: logos.get(o.id) ?? null })) });
-      } catch (e) {
-        if (e instanceof OrgAccessError) return fail(e.status, e.code, e.message);
-        throw e;
-      }
-    }
-
-    if (path === '/me/sessions' || path === '/me/sessions/signout') {
-      try {
-        if (request.method === 'GET' && path === '/me/sessions') return reply({ sessions: await listMySessions(db, auth, request) });
-        if (request.method === 'POST' && path === '/me/sessions/signout') {
-          const b = await jsonBody(request);
-          const id = typeof b.id === 'string' && b.id ? b.id : undefined;
-          return reply({ signedOut: await signOutMySessions(db, auth, request, id) });
-        }
-      } catch (e) {
-        if (e instanceof OrgAccessError) return fail(e.status, e.code, e.message);
-        throw e;
-      }
-    }
-
-    // An organization's own business data. resolveOrgContext checks the
-    // session, the membership and the organization's status before any
-    // database is opened; it never falls back to another organization.
-    const org = /^\/org\/([A-Za-z0-9-]{1,64})(\/.*)?$/.exec(path);
-    if (org) {
-      try {
-        const ctx = await resolveOrgContext(env, db, auth, request, org[1]);
-        return reply(await handleOrgRequest(ctx, request, org[2] ?? '', url));
-      } catch (e) {
-        if (e instanceof OrgAccessError) return fail(e.status, e.code, e.message);
-        throw e;
-      }
-    }
-    return fail(404, 'not_found', 'Not found');
+    return await handleSignedInArea(env, db, request, url, path, origin);
   } catch (e) {
     console.error('platform request failed', url.pathname, e);
     return fail(500, 'internal', 'Something went wrong. Please try again.');

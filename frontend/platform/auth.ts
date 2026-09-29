@@ -48,10 +48,16 @@ export async function verifyLegacyPbkdf2(password: string, stored: string): Prom
 
 // ── Origins ───────────────────────────────────────────────────────────────
 
+function withoutTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s[end - 1] === '/') end--;
+  return s.slice(0, end);
+}
+
 export function configuredOrigins(env: Env): string[] {
   return (env.AUTH_ORIGINS ?? '')
     .split(',')
-    .map(s => s.trim().replace(/\/+$/, ''))
+    .map(s => withoutTrailingSlashes(s.trim()))
     .filter(Boolean);
 }
 

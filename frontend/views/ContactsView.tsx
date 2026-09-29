@@ -22,54 +22,47 @@ type ContactFilter = 'all' | 'inquiry' | 'manual' | 'import';
 const isNonEmptyCell = (cell: string): boolean => cell !== '';
 
 /** Minimal CSV parser — handles quoted cells with embedded commas/newlines. */
-function parseCsv(text: string): string[][] {
-    const rows: string[][] = [];
-    const state = { inQuotes: false, cell: '', row: [] as string[] };
+interface CsvState { inQuotes: boolean; cell: string; row: string[]; rows: string[][] }
 
-    const endCell = () => {
-        state.row.push(state.cell.trim());
-        state.cell = '';
-    };
-    const endRow = () => {
-        endCell();
-        if (state.row.some(isNonEmptyCell)) rows.push(state.row);
-        state.row = [];
-    };
+function endCell(st: CsvState): void {
+    st.row.push(st.cell.trim());
+    st.cell = '';
+}
 
-    for (let i = 0; i < text.length; i++) {
-        const ch = text[i];
-        const next = text[i + 1] ?? '';
-        if (ch === '"') {
-            // Inside a quoted cell, a doubled quote is an escaped quote.
-            if (state.inQuotes && next === '"') {
-                state.cell += '"';
-                i++;
-                continue;
-            }
-            state.inQuotes = !state.inQuotes;
-            continue;
-        }
-        if (state.inQuotes) {
-            state.cell += ch;
-            continue;
-        }
-        if (ch === ',') {
-            endCell();
-            continue;
-        }
-        if (ch === '\r') {
-            if (next === '\n') i++;
-            endRow();
-            continue;
-        }
-        if (ch === '\n') {
-            endRow();
-            continue;
-        }
-        state.cell += ch;
+function endRow(st: CsvState): void {
+    endCell(st);
+    if (st.row.some(isNonEmptyCell)) st.rows.push(st.row);
+    st.row = [];
+}
+
+/** A quote: inside a quoted cell a doubled quote is an escaped quote; otherwise it opens or closes quoting. */
+function takeQuote(st: CsvState, next: string): number {
+    if (st.inQuotes && next === '"') {
+        st.cell += '"';
+        return 1;
     }
-    endRow();
-    return rows;
+    st.inQuotes = !st.inQuotes;
+    return 0;
+}
+
+/** One character of the file; gives how many following characters it used too (an escaped quote, or \r\n). */
+function takeChar(st: CsvState, ch: string, next: string): number {
+    if (ch === '"') return takeQuote(st, next);
+    if (st.inQuotes) { st.cell += ch; return 0; }
+    if (ch === ',') { endCell(st); return 0; }
+    if (ch === '\r' || ch === '\n') {
+        endRow(st);
+        return ch === '\r' && next === '\n' ? 1 : 0;
+    }
+    st.cell += ch;
+    return 0;
+}
+
+function parseCsv(text: string): string[][] {
+    const st: CsvState = { inQuotes: false, cell: '', row: [], rows: [] };
+    for (let i = 0; i < text.length; i++) i += takeChar(st, text[i], text[i + 1] ?? '');
+    endRow(st);
+    return st.rows;
 }
 
 function csvEscape(value: string): string {

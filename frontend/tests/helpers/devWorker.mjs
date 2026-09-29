@@ -107,6 +107,11 @@ export async function startDevWorker({ port = 8810, inspectorPort = 9240, adminE
         origin,
         browser,
         log: () => log,
+        /** Rows from SQL run against a local D1 database. Stop the Worker first: it holds the files while running. */
+        query(binding, sql) {
+            const out = JSON.parse(execSql(binding, sql));
+            return out[0]?.results ?? [];
+        },
         /**
          * Emails "sent" so far. Locally the send_email binding writes each
          * message's text to a file and logs where; this reads them back.

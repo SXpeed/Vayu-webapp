@@ -47,11 +47,12 @@ const FILTERS = [
 /** Published plan versions, loaded once per visit. */
 let versionsCache: Promise<VersionOption[]> | null = null;
 function loadVersions(): Promise<VersionOption[]> {
-    return (versionsCache ??= (async () => {
+    versionsCache ??= (async () => {
         const { plans } = await api<{ plans: { id: string; key: string; name: string }[] }>('/admin/plans');
         const details = await Promise.all(plans.map(p => api<{ versions: { id: string; version: number; status: string; billing_type: string }[] }>(`/admin/plans/${p.id}`).then(d => ({ p, d }))));
         return details.flatMap(({ p, d }) => d.versions.filter(v => v.status === 'published').map(v => ({ id: v.id, planKey: p.key, label: `${p.name} · v${v.version} · ${v.billing_type}` })));
-    })().catch(e => { versionsCache = null; throw e; }));
+    })().catch(e => { versionsCache = null; throw e; });
+    return versionsCache;
 }
 
 export const ApplicationsPanel: React.FC<{ reauth: Reauth; routeId?: string; go: (section: string, id?: string) => void; onCountsChange?: () => void }> = ({ reauth, routeId, go, onCountsChange }) => {
@@ -61,7 +62,7 @@ export const ApplicationsPanel: React.FC<{ reauth: Reauth; routeId?: string; go:
 
     const load = useCallback(async () => {
         try {
-            setData(await api(`/admin/applications${filter ? `?status=${filter}` : ''}`));
+            setData(await api(`/admin/applications${filter ? '?status=' + filter : ''}`));
         } catch (e) { toast.error((e as ApiError).message); }
     }, [filter]);
     // Switching filters keeps the old rows until the new ones arrive: no flash.
@@ -86,10 +87,12 @@ export const ApplicationsPanel: React.FC<{ reauth: Reauth; routeId?: string; go:
                     </div>
                 </div>
 
-                {!data ? <SkeletonRows rows={6} /> : rows.length === 0 ? (
+                {!data && <SkeletonRows rows={6} />}
+                {data && rows.length === 0 && (
                     <EmptyState icon={<ClipboardList size={20} />} title={term ? 'No matches' : 'Nothing here'}
                         body={filter === 'pending_review' && !term ? 'No application is waiting for a decision.' : undefined} />
-                ) : (
+                )}
+                {data && rows.length > 0 && (
                     <ul className="ac-divide -mx-2">
                         {rows.map(a => (
                             <li key={a.id}>
@@ -118,6 +121,17 @@ export const ApplicationsPanel: React.FC<{ reauth: Reauth; routeId?: string; go:
     );
 };
 
+/** Ask for information, reject (while open), and approve or retry the setup. */
+const DecisionFooter: React.FC<{ open: boolean; busy: boolean; canApprove: boolean; approveLabel: string; onAsk: () => void; onReject: () => void; onApprove: () => void }> = ({ open, busy, canApprove, approveLabel, onAsk, onReject, onApprove }) => (
+    <>
+        {open && <button type="button" className="neu-button" onClick={onAsk} disabled={busy}><MessageSquare size={15} /> Ask for information</button>}
+        {open && <button type="button" className="neu-button neu-button-danger" onClick={onReject} disabled={busy}><XCircle size={15} /> Reject</button>}
+        <button type="button" className="neu-button neu-button-primary" disabled={busy || !canApprove} onClick={onApprove}>
+            <CheckCircle2 size={15} /> {busy ? 'Working…' : approveLabel}
+        </button>
+    </>
+);
+
 const ApplicationDrawer: React.FC<{ id?: string; reauth: Reauth; onClose: () => void; onChanged: () => void }> = ({ id, reauth, onClose, onChanged }) => {
     const dialogs = useDialogs();
     const [d, setD] = useState<AppDetail | null>(null);
@@ -145,6 +159,7 @@ const ApplicationDrawer: React.FC<{ id?: string; reauth: Reauth; onClose: () => 
     const a = d?.application;
     const open = !!a && ['pending_review', 'needs_information'].includes(a.reviewStatus);
     const retry = !!a && a.reviewStatus === 'approved' && a.provisioningStatus === 'failed';
+    const approveLabel = retry ? 'Retry setup' : 'Approve';
     const defaultVersion = versions.find(v => v.planKey === a?.requestedPlanKey)?.id ?? '';
     const chosen = versionId || defaultVersion;
 
@@ -170,14 +185,9 @@ const ApplicationDrawer: React.FC<{ id?: string; reauth: Reauth; onClose: () => 
             meta={a && <StatusPill status={a.status} />}
             subtitle={d && `${d.applicant.name} · ${d.applicant.email} · account created ${timeAgo(d.applicant.createdAt)}`}
             footer={(open || retry) && d ? (
-                <>
-                    {open && <button type="button" className="neu-button" onClick={askInfo} disabled={busy}><MessageSquare size={15} /> Ask for information</button>}
-                    {open && <button type="button" className="neu-button neu-button-danger" onClick={reject} disabled={busy}><XCircle size={15} /> Reject</button>}
-                    <button type="button" className="neu-button neu-button-primary" disabled={busy || !chosen || (waive && exception.trim().length < 3)}
-                        onClick={() => act('approve', { planVersionId: chosen || undefined, waivePayment: waive, reason: waive ? exception : undefined }, retry ? 'Setup retried' : 'Approved')}>
-                        <CheckCircle2 size={15} /> {busy ? 'Working…' : retry ? 'Retry setup' : 'Approve'}
-                    </button>
-                </>
+                <DecisionFooter open={open} busy={busy} canApprove={!!chosen && !(waive && exception.trim().length < 3)} approveLabel={approveLabel}
+                    onAsk={askInfo} onReject={reject}
+                    onApprove={() => act('approve', { planVersionId: chosen || undefined, waivePayment: waive, reason: waive ? exception : undefined }, retry ? 'Setup retried' : 'Approved')} />
             ) : undefined}>
             {!d || !a ? <SkeletonRows rows={6} /> : (
                 <>

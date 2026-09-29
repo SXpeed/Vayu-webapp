@@ -5,12 +5,20 @@ import { FullScreenPortal } from '../../components/FullScreenPortal';
 import { Button, Field, Input, Select, Textarea, Toggle } from '../../components/ui';
 import {
     addDays, defaultBreakMin, endsNextDay, findConflicts, leaveOn, minToTime, mondayOf, paidMin, shiftFieldErrors, shiftLengthMin,
-    timeToMin, weekDates, weekdayIdx, type StaffShift,
+    timeToMin, weekDates, weekdayIdx, type Conflict, type StaffShift,
 } from '../../staffRosterRules';
 import { staffRosterService, type ShiftInput, type StaffRosterData } from '../../services/staffRosterService';
 import { DOW, dayLabel, dayOfMonth, hoursText, inWeek, rangeLabel, timeRange, type Derived } from './shared';
 
 /** A panel on the right on desktop, the whole screen on a phone. Focus stays inside; Escape closes. */
+
+function editorHeading(dayOff: boolean, isNew: boolean, duplicate: boolean): string {
+    if (dayOff) return isNew ? 'Mark a day off' : 'Day off';
+    if (!isNew) return 'Edit shift';
+    return duplicate ? 'Duplicate shift' : 'New shift';
+}
+
+const publishedNote = (n: number): string => `Published. ${n} ${n === 1 ? 'person was' : 'people were'} notified.`;
 export const Drawer: React.FC<{ title: string; onClose: () => void; footer?: React.ReactNode; children: React.ReactNode }> = ({ title, onClose, footer, children }) => {
     const box = useRef<HTMLDivElement>(null);
     useEffect(() => {
@@ -53,6 +61,71 @@ export const Msg: React.FC<{ kind: keyof typeof MSG_TONE; children: React.ReactN
     </p>
 );
 
+type Person = StaffRosterData['people'][number];
+
+/**
+ * What saving would run into for this person: overlapping shifts and approved
+ * leave (both block publishing), leave still waiting for a decision, and a
+ * day off that the shift would replace. One line per problem, per day.
+ */
+function personWarnings(s: ShiftInput, first: string, repeat: string[], data: StaffRosterData, d: Derived, editingId: string | null): string[] {
+    const warns: string[] = [];
+    const candidates = [...repeat, s.date].map((date, i) => ({ ...s, date, id: `__new${i}` }));
+    const others = data.shifts.filter(x => x.id !== editingId);
+    const conflicts = findConflicts([...others, ...candidates], data.leaves);
+    for (const c of candidates) {
+        for (const hit of conflicts.get(c.id) ?? []) {
+            if (hit.type === 'overlap') {
+                const o = others.find(x => x.id === hit.otherId);
+                if (o) warns.push(`Overlaps ${first}’s ${timeRange(o)} at ${d.storeName(o.storeId)} on ${dayLabel(o.date)}. Overlapping shifts block publishing.`);
+            } else {
+                const l = data.leaves.find(x => x.id === hit.leaveId);
+                warns.push(`${first} is on approved ${l?.type.toLowerCase() ?? 'leave'} on ${dayLabel(c.date)}. Shifts during approved leave block publishing.`);
+            }
+        }
+        if (leaveOn(data.leaves, s.employeeId as string, c.date, 'pending')) warns.push(`${first} has asked for leave on ${dayLabel(c.date)} (waiting for a decision).`);
+        if (data.shifts.some(x => x.kind === 'off' && x.employeeId === s.employeeId && x.date === c.date)) warns.push(`${dayLabel(c.date)} is ${first}’s day off. Saving replaces it with this shift.`);
+    }
+    return warns;
+}
+
+/** Notes on a shift being edited: errors block saving; warnings and notes explain. */
+function shiftChecks({ s, repeat, data, d, editingId, person, timesValid }: {
+    s: ShiftInput; repeat: string[]; data: StaffRosterData; d: Derived; editingId: string | null; person: Person | undefined; timesValid: boolean;
+}): { errors: string[]; warns: string[]; infos: string[] } {
+    const errors = timesValid ? shiftFieldErrors(s) : ['Enter a start and an end time.'];
+    const warns: string[] = [], infos: string[] = [];
+    if (s.kind === 'shift' && !errors.length) {
+        if (endsNextDay(s)) infos.push(`Ends the next day (+1 day), at ${minToTime(s.endMin)} on ${dayLabel(addDays(s.date, 1))}.`);
+        if (s.employeeId) {
+            const first = (person?.name ?? 'This person').split(' ')[0];
+            warns.push(...personWarnings(s, first, repeat, data, d, editingId));
+            if (person?.title && s.role && person.title !== s.role) infos.push(`${first} is a ${person.title.toLowerCase()}; this shift asks for a ${s.role.toLowerCase()}.`);
+        } else infos.push('No one is assigned. It shows as an open shift that needs cover, and can be published that way.');
+    }
+    const busyThatDay = s.kind === 'off' && !!s.employeeId && data.shifts.some(x => x.kind === 'shift' && x.employeeId === s.employeeId && x.date === s.date && x.id !== editingId);
+    if (busyThatDay) errors.push(`${person?.name ?? 'This person'} has a shift that day. Remove it first.`);
+    if (repeat.length) infos.push(`Also adds this on ${repeat.map(x => DOW[weekdayIdx(x)]).join(', ')}.`);
+    return { errors, warns: [...new Set(warns)], infos };
+}
+
+/** A shift's status in the export. */
+function csvStatus(s: StaffShift, d: Derived): string {
+    const c = d.conflicts.get(s.id) ?? [];
+    if (s.kind === 'off') return 'Day off';
+    if (!s.employeeId) return 'Open';
+    if (c.some(x => x.type === 'overlap')) return 'Overlap';
+    return c.length ? 'During leave' : 'Scheduled';
+}
+
+/** A shift's row in the export; a day off leaves the work columns empty. */
+function csvRow(s: StaffShift, d: Derived): string[] {
+    const person = s.employeeId ? d.personName(s.employeeId) : '';
+    if (s.kind !== 'shift') return [s.date, DOW[weekdayIdx(s.date)], person, '', '', '', '', '', '', '', csvStatus(s, d), s.note];
+    return [s.date, DOW[weekdayIdx(s.date)], person, s.role, d.storeName(s.storeId), minToTime(s.startMin), minToTime(s.endMin),
+        endsNextDay(s) ? 'Yes' : '', String(s.breakMin), hoursText(paidMin(s)), csvStatus(s, d), s.note];
+}
+
 export interface EditorState { id: string | null; draft: ShiftInput; duplicate?: boolean }
 
 const BREAKS = [0, 15, 30, 45, 60, 90];
@@ -82,38 +155,10 @@ export const ShiftEditor: React.FC<{ data: StaffRosterData; d: Derived; start: E
     };
     const timesValid = timeToMin(startText) !== null && timeToMin(endText) !== null;
 
-    const { errors, warns, infos } = useMemo(() => {
-        const errors = timesValid ? shiftFieldErrors(s) : ['Enter a start and an end time.'];
-        const warns: string[] = [], infos: string[] = [];
-        if (s.kind === 'shift' && !errors.length) {
-            if (endsNextDay(s)) infos.push(`Ends the next day (+1 day), at ${minToTime(s.endMin)} on ${dayLabel(addDays(s.date, 1))}.`);
-            if (s.employeeId) {
-                const first = (person?.name ?? 'This person').split(' ')[0];
-                const candidates = [...repeat, s.date].map((date, i) => ({ ...s, date, id: `__new${i}` }));
-                const others = data.shifts.filter(x => x.id !== state.id);
-                const conflicts = findConflicts([...others, ...candidates], data.leaves);
-                for (const c of candidates) {
-                    for (const hit of conflicts.get(c.id) ?? []) {
-                        if (hit.type === 'overlap') {
-                            const o = others.find(x => x.id === hit.otherId) ?? candidates.find(x => x.id === hit.otherId);
-                            if (o && !o.id.startsWith('__new')) warns.push(`Overlaps ${first}’s ${timeRange(o)} at ${d.storeName(o.storeId)} on ${dayLabel(o.date)}. Overlapping shifts block publishing.`);
-                        } else {
-                            const l = data.leaves.find(x => x.id === hit.leaveId);
-                            warns.push(`${first} is on approved ${l?.type.toLowerCase() ?? 'leave'} on ${dayLabel(c.date)}. Shifts during approved leave block publishing.`);
-                        }
-                    }
-                    if (leaveOn(data.leaves, s.employeeId, c.date, 'pending')) warns.push(`${first} has asked for leave on ${dayLabel(c.date)} (waiting for a decision).`);
-                    if (data.shifts.some(x => x.kind === 'off' && x.employeeId === s.employeeId && x.date === c.date)) warns.push(`${dayLabel(c.date)} is ${first}’s day off. Saving replaces it with this shift.`);
-                }
-                if (person?.title && s.role && person.title !== s.role) infos.push(`${first} is a ${person.title.toLowerCase()}; this shift asks for a ${s.role.toLowerCase()}.`);
-            } else infos.push('No one is assigned. It shows as an open shift that needs cover, and can be published that way.');
-        }
-        if (s.kind === 'off' && s.employeeId && data.shifts.some(x => x.kind === 'shift' && x.employeeId === s.employeeId && x.date === s.date && x.id !== state.id)) {
-            errors.push(`${person?.name ?? 'This person'} has a shift that day. Remove it first.`);
-        }
-        if (repeat.length) infos.push(`Also adds this on ${repeat.map(x => DOW[weekdayIdx(x)]).join(', ')}.`);
-        return { errors, warns: [...new Set(warns)], infos };
-    }, [s, repeat, data, d, state.id, person, timesValid]);
+    const { errors, warns, infos } = useMemo(
+        () => shiftChecks({ s, repeat, data, d, editingId: state.id, person, timesValid }),
+        [s, repeat, data, d, state.id, person, timesValid],
+    );
 
     const save = async () => {
         if (errors.length) return;
@@ -121,7 +166,9 @@ export const ShiftEditor: React.FC<{ data: StaffRosterData; d: Derived; start: E
         try {
             if (state.id) await staffRosterService.updateShift(state.id, s);
             else await staffRosterService.createShifts([s, ...repeat.map(date => ({ ...s, date }))]);
-            toast.success(s.kind === 'off' ? 'Day off saved' : `${state.id ? 'Shift saved' : 'Shift added'}${repeat.length ? ` on ${repeat.length + 1} days` : ''}`);
+            const days = repeat.length ? ' on ' + (repeat.length + 1) + ' days' : '';
+            const saved = state.id ? 'Shift saved' : 'Shift added';
+            toast.success(s.kind === 'off' ? 'Day off saved' : saved + days);
             onSaved();
         } catch (e) {
             toast.error((e as Error).message || 'Could not save');
@@ -143,7 +190,7 @@ export const ShiftEditor: React.FC<{ data: StaffRosterData; d: Derived; start: E
     };
 
     const weekOfDate = weekDates(mondayOf(s.date));
-    const heading = s.kind === 'off' ? (isNew ? 'Mark a day off' : 'Day off') : (isNew ? (state.duplicate ? 'Duplicate shift' : 'New shift') : 'Edit shift');
+    const heading = editorHeading(s.kind === 'off', isNew, !!state.duplicate);
     const roles = [...new Set([...data.jobTitles, s.role].filter(Boolean))];
 
     return (
@@ -229,7 +276,7 @@ export const ShiftEditor: React.FC<{ data: StaffRosterData; d: Derived; start: E
                         {weekOfDate.filter(x => x !== s.date).map(x => {
                             const on = repeat.includes(x);
                             return (
-                                <button key={x} type="button" aria-pressed={on} onClick={() => setRepeat(r => (on ? r.filter(y => y !== x) : [...r, x].sort()))}
+                                <button key={x} type="button" aria-pressed={on} onClick={() => setRepeat(r => (on ? r.filter(y => y !== x) : [...r, x].sort((a, b) => a.localeCompare(b))))}
                                     className={`rounded-full px-3 py-1.5 text-[12px] ${on ? 'neu-inset text-gold-700 dark:text-gold-300 font-semibold' : 'neu-raised-sm text-gray-700 dark:text-gray-300'}`}>
                                     {DOW[weekdayIdx(x)]} {dayOfMonth(x)}
                                 </button>
@@ -292,31 +339,56 @@ export const OpenShiftsPanel: React.FC<{ data: StaffRosterData; d: Derived; week
 };
 
 /** Review, then publish a week so staff see it. Blocked while it has conflicts. */
+interface PublishProblem { s: StaffShift; text: string }
+
+/** What blocks publishing a week: overlapping shifts (each pair once) and shifts during approved leave. */
+function publishProblems(week: StaffShift[], data: StaffRosterData, d: Derived): PublishProblem[] {
+    const problems: PublishProblem[] = [];
+    const seen = new Set<string>();
+    for (const s of week) {
+        for (const c of d.conflicts.get(s.id) ?? []) {
+            const key = c.type === 'overlap' ? [s.id, c.otherId].sort((a, b) => a.localeCompare(b)).join('|') : `${s.id}|leave`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            problems.push({ s, text: problemText(s, c, data, d) });
+        }
+    }
+    return problems;
+}
+
+function problemText(s: StaffShift, c: Conflict, data: StaffRosterData, d: Derived): string {
+    const who = d.personName(s.employeeId);
+    const where = `${timeRange(s)} at ${d.storeName(s.storeId)}`;
+    if (c.type !== 'overlap') return `${who} is on approved leave on ${dayLabel(s.date)} but has ${where}.`;
+    const o = data.shifts.find(x => x.id === c.otherId);
+    return `${who}: ${dayLabel(s.date)} ${where} overlaps ${o ? timeRange(o) + ' at ' + d.storeName(o.storeId) : 'another shift'}.`;
+}
+
+const PublishProblems: React.FC<{ problems: PublishProblem[]; onFix: (s: StaffShift) => void }> = ({ problems, onFix }) => (
+    <div className="space-y-2">
+        {problems.map(p => (
+            <p key={p.text} className="sr-bad-box rounded-xl px-3 py-2 text-[12.5px] flex gap-2 items-start">
+                <AlertTriangle size={14} className="shrink-0 mt-px" />
+                <span>{p.text} <button type="button" onClick={() => onFix(p.s)} className="underline font-semibold">Fix</button></span>
+            </p>
+        ))}
+        <Msg kind="error">Fix these before publishing.</Msg>
+    </div>
+);
+
 export const PublishDialog: React.FC<{ data: StaffRosterData; d: Derived; weekStart: string; notify: boolean; onNotify: (v: boolean) => void; onFix: (s: StaffShift) => void; onClose: () => void; onPublished: () => void }> = ({ data, d, weekStart, notify, onNotify, onFix, onClose, onPublished }) => {
     const [busy, setBusy] = useState(false);
     const week = data.shifts.filter(s => s.kind === 'shift' && inWeek(s, weekStart));
     const assigned = week.filter(s => s.employeeId).length;
     const open = week.filter(s => !s.employeeId).length;
     const staff = new Set(week.filter(s => s.employeeId && s.employeeId !== data.me).map(s => s.employeeId)).size;
-    const problems: { s: StaffShift; text: string }[] = [];
-    const seen = new Set<string>();
-    for (const s of week) {
-        for (const c of d.conflicts.get(s.id) ?? []) {
-            const key = c.type === 'overlap' ? [s.id, c.otherId].sort().join('|') : `${s.id}|leave`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            if (c.type === 'overlap') {
-                const o = data.shifts.find(x => x.id === c.otherId);
-                problems.push({ s, text: `${d.personName(s.employeeId)}: ${dayLabel(s.date)} ${timeRange(s)} at ${d.storeName(s.storeId)} overlaps ${o ? `${timeRange(o)} at ${d.storeName(o.storeId)}` : 'another shift'}.` });
-            } else problems.push({ s, text: `${d.personName(s.employeeId)} is on approved leave on ${dayLabel(s.date)} but has ${timeRange(s)} at ${d.storeName(s.storeId)}.` });
-        }
-    }
+    const problems = publishProblems(week, data, d);
     const blocked = problems.length > 0;
     const publish = async () => {
         setBusy(true);
         try {
             const res = await staffRosterService.publish(weekStart, notify);
-            toast.success(res.notified ? `Published. ${res.notified} ${res.notified === 1 ? 'person was' : 'people were'} notified.` : 'Published.');
+            toast.success(res.notified ? publishedNote(res.notified) : 'Published.');
             onPublished();
         } catch (e) { toast.error((e as Error).message || 'Could not publish'); setBusy(false); }
     };
@@ -335,18 +407,8 @@ export const PublishDialog: React.FC<{ data: StaffRosterData; d: Derived; weekSt
                 <dt className="text-[var(--neu-text-dim)]">Open shifts</dt><dd className="font-semibold text-right tabular-nums">{open}</dd>
                 <dt className="text-[var(--neu-text-dim)]">Conflicts</dt><dd className={`font-semibold text-right tabular-nums ${blocked ? 'sr-bad-text' : 'text-green-700 dark:text-green-400'}`}>{problems.length || 'None'}</dd>
             </dl>
-            {blocked && (
-                <div className="space-y-2">
-                    {problems.map(p => (
-                        <p key={p.text} className="sr-bad-box rounded-xl px-3 py-2 text-[12.5px] flex gap-2 items-start">
-                            <AlertTriangle size={14} className="shrink-0 mt-px" />
-                            <span>{p.text} <button type="button" onClick={() => onFix(p.s)} className="underline font-semibold">Fix</button></span>
-                        </p>
-                    ))}
-                    <Msg kind="error">Fix these before publishing.</Msg>
-                </div>
-            )}
-            {!blocked && open > 0 && <Msg kind="warn">{open} open shift{open > 1 ? 's' : ''} will be published as needing cover.</Msg>}
+            {blocked && <PublishProblems problems={problems} onFix={onFix} />}
+            {!blocked && open > 0 && <Msg kind="warn">{open > 1 ? `${open} open shifts` : '1 open shift'} will be published as needing cover.</Msg>}
             <div className="flex items-center justify-between gap-3">
                 <div>
                     <p className="text-[13.5px] font-medium">Notify staff</p>
@@ -388,17 +450,6 @@ export const ExportPanel: React.FC<{ csv: string; weekStart: string; onClose: ()
 export function rosterCsv(data: StaffRosterData, d: Derived, shifts: StaffShift[]): string {
     const q = (v: string) => (/[",\n]/.test(v) ? `"${v.replaceAll('"', '""')}"` : v);
     const out = [['Date', 'Day', 'Employee', 'Job title', 'Store', 'Start', 'End', 'Ends next day', 'Break (min)', 'Paid hours', 'Status', 'Note']];
-    for (const s of [...shifts].sort((a, b) => a.date.localeCompare(b.date) || a.startMin - b.startMin)) {
-        const c = d.conflicts.get(s.id) ?? [];
-        let status = 'Scheduled';
-        if (s.kind === 'off') status = 'Day off';
-        else if (!s.employeeId) status = 'Open';
-        else if (c.some(x => x.type === 'overlap')) status = 'Overlap';
-        else if (c.length) status = 'During leave';
-        const work = s.kind === 'shift';
-        out.push([s.date, DOW[weekdayIdx(s.date)], s.employeeId ? d.personName(s.employeeId) : '', work ? s.role : '', work ? d.storeName(s.storeId) : '',
-            work ? minToTime(s.startMin) : '', work ? minToTime(s.endMin) : '', work && endsNextDay(s) ? 'Yes' : '', work ? String(s.breakMin) : '',
-            work ? hoursText(paidMin(s)) : '', status, s.note]);
-    }
+    for (const s of [...shifts].sort((a, b) => a.date.localeCompare(b.date) || a.startMin - b.startMin)) out.push(csvRow(s, d));
     return out.map(r => r.map(q).join(',')).join('\n');
 }

@@ -29,7 +29,7 @@ export function deviceCountText(count: number, limit: number | null | undefined)
     return `${count} ${count === 1 ? 'device' : 'devices'}`;
 }
 
-function DeviceIcon({ label }: { label: string }) {
+function DeviceIcon({ label }: Readonly<{ label: string }>) {
     if (/iPad/.test(label)) return <Tablet size={15} />;
     if (/iPhone|Android/.test(label)) return <Smartphone size={15} />;
     return <Monitor size={15} />;

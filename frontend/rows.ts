@@ -219,7 +219,7 @@ const LITERAL_SEGMENTS = new Set([
   'deleted-items', 'restore', 'settings', 'push', 'public-key', 'subscribe',
   'unsubscribe', 'holidays', 'attendance', 'stores', 'records', 'check-in',
   'check-out', 'payments', 'link', 'links', 'webhook', 'sync', 'realtime',
-  'ticket', 'ws', 'roster', 'sections', 'order', 'favorites',
+  'ticket', 'ws', 'sales',
   'staff-roster', 'shifts', 'publish', 'leaves', 'titles',
 ]);
 

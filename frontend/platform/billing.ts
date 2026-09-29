@@ -335,6 +335,18 @@ function checkoutFor(row: BillingPaymentRow, orgName: string, payer: { name: str
   };
 }
 
+/**
+ * The price for a period: the list price, lowered by a running offer. The
+ * list price and the offer are kept with the payment.
+ */
+function checkoutPrice(option: { name: string; priceAnnual: number; priceMonthly: number; offer?: { priceAnnual: number; priceMonthly: number } | null }, period: Period): { listAmount: number; amount: number } {
+  const annual = period === 'annual';
+  const listAmount = annual ? option.priceAnnual : option.priceMonthly;
+  if (listAmount < 100) throw new OrgError(400, 'invalid', `${option.name} has no ${annual ? 'annual' : 'monthly'} price.`);
+  if (!option.offer) return { listAmount, amount: listAmount };
+  return { listAmount, amount: annual ? option.offer.priceAnnual : option.offer.priceMonthly };
+}
+
 export async function startCheckout(
   env: Env, db: D1Database, orgId: string, body: Record<string, unknown>,
   payer: { userId: string; name: string; email: string; ip: string | null },
@@ -344,16 +356,12 @@ export async function startCheckout(
   if (!period) throw new OrgError(400, 'invalid', 'Choose monthly or annual.');
   const option = (await planOptions(db, orgId)).find(o => o.key === planKey);
   if (!option) throw new OrgError(404, 'plan_unavailable', 'That plan is not available to buy. Refresh and choose again.');
-  const listAmount = period === 'annual' ? option.priceAnnual : option.priceMonthly;
-  if (listAmount < 100) throw new OrgError(400, 'invalid', `${option.name} has no ${period === 'annual' ? 'annual' : 'monthly'} price.`);
+  const { listAmount, amount } = checkoutPrice(option, period);
   const keys = await payableKeys(env, db);
   if (!keys) throw new OrgError(503, 'billing_unavailable', "Online payment isn't set up yet. Contact us to change your plan.");
   const org = await db.prepare('SELECT name FROM organizations WHERE id = ?').bind(orgId).first<{ name: string }>();
   if (!org) throw new OrgError(404, 'org_not_found', 'Organization not found.');
-  // A running offer lowers the price; the list price and the offer are kept with the payment.
   const offer = option.offer;
-  let amount = listAmount;
-  if (offer) amount = period === 'annual' ? offer.priceAnnual : offer.priceMonthly;
   const offerLabel = offer?.label ? ` (${offer.label.slice(0, 60)})` : '';
 
   // Opening the checkout again (closed by mistake, a retry) reuses the order.

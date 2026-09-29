@@ -35,7 +35,7 @@ export const MonthView: React.FC<{ data: StaffRosterData; d: Derived; monthOf: s
                     const out = date < first || date > last;
                     return (
                         <button key={date} type="button" onClick={() => onPickDay(date)}
-                            aria-label={`${dayLabel(date)}: ${staff} on shift${open ? `, ${open} open` : ''}${bad ? `, ${bad} conflicts` : ''}${onLeave ? `, ${onLeave} on leave` : ''}. Open this day`}
+                            aria-label={`${dayLabel(date)}: ${staff} on shift${open ? ', ' + open + ' open' : ''}${bad ? ', ' + bad + ' conflicts' : ''}${onLeave ? ', ' + onLeave + ' on leave' : ''}. Open this day`}
                             className={`min-h-[68px] lg:min-h-[92px] rounded-2xl p-1.5 lg:p-2.5 flex flex-col items-start gap-0.5 text-left active-scale ${date === today ? 'neu-inset' : 'neu-raised-sm'} ${out ? 'opacity-45' : ''}`}>
                             <span className={`text-[13px] lg:text-[14px] font-semibold tabular-nums ${date === today ? 'text-[var(--neu-gold)]' : ''}`}>{dayOfMonth(date)}</span>
                             <span className="text-[10px] lg:text-[11.5px] text-[var(--neu-text-dim)] tabular-nums">{staff} staff</span>
@@ -117,7 +117,7 @@ export const RequestsView: React.FC<{ data: StaffRosterData; d: Derived; onChang
         setBusy(id);
         try { await fn(); toast.success(done); onChanged(); } catch (e) { toast.error((e as Error).message || 'That didn’t work'); } finally { setBusy(null); }
     };
-    const submit = async (e: React.FormEvent) => {
+    const submit = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
         if (!isIsoDate(form.from) || !isIsoDate(form.to)) { toast.error('Choose the first and last day'); return; }
         if (form.to < form.from) { toast.error('The last day is before the first day'); return; }

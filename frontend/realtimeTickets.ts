@@ -29,7 +29,7 @@ const encoder = new TextEncoder();
 function bytesToB64Url(bytes: Uint8Array): string {
   let bin = '';
   for (const b of bytes) bin += String.fromCodePoint(b);
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/={1,2}$/, '');
 }
 
 function b64UrlToBytes(s: string): Uint8Array<ArrayBuffer> {

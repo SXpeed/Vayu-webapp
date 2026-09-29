@@ -95,29 +95,38 @@ let indexesBuilt = false;
  * One-time migration: sessions created before device tracking existed get
  * indexed, so they count toward the limit (and can be signed out) too.
  */
-async function ensureIndexes(kv: KVNamespace): Promise<void> {
-  if (indexesBuilt) return;
-  if (await kv.get(INDEX_BUILT_KEY)) { indexesBuilt = true; return; }
+/** A stored session still in force, as a device entry; null when expired or unreadable. */
+function sessionEntry(key: string, raw: string): { userId: string; entry: DeviceEntry } | null {
+  let s: { userId?: string; expiresAt?: number };
+  try { s = JSON.parse(raw) as { userId?: string; expiresAt?: number }; } catch { return null; }
+  if (!s.userId || !s.expiresAt || s.expiresAt < Date.now()) return null;
+  // Unknown login time: treat as old so fresh logins win ties.
+  return {
+    userId: s.userId,
+    entry: { token: key.slice('auth:session:'.length), label: 'Earlier login', createdAt: 0, lastUsedAt: 0, expiresAt: s.expiresAt },
+  };
+}
+
+/** Every live session, by user, from a walk over the session keys. */
+async function liveSessionsByUser(kv: KVNamespace): Promise<Map<string, DeviceEntry[]>> {
   const byUser = new Map<string, DeviceEntry[]>();
   let cursor: string | undefined;
   do {
     const page = await kv.list({ prefix: 'auth:session:', cursor });
     for (const key of page.keys) {
       const raw = await kv.get(key.name);
-      if (!raw) continue;
-      try {
-        const s = JSON.parse(raw) as { userId?: string; expiresAt?: number };
-        if (!s.userId || !s.expiresAt || s.expiresAt < Date.now()) continue;
-        // Unknown login time: treat as old so fresh logins win ties.
-        const entry: DeviceEntry = {
-          token: key.name.slice('auth:session:'.length), label: 'Earlier login',
-          createdAt: 0, lastUsedAt: 0, expiresAt: s.expiresAt,
-        };
-        byUser.set(s.userId, [...(byUser.get(s.userId) ?? []), entry]);
-      } catch { /* malformed session: ignore */ }
+      const found = raw ? sessionEntry(key.name, raw) : null;
+      if (found) byUser.set(found.userId, [...(byUser.get(found.userId) ?? []), found.entry]);
     }
     cursor = page.list_complete ? undefined : page.cursor;
   } while (cursor);
+  return byUser;
+}
+
+async function ensureIndexes(kv: KVNamespace): Promise<void> {
+  if (indexesBuilt) return;
+  if (await kv.get(INDEX_BUILT_KEY)) { indexesBuilt = true; return; }
+  const byUser = await liveSessionsByUser(kv);
   for (const [userId, found] of byUser) {
     const existing = await loadIndexRaw(kv, userId);
     const known = new Set(existing.map(e => e.token));

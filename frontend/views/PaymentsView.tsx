@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
-import { PaymentDetail, PaymentLink } from '../types';
+import { PaymentLink } from '../types';
 import { paymentService } from '../services/paymentService';
 import { createRefreshScheduler } from '../services/refreshScheduler';
 import { realtimeService } from '../services/realtimeService';
@@ -94,6 +94,17 @@ const STATUS_LABELS: Record<string, string> = {
     cancelled: 'Cancelled',
 };
 
+
+/** The bin button's tooltip: an open link is cancelled first, a closed one only removed. */
+function binTitle(open: boolean, confirming: boolean): string {
+    if (confirming) return open ? 'Tap again to cancel and delete' : 'Tap again to remove';
+    return open ? 'Cancel and delete' : 'Remove from the list';
+}
+
+const binLabel = (open: boolean): string => (open ? 'Cancel and delete link' : 'Remove from the list');
+
+const removeNote = (paid: boolean): string =>
+    'Tap the bin again to remove it from the list.' + (paid ? ' The payment stays in Razorpay.' : '');
 export const PaymentsView: React.FC = () => {
     const [amount, setAmount] = useState('');
     const [customerName, setCustomerName] = useState('');
@@ -446,8 +457,8 @@ export const PaymentsView: React.FC = () => {
                                                         onClick={() => void deleteLink(link)}
                                                         disabled={busyId === link.id}
                                                         className={`neu-icon-btn-sm active-scale disabled:opacity-50 ${confirmDeleteId === link.id ? 'text-red-600 dark:text-red-400 ring-1 ring-red-500/60' : ''}`}
-                                                        title={confirmDeleteId === link.id ? (isOpen(link) ? 'Tap again to cancel and delete' : 'Tap again to remove') : (isOpen(link) ? 'Cancel and delete' : 'Remove from the list')}
-                                                        aria-label={confirmDeleteId === link.id ? 'Tap again to confirm' : (isOpen(link) ? 'Cancel and delete link' : 'Remove from the list')}
+                                                        title={binTitle(isOpen(link), confirmDeleteId === link.id)}
+                                                        aria-label={confirmDeleteId === link.id ? 'Tap again to confirm' : binLabel(isOpen(link))}
                                                     >
                                                         <Trash2 size={14} />
                                                     </button>
@@ -458,7 +469,7 @@ export const PaymentsView: React.FC = () => {
                                             <p className="mt-2 text-[11px] text-red-600 dark:text-red-400">
                                                 {isOpen(link)
                                                     ? 'Tap the bin again: the link is cancelled so it can no longer be paid, then removed.'
-                                                    : `Tap the bin again to remove it from the list.${link.status === 'paid' ? ' The payment stays in Razorpay.' : ''}`}
+                                                    : removeNote(link.status === 'paid')}
                                             </p>
                                         )}
                                         {detailsId === link.id && (

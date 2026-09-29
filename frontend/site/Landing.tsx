@@ -204,13 +204,15 @@ export const Landing: React.FC = () => {
                     </div>
                     {/* Space is kept while plans load, so the page below does not jump. */}
                     <div className="mt-10 min-h-[16rem]">
-                        {plans === null ? (
+                        {plans === null && (
                             <div className="grid gap-5 lg:gap-6 sm:grid-cols-2 lg:grid-cols-3" aria-busy="true" aria-label="Loading plans">
                                 {[0, 1, 2].map(n => <div key={n} className="neu-card h-[22rem] opacity-60" />)}
                             </div>
-                        ) : plans.length === 0 ? (
+                        )}
+                        {plans?.length === 0 && (
                             <p className="text-gray-700 dark:text-gray-300">Plans are being finalised. <a href={SIGNUP_URL} className="text-gold-700 underline">Apply now</a> and we will set you up.</p>
-                        ) : (
+                        )}
+                        {plans?.length ? (
                             <div className="grid gap-5 lg:gap-6 sm:grid-cols-2 lg:grid-cols-3 items-stretch">
                                 {plans.map((p, n) => (
                                     <div key={p.key} data-reveal="scale" style={i(n)} className="flex">
@@ -219,7 +221,7 @@ export const Landing: React.FC = () => {
                                     </div>
                                 ))}
                             </div>
-                        )}
+                        ) : null}
                     </div>
                 </section>
 

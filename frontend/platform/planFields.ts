@@ -54,7 +54,6 @@ export const MODULE_FIELDS: FlagField[] = [
   { key: 'inventory', label: 'Inventory', hint: 'Artworks and stock records.', default: true, alwaysOn: true },
   { key: 'collections', label: 'Collections', hint: 'Group inventory into collections.', default: true },
   { key: 'catalogs', label: 'Catalogs', hint: 'Build and share catalogs.', default: true },
-  { key: 'roster', label: 'Showcase', hint: 'Curated showcase of pieces in sections, with favourites, selections and presenting. Switching it off hides it for everyone.', default: true },
   { key: 'contacts', label: 'Customers', hint: 'Customer address book.', default: true },
   { key: 'inquiries', label: 'Inquiries', hint: 'Track interest through to a sale.', default: true },
   { key: 'invoices', label: 'Invoices', hint: 'Invoices and proformas.', default: true },

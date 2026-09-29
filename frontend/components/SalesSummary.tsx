@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ChevronRight, CloudOff, HandCoins } from 'lucide-react';
 import { realtimeService } from '../services/realtimeService';
 import { salesService, type SalesData } from '../services/salesService';
-import { monthRange, todayIso, type PaymentMode, type SalesSummary } from '../salesRules';
+import { monthRange, todayIso, type PaymentMode, type SalesSummary, type TagTotal } from '../salesRules';
 
 // Pieces of the sales ledger shared by the Sales screen and Home. Kept out of
 // views/SalesView so Home, which loads first, doesn't pull that screen in.
@@ -16,30 +16,56 @@ export const itemsText = (n: number): string => `${n} item${n === 1 ? '' : 's'}`
 export const saleDayLabel = (iso: string): string =>
     new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' });
 
-/** How the takings split across payment modes, largest first. */
-export const ModeBreakdown: React.FC<{ summary: SalesSummary; compact?: boolean }> = ({ summary, compact = false }) => {
-    const modes = (Object.entries(summary.byMode) as [PaymentMode, { count: number; amount: number }][])
-        .sort((a, b) => b[1].amount - a[1].amount);
-    if (!modes.length) return null;
+interface BreakdownRow { key: string; label: string; count: number; amount: number }
+
+/** Rows of count and amount, each with a bar for its share of `total`. Rows can be buttons (`onPick`). */
+const Breakdown: React.FC<{ rows: BreakdownRow[]; total: number; compact?: boolean; label: string; active?: string; onPick?: (key: string) => void }> = ({ rows, total, compact = false, label, active, onPick }) => {
+    if (!rows.length) return null;
     return (
-        <ul className={compact ? 'space-y-1.5' : 'space-y-2.5'} aria-label="By payment mode">
-            {modes.map(([mode, m]) => {
-                const share = summary.totalAmount > 0 ? m.amount / summary.totalAmount : 0;
+        <ul className={compact ? 'space-y-1.5' : 'space-y-2.5'} aria-label={label}>
+            {rows.map(row => {
+                const share = total > 0 ? row.amount / total : 0;
+                const inner = (
+                    <>
+                        <span className="flex items-baseline justify-between gap-2">
+                            <span className={`min-w-0 truncate font-medium ${active === row.key ? 'text-[var(--neu-gold)]' : 'text-[var(--neu-text)]'}`}>{row.label} <span className="font-normal text-[var(--neu-text-dim)]">· {row.count}</span></span>
+                            <span className="shrink-0 tabular-nums text-[var(--neu-text)]">{rupees(row.amount)}</span>
+                        </span>
+                        <span className="block mt-1 h-1.5 rounded-full neu-inset overflow-hidden" aria-hidden="true">
+                            <span className="block h-full rounded-full bg-[var(--neu-gold)]" style={{ width: `${Math.min(Math.max(share * 100, 2), 100)}%` }} />
+                        </span>
+                    </>
+                );
                 return (
-                    <li key={mode} className="text-[12px]">
-                        <div className="flex items-baseline justify-between gap-2">
-                            <span className="font-medium text-[var(--neu-text)]">{mode} <span className="font-normal text-[var(--neu-text-dim)]">· {m.count}</span></span>
-                            <span className="tabular-nums text-[var(--neu-text)]">{rupees(m.amount)}</span>
-                        </div>
-                        <div className="mt-1 h-1.5 rounded-full neu-inset overflow-hidden" aria-hidden="true">
-                            <div className="h-full rounded-full bg-[var(--neu-gold)]" style={{ width: `${Math.max(share * 100, 2)}%` }} />
-                        </div>
+                    <li key={row.key} className="text-[12px]">
+                        {onPick
+                            ? <button type="button" onClick={() => onPick(row.key)} aria-pressed={active === row.key} className="block w-full text-left active-scale">{inner}</button>
+                            : inner}
                     </li>
                 );
             })}
         </ul>
     );
 };
+
+/** How the takings split across payment modes, largest first. */
+export const ModeBreakdown: React.FC<{ summary: SalesSummary; compact?: boolean }> = ({ summary, compact = false }) => {
+    const rows = (Object.entries(summary.byMode) as [PaymentMode, { count: number; amount: number }][])
+        .sort((a, b) => b[1].amount - a[1].amount)
+        .map(([mode, m]) => ({ key: mode, label: mode, count: m.count, amount: m.amount }));
+    return <Breakdown rows={rows} total={summary.totalAmount} compact={compact} label="By payment mode" />;
+};
+
+/**
+ * Takings per tag (an event, say), with untagged sales last. Tapping a row
+ * shows only those sales. A sale with two tags counts under both.
+ */
+export const TagBreakdown: React.FC<{ rows: TagTotal[]; total: number; active?: string; onPick?: (tag: string) => void }> = ({ rows, total, active, onPick }) => (
+    <Breakdown
+        rows={rows.map(r => ({ key: r.tag, label: r.tag || 'Untagged', count: r.count, amount: r.amount }))}
+        total={total} label="By tag" active={active} onPick={onPick}
+    />
+);
 
 const LAST_FEW = 3;
 

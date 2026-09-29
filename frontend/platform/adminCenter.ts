@@ -122,7 +122,7 @@ export async function revokeSessions(db: D1Database, userId: string, actor: Acto
 }
 
 export async function setUserStatus(db: D1Database, userId: string, body: Record<string, unknown>, actor: Actor) {
-  const status = body.status === 'disabled' ? 'disabled' : body.status === 'active' ? 'active' : null;
+  const status = body.status === 'disabled' || body.status === 'active' ? body.status : null;
   if (!status) throw new OrgError(400, 'invalid', 'Status must be active or disabled.');
   if (userId === actor.userId) throw new OrgError(409, 'self', 'You cannot disable your own account.');
   const reason = typeof body.reason === 'string' ? body.reason.trim().slice(0, 500) : '';
@@ -204,8 +204,10 @@ export async function updateAdmin(db: D1Database, userId: string, body: Record<s
   if (userId === actor.userId) throw new OrgError(409, 'self', 'You cannot change your own administrator access.');
   const current = await db.prepare('SELECT role, status FROM provider_admins WHERE user_id = ?').bind(userId).first<{ role: string; status: string }>();
   if (!current) throw new OrgError(404, 'not_found', 'Not an administrator.');
-  const role = body.role === undefined ? current.role : (ADMIN_ROLES.includes(body.role as never) ? String(body.role) : null);
-  const status = body.status === undefined ? current.status : (body.status === 'disabled' || body.status === 'active' ? String(body.status) : null);
+  const validRole = ADMIN_ROLES.includes(body.role as never) ? String(body.role) : null;
+  const validStatus = body.status === 'disabled' || body.status === 'active' ? body.status : null;
+  const role = body.role === undefined ? current.role : validRole;
+  const status = body.status === undefined ? current.status : validStatus;
   if (!role || !status) throw new OrgError(400, 'invalid', 'Invalid role or status.');
   const losingOwner = current.role === 'owner' && current.status === 'active' && (role !== 'owner' || status !== 'active');
   if (losingOwner && await activeOwners(db) <= 1) {
@@ -223,6 +225,28 @@ export async function updateAdmin(db: D1Database, userId: string, body: Record<s
 // ── System health ─────────────────────────────────────────────────────────
 
 /** What is configured, as yes/no. Never a secret value. */
+/**
+ * Which Razorpay account the app's payment links use, and whether payments
+ * on it reach the app at once (webhook) or only via its status check.
+ */
+async function appPaymentLinksCheck(env: Env, db: D1Database): Promise<{ ok: boolean; detail: string }> {
+  const appPaymentsOrg = await getAppPaymentsOrg(db);
+  if (appPaymentsOrg) {
+    const org = await db.prepare('SELECT name FROM organizations WHERE id = ?').bind(appPaymentsOrg).first<{ name: string }>();
+    return { ok: true, detail: `${org?.name ?? 'An organization'}'s own Razorpay account (see its Customer payments card)` };
+  }
+  if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) {
+    return { ok: false, detail: 'RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET not set: the app cannot create payment links' };
+  }
+  if (!env.RAZORPAY_WEBHOOK_SECRET) {
+    return { ok: false, detail: 'Shared account: RAZORPAY_WEBHOOK_SECRET not set, so payments show as paid only when the app next checks Razorpay (a few minutes), with no instant notice' };
+  }
+  return { ok: true, detail: 'Shared account: keys and webhook secret set' };
+}
+
+/** A check's words, when it passes and when it doesn't. */
+const status = (ok: boolean, yes: string, no: string) => [ok, ok ? yes : no] as const;
+
 export async function systemHealth(env: Env, db: D1Database) {
   // `fix` names the control-centre screen where a failing check is put right;
   // checks without one are fixed in the deployment (secrets, bindings, vars).
@@ -230,34 +254,24 @@ export async function systemHealth(env: Env, db: D1Database) {
   const check = (name: string, ok: boolean, detail: string, fix?: string) => checks.push({ name, ok, detail, ...(ok || !fix ? {} : { fix }) });
 
   check('Platform database', true, 'Connected');
-  check('Organization databases', !!env.ORG_STORE, env.ORG_STORE ? 'Available' : 'ORG_STORE binding missing');
-  check('File storage', !!env.VAYU_R2, env.VAYU_R2 ? 'Available' : 'R2 binding missing');
-  check('Original app database', !!env.VAYU_DB, env.VAYU_DB ? 'Available (needed for the import)' : 'Not bound');
-  check('Sign-in secret', (env.BETTER_AUTH_SECRET?.length ?? 0) >= 32, (env.BETTER_AUTH_SECRET?.length ?? 0) >= 32 ? 'Configured' : 'Missing or too short');
-  check('Payment credential key', secretsConfigured(env), secretsConfigured(env) ? 'Configured' : 'PAYMENT_SECRETS_KEY missing — organizations cannot connect Razorpay');
-  check('Google sign-in', googleConfigured(env), googleConfigured(env) ? 'Credentials configured' : 'Not configured (optional)');
-  check('Two-factor for admins', env.ADMIN_REQUIRE_2FA !== 'off', env.ADMIN_REQUIRE_2FA === 'off' ? 'OFF — only acceptable locally' : 'Required');
-  check('Admin host restriction', !!env.ADMIN_HOST, env.ADMIN_HOST ? `Only on ${env.ADMIN_HOST}` : 'Not set (any configured host)');
-  check('Email delivery', emailConfigured(env), emailConfigured(env)
-    ? `Cloudflare Email Service, from ${env.EMAIL_FROM || 'no-reply@ateliersupport.com'}`
-    : 'Not configured — notices wait in the outbox; no confirmation or reset emails');
+  check('Organization databases', ...status(!!env.ORG_STORE, 'Available', 'ORG_STORE binding missing'));
+  check('File storage', ...status(!!env.VAYU_R2, 'Available', 'R2 binding missing'));
+  check('Original app database', ...status(!!env.VAYU_DB, 'Available (needed for the import)', 'Not bound'));
+  check('Sign-in secret', ...status((env.BETTER_AUTH_SECRET?.length ?? 0) >= 32, 'Configured', 'Missing or too short'));
+  check('Payment credential key', ...status(secretsConfigured(env), 'Configured', 'PAYMENT_SECRETS_KEY missing — organizations cannot connect Razorpay'));
+  check('Google sign-in', ...status(googleConfigured(env), 'Credentials configured', 'Not configured (optional)'));
+  check('Two-factor for admins', ...status(env.ADMIN_REQUIRE_2FA !== 'off', 'Required', 'OFF — only acceptable locally'));
+  check('Admin host restriction', ...status(!!env.ADMIN_HOST, `Only on ${env.ADMIN_HOST}`, 'Not set (any configured host)'));
+  check('Email delivery', ...status(emailConfigured(env),
+    `Cloudflare Email Service, from ${env.EMAIL_FROM || 'no-reply@ateliersupport.com'}`,
+    'Not configured — notices wait in the outbox; no confirmation or reset emails'));
   const { providerEmail } = await getNotificationSettings(db);
   check('Provider notification address', !!providerEmail, providerEmail ?? 'Not set — new applications only appear in the queue', 'notifications');
   // Which Razorpay account the app's payment links use, and whether payments
   // on it can reach the app at once (webhook) or only via its status check.
-  const appPaymentsOrg = await getAppPaymentsOrg(db);
-  if (appPaymentsOrg) {
-    const org = await db.prepare('SELECT name FROM organizations WHERE id = ?').bind(appPaymentsOrg).first<{ name: string }>();
-    check('App payment links', true, `${org?.name ?? 'An organization'}'s own Razorpay account (see its Customer payments card)`);
-  } else {
-    const keys = !!env.RAZORPAY_KEY_ID && !!env.RAZORPAY_KEY_SECRET;
-    const webhook = !!env.RAZORPAY_WEBHOOK_SECRET;
-    let detail = 'Shared account: keys and webhook secret set';
-    if (!keys) detail = 'RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET not set: the app cannot create payment links';
-    else if (!webhook) detail = 'Shared account: RAZORPAY_WEBHOOK_SECRET not set, so payments show as paid only when the app next checks Razorpay (a few minutes), with no instant notice';
-    check('App payment links', keys && webhook, detail);
-  }
-  check('Private file access', env.FILE_AUTH === 'on', env.FILE_AUTH === 'on' ? 'Files need a session' : 'OFF — files are reachable by URL');
+  const links = await appPaymentLinksCheck(env, db);
+  check('App payment links', links.ok, links.detail);
+  check('Private file access', ...status(env.FILE_AUTH === 'on', 'Files need a session', 'OFF — files are reachable by URL'));
 
   let migrations: string[] = [];
   try {

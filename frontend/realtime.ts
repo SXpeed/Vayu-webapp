@@ -17,7 +17,7 @@ import {
   type RealtimeTicketPayload,
 } from './realtimeTickets';
 import {
-  canReadPayments, canReadRoster, canReadSales, canReadSchedule, permissionsForRoles, readableEntities, type SyncEntity,
+  canReadPayments, canReadSales, canReadSchedule, permissionsForRoles, readableEntities, type SyncEntity,
 } from './entityAccess';
 import { ADMIN_ROLE_ID, type RoleDef } from './permissions';
 import { ackStatus, ensureChangeLogTable, statusUpgradeStmts } from './deltaSync';
@@ -58,6 +58,28 @@ function hubJson(data: unknown, status = 200): Response {
   });
 }
 
+/** A chat row's event: its conversation decides who may receive it. */
+const chatEvent = (e: ChangeEvent): boolean => (e.entity === 'conversation' || e.entity === 'message') && !!e.conversationId;
+
+/**
+ * Whether one person may receive an event: signal-only datasets by their
+ * permission, change-log entities by role, and chat rows only for the
+ * conversation's members.
+ */
+function mayReceive(
+  event: ChangeEvent,
+  access: { entities: Set<SyncEntity>; payments: boolean; schedule: boolean; sales: boolean },
+  rooms: Map<string, RoomAccess>, userId: string, isAdmin: boolean,
+): boolean {
+  if (event.entity === 'payments') return access.payments; // KV-backed signal
+  if (event.entity === 'schedule') return access.schedule; // signal only, not in change_log
+  if (event.entity === 'sales') return access.sales; // signal only, not in change_log
+  if (!access.entities.has(event.entity as SyncEntity)) return false;
+  if (!chatEvent(event)) return true;
+  const room = rooms.get(event.conversationId as string);
+  return !!room && mayUseConversation(userId, isAdmin, room);
+}
+
 export class SyncHub {
   private state: DurableObjectState;
   private env: Env;
@@ -69,7 +91,7 @@ export class SyncHub {
   private typingAt = new Map<string, number>();
   private membership = new Map<string, { at: number; room: RoomAccess }>();
   private rolesCache: { at: number; roles: RoleDef[] } | null = null;
-  private readableCache = new Map<string, { at: number; entities: Set<SyncEntity>; payments: boolean; roster: boolean; schedule: boolean; sales: boolean }>();
+  private readableCache = new Map<string, { at: number; entities: Set<SyncEntity>; payments: boolean; schedule: boolean; sales: boolean }>();
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -330,40 +352,19 @@ export class SyncHub {
   /** Filter committed changes per connected user and push invalidations. */
   private async broadcastEvents(events: ChangeEvent[]): Promise<void> {
     if (events.length === 0) return;
-    // Membership may have changed with these rows — drop cached answers.
-    for (const event of events) {
-      if ((event.entity === 'conversation' || event.entity === 'message') && event.conversationId) {
-        this.membership.delete(event.conversationId);
-      }
-    }
-    // Resolve each mentioned conversation's members once, up front.
+    // Membership may have changed with these rows: drop cached answers, then
+    // resolve each mentioned conversation's members once, up front.
+    const conversationIds = [...new Set(events.filter(chatEvent).map(e => e.conversationId as string))];
+    for (const id of conversationIds) this.membership.delete(id);
     const convRooms = new Map<string, RoomAccess>();
-    for (const event of events) {
-      if ((event.entity === 'message' || event.entity === 'conversation') && event.conversationId) {
-        if (!convRooms.has(event.conversationId)) {
-          convRooms.set(event.conversationId, await this.room(event.conversationId));
-        }
-      }
-    }
+    for (const id of conversationIds) convRooms.set(id, await this.room(id));
 
     const roles = await this.getRoles();
     for (const [userId, set] of this.sockets) {
       if (set.size === 0) continue;
-      const meta = this.metaFor(userId);
-      const role = meta?.role ?? '';
+      const role = this.metaFor(userId)?.role ?? '';
       const access = this.readableFor(role, roles);
-      const visible = events.filter(event => {
-        if (event.entity === 'payments') return access.payments; // KV-backed signal
-        if (event.entity === 'roster') return access.roster; // signal only, not in change_log
-        if (event.entity === 'schedule') return access.schedule; // signal only, not in change_log
-        if (event.entity === 'sales') return access.sales; // signal only, not in change_log
-        if (!access.entities.has(event.entity as SyncEntity)) return false;
-        if ((event.entity === 'message' || event.entity === 'conversation') && event.conversationId) {
-          const room = convRooms.get(event.conversationId);
-          return !!room && mayUseConversation(userId, role === ADMIN_ROLE_ID, room);
-        }
-        return true;
-      });
+      const visible = events.filter(event => mayReceive(event, access, convRooms, userId, role === ADMIN_ROLE_ID));
       if (visible.length === 0) continue;
       const payload = JSON.stringify({ type: 'invalidate', events: visible });
       for (const socket of set) {
@@ -512,11 +513,11 @@ export class SyncHub {
   }
 
   /** Entities this role may read — mirrors the REST route rules. */
-  private readableFor(role: string, roles: RoleDef[]): { entities: Set<SyncEntity>; payments: boolean; roster: boolean; schedule: boolean; sales: boolean } {
+  private readableFor(role: string, roles: RoleDef[]): { entities: Set<SyncEntity>; payments: boolean; schedule: boolean; sales: boolean } {
     const cached = this.readableCache.get(role);
     if (cached && Date.now() - cached.at < ROLES_TTL_MS) return cached;
     const perms = permissionsForRoles(roles, role);
-    const entry = { at: Date.now(), entities: readableEntities(perms), payments: canReadPayments(perms), roster: canReadRoster(perms), schedule: canReadSchedule(perms), sales: canReadSales(perms) };
+    const entry = { at: Date.now(), entities: readableEntities(perms), payments: canReadPayments(perms), schedule: canReadSchedule(perms), sales: canReadSales(perms) };
     this.readableCache.set(role, entry);
     return entry;
   }

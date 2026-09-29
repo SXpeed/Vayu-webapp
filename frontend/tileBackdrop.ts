@@ -2,8 +2,7 @@
 // Profile → App Settings. Like the UI size and theme it belongs to this
 // device: it is saved in the browser and applied before first paint
 // (index.html) as <html data-tile-bg="…">, which index.css turns into the
-// --tile-bg the .tile-backdrop class paints. Showcase sections keep the
-// backdrop their curator chose.
+// --tile-bg the .tile-backdrop class paints.
 
 export type TileBackdrop = 'blue' | 'light' | 'dark' | 'offwhite' | 'sage' | 'clay';
 

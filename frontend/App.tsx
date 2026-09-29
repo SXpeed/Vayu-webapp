@@ -57,7 +57,6 @@ const viewLoaders = {
     ContactsView: () => import('./views/ContactsView'),
     CalendarView: () => import('./views/CalendarView'),
     AttendanceView: () => import('./views/AttendanceView'),
-    RosterView: () => import('./views/RosterView'),
     StaffRosterView: () => import('./views/StaffRosterView'),
     SalesView: () => import('./views/SalesView'),
 };
@@ -75,7 +74,6 @@ const PaymentsView = lazy(() => viewLoaders.PaymentsView().then(m => ({ default:
 const ContactsView = lazy(() => viewLoaders.ContactsView().then(m => ({ default: m.ContactsView })));
 const CalendarView = lazy(() => viewLoaders.CalendarView().then(m => ({ default: m.CalendarView })));
 const AttendanceView = lazy(() => viewLoaders.AttendanceView().then(m => ({ default: m.AttendanceView })));
-const RosterView = lazy(() => viewLoaders.RosterView().then(m => ({ default: m.RosterView })));
 const StaffRosterView = lazy(() => viewLoaders.StaffRosterView().then(m => ({ default: m.StaffRosterView })));
 const SalesView = lazy(() => viewLoaders.SalesView().then(m => ({ default: m.SalesView })));
 
@@ -362,16 +360,6 @@ const App: React.FC = () => {
                 return <CollectionsView collections={collections} artworks={artworks} onAddCollection={handlers.handleAddCollection} onUpdateCollection={handlers.handleUpdateCollection} onDeleteCollection={handlers.handleDeleteCollection} onArtworkClick={handleArtworkClick} onAddArtwork={handlers.handleAddArtwork} />;
             case 'catalogs':
                 return <CatalogsView catalogs={catalogs} artworks={artworks} onAddCatalog={handlers.handleAddCatalog} onUpdateCatalog={handlers.handleUpdateCatalog} onDeleteCatalog={handlers.handleDeleteCatalog} onArtworkClick={handleArtworkClick} onAddArtwork={handlers.handleAddArtwork} />;
-            case 'roster':
-                return (
-                    <RosterView
-                        artworks={artworks}
-                        userId={userProfile?.id || authUser?.id || ''}
-                        onArtworkClick={handleArtworkClick}
-                        onAddInquiry={handlers.handleAddInquiry}
-                        onAddCollection={handlers.handleAddCollection}
-                    />
-                );
             case 'schedule':
                 return <StaffRosterView />;
             case 'contacts':

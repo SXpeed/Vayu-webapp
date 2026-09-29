@@ -49,67 +49,81 @@ export interface CenterAdmin {
 
 const ID = '([A-Za-z0-9-]{1,64})';
 
+/** One control-centre request. */
+interface CenterCtx {
+  env: Env; db: D1Database; request: Request; url: URL; admin: CenterAdmin;
+  actor: { userId: string; ip: string | null };
+}
+
+/** A route: path (exact, or a pattern whose groups reach `run`), method, and whether it needs a fresh sign-in. */
+interface CenterRoute {
+  method: string;
+  path: string | RegExp;
+  fresh?: boolean;
+  run: (c: CenterCtx, m: readonly string[]) => Promise<Response>;
+}
+
+const route = (method: string, path: string | RegExp, run: CenterRoute['run'], fresh = false): CenterRoute => ({ method, path, run, fresh });
+const at = (rest: string) => new RegExp(`^/admin/${rest}$`);
+const withRole = (c: CenterCtx) => ({ ...c.actor, role: c.admin.role });
+
+const CENTER_ROUTES: CenterRoute[] = [
+  route('GET', '/admin/overview', async c => reply(await overview(c.env, c.db))),
+  route('GET', '/admin/health', async c => reply(await systemHealth(c.env, c.db))),
+
+  // Applications
+  route('GET', '/admin/applications', async c => reply(await listApplications(c.db, c.url.searchParams))),
+  route('GET', at(`applications/${ID}`), async (c, m) => reply(await getApplication(c.db, m[1]))),
+  route('POST', at(`applications/${ID}/approve`), async (c, m) => reply(await approveApplication(c.env, c.db, m[1], await jsonBody(c.request), c.actor)), true),
+  route('POST', at(`applications/${ID}/reject`), async (c, m) => reply(await rejectApplication(c.db, m[1], await jsonBody(c.request), c.actor))),
+  route('POST', at(`applications/${ID}/request-info`), async (c, m) => reply(await requestInformation(c.db, m[1], await jsonBody(c.request), c.actor))),
+  route('POST', at(`applications/${ID}/change-plan`), async (c, m) => reply(await changeRequestedPlan(c.db, m[1], await jsonBody(c.request), c.actor))),
+
+  // Accounts (people who can sign in)
+  route('GET', '/admin/accounts', async c => reply({ accounts: await listUsers(c.db, c.url.searchParams) })),
+  route('GET', at(`accounts/${ID}`), async (c, m) => reply(await getUser(c.db, m[1]))),
+  route('POST', at(`accounts/${ID}/status`), async (c, m) => reply(await setUserStatus(c.db, m[1], await jsonBody(c.request), c.actor)), true),
+  route('POST', at(`accounts/${ID}/revoke-sessions`), async (c, m) => { await jsonBody(c.request); return reply(await revokeSessions(c.db, m[1], c.actor)); }, true),
+  route('POST', at(`accounts/${ID}/reset-password`), async (c, m) => reply(await resetPassword(c.db, m[1], await jsonBody(c.request), c.actor)), true),
+
+  // Provider administrators
+  route('GET', '/admin/admins', async c => reply({ admins: await listAdmins(c.db) })),
+  route('POST', '/admin/admins', async c => reply({ admins: await addAdmin(c.db, await jsonBody(c.request), withRole(c)) }), true),
+  route('PATCH', at(`admins/${ID}`), async (c, m) => reply({ admins: await updateAdmin(c.db, m[1], await jsonBody(c.request), withRole(c)) }), true),
+
+  // Notifications
+  route('GET', '/admin/notifications', async c => reply(await listOutbox(c.db, c.url.searchParams))),
+  route('POST', at(`notifications/${ID}/(retry|cancel)`), async (c, m) => {
+    if (m[2] === 'retry') await retryNotification(c.db, m[1], c.actor);
+    else await cancelNotification(c.db, m[1], c.actor);
+    return reply(await listOutbox(c.db, c.url.searchParams));
+  }),
+  route('GET', '/admin/settings/notifications', async c => reply({ ...await getNotificationSettings(c.db), emailConfigured: emailConfigured(c.env) })),
+  route('PUT', '/admin/settings/notifications', async c => reply(await updateNotificationSettings(c.db, await jsonBody(c.request), c.actor))),
+];
+
+function matchCenterRoute(path: string, method: string): { r: CenterRoute; m: readonly string[] } | null {
+  for (const r of CENTER_ROUTES) {
+    if (r.method !== method) continue;
+    if (typeof r.path === 'string') {
+      if (r.path === path) return { r, m: [path] };
+      continue;
+    }
+    const m = r.path.exec(path);
+    if (m) return { r, m };
+  }
+  return null;
+}
+
 export async function handleCenterRoute(env: Env, db: D1Database, request: Request, url: URL, path: string, admin: CenterAdmin): Promise<Response | null> {
-  const method = request.method;
-  const actor = { userId: admin.userId, ip: admin.ip };
-  const needFresh = () => fail(403, 'reauth_required', 'Sign in again to do this.');
-  let m: RegExpExecArray | null;
-
+  const found = matchCenterRoute(path, request.method);
+  if (!found) return null;
+  if (found.r.fresh && !admin.fresh) return fail(403, 'reauth_required', 'Sign in again to do this.');
+  const c: CenterCtx = { env, db, request, url, admin, actor: { userId: admin.userId, ip: admin.ip } };
   try {
-    if (path === '/admin/overview' && method === 'GET') return reply(await overview(env, db));
-    if (path === '/admin/health' && method === 'GET') return reply(await systemHealth(env, db));
-
-    // Applications
-    if (path === '/admin/applications' && method === 'GET') return reply(await listApplications(db, url.searchParams));
-    if ((m = new RegExp(`^/admin/applications/${ID}$`).exec(path)) && method === 'GET') return reply(await getApplication(db, m[1]));
-    if ((m = new RegExp(`^/admin/applications/${ID}/(approve|reject|request-info|change-plan)$`).exec(path)) && method === 'POST') {
-      const body = await jsonBody(request);
-      switch (m[2]) {
-        case 'approve':
-          if (!admin.fresh) return needFresh();
-          return reply(await approveApplication(env, db, m[1], body, actor));
-        case 'reject': return reply(await rejectApplication(db, m[1], body, actor));
-        case 'request-info': return reply(await requestInformation(db, m[1], body, actor));
-        case 'change-plan': return reply(await changeRequestedPlan(db, m[1], body, actor));
-      }
-    }
-
-    // Accounts (people who can sign in)
-    if (path === '/admin/accounts' && method === 'GET') return reply({ accounts: await listUsers(db, url.searchParams) });
-    if ((m = new RegExp(`^/admin/accounts/${ID}$`).exec(path)) && method === 'GET') return reply(await getUser(db, m[1]));
-    if ((m = new RegExp(`^/admin/accounts/${ID}/(status|revoke-sessions|reset-password)$`).exec(path)) && method === 'POST') {
-      if (!admin.fresh) return needFresh();
-      const body = await jsonBody(request);
-      if (m[2] === 'status') return reply(await setUserStatus(db, m[1], body, actor));
-      if (m[2] === 'revoke-sessions') return reply(await revokeSessions(db, m[1], actor));
-      return reply(await resetPassword(db, m[1], body, actor));
-    }
-
-    // Provider administrators
-    if (path === '/admin/admins' && method === 'GET') return reply({ admins: await listAdmins(db) });
-    if (path === '/admin/admins' && method === 'POST') {
-      if (!admin.fresh) return needFresh();
-      return reply({ admins: await addAdmin(db, await jsonBody(request), { ...actor, role: admin.role }) });
-    }
-    if ((m = new RegExp(`^/admin/admins/${ID}$`).exec(path)) && method === 'PATCH') {
-      if (!admin.fresh) return needFresh();
-      return reply({ admins: await updateAdmin(db, m[1], await jsonBody(request), { ...actor, role: admin.role }) });
-    }
-
-    // Notifications
-    if (path === '/admin/notifications' && method === 'GET') return reply(await listOutbox(db, url.searchParams));
-    if ((m = new RegExp(`^/admin/notifications/${ID}/(retry|cancel)$`).exec(path)) && method === 'POST') {
-      if (m[2] === 'retry') await retryNotification(db, m[1], actor);
-      else await cancelNotification(db, m[1], actor);
-      return reply(await listOutbox(db, url.searchParams));
-    }
-    if (path === '/admin/settings/notifications' && method === 'GET') return reply({ ...await getNotificationSettings(db), emailConfigured: emailConfigured(env) });
-    if (path === '/admin/settings/notifications' && method === 'PUT') {
-      return reply(await updateNotificationSettings(db, await jsonBody(request), actor));
-    }
+    return await found.r.run(c, found.m);
   } catch (e) {
     if (e instanceof OrgError) return fail(e.status, e.code, e.message);
     throw e;
   }
-  return null;
 }

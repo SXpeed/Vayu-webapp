@@ -103,7 +103,7 @@ export interface Env {
   // one that owns the original app's data (orgApp.ts).
   ORG_STORAGE?: 'own' | 'original';
   // App sections this organization's plan leaves out (plan modules that gate
-  // a section; only the Roster so far). Nobody reaches them, admins included.
+  // a section: the staff roster so far). Nobody reaches them, admins included.
   SECTIONS_OFF?: SectionId[];
 }
 
@@ -172,7 +172,7 @@ export function addD1Usage(request: Request, rowsRead: number, rowsWritten: numb
  */
 export function trackedEnv(request: Request, env: Env): Env {
   const metrics = requestMetrics(request);
-  const track = <T>(result: T | Promise<T>): T | Promise<T> => {
+  const track = <T>(result: T | Promise<T>): T | Promise<T> => { // NOSONAR: hands back whatever D1 gave, a result or its promise
     if (result && typeof (result as { then?: unknown }).then === 'function') {
       return (result as Promise<T>).then(value => { track(value); return value; });
     }

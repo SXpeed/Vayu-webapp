@@ -12,6 +12,20 @@ import { startDevWorker } from './helpers/devWorker.mjs';
 
 const OWNER = { name: 'Aarav Shah', email: 'owner@example.com', password: 'owner-password-1234' };
 const DAY = '2026-09-15';
+
+// The table as it first shipped (before tags and photos), so every run also
+// checks that a live workspace's table gains the new columns on first use.
+const SALES_TABLE_V1 = `CREATE TABLE sales (
+    id TEXT PRIMARY KEY, seq INTEGER NOT NULL UNIQUE, sale_number TEXT NOT NULL, artwork_id TEXT,
+    item_title TEXT NOT NULL DEFAULT '', item_price REAL NOT NULL DEFAULT 0, contact_id TEXT,
+    buyer_name TEXT NOT NULL DEFAULT '', buyer_phone TEXT NOT NULL DEFAULT '', sale_date TEXT NOT NULL,
+    recorded_at INTEGER NOT NULL, amount REAL NOT NULL DEFAULT 0, payment_mode TEXT NOT NULL,
+    reference_no TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', created_by TEXT,
+    created_by_name TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, updated_by TEXT,
+    deleted_at INTEGER, deleted_by TEXT, deleted_by_name TEXT NOT NULL DEFAULT ''
+);
+INSERT INTO sales (id, seq, sale_number, item_title, buyer_name, sale_date, recorded_at, amount, payment_mode, updated_at)
+VALUES ('sale_from_before_tags', 1, 'SAL-001', 'Recorded before tags', 'Early buyer', '2026-06-10', 1, 100, 'Cash', 1);`;
 const MONTH = { from: '2026-09-01', to: '2026-09-30' };
 
 let worker;
@@ -62,7 +76,8 @@ const sale = (extra = {}) => ({
 
 before(async () => {
     const schema = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
-    worker = await startDevWorker({ port: 8838, inspectorPort: 9268, seedLegacy: { sql: schema } });
+    worker = await startDevWorker({ port: 8838, inspectorPort: 9268, seedLegacy: { sql: `${schema}
+${SALES_TABLE_V1}` } });
     assert.equal((await api(null, '/auth/setup', { method: 'POST', body: OWNER })).status, 200);
     owner = (await api(null, '/auth/login', { method: 'POST', body: { email: OWNER.email, password: OWNER.password } })).body.token;
     accounts = await person('Accounts', 'accounts@example.com', await role('Accounts', { sales: 'edit' }));
@@ -202,6 +217,51 @@ test('the summary adds up, by payment mode, within the dates asked for', async (
     const sept = (await month()).body;
     assert.equal(sept.summary.count, sept.sales.length);
     assert.equal(sept.summary.totalAmount, sept.sales.reduce((a, s) => a + Math.round(s.amount * 100), 0) / 100);
+});
+
+test('a table from before tags and photos gains them; its sales read back untouched', async () => {
+    const june = await api(staff, '/sales?from=2026-06-01&to=2026-06-30');
+    assert.equal(june.status, 200, june.text);
+    const old = june.body.sales.find(s => s.id === 'sale_from_before_tags');
+    assert.ok(old);
+    assert.deepEqual(old.tags, []);
+    assert.deepEqual(old.photoUrls, []);
+    assert.equal(old.saleNumber, 'SAL-001');
+});
+
+test('tags: cleaned, kept per sale, offered back as suggestions', async () => {
+    const tagged = await api(accounts, '/sales', { method: 'POST', body: sale({ itemTitle: 'Candle set', saleDate: '2026-07-12', tags: ['  Kala Ghoda   Fair ', 'kala ghoda fair', 'Diwali', 42, ''] }) });
+    assert.equal(tagged.status, 201, tagged.text);
+    assert.deepEqual(tagged.body.tags, ['Kala Ghoda Fair', 'Diwali'], 'trimmed, spaces collapsed, no repeats ignoring case, text only');
+    const other = await api(accounts, '/sales', { method: 'POST', body: sale({ itemTitle: 'Postcards', saleDate: '2026-07-13', tags: ['Diwali'] }) });
+    assert.equal(other.status, 201);
+    assert.equal((await api(accounts, '/sales', { method: 'POST', body: sale({ itemTitle: 'Mug', saleDate: '2026-07-14', tags: Array.from({ length: 15 }, (_, i) => `t${i}`) }) })).body.tags.length, 10, 'at most 10');
+
+    const july = (await api(staff, '/sales?from=2026-07-01&to=2026-07-31')).body;
+    assert.ok(july.allTags.includes('Kala Ghoda Fair'));
+    assert.equal(july.allTags.filter(t => t.toLowerCase() === 'diwali').length, 1, 'each tag once');
+
+    const edited = await api(accounts, `/sales/${tagged.body.id}`, { method: 'PUT', body: { ...tagged.body, tags: ['Walk-in'] } });
+    assert.deepEqual(edited.body.tags, ['Walk-in']);
+});
+
+test('photos: for items not in the inventory, checked, and shown as the picture', async () => {
+    const urls = ['/api/files/uploads/a.jpg', '/api/files/uploads/b.jpg'];
+    const withPhotos = await api(accounts, '/sales', { method: 'POST', body: sale({ itemTitle: 'Hand-painted tray', photoUrls: urls }) });
+    assert.equal(withPhotos.status, 201, withPhotos.text);
+    assert.deepEqual(withPhotos.body.photoUrls, urls);
+    assert.equal(withPhotos.body.imageUrl, urls[0]);
+    assert.equal((await api(accounts, '/sales', { method: 'POST', body: sale({ itemTitle: 'Tray', photoUrls: ['https://evil.example/x.jpg'] }) })).status, 400, 'only our own uploads');
+    assert.equal((await api(accounts, '/sales', { method: 'POST', body: sale({ itemTitle: 'Tray', photoUrls: Array.from({ length: 11 }, (_, i) => `/api/files/u/${i}.jpg`) }) })).status, 400, 'at most 10');
+
+    const art = await artwork('Blue Vessel', 12_000);
+    const piece = await api(accounts, '/sales', { method: 'POST', body: sale({ artworkId: art, photoUrls: urls }) });
+    assert.equal(piece.status, 201);
+    assert.deepEqual(piece.body.photoUrls, [], 'an inventory piece uses its own photos');
+    assert.equal(piece.body.imageUrl, `/api/files/${art}.jpg`);
+
+    const fewer = await api(accounts, `/sales/${withPhotos.body.id}`, { method: 'PUT', body: { ...withPhotos.body, photoUrls: [urls[1]] } });
+    assert.deepEqual(fewer.body.photoUrls, [urls[1]]);
 });
 
 test('in an organization’s own database too', async () => {

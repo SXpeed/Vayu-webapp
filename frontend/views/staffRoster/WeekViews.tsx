@@ -170,6 +170,62 @@ export const WeekGrid: React.FC<WeekProps> = ({ data, d, dates, filters, onEdit,
     );
 };
 
+/** A tile in the phone week: a button when it does something. */
+const DayTile: React.FC<{ dayIdx: number; content: React.ReactNode; cls: string; label: string; act?: () => void }> = ({ dayIdx, content, cls, label, act }) => (
+    act
+        ? <button type="button" onClick={act} aria-label={label} className={`h-[52px] min-w-0 rounded-[10px] border flex flex-col items-center justify-center text-center leading-tight active-scale ${cls}`}>{content}</button>
+        : <div aria-label={label} className={`h-[52px] min-w-0 rounded-[10px] border flex flex-col items-center justify-center text-center leading-tight ${cls}`} data-day={dayIdx}>{content}</div>
+);
+
+type TileLook = { content: React.ReactNode; cls: string; label: string; act?: () => void };
+
+interface DayArgs {
+    data: StaffRosterData; d: Derived; filters: Filters; employeeId: string | null; name: string; date: string;
+    openDay?: () => void; onEdit?: (s: StaffShift) => void; onNew?: (employeeId: string | null, date: string) => void;
+}
+
+/** A day with shifts: the first one's times and store (or "+N MORE"), tinted by store; conflicts and requested leave marked. */
+function workTile(a: DayArgs, work: StaffShift[], ring: string, pending: boolean): TileLook {
+    const { d, employeeId, name, date } = a;
+    const s = work[0];
+    const bad = work.some(x => d.conflicts.has(x.id));
+    const more = work.length > 1;
+    const storeTag = d.storeName(s.storeId).slice(0, 3).toUpperCase() + (nextDay(s) ? ' ⁺¹' : '');
+    const tint = employeeId ? d.storeClass(s.storeId) : 'sr-open border-[1.5px]';
+    return {
+        content: (
+            <>
+                <span className="text-[11px] font-semibold tabular-nums tracking-tight">{shortRange(s)}</span>
+                <span className="text-[9px] font-semibold tracking-wider opacity-80">{more ? `+${work.length - 1} MORE` : storeTag}</span>
+                {bad && <span className="sr-only">has a conflict</span>}
+            </>
+        ),
+        cls: `${tint}${bad ? ' sr-conflict' : ''}${ring}`,
+        label: `${name}, ${dayLabel(date)}: ${work.map(x => timeRange(x) + ' at ' + d.storeName(x.storeId)).join(', ')}${bad ? ', has a conflict' : ''}${pending ? ', leave requested' : ''}`,
+        act: more || !a.onEdit ? a.openDay : () => a.onEdit?.(s),
+    };
+}
+
+/** What a person's day shows on the phone week: leave, work, a day off, a way to add a shift, or nothing. */
+function describeDay(a: DayArgs): TileLook {
+    const { data, employeeId, name, date } = a;
+    const all = shiftsOf(data, employeeId, date);
+    const work = all.filter(s => s.kind === 'shift' && matchesStore(s, a.filters));
+    const off = all.find(s => s.kind === 'off');
+    const leave = employeeId ? leaveOn(data.leaves, employeeId, date) : undefined;
+    const pending = !!employeeId && !!leaveOn(data.leaves, employeeId, date, 'pending');
+    const ring = pending ? ' outline outline-1 outline-dashed outline-offset-1 outline-[var(--sr-leave-edge)]' : '';
+    if (leave) {
+        return { content: <><Leaf size={12} /><span className="text-[10px] font-semibold mt-0.5">Leave</span></>, cls: 'sr-leave' + ring, label: `${name}, ${dayLabel(date)}: ${leave.type}`, act: work.length ? a.openDay : undefined };
+    }
+    if (work.length) return workTile(a, work, ring, pending);
+    if (off) return { content: <span className="text-[10.5px] font-medium">Off</span>, cls: 'sr-off' + ring, label: `${name}, ${dayLabel(date)}: day off`, act: a.onEdit ? () => a.onEdit?.(off) : undefined };
+    if (employeeId && a.onNew) {
+        return { content: <Plus size={13} className="opacity-60" />, cls: 'border-dashed border-[var(--neu-line)] text-[var(--neu-text-dim)]' + ring, label: `Add a shift for ${name} on ${dayLabel(date)}`, act: () => a.onNew?.(employeeId, date) };
+    }
+    return { content: <span className="text-[var(--neu-text-dim)] opacity-50">·</span>, cls: 'border-transparent' + ring, label: `${name}, ${dayLabel(date)}: nothing planned${pending ? ', leave requested' : ''}` };
+}
+
 /**
  * Phones: the whole week without sideways scrolling. Each person is a short
  * row of seven day tiles — the times, the store's first letters and its tint —
@@ -180,41 +236,10 @@ export const PhoneWeek: React.FC<WeekProps> = ({ data, d, dates, filters, onEdit
     const today = todayIso();
     const people = peopleFor(data, filters);
     const opens = data.shifts.filter(s => !s.employeeId && dates.includes(s.date) && matchesStore(s, filters) && (filters.title === 'all' || s.role === filters.title));
-    const abbr = (id: string | null) => d.storeName(id).slice(0, 3).toUpperCase();
 
-    const tile = (key: string, dayIdx: number, content: React.ReactNode, cls: string, label: string, act?: () => void) => (
-        act
-            ? <button key={key} type="button" onClick={act} aria-label={label} className={`h-[52px] min-w-0 rounded-[10px] border flex flex-col items-center justify-center text-center leading-tight active-scale ${cls}`}>{content}</button>
-            : <div key={key} aria-label={label} className={`h-[52px] min-w-0 rounded-[10px] border flex flex-col items-center justify-center text-center leading-tight ${cls}`} data-day={dayIdx}>{content}</div>
+    const dayTile = (employeeId: string | null, name: string, date: string, i: number) => (
+        <DayTile key={date} dayIdx={i} {...describeDay({ data, d, filters, employeeId, name, date, openDay: onOpenDay ? () => onOpenDay(i) : undefined, onEdit, onNew })} />
     );
-
-    const dayTile = (employeeId: string | null, name: string, date: string, i: number) => {
-        const all = shiftsOf(data, employeeId, date);
-        const work = all.filter(s => s.kind === 'shift' && matchesStore(s, filters));
-        const off = all.find(s => s.kind === 'off');
-        const leave = employeeId ? leaveOn(data.leaves, employeeId, date) : undefined;
-        const pending = employeeId ? leaveOn(data.leaves, employeeId, date, 'pending') : undefined;
-        const ring = pending ? ' outline outline-1 outline-dashed outline-offset-1 outline-[var(--sr-leave-edge)]' : '';
-        const openDay = onOpenDay ? () => onOpenDay(i) : undefined;
-        if (leave) return tile(date, i, <><Leaf size={12} /><span className="text-[10px] font-semibold mt-0.5">Leave</span></>, 'sr-leave' + ring, `${name}, ${dayLabel(date)}: ${leave.type}`, work.length ? openDay : undefined);
-        if (work.length) {
-            const s = work[0];
-            const bad = work.some(x => d.conflicts.has(x.id));
-            const more = work.length > 1;
-            return tile(date, i, (
-                <>
-                    <span className="text-[11px] font-semibold tabular-nums tracking-tight">{shortRange(s)}</span>
-                    <span className="text-[9px] font-semibold tracking-wider opacity-80">{more ? `+${work.length - 1} MORE` : `${abbr(s.storeId)}${nextDay(s) ? ' ⁺¹' : ''}`}</span>
-                    {bad && <span className="sr-only">has a conflict</span>}
-                </>
-            ), `${employeeId ? d.storeClass(s.storeId) : 'sr-open border-[1.5px]'}${bad ? ' sr-conflict' : ''}${ring}`,
-                `${name}, ${dayLabel(date)}: ${work.map(x => `${timeRange(x)} at ${d.storeName(x.storeId)}`).join(', ')}${bad ? ', has a conflict' : ''}${pending ? ', leave requested' : ''}`,
-                more ? openDay : (onEdit ? () => onEdit(s) : openDay));
-        }
-        if (off) return tile(date, i, <span className="text-[10.5px] font-medium">Off</span>, 'sr-off' + ring, `${name}, ${dayLabel(date)}: day off`, onEdit ? () => onEdit(off) : undefined);
-        if (employeeId && onNew) return tile(date, i, <Plus size={13} className="opacity-60" />, 'border-dashed border-[var(--neu-line)] text-[var(--neu-text-dim)]' + ring, `Add a shift for ${name} on ${dayLabel(date)}`, () => onNew(employeeId, date));
-        return tile(date, i, <span className="text-[var(--neu-text-dim)] opacity-50">·</span>, 'border-transparent' + ring, `${name}, ${dayLabel(date)}: nothing planned${pending ? ', leave requested' : ''}`);
-    };
 
     return (
         <div className="neu-card p-3 space-y-3">
@@ -271,7 +296,7 @@ export const DayAgenda: React.FC<WeekProps & { dayIdx: number; onDay: (i: number
                     const open = data.shifts.filter(s => !s.employeeId && s.date === dt && matchesStore(s, filters)).length;
                     return (
                         <button key={dt} type="button" onClick={() => onDay(i)} aria-pressed={i === dayIdx}
-                            aria-label={`${dayLabel(dt)}: ${staff} on shift${open ? `, ${open} open` : ''}`}
+                            aria-label={`${dayLabel(dt)}: ${staff} on shift${open ? ', ' + open + ' open' : ''}`}
                             className={`rounded-2xl py-2 flex flex-col items-center leading-tight active-scale ${i === dayIdx ? 'neu-inset text-[var(--neu-gold)]' : 'text-[var(--neu-text-dim)]'}`}>
                             <span className="text-[10.5px] font-semibold uppercase">{DOW[i]}</span>
                             <span className={`text-[16px] font-semibold tabular-nums ${i === dayIdx ? '' : 'text-[var(--neu-text)]'}`}>{dayOfMonth(dt)}</span>

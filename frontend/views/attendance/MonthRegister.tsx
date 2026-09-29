@@ -21,6 +21,8 @@ const WEEKDAY_LETTER = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
  * Admin: the month as an attendance register — one row per person, one
  * column per day, hours in each cell. Tap a cell to open that day.
  */
+
+const workedText = (c: { forgot: boolean; worked: number }): string => (c.forgot ? 'not checked out' : fmtHours(c.worked) + ' h');
 export const MonthRegister: React.FC<MonthRegisterProps> = ({ team, refreshKey, onOpenDay }) => {
     const [year, setYear] = useState(() => new Date().getFullYear());
     const [month, setMonth] = useState(() => new Date().getMonth());
@@ -174,7 +176,7 @@ export const MonthRegister: React.FC<MonthRegisterProps> = ({ team, refreshKey, 
                                                             type="button"
                                                             disabled={future}
                                                             onClick={() => onOpenDay(dayStart(d))}
-                                                            title={c ? `${p.name}, ${toDateInput(dayStart(d))}: ${c.forgot ? 'not checked out' : `${fmtHours(c.worked)} h`}` : undefined}
+                                                            title={c ? `${p.name}, ${toDateInput(dayStart(d))}: ${workedText(c)}` : undefined}
                                                             className={`w-8 h-7 rounded-md text-[10.5px] ${cls} ${dayStart(d) === today ? 'ring-1 ring-gold-500/70' : ''} disabled:cursor-default hover:ring-1 hover:ring-[var(--neu-gold)]`}
                                                         >
                                                             {text}

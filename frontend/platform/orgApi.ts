@@ -99,6 +99,41 @@ function requireRole(ctx: OrgContext, allowed: Set<string>): void {
  * Routes one organization request. `rest` is the path after the org id, e.g.
  * "/artworks" or "/artworks/<id>/status".
  */
+const NOT_HANDLED = Symbol('not handled');
+
+/** GET, PUT or DELETE one artwork, or POST its status. */
+async function oneArtwork(ctx: OrgContext, method: string, id: string, status: boolean, body: () => Promise<Record<string, unknown>>): Promise<unknown> {
+  if (status) {
+    if (method !== 'POST') return NOT_HANDLED;
+    requireRole(ctx, WRITE_ROLES);
+    const b = await body();
+    return ctx.store.setArtworkStatus(id, String(b.expected ?? ''), String(b.status ?? ''), ctx.actor);
+  }
+  if (method === 'GET') return ctx.store.getArtwork(id);
+  if (method === 'PUT') {
+    requireRole(ctx, WRITE_ROLES);
+    return ctx.store.putArtwork({ ...(await body()), id }, ctx.actor);
+  }
+  if (method === 'DELETE') {
+    requireRole(ctx, MANAGE_ROLES);
+    return ctx.store.deleteArtwork(id, ctx.actor);
+  }
+  return NOT_HANDLED;
+}
+
+/**
+ * Errors thrown inside the Durable Object arrive as plain Errors; the code is
+ * preserved in the message by the RPC boundary, and becomes a status here.
+ */
+function fromStoreError(e: unknown): unknown {
+  const message = String((e as Error)?.message ?? e);
+  const codes: Record<string, number> = { not_found: 404, conflict: 409, invalid: 400 };
+  for (const [code, status] of Object.entries(codes)) {
+    if (message.startsWith(`${code}: `)) return new OrgAccessError(status, code, message.slice(code.length + 2));
+  }
+  return e;
+}
+
 export async function handleOrgRequest(ctx: OrgContext, request: Request, rest: string, url: URL): Promise<unknown> {
   const method = request.method;
   const body = async () => {
@@ -126,21 +161,8 @@ export async function handleOrgRequest(ctx: OrgContext, request: Request, rest: 
 
     const one = /^\/artworks\/([A-Za-z0-9-]{1,64})(\/status)?$/.exec(rest);
     if (one) {
-      const id = one[1];
-      if (!one[2] && method === 'GET') return await ctx.store.getArtwork(id);
-      if (!one[2] && method === 'PUT') {
-        requireRole(ctx, WRITE_ROLES);
-        return await ctx.store.putArtwork({ ...(await body()), id }, ctx.actor);
-      }
-      if (!one[2] && method === 'DELETE') {
-        requireRole(ctx, MANAGE_ROLES);
-        return await ctx.store.deleteArtwork(id, ctx.actor);
-      }
-      if (one[2] && method === 'POST') {
-        requireRole(ctx, WRITE_ROLES);
-        const b = await body();
-        return await ctx.store.setArtworkStatus(id, String(b.expected ?? ''), String(b.status ?? ''), ctx.actor);
-      }
+      const handled = await oneArtwork(ctx, method, one[1], !!one[2], body);
+      if (handled !== NOT_HANDLED) return handled;
     }
 
     if (rest === '/audit' && method === 'GET') {
@@ -148,16 +170,7 @@ export async function handleOrgRequest(ctx: OrgContext, request: Request, rest: 
       return { entries: await ctx.store.recentAudit(Number(url.searchParams.get('limit')) || 50) };
     }
   } catch (e) {
-    // Errors thrown inside the Durable Object arrive as plain Errors; the
-    // code is preserved in the message by the RPC boundary.
-    const message = String((e as Error)?.message ?? e);
-    const codes: Record<string, number> = { not_found: 404, conflict: 409, invalid: 400 };
-    for (const [code, status] of Object.entries(codes)) {
-      if (message.startsWith(`${code}: `)) {
-        throw new OrgAccessError(status, code, message.slice(code.length + 2));
-      }
-    }
-    throw e;
+    throw fromStoreError(e);
   }
 
   throw new OrgAccessError(404, 'not_found', 'Not found');

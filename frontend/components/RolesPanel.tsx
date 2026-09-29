@@ -26,6 +26,12 @@ function summarize(p: Permissions): string {
 }
 
 /** Admin: define roles and what each one can see and change. */
+
+/** A level button's look: pressed in its colour when chosen ("none" in red), raised otherwise. */
+function levelButtonClass(on: boolean, level: string): string {
+    if (!on) return 'neu-raised-sm text-gray-600 dark:text-gray-300 disabled:opacity-40';
+    return level === 'none' ? 'neu-inset text-red-600 dark:text-red-400' : 'neu-inset text-gold-700 dark:text-gold-300';
+}
 export const RolesPanel: React.FC = () => {
     const [roles, setRoles] = useState<RoleDef[]>([]);
     const [users, setUsers] = useState<AuthUser[]>([]);
@@ -231,9 +237,7 @@ export const RolesPanel: React.FC = () => {
                                                     aria-checked={on}
                                                     disabled={isAdminRole}
                                                     onClick={() => setDraft(d => ({ ...d, [section.id]: level }))}
-                                                    className={`flex-1 rounded-full py-1.5 text-[10.5px] font-bold uppercase tracking-wider transition-colors disabled:cursor-default ${on
-                                                        ? `neu-inset ${level === 'none' ? 'text-red-600 dark:text-red-400' : 'text-gold-700 dark:text-gold-300'}`
-                                                        : 'neu-raised-sm text-gray-600 dark:text-gray-300 disabled:opacity-40'}`}
+                                                    className={`flex-1 rounded-full py-1.5 text-[10.5px] font-bold uppercase tracking-wider transition-colors disabled:cursor-default ${levelButtonClass(on, level)}`}
                                                 >
                                                     {label}
                                                 </button>

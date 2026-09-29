@@ -26,7 +26,7 @@
 import { changeLogStmt, ensureChangeLogTable } from './deltaSync';
 import { err, json, runSetupOnce } from './rows';
 import {
-    MAX_AMOUNT, isAmount, isIsoDate, isPaymentMode, saleFieldErrors, summarize,
+    MAX_AMOUNT, cleanTags, isAmount, isIsoDate, isPaymentMode, saleFieldErrors, summarize,
     type PaymentMode, type Sale, type SaleInput,
 } from './salesRules';
 import type { ChangeEvent, Ctx, SessionData } from './workerEnv';
@@ -53,6 +53,8 @@ export function ensureSalesTable(db: D1Database): Promise<void> {
             payment_mode    TEXT NOT NULL,
             reference_no    TEXT NOT NULL DEFAULT '',
             notes           TEXT NOT NULL DEFAULT '',
+            tags            TEXT NOT NULL DEFAULT '[]',
+            photo_urls      TEXT NOT NULL DEFAULT '[]',
             created_by      TEXT,
             created_by_name TEXT NOT NULL DEFAULT '',
             updated_at      INTEGER NOT NULL,
@@ -63,29 +65,49 @@ export function ensureSalesTable(db: D1Database): Promise<void> {
         )`).run();
         await db.prepare('CREATE INDEX IF NOT EXISTS idx_sales_date ON sales (sale_date)').run();
         await db.prepare('CREATE INDEX IF NOT EXISTS idx_sales_artwork ON sales (artwork_id)').run();
+        // Tables made before a column existed get it here.
+        const have = new Set(((await db.prepare('PRAGMA table_info(sales)').all<{ name: string }>()).results || []).map(c => c.name));
+        for (const [column, definition] of Object.entries(ADDED_COLUMNS)) {
+            if (have.has(column)) continue;
+            try {
+                await db.prepare(`ALTER TABLE sales ADD COLUMN ${column} ${definition}`).run();
+            } catch (e) {
+                // Another isolate may have added it at the same moment.
+                if (!/duplicate column/i.test((e as Error).message)) throw e;
+            }
+        }
     });
 }
 
+/** Columns added after the table first shipped (2026-09-29), with their definitions. */
+const ADDED_COLUMNS: Record<string, string> = {
+    tags: "TEXT NOT NULL DEFAULT '[]'",
+    photo_urls: "TEXT NOT NULL DEFAULT '[]'",
+};
+
 // ── Rows ────────────────────────────────────────────────────────────────────
 
-function firstImage(raw: unknown): string | null {
-    if (typeof raw !== 'string') return null;
+function stringList(raw: unknown): string[] {
+    if (typeof raw !== 'string') return [];
     try {
         const list = JSON.parse(raw) as unknown;
-        return Array.isArray(list) && typeof list[0] === 'string' ? list[0] : null;
-    } catch { return null; }
+        return Array.isArray(list) ? list.filter((v): v is string => typeof v === 'string') : [];
+    } catch { return []; }
 }
 
 /** A sales row, optionally LEFT JOINed with its artwork (art_id, art_images). */
 function rowToSale(r: Record<string, unknown>): Sale {
     const artworkId = r.artwork_id ? String(r.artwork_id) : null;
     const inInventory = !!artworkId && !!r.art_id;
+    const photoUrls = artworkId ? [] : stringList(r.photo_urls);
     return {
         id: String(r.id),
         saleNumber: String(r.sale_number),
         artworkId,
         inInventory,
-        imageUrl: inInventory ? firstImage(r.art_images) : null,
+        imageUrl: (inInventory ? stringList(r.art_images)[0] : photoUrls[0]) ?? null,
+        photoUrls,
+        tags: stringList(r.tags),
         itemTitle: String(r.item_title ?? ''),
         itemPrice: Number(r.item_price) || 0,
         contactId: r.contact_id ? String(r.contact_id) : null,
@@ -142,7 +164,18 @@ function readInput(raw: Record<string, unknown>): SaleInput {
         paymentMode: raw.paymentMode as PaymentMode,
         referenceNo: cleanText(raw.referenceNo, 80),
         notes: cleanText(raw.notes, 1000),
+        tags: cleanTags(raw.tags),
+        // Checked by saleFieldErrors (isFileUrl, at most MAX_PHOTOS).
+        photoUrls: Array.isArray(raw.photoUrls) ? [...new Set(raw.photoUrls as string[])] : [],
     };
+}
+
+/** Every tag in use, most recently used first: suggestions for the next sale. */
+async function tagsInUse(db: D1Database): Promise<string[]> {
+    const rows = (await db.prepare("SELECT tags FROM sales WHERE deleted_at IS NULL AND tags <> '[]' ORDER BY recorded_at DESC LIMIT 5000").all()).results || [];
+    const seen = new Map<string, string>();
+    for (const tag of rows.flatMap(r => stringList(r.tags))) if (!seen.has(tag.toLowerCase())) seen.set(tag.toLowerCase(), tag);
+    return [...seen.values()].slice(0, 200);
 }
 
 export function salesRoutes(deps: SalesDeps): SalesRoute[] {
@@ -170,7 +203,7 @@ export function salesRoutes(deps: SalesDeps): SalesRoute[] {
         }
     }
 
-    /** GET /sales?from=&to= — the sales in a date range (the day of the sale), and their totals. */
+    /** GET /sales?from=&to= — the sales in a date range (the day of the sale), their totals, and every tag in use. */
     const list: Handler = async (ctx) => {
         const session = await caller(ctx);
         if (session instanceof Response) return session;
@@ -183,8 +216,70 @@ export function salesRoutes(deps: SalesDeps): SalesRoute[] {
             `${SELECT_SALE} WHERE s.deleted_at IS NULL AND s.sale_date >= ? AND s.sale_date <= ? ORDER BY s.sale_date DESC, s.seq DESC LIMIT ${MAX_ROWS}`,
         ).bind(from, to).all()).results || [];
         const sales = rows.map(r => rowToSale(r as Record<string, unknown>));
-        return json({ from, to, sales, summary: summarize(sales) });
+        return json({ from, to, sales, summary: summarize(sales), allTags: await tagsInUse(ctx.env.VAYU_DB) });
     };
+
+    /**
+     * The id for a new sale. The app names new sales itself, so an upload
+     * retried after a dropped connection finds the first one (answered as
+     * it is) instead of recording it twice.
+     */
+    async function newSaleId(db: D1Database, raw: Record<string, unknown>): Promise<{ id: string } | Response> {
+        if (raw.id === undefined) return { id: newId() };
+        if (typeof raw.id !== 'string' || !CLIENT_ID.test(raw.id)) return err('Invalid sale id.');
+        const existing = await db.prepare('SELECT id, deleted_at FROM sales WHERE id = ?').bind(raw.id).first<{ deleted_at: number | null }>();
+        if (!existing) return { id: raw.id };
+        if (existing.deleted_at) return err('This sale was deleted.', 410);
+        return json(await loadSale(db, raw.id), 200);
+    }
+
+    /**
+     * Marks an inventory piece Sold and gives its title and price for the
+     * sale's snapshot. The check and the change are one statement, so two
+     * sales of the same piece can't both get through.
+     */
+    async function sellPiece(db: D1Database, artworkId: string): Promise<{ title: string; price: number } | Response> {
+        const art = await db.prepare('SELECT title, custom_id, price, status FROM artworks WHERE id = ?').bind(artworkId)
+            .first<{ title: string; custom_id: string; price: number; status: string }>();
+        if (!art) return err('That piece is no longer in the inventory.', 404);
+        const sold = await db.prepare("UPDATE artworks SET status = 'Sold' WHERE id = ? AND status = 'Available'").bind(artworkId).run();
+        if (!sold.meta.changes) {
+            const now = await db.prepare('SELECT status FROM artworks WHERE id = ?').bind(artworkId).first<{ status: string }>();
+            return json(now?.status === 'Reserved'
+                ? { error: 'That piece is reserved. Mark it available first.', code: 'reserved' }
+                : { error: 'That piece is already sold', code: 'already_sold' }, 409);
+        }
+        return { title: String(art.title || art.custom_id || 'Untitled'), price: Number(art.price) || 0 };
+    }
+
+    /**
+     * Saves the sale with the next number, in a single statement so two sales
+     * recorded at once can't share one (seq is UNIQUE besides). Deleted sales
+     * keep theirs: numbers are never reused. If saving fails, a piece this
+     * sale sold goes back on sale.
+     */
+    async function insertSale(ctx: Ctx, session: SessionData, id: string, input: SaleInput, item: { title: string; price: number }): Promise<void> {
+        const db = ctx.env.VAYU_DB;
+        const now = Date.now();
+        // An inventory piece shows its own photos; the sale keeps none of its own.
+        const photoUrls = input.artworkId ? [] : input.photoUrls;
+        try {
+            await ensureChangeLogTable(db);
+            const stmts: D1PreparedStatement[] = [db.prepare(
+                `INSERT INTO sales (id, seq, sale_number, artwork_id, item_title, item_price, contact_id, buyer_name, buyer_phone,
+                    sale_date, recorded_at, amount, payment_mode, reference_no, notes, tags, photo_urls, created_by, created_by_name, updated_at, updated_by)
+                 SELECT ?, n, printf('SAL-%03d', n), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                 FROM (SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM sales)`,
+            ).bind(id, input.artworkId, item.title, item.price, input.contactId, input.buyerName, input.buyerPhone,
+                input.saleDate, now, input.amount, input.paymentMode, input.referenceNo, input.notes,
+                JSON.stringify(input.tags), JSON.stringify(photoUrls), session.userId, session.name, now, session.userId)];
+            if (input.artworkId) stmts.push(changeLogStmt(db, ctx.env, 'artwork', input.artworkId, 'put', { actorId: session.userId }));
+            await db.batch(stmts);
+        } catch (e) {
+            if (input.artworkId) await db.prepare("UPDATE artworks SET status = 'Available' WHERE id = ? AND status = 'Sold'").bind(input.artworkId).run().catch(() => undefined);
+            throw e;
+        }
+    }
 
     /** POST /sales — record a sale. An inventory piece is marked Sold, only if it is still Available. */
     const create: Handler = async (ctx) => {
@@ -193,72 +288,28 @@ export function salesRoutes(deps: SalesDeps): SalesRoute[] {
         const db = ctx.env.VAYU_DB;
         const raw = await body(ctx);
         if (!raw) return err('Invalid request body');
-
-        // The app names new sales itself so an upload retried after a dropped
-        // connection finds the first one instead of recording it twice.
-        let id = newId();
-        if (raw.id !== undefined) {
-            if (typeof raw.id !== 'string' || !CLIENT_ID.test(raw.id)) return err('Invalid sale id.');
-            id = raw.id;
-            const existing = await db.prepare('SELECT id, deleted_at FROM sales WHERE id = ?').bind(id).first<{ deleted_at: number | null }>();
-            if (existing) {
-                if (existing.deleted_at) return err('This sale was deleted.', 410);
-                return json(await loadSale(db, id), 200);
-            }
-        }
+        const named = await newSaleId(db, raw);
+        if (named instanceof Response) return named;
+        const { id } = named;
 
         const input = readInput(raw);
         const errors = saleFieldErrors(input);
         if (errors.length) return err(errors[0]);
         if (input.contactId && !(await contactExists(db, input.contactId))) input.contactId = null;
 
-        let itemTitle = input.itemTitle;
-        let itemPrice = input.itemPrice;
-        const artworkId = input.artworkId;
-        if (artworkId) {
-            const art = await db.prepare('SELECT title, custom_id, price, status FROM artworks WHERE id = ?').bind(artworkId)
-                .first<{ title: string; custom_id: string; price: number; status: string }>();
-            if (!art) return err('That piece is no longer in the inventory.', 404);
-            itemTitle = String(art.title || art.custom_id || 'Untitled');
-            itemPrice = Number(art.price) || 0;
-            // The check and the change are one statement, so two sales of the
-            // same piece can't both get through.
-            const sold = await db.prepare("UPDATE artworks SET status = 'Sold' WHERE id = ? AND status = 'Available'").bind(artworkId).run();
-            if (!sold.meta.changes) {
-                const now = await db.prepare('SELECT status FROM artworks WHERE id = ?').bind(artworkId).first<{ status: string }>();
-                return json(now?.status === 'Reserved'
-                    ? { error: 'That piece is reserved. Mark it available first.', code: 'reserved' }
-                    : { error: 'That piece is already sold', code: 'already_sold' }, 409);
-            }
+        let item = { title: input.itemTitle, price: input.itemPrice };
+        if (input.artworkId) {
+            const piece = await sellPiece(db, input.artworkId);
+            if (piece instanceof Response) return piece;
+            item = piece;
         }
-        if (itemPrice > MAX_AMOUNT || !isAmount(itemPrice)) itemPrice = 0;
-
-        const now = Date.now();
-        try {
-            await ensureChangeLogTable(db);
-            // The number is the next one in a single statement, so two sales
-            // recorded at once can't share one (and seq is UNIQUE besides).
-            // Deleted sales keep theirs: numbers are never reused.
-            const stmts: D1PreparedStatement[] = [db.prepare(
-                `INSERT INTO sales (id, seq, sale_number, artwork_id, item_title, item_price, contact_id, buyer_name, buyer_phone,
-                    sale_date, recorded_at, amount, payment_mode, reference_no, notes, created_by, created_by_name, updated_at, updated_by)
-                 SELECT ?, n, printf('SAL-%03d', n), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-                 FROM (SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM sales)`,
-            ).bind(id, artworkId, itemTitle, itemPrice, input.contactId, input.buyerName, input.buyerPhone,
-                input.saleDate, now, input.amount, input.paymentMode, input.referenceNo, input.notes,
-                session.userId, session.name, now, session.userId)];
-            if (artworkId) stmts.push(changeLogStmt(db, ctx.env, 'artwork', artworkId, 'put', { actorId: session.userId }));
-            await db.batch(stmts);
-        } catch (e) {
-            // Put the piece back: the sale that sold it was never saved.
-            if (artworkId) await db.prepare("UPDATE artworks SET status = 'Available' WHERE id = ? AND status = 'Sold'").bind(artworkId).run().catch(() => undefined);
-            throw e;
-        }
+        if (!isAmount(item.price) || item.price > MAX_AMOUNT) item.price = 0;
+        await insertSale(ctx, session, id, input, item);
 
         const sale = await loadSale(db, id);
         if (!sale) return err('The sale could not be saved. Please try again.', 500);
-        deps.logChange(ctx, session, 'created', 'sale', id, `Recorded sale ${sale.saleNumber}: "${itemTitle}" to ${sale.buyerName} for ${rupees(sale.amount)} (${sale.paymentMode})`);
-        signal(ctx, id, artworkId);
+        deps.logChange(ctx, session, 'created', 'sale', id, `Recorded sale ${sale.saleNumber}: "${item.title}" to ${sale.buyerName} for ${rupees(sale.amount)} (${sale.paymentMode})`);
+        signal(ctx, id, input.artworkId);
         return json(sale, 201);
     };
 
@@ -278,16 +329,16 @@ export function salesRoutes(deps: SalesDeps): SalesRoute[] {
         if (!raw) return err('Invalid request body');
         const input = readInput(raw);
         input.artworkId = existing.artworkId;
-        // A piece's title and price are its snapshot; a free-text item's can be corrected.
-        if (existing.artworkId) { input.itemTitle = existing.itemTitle; input.itemPrice = existing.itemPrice; }
+        // A piece's title and price are its snapshot; a free-text item's can be corrected, and its photos changed.
+        if (existing.artworkId) { input.itemTitle = existing.itemTitle; input.itemPrice = existing.itemPrice; input.photoUrls = []; }
         const errors = saleFieldErrors(input);
         if (errors.length) return err(errors[0]);
         if (input.contactId && !(await contactExists(db, input.contactId))) input.contactId = null;
         await db.prepare(
             `UPDATE sales SET item_title = ?, item_price = ?, contact_id = ?, buyer_name = ?, buyer_phone = ?, sale_date = ?, amount = ?,
-               payment_mode = ?, reference_no = ?, notes = ?, updated_at = ?, updated_by = ? WHERE id = ? AND deleted_at IS NULL`,
+               payment_mode = ?, reference_no = ?, notes = ?, tags = ?, photo_urls = ?, updated_at = ?, updated_by = ? WHERE id = ? AND deleted_at IS NULL`,
         ).bind(input.itemTitle, input.itemPrice, input.contactId, input.buyerName, input.buyerPhone, input.saleDate, input.amount,
-            input.paymentMode, input.referenceNo, input.notes, Date.now(), session.userId, id).run();
+            input.paymentMode, input.referenceNo, input.notes, JSON.stringify(input.tags), JSON.stringify(input.photoUrls), Date.now(), session.userId, id).run();
         const sale = await loadSale(db, id);
         if (!sale) return err('That sale no longer exists.', 404);
         deps.logChange(ctx, session, 'updated', 'sale', id, `Changed sale ${sale.saleNumber} ("${sale.itemTitle}", ${rupees(sale.amount)})`);

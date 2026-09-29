@@ -47,7 +47,7 @@ const AdminDeviceControls: React.FC<{
   const signOutAll = () => {
     if (!confirmAll) { setConfirmAll(true); return; }
     setConfirmAll(false);
-    void run(undefined, count => `Signed ${user.name} out of ${count === 1 ? '1 device' : `${count} devices`}`);
+    void run(undefined, count => `Signed ${user.name} out of ${count === 1 ? '1 device' : count + ' devices'}`);
   };
 
   const devices = user.devices ?? [];

@@ -57,7 +57,7 @@ export const BrandingPanel: React.FC = () => {
     const dirty = appName !== saved.appName || tagline !== saved.tagline || accent !== (saved.accentColor ?? '');
     const shownAccent = accentValid && accent ? accent : DEFAULT_ACCENT;
 
-    const save = async (e: React.FormEvent) => {
+    const save = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
         if (!nameValid || !accentValid) return;
         setBusy(true);

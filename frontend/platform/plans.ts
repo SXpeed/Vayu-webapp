@@ -50,7 +50,7 @@ function flags(raw: unknown, fields: typeof MODULE_FIELDS): Record<string, boole
   return Object.fromEntries(fields.map(f => [
     f.key,
     // Part of every plan: never switchable, whatever the caller sends.
-    f.alwaysOn ? true : (typeof src[f.key] === 'boolean' ? src[f.key] as boolean : f.default),
+    f.alwaysOn || (typeof src[f.key] === 'boolean' ? src[f.key] as boolean : f.default),
   ]));
 }
 
@@ -145,14 +145,16 @@ export async function updatePlan(db: D1Database, planId: string, body: Record<st
   const current = await db.prepare('SELECT * FROM plans WHERE id = ?').bind(planId).first<{ status: string; name: string }>();
   if (!current) throw new OrgError(404, 'plan_not_found', 'Plan not found.');
   const name = body.name === undefined ? current.name : str(body.name, 'Plan name', 80);
-  const status = body.status === undefined ? current.status
-    : (PLAN_STATUSES.includes(body.status as never) ? body.status as string
-      : (() => { throw new OrgError(400, 'invalid', `Status must be one of: ${PLAN_STATUSES.join(', ')}.`); })());
+  if (body.status !== undefined && !PLAN_STATUSES.includes(body.status as never)) {
+    throw new OrgError(400, 'invalid', `Status must be one of: ${PLAN_STATUSES.join(', ')}.`);
+  }
+  const status = body.status === undefined ? current.status : body.status as string;
   if (status === 'published') {
     const published = await db.prepare("SELECT 1 FROM plan_versions WHERE plan_id = ? AND status = 'published'").bind(planId).first();
     if (!published) throw new OrgError(409, 'no_published_version', 'Publish a version before publishing the plan.');
   }
-  const isPublic = body.isPublic === undefined ? null : (body.isPublic === true ? 1 : 0);
+  let isPublic: number | null = null;
+  if (body.isPublic !== undefined) isPublic = body.isPublic === true ? 1 : 0;
   await db.batch([
     db.prepare(`UPDATE plans SET name = ?, description = COALESCE(?, description), status = ?,
                   is_public = COALESCE(?, is_public), sort_order = COALESCE(?, sort_order), updated_at = ?
@@ -281,6 +283,44 @@ export const RENEWAL_GRACE_MS = 7 * 86_400_000;
  * per-organization overrides applied on top. An organization with no
  * subscription gets the conservative defaults.
  */
+/**
+ * Applies an organization's overrides to its limits (in place). An override
+ * names one field: a countable limit, a module or a feature. An unreadable
+ * one is ignored rather than failing the request.
+ */
+function applyOverrides(limits: PlanLimits, rows: { key: string; value: string }[]): Record<string, unknown> {
+  const overrides: Record<string, unknown> = {};
+  for (const o of rows) {
+    let value: unknown;
+    try { value = JSON.parse(o.value); } catch { continue; }
+    overrides[o.key] = value;
+    if (o.key in limits.limits) limits.limits[o.key] = value as number | null;
+    else if (o.key in limits.modules) limits.modules[o.key] = value === true;
+    else if (o.key in limits.features) limits.features[o.key] = value === true;
+  }
+  return overrides;
+}
+
+/**
+ * Whether the subscription lets the organization work now, and the status to
+ * show: an ended trial, or a period bought through billing.ts that ran out
+ * (grace included). A waived plan never lapses; nothing else sets a period end.
+ */
+function subscriptionState(row: Record<string, unknown> | null) {
+  const status = (row?.status as string) ?? 'none';
+  const now = Date.now();
+  const trialEndsAt = (row?.trial_ends_at as number) ?? null;
+  const trialExpired = status === 'trialing' && !!trialEndsAt && trialEndsAt < now;
+  const periodEnd = (row?.current_period_end as number) ?? null;
+  const graceEndsAt = status === 'active' && row?.payment_waived !== 1 && periodEnd ? periodEnd + RENEWAL_GRACE_MS : null;
+  const lapsed = graceEndsAt !== null && graceEndsAt < now;
+  const active = !trialExpired && !lapsed && ['active', 'trialing', 'none'].includes(status);
+  let shownStatus = status;
+  if (trialExpired) shownStatus = 'trial_expired';
+  else if (lapsed) shownStatus = 'past_due';
+  return { status, active, shownStatus, trialEndsAt, periodEnd, graceEndsAt };
+}
+
 export async function resolveEntitlements(db: D1Database, orgId: string): Promise<Entitlements> {
   const row = await db.prepare(
     `SELECT s.status, s.trial_ends_at, s.current_period_end, s.payment_waived,
@@ -299,30 +339,8 @@ export async function resolveEntitlements(db: D1Database, orgId: string): Promis
     'SELECT key, value FROM entitlement_overrides WHERE org_id = ? AND (expires_at IS NULL OR expires_at > ?)',
   ).bind(orgId, Date.now()).all();
 
-  const overrides: Record<string, unknown> = {};
-  for (const o of overrideRows as { key: string; value: string }[]) {
-    try {
-      const value = JSON.parse(o.value);
-      overrides[o.key] = value;
-      // An override names one field: a countable limit, a module or a feature.
-      if (o.key in limits.limits) limits.limits[o.key] = value as number | null;
-      else if (o.key in limits.modules) limits.modules[o.key] = value === true;
-      else if (o.key in limits.features) limits.features[o.key] = value === true;
-    } catch { /* ignore an unreadable override rather than failing the request */ }
-  }
-
-  const status = (row?.status as string) ?? 'none';
-  const trialEndsAt = (row?.trial_ends_at as number) ?? null;
-  const trialExpired = status === 'trialing' && !!trialEndsAt && trialEndsAt < Date.now();
-  // A period bought through billing.ts that ran out, grace included. A
-  // waived plan never lapses; nothing else sets a period end.
-  const periodEnd = (row?.current_period_end as number) ?? null;
-  const graceEndsAt = status === 'active' && row?.payment_waived !== 1 && periodEnd ? periodEnd + RENEWAL_GRACE_MS : null;
-  const lapsed = graceEndsAt !== null && graceEndsAt < Date.now();
-  const active = !trialExpired && !lapsed && ['active', 'trialing', 'none'].includes(status);
-  let shownStatus = status;
-  if (trialExpired) shownStatus = 'trial_expired';
-  else if (lapsed) shownStatus = 'past_due';
+  const overrides = applyOverrides(limits, overrideRows as { key: string; value: string }[]);
+  const { active, shownStatus, trialEndsAt, periodEnd, graceEndsAt } = subscriptionState(row);
 
   return {
     limits,
@@ -371,18 +389,52 @@ export function insertMemberWithinSeatLimit(
   ).bind(args.id, args.orgId, args.userId, args.role, now, args.actorId, now, args.orgId, args.maxMembers);
 }
 
+type AssignableVersion = { id: string; billing_type: string; trial_days: number; status: string };
+
+/** A plan version that exists and is published: only those can be assigned. */
+async function assignableVersion(db: D1Database, versionId: string): Promise<AssignableVersion> {
+  const version = await db.prepare('SELECT id, billing_type, trial_days, status FROM plan_versions WHERE id = ?')
+    .bind(versionId).first<AssignableVersion>();
+  if (!version) throw new OrgError(404, 'version_not_found', 'Plan version not found.');
+  if (version.status !== 'published') throw new OrgError(409, 'version_not_published', 'Only a published version can be assigned.');
+  return version;
+}
+
+/** The default by billing type: free and waived start active, trials start their clock now, paid waits for payment. */
+function startingStatus(version: AssignableVersion, waive: boolean, trialEndsAt: number | null): { status: string; trialEndsAt: number | null } {
+  if (version.billing_type === 'free' || waive) return { status: 'active', trialEndsAt };
+  if (version.billing_type === 'trial') return { status: 'trialing', trialEndsAt: trialEndsAt ?? Date.now() + version.trial_days * 86_400_000 };
+  return { status: 'payment_required', trialEndsAt };
+}
+
+/** Why: required when payment is waived or the status is set by hand, optional otherwise. */
+function subscriptionReason(body: Record<string, unknown>): string | null {
+  if (body.waivePayment === true || body.status) return str(body.reason, 'Reason', 500, 3);
+  const given = typeof body.reason === 'string' ? body.reason.trim().slice(0, 500) : '';
+  return given || null;
+}
+
+const SUBSCRIPTION_STATUSES = ['none', 'trialing', 'payment_required', 'active', 'past_due', 'canceled'];
+
+/**
+ * The status to set: the one asked for, else the kept one (a plan move that
+ * keeps the period), else the plan's default; 'none' without a plan.
+ */
+function chosenStatus(body: Record<string, unknown>, version: AssignableVersion | null, waive: boolean, kept: string | null): { status: string; trialEndsAt: number | null } {
+  let status = (typeof body.status === 'string' && body.status) || kept;
+  let trialEndsAt = typeof body.trialEndsAt === 'number' ? body.trialEndsAt : null;
+  if (!status && version) ({ status, trialEndsAt } = startingStatus(version, waive, trialEndsAt));
+  status ??= 'none';
+  if (!SUBSCRIPTION_STATUSES.includes(status)) throw new OrgError(400, 'invalid', `Status must be one of: ${SUBSCRIPTION_STATUSES.join(', ')}.`);
+  return { status, trialEndsAt };
+}
+
 export async function setSubscription(db: D1Database, orgId: string, body: Record<string, unknown>, actor: Actor) {
   const org = await db.prepare('SELECT status FROM organizations WHERE id = ?').bind(orgId).first<{ status: string }>();
   if (!org) throw new OrgError(404, 'org_not_found', 'Organization not found.');
 
   const versionId = typeof body.planVersionId === 'string' ? body.planVersionId : null;
-  let version: { id: string; billing_type: string; trial_days: number; status: string } | null = null;
-  if (versionId) {
-    version = await db.prepare('SELECT id, billing_type, trial_days, status FROM plan_versions WHERE id = ?')
-      .bind(versionId).first();
-    if (!version) throw new OrgError(404, 'version_not_found', 'Plan version not found.');
-    if (version.status !== 'published') throw new OrgError(409, 'version_not_published', 'Only a published version can be assigned.');
-  }
+  const version = versionId ? await assignableVersion(db, versionId) : null;
 
   const before = await db.prepare('SELECT status, plan_version_id, payment_waived, current_period_end FROM subscriptions WHERE org_id = ?')
     .bind(orgId).first<{ status: string; plan_version_id: string | null; payment_waived: number; current_period_end: number | null }>();
@@ -390,24 +442,11 @@ export async function setSubscription(db: D1Database, orgId: string, body: Recor
   // date it has paid up to, its trial end and any waiver. Only the plan changes.
   const keepPeriod = body.keepPeriod === true && !!version && !!before && before.status !== 'none';
   const waive = body.waivePayment === true || (keepPeriod && before?.payment_waived === 1);
-  const given = typeof body.reason === 'string' ? body.reason.trim().slice(0, 500) : '';
-  const reason = body.waivePayment === true || body.status ? str(body.reason, 'Reason', 500, 3) : given || null;
+  const reason = subscriptionReason(body);
   // A free plan never runs out, so a paid-until date no longer applies.
   const clearPeriod = keepPeriod && version?.billing_type === 'free';
-
-  let status = typeof body.status === 'string' ? body.status : null;
-  let trialEndsAt = typeof body.trialEndsAt === 'number' ? body.trialEndsAt : null;
-  if (!status && keepPeriod && before) status = clearPeriod ? 'active' : before.status;
-  if (!status && version) {
-    // Default by billing type: free and waived start active, trials start
-    // their clock now, paid waits for payment.
-    if (version.billing_type === 'free' || waive) status = 'active';
-    else if (version.billing_type === 'trial') { status = 'trialing'; trialEndsAt ??= Date.now() + version.trial_days * 86_400_000; }
-    else status = 'payment_required';
-  }
-  status ??= 'none';
-  const allowed = ['none', 'trialing', 'payment_required', 'active', 'past_due', 'canceled'];
-  if (!allowed.includes(status)) throw new OrgError(400, 'invalid', `Status must be one of: ${allowed.join(', ')}.`);
+  const kept = keepPeriod && before ? before.status : null;
+  const { status, trialEndsAt } = chosenStatus(body, version, waive, clearPeriod ? 'active' : kept);
 
   const now = Date.now();
   await db.batch([
