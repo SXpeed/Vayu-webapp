@@ -8,6 +8,7 @@ import { PageRoot, PageHeader, PageBody, GhostIconButton } from '../components/u
 import { useAppChrome } from '../components/Layout';
 import { useBranding } from '../useBranding';
 import type { SectionId } from '../permissions';
+import { SalesMonthCard } from '../components/SalesSummary';
 
 /** One dashboard metric — raised tile, gold glyph, serif figure. */
 const StatTile: React.FC<{ icon: React.ReactNode; label: string; children?: React.ReactNode }> = ({ icon, label, children }) => (
@@ -264,6 +265,14 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                         ))}
                     </div>
                     </div>
+                </section>
+                )}
+
+                {/* Sales this month, for everyone with the Sales permission */}
+                {can('sales') && (
+                <section className="animate-fade-in-up" style={{ animationDelay: '165ms' }}>
+                    <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-3">Sales this month</h2>
+                    <SalesMonthCard onOpen={() => onNavigate('sales')} />
                 </section>
                 )}
 

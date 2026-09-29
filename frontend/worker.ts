@@ -5,6 +5,7 @@ import {
 } from './permissions';
 import { ROSTER_ARCHIVE_ENTITY, ensureRosterTables, rosterRoutes } from './roster';
 import { staffRosterRoutes } from './staffRoster';
+import { salesRoutes } from './sales';
 import {
   CORS, json, err, normalizeRoute, rowToConversation, rowToMessage, rowToArtwork,
   rowToCollection, rowToCatalog, rowToInquiry, rowToInquiryMessage, rowToEvent,
@@ -249,8 +250,8 @@ function accessRule(path: string, method: string): AccessRule | null {
   const under = (prefix: string) => path === prefix || path.startsWith(`${prefix}/`) || path.startsWith(`${prefix}?`);
 
   if (under('/artworks')) {
-    // Collections, catalogs, inquiries and invoices all show artworks.
-    return { section: 'inventory', level, readableBy: read ? ['collections', 'catalogs', 'roster', 'inquiries', 'invoices'] : undefined };
+    // Collections, catalogs, inquiries, invoices and sales all show artworks.
+    return { section: 'inventory', level, readableBy: read ? ['collections', 'catalogs', 'roster', 'inquiries', 'invoices', 'sales'] : undefined };
   }
   if (under('/collections')) return { section: 'collections', level };
   // Hearting a piece is personal: browsing the roster is enough. Everything
@@ -270,6 +271,7 @@ function accessRule(path: string, method: string): AccessRule | null {
   if (under('/invoices')) return { section: 'invoices', level };
   if (under('/payments/webhook')) return null; // Razorpay calls this, no session
   if (under('/payments')) return { section: 'payments', level };
+  if (under('/sales')) return { section: 'sales', level };
   if (under('/events') || under('/holidays')) return { section: 'calendar', level };
   if (under('/conversations') || under('/messages')) return { section: 'messages', level };
   if (under('/activity-logs')) return read ? { section: 'activity', level: 'view' } : null;
@@ -4079,6 +4081,9 @@ const routes: Route[] = [
     logChange: logEntityChange,
     notify: queueHubNotify,
   }),
+
+  // Sales ledger (sales.ts)
+  ...salesRoutes({ logChange: logEntityChange, notify: queueHubNotify }),
 
   { method: 'GET', match: isExact('/viewing-rooms'), handler: handleViewingRoomsList },
   { method: 'POST', match: isExact('/viewing-rooms'), handler: handleViewingRoomsCreate },

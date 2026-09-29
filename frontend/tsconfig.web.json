@@ -38,6 +38,7 @@
     "viewingRooms.ts",
     "roster.ts",
     "staffRoster.ts",
+    "sales.ts",
     "fileAuth.ts",
     "deviceSessions.ts",
     "planUsage.ts",

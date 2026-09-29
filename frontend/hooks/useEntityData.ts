@@ -27,7 +27,7 @@ type Dataset = 'artworks' | 'messages' | 'collections' | 'catalogs' | 'inquiries
  * would refuse.
  */
 const DATASET_READERS: Record<Dataset, SectionId[]> = {
-    artworks: ['inventory', 'collections', 'catalogs', 'roster', 'inquiries', 'invoices'],
+    artworks: ['inventory', 'collections', 'catalogs', 'roster', 'inquiries', 'invoices', 'sales'],
     messages: ['messages'],
     collections: ['collections'],
     catalogs: ['catalogs'],

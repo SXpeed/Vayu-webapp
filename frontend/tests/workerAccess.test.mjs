@@ -253,3 +253,11 @@ test('staff roster permission: Staff view by default; the plan gate maps it', ()
     assert.equal(access.canReadSchedule(perms.normalizePermissions({ schedule: 'view' })), true);
     assert.equal(access.canReadSchedule(perms.normalizePermissions({})), false);
 });
+
+test('sales permission: Staff view by default; sales can read the inventory; the hub gates its signal', () => {
+    assert.equal(perms.STAFF_DEFAULT_PERMISSIONS.sales, 'view');
+    assert.equal(perms.normalizePermissions({}).sales, 'none', 'custom roles made before it get none');
+    assert.equal(access.canReadSales(perms.normalizePermissions({ sales: 'view' })), true);
+    assert.equal(access.canReadSales(perms.normalizePermissions({})), false);
+    assert.ok(access.readableEntities(perms.normalizePermissions({ sales: 'view' })).has('artwork'));
+});

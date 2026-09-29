@@ -17,7 +17,7 @@ import {
   type RealtimeTicketPayload,
 } from './realtimeTickets';
 import {
-  canReadPayments, canReadRoster, canReadSchedule, permissionsForRoles, readableEntities, type SyncEntity,
+  canReadPayments, canReadRoster, canReadSales, canReadSchedule, permissionsForRoles, readableEntities, type SyncEntity,
 } from './entityAccess';
 import { ADMIN_ROLE_ID, type RoleDef } from './permissions';
 import { ackStatus, ensureChangeLogTable, statusUpgradeStmts } from './deltaSync';
@@ -69,7 +69,7 @@ export class SyncHub {
   private typingAt = new Map<string, number>();
   private membership = new Map<string, { at: number; room: RoomAccess }>();
   private rolesCache: { at: number; roles: RoleDef[] } | null = null;
-  private readableCache = new Map<string, { at: number; entities: Set<SyncEntity>; payments: boolean; roster: boolean; schedule: boolean }>();
+  private readableCache = new Map<string, { at: number; entities: Set<SyncEntity>; payments: boolean; roster: boolean; schedule: boolean; sales: boolean }>();
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -356,6 +356,7 @@ export class SyncHub {
         if (event.entity === 'payments') return access.payments; // KV-backed signal
         if (event.entity === 'roster') return access.roster; // signal only, not in change_log
         if (event.entity === 'schedule') return access.schedule; // signal only, not in change_log
+        if (event.entity === 'sales') return access.sales; // signal only, not in change_log
         if (!access.entities.has(event.entity as SyncEntity)) return false;
         if ((event.entity === 'message' || event.entity === 'conversation') && event.conversationId) {
           const room = convRooms.get(event.conversationId);
@@ -511,11 +512,11 @@ export class SyncHub {
   }
 
   /** Entities this role may read — mirrors the REST route rules. */
-  private readableFor(role: string, roles: RoleDef[]): { entities: Set<SyncEntity>; payments: boolean; roster: boolean; schedule: boolean } {
+  private readableFor(role: string, roles: RoleDef[]): { entities: Set<SyncEntity>; payments: boolean; roster: boolean; schedule: boolean; sales: boolean } {
     const cached = this.readableCache.get(role);
     if (cached && Date.now() - cached.at < ROLES_TTL_MS) return cached;
     const perms = permissionsForRoles(roles, role);
-    const entry = { at: Date.now(), entities: readableEntities(perms), payments: canReadPayments(perms), roster: canReadRoster(perms), schedule: canReadSchedule(perms) };
+    const entry = { at: Date.now(), entities: readableEntities(perms), payments: canReadPayments(perms), roster: canReadRoster(perms), schedule: canReadSchedule(perms), sales: canReadSales(perms) };
     this.readableCache.set(role, entry);
     return entry;
   }

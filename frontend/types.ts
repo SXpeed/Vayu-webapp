@@ -320,7 +320,7 @@ export interface AttendanceRecord {
 /** A contact as passed by the UI before id/creator metadata is stamped. */
 export type NewContact = Omit<Contact, 'id' | 'createdAt' | 'createdBy' | 'createdByName'>;
 
-export type ViewState = 'login' | 'home' | 'artworks' | 'collections' | 'catalogs' | 'roster' | 'schedule' | 'contacts' | 'calendar' | 'attendance' | 'invoice' | 'inquiry' | 'messaging' | 'profile' | 'activity' | 'payments';
+export type ViewState = 'login' | 'home' | 'artworks' | 'collections' | 'catalogs' | 'roster' | 'schedule' | 'contacts' | 'calendar' | 'attendance' | 'invoice' | 'inquiry' | 'messaging' | 'profile' | 'activity' | 'payments' | 'sales';
 
 export interface PaymentLink {
     id: string;

@@ -1,5 +1,6 @@
 import { currentWorkspace } from './workspace';
 import { Artwork, CalendarEvent, Catalog, Collection, Contact, Invoice, Inquiry, Conversation, Message, InquiryMessage, UserProfile } from '../types';
+import type { Sale, SaleInput, SalesSummary } from '../salesRules';
 
 const STORAGE_KEYS = {
   users: 'vayu_users',
@@ -13,6 +14,8 @@ const STORAGE_KEYS = {
   inquiryMessages: 'vayu_inquiry_messages',
   events: 'vayu_events',
   contacts: 'vayu_contacts',
+  salesPages: 'vayu_sales_pages',
+  salesPending: 'vayu_sales_pending',
   seedVersion: 'vayu_seed_version',
 };
 
@@ -47,6 +50,14 @@ function setArray<T>(key: string, data: T[]): void {
   localStorage.setItem(scoped(key), JSON.stringify(data));
 }
 
+/** One date range of the sales ledger, as last loaded (shown when offline). */
+export interface SavedSalesPage { from: string; to: string; sales: Sale[]; summary: SalesSummary; savedAt: number }
+
+/** A sale recorded while offline: uploaded, and given its number, when the server can be reached. */
+export interface PendingSale { id: string; input: SaleInput; savedAt: number; /** Why the server refused it, if it did. */ error?: string }
+
+const MAX_SAVED_SALES_PAGES = 6;
+
 function upsertById<T extends { id: string }>(arr: T[], item: T): T[] {
   const idx = arr.findIndex(x => x.id === item.id);
   if (idx >= 0) arr[idx] = item;
@@ -64,6 +75,9 @@ export const db = {
     const workspace = currentWorkspace();
     if (!workspace) return;
     for (const key of Object.values(STORAGE_KEYS)) {
+      // Sales recorded offline that still couldn't be uploaded stay: they
+      // exist nowhere else, and upload at the next sign-in to this workspace.
+      if (key === STORAGE_KEYS.salesPending) continue;
       try { localStorage.removeItem(`${key}@${workspace.id}`); } catch { /* unavailable */ }
     }
   },
@@ -145,6 +159,24 @@ export const db = {
   },
   async deleteCollection(id: string): Promise<void> {
     setArray(STORAGE_KEYS.collections, getArray<Collection>(STORAGE_KEYS.collections).filter(c => c.id !== id));
+  },
+
+  // Sales ledger: the last few ranges loaded, and sales waiting to upload.
+  getSavedSalesPage(from: string, to: string): SavedSalesPage | null {
+    try { return getArray<SavedSalesPage>(STORAGE_KEYS.salesPages).find(p => p.from === from && p.to === to) ?? null; } catch { return null; }
+  },
+  saveSalesPage(page: SavedSalesPage): void {
+    try {
+      const others = getArray<SavedSalesPage>(STORAGE_KEYS.salesPages).filter(p => p.from !== page.from || p.to !== page.to);
+      setArray(STORAGE_KEYS.salesPages, [page, ...others].slice(0, MAX_SAVED_SALES_PAGES));
+    } catch { /* storage full or unavailable — the offline copy just stays older */ }
+  },
+  getPendingSales(): PendingSale[] {
+    try { return getArray<PendingSale>(STORAGE_KEYS.salesPending); } catch { return []; }
+  },
+  /** Throws when the device can't store it, so the caller can say the sale wasn't saved. */
+  setPendingSales(list: PendingSale[]): void {
+    setArray(STORAGE_KEYS.salesPending, list);
   },
 
   // Invoices

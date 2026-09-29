@@ -11,7 +11,7 @@ import { staffRosterService, type ShiftInput, type StaffRosterData } from '../..
 import { DOW, dayLabel, dayOfMonth, hoursText, inWeek, rangeLabel, timeRange, type Derived } from './shared';
 
 /** A panel on the right on desktop, the whole screen on a phone. Focus stays inside; Escape closes. */
-const Drawer: React.FC<{ title: string; onClose: () => void; footer?: React.ReactNode; children: React.ReactNode }> = ({ title, onClose, footer, children }) => {
+export const Drawer: React.FC<{ title: string; onClose: () => void; footer?: React.ReactNode; children: React.ReactNode }> = ({ title, onClose, footer, children }) => {
     const box = useRef<HTMLDivElement>(null);
     useEffect(() => {
         const back = document.activeElement as HTMLElement | null;
@@ -47,7 +47,7 @@ const Drawer: React.FC<{ title: string; onClose: () => void; footer?: React.Reac
 
 const MSG_TONE = { error: 'sr-bad-box', warn: 'sr-warn-box', info: 'neu-inset text-[var(--neu-text-dim)]' } as const;
 
-const Msg: React.FC<{ kind: keyof typeof MSG_TONE; children: React.ReactNode }> = ({ kind, children }) => (
+export const Msg: React.FC<{ kind: keyof typeof MSG_TONE; children: React.ReactNode }> = ({ kind, children }) => (
     <p className={`rounded-xl px-3 py-2 text-[12.5px] flex gap-2 items-start ${MSG_TONE[kind]}`}>
         {kind !== 'info' && <AlertTriangle size={14} className="shrink-0 mt-px" />}<span>{children}</span>
     </p>

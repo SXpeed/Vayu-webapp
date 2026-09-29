@@ -19,7 +19,7 @@ export type SyncEntity = (typeof SYNC_ENTITIES)[number];
  * change_log (their records live in KV, which cannot share a D1 transaction).
  * Clients respond by refetching that dataset through its REST endpoint.
  */
-export type SignalEntity = 'payments' | 'roster' | 'schedule';
+export type SignalEntity = 'payments' | 'roster' | 'schedule' | 'sales';
 
 export function permissionsForRoles(roles: RoleDef[], roleId: string): Permissions {
   if (roleId === ADMIN_ROLE_ID) return ADMIN_PERMISSIONS;
@@ -34,7 +34,7 @@ export function permissionsForRoles(roles: RoleDef[], roleId: string): Permissio
 export function readableEntities(perms: Permissions): Set<SyncEntity> {
   const can = (section: SectionId, level: AccessLevel = 'view') => atLeast(perms[section], level);
   const set = new Set<SyncEntity>();
-  if (can('inventory') || can('collections') || can('catalogs') || can('roster') || can('inquiries') || can('invoices')) {
+  if (can('inventory') || can('collections') || can('catalogs') || can('roster') || can('inquiries') || can('invoices') || can('sales')) {
     set.add('artwork');
   }
   if (can('collections')) set.add('collection');
@@ -61,6 +61,11 @@ export function canReadRoster(perms: Permissions): boolean {
 /** Staff roster changes are signal-only too (staffRoster.ts). */
 export function canReadSchedule(perms: Permissions): boolean {
   return atLeast(perms['schedule'], 'view');
+}
+
+/** So are sales (sales.ts). */
+export function canReadSales(perms: Permissions): boolean {
+  return atLeast(perms['sales'], 'view');
 }
 
 /**

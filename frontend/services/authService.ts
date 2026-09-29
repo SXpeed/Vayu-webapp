@@ -53,6 +53,7 @@ export interface PresenceMap {
 
 import { apiCall as call, authHeaders } from './apiClient';
 import { db } from './db';
+import { flushPendingSales } from './salesService';
 import { apiBase, authClient, isPlatformSession, setWorkspace, type Workspace } from './workspace';
 
 type DeviceInfo = { id: string; label: string; createdAt: number; lastUsedAt: number; current?: boolean };
@@ -143,6 +144,8 @@ export const authService = {
     if (isPlatformSession()) {
       // Close this workspace's live connection and file access, remove its
       // offline copy from the device, then end the platform sign-in.
+      // Sales recorded offline go up first, while this sign-in still works.
+      await flushPendingSales().catch(() => undefined);
       try { await fetch(`${apiBase()}/auth/logout`, { method: 'POST', headers: authHeaders() }); } catch { /* signing out anyway */ }
       db.clearWorkspaceCopy();
       try { await authClient.signOut(); } finally { setWorkspace(null); }

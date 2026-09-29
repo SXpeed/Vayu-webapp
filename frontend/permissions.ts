@@ -14,7 +14,7 @@ export type AccessLevel = 'none' | 'view' | 'edit';
 
 export type SectionId =
     | 'inventory' | 'collections' | 'catalogs' | 'roster' | 'contacts' | 'inquiries' | 'invoices'
-    | 'payments' | 'calendar' | 'messages' | 'attendance' | 'schedule' | 'activity';
+    | 'payments' | 'sales' | 'calendar' | 'messages' | 'attendance' | 'schedule' | 'activity';
 
 export interface SectionDef {
     id: SectionId;
@@ -36,6 +36,10 @@ export const SECTIONS: SectionDef[] = [
     { id: 'inquiries', label: 'Inquiries', description: 'Customer inquiries and their chats' },
     { id: 'invoices', label: 'Proforma invoices', description: 'Proforma invoices (stored on each device)' },
     { id: 'payments', label: 'Payments', description: 'Payment links' },
+    {
+        id: 'sales', label: 'Sales', description: 'Store sales paid offline, and the month’s figures on Home. Record adds, changes and deletes sales',
+        levelLabels: { view: 'View', edit: 'Record' },
+    },
     { id: 'calendar', label: 'Calendar', description: 'Events and holidays' },
     { id: 'messages', label: 'Messages', description: 'Team chat' },
     {
@@ -73,9 +77,10 @@ export const ADMIN_PERMISSIONS: Permissions = all('edit');
 /**
  * Staff starts exactly as regular users worked before roles existed: every
  * data section, their own attendance, no activity log. The Roster came later:
- * staff browse it, and curating it is given by role.
+ * staff browse it, and curating it is given by role. Likewise Sales: staff
+ * see the figures, and recording sales is given by role (the accounts team).
  */
-export const STAFF_DEFAULT_PERMISSIONS: Permissions = { ...all('edit'), roster: 'view', attendance: 'view', schedule: 'view', activity: 'none' };
+export const STAFF_DEFAULT_PERMISSIONS: Permissions = { ...all('edit'), roster: 'view', attendance: 'view', schedule: 'view', sales: 'view', activity: 'none' };
 
 export const BUILT_IN_ROLES: RoleDef[] = [
     { id: ADMIN_ROLE_ID, name: 'Admin', builtIn: true, permissions: ADMIN_PERMISSIONS },

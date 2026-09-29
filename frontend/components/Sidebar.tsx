@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
     Home, Image, Library, BookOpen, MessageCircle, Search, Users,
     CalendarDays, Clock, FileText, CreditCard, User, ShieldCheck, Wind,
-    ChevronLeft, ChevronRight, LayoutGrid, CalendarClock,
+    ChevronLeft, ChevronRight, LayoutGrid, CalendarClock, HandCoins,
 } from 'lucide-react';
 import { ViewState } from '../types';
 import { CanFn, canOpenView } from '../access';
@@ -40,6 +40,7 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
         items: [
             { id: 'invoice', label: 'Invoices', icon: FileText },
             { id: 'payments', label: 'Payments', icon: CreditCard },
+            { id: 'sales', label: 'Sales', icon: HandCoins },
             { id: 'inquiry', label: 'Inquiry', icon: Search },
             { id: 'messaging', label: 'Messages', icon: MessageCircle },
         ],

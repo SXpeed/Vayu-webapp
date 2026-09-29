@@ -59,6 +59,7 @@ const viewLoaders = {
     AttendanceView: () => import('./views/AttendanceView'),
     RosterView: () => import('./views/RosterView'),
     StaffRosterView: () => import('./views/StaffRosterView'),
+    SalesView: () => import('./views/SalesView'),
 };
 
 const ArtworksView = lazy(() => viewLoaders.ArtworksView().then(m => ({ default: m.ArtworksView })));
@@ -76,6 +77,7 @@ const CalendarView = lazy(() => viewLoaders.CalendarView().then(m => ({ default:
 const AttendanceView = lazy(() => viewLoaders.AttendanceView().then(m => ({ default: m.AttendanceView })));
 const RosterView = lazy(() => viewLoaders.RosterView().then(m => ({ default: m.RosterView })));
 const StaffRosterView = lazy(() => viewLoaders.StaffRosterView().then(m => ({ default: m.StaffRosterView })));
+const SalesView = lazy(() => viewLoaders.SalesView().then(m => ({ default: m.SalesView })));
 
 /** Warm every view chunk once the app is idle after sign-in, one per idle
  *  slot, so the first tap on a tab renders at once instead of showing the
@@ -430,6 +432,8 @@ const App: React.FC = () => {
                 return <ActivityLogView onBack={() => navigateTo('home')} />;
             case 'payments':
                 return <PaymentsView />;
+            case 'sales':
+                return <SalesView artworks={artworks} contacts={contacts} />;
             case 'profile':
                 return userProfile ? (
                     <ProfileView

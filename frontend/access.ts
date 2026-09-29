@@ -15,6 +15,7 @@ export const VIEW_SECTION: Partial<Record<ViewState, SectionId>> = {
     inquiry: 'inquiries',
     invoice: 'invoices',
     payments: 'payments',
+    sales: 'sales',
     calendar: 'calendar',
     messaging: 'messages',
     attendance: 'attendance',
