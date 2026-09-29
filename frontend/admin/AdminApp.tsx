@@ -24,6 +24,7 @@ import { DialogProvider, EmptyState, PageHeader, Section, Segmented, SkeletonRow
 import { CommandPalette, Dock, MoreSheet, PhoneHeader, Sidebar, useSmoothScroll, type NavGroup, type NavItem, type Tab } from './Shell';
 import { useBranding } from '../useBranding';
 import { Button, Field, Input, ToggleRow } from '../components/ui';
+import { fieldValue } from '../formFields';
 
 interface LoginMethods {
     emailPassword: { signIn: boolean; signUp: boolean };
@@ -304,19 +305,21 @@ const SignIn: React.FC<{ onDone: () => void; email?: string; title?: string; com
         api<LoginMethods>('/public/login-methods').then(setMethods).catch(() => setMethods(null));
     }, []);
 
-    const submit = async (e: React.FormEvent) => {
+    const submit = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
+        // What the fields show, even when Safari's AutoFill filled them without telling React (formFields.ts).
+        const form = e.currentTarget;
         setBusy(true);
         try {
             if (!needsCode) {
-                const { data, error } = await authClient.signIn.email({ email, password });
+                const { data, error } = await authClient.signIn.email({ email: fieldValue(form, 'adm-email', email).trim(), password: fieldValue(form, 'adm-password', password) });
                 if (error) throw new Error(error.message || 'Sign-in failed');
                 if ((data as { twoFactorRedirect?: boolean })?.twoFactorRedirect) {
                     setNeedsCode(true);
                     return;
                 }
             } else {
-                const { error } = await authClient.twoFactor.verifyTotp({ code: code.trim() });
+                const { error } = await authClient.twoFactor.verifyTotp({ code: fieldValue(form, 'adm-code', code).trim() });
                 if (error) throw new Error(error.message || 'That code did not work');
             }
             onDone();
@@ -383,20 +386,22 @@ const SetupTwoFactor: React.FC<{ onDone: () => void }> = ({ onDone }) => {
     const [code, setCode] = useState('');
     const [busy, setBusy] = useState(false);
 
-    const start = async (e: React.FormEvent) => {
+    const start = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
+        const secret = fieldValue(e.currentTarget, 'tfa-password', password);
         setBusy(true);
-        const { data, error } = await authClient.twoFactor.enable({ password });
+        const { data, error } = await authClient.twoFactor.enable({ password: secret });
         setBusy(false);
         if (error || !data || !('totpURI' in data)) { toast.error(error?.message || 'Could not start 2FA set-up'); return; }
         setSecret(new URL(data.totpURI).searchParams.get('secret'));
         setBackupCodes(data.backupCodes);
     };
 
-    const confirm = async (e: React.FormEvent) => {
+    const confirm = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
+        const typed = fieldValue(e.currentTarget, 'tfa-code', code).trim();
         setBusy(true);
-        const { error } = await authClient.twoFactor.verifyTotp({ code: code.trim() });
+        const { error } = await authClient.twoFactor.verifyTotp({ code: typed });
         setBusy(false);
         if (error) { toast.error(error.message || 'That code did not work'); return; }
         toast.success('Two-factor authentication is on');

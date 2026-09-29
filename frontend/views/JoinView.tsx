@@ -3,6 +3,7 @@ import { Building2, Eye, EyeOff, LogOut } from 'lucide-react';
 import { Toaster } from 'react-hot-toast';
 import { authClient, platformUser, setWorkspace } from '../services/workspace';
 import { useBranding } from '../useBranding';
+import { fieldValue } from '../formFields';
 
 // app.ateliersupport.com/join/<token>: the link in an invitation email.
 //
@@ -159,11 +160,14 @@ const SignInToJoin: React.FC<{ invitation: Invitation; token: string; onSignedIn
   const google = useGoogle();
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
-  const submit = async (e: React.FormEvent) => {
+  const submit = async (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
+    // What the field shows, even when Safari's AutoFill filled it without telling React (formFields.ts).
+    const secret = fieldValue(e.currentTarget, 'join-password', password);
+    if (!secret) { setError('Enter your password.'); return; }
     setBusy(true);
     setError('');
-    const { error } = await authClient.signIn.email({ email: invitation.email, password });
+    const { error } = await authClient.signIn.email({ email: invitation.email, password: secret });
     if (error) { setBusy(false); setError(error.status === 401 ? 'Wrong password.' : (error.message || 'Sign-in did not work.')); return; }
     await onSignedIn();
   };
@@ -173,7 +177,7 @@ const SignInToJoin: React.FC<{ invitation: Invitation; token: string; onSignedIn
       <form onSubmit={submit} className="space-y-4">
         <p className="text-xs text-gray-600 dark:text-gray-400 text-center">{google.signIn ? 'Or sign in' : 'Sign in'} with your password for {invitation.email}</p>
         <div><label htmlFor="join-password" className={label}>Password</label><PasswordInput id="join-password" value={password} onChange={setPassword} autoComplete="current-password" /></div>
-        <button type="submit" disabled={busy || !password} className={primary}>{busy ? 'Joining…' : 'Sign in and join'}</button>
+        <button type="submit" disabled={busy} className={primary}>{busy ? 'Joining…' : 'Sign in and join'}</button>
       </form>
     </div>
   );
@@ -184,16 +188,18 @@ const CreateAccountToJoin: React.FC<{ invitation: Invitation; token: string; set
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
-  const submit = async (e: React.FormEvent) => {
+  const submit = async (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError('');
-    if (password.length < 10) { setError('Choose a password of at least 10 characters.'); return; }
+    const fullName = fieldValue(e.currentTarget, 'join-name', name).trim();
+    const secret = fieldValue(e.currentTarget, 'join-new-password', password);
+    if (secret.length < 10) { setError('Choose a password of at least 10 characters.'); return; }
     setBusy(true);
     try {
       const joined = await api<{ orgId: string; orgName: string }>(`/invitations/${token}/create-account`, {
-        method: 'POST', body: JSON.stringify({ name: name.trim(), password }),
+        method: 'POST', body: JSON.stringify({ name: fullName, password: secret }),
       });
-      const { error } = await authClient.signIn.email({ email: invitation.email, password });
+      const { error } = await authClient.signIn.email({ email: invitation.email, password: secret });
       if (error) throw new Error('Your account is ready. Sign in to continue.');
       setWorkspace({ id: joined.orgId, name: joined.orgName, role: 'staff' });
       location.replace('/');

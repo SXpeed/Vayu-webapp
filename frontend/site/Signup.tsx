@@ -18,6 +18,7 @@ import { ArrowLeft, ArrowRight, Check, CheckCircle2, Clock, Eye, EyeOff, LogOut,
 import { Button, Card, Field, Input, Select, Textarea } from '../components/ui';
 import { useBranding } from '../useBranding';
 import { HOME_URL, PlanCard, SiteHeader, usePublicPlans, type PublicPlan } from './common';
+import { fieldValue } from '../formFields';
 import './site.css';
 
 const authClient = createAuthClient({ basePath: '/api/v2/auth' });
@@ -473,7 +474,12 @@ const EmailForm: React.FC<{
     const signup = mode === 'signup';
     const submitLabel = signup ? 'Create account' : 'Sign in';
     return (
-        <form className={`space-y-4 ${spaced ? 'mt-6' : ''}`} onSubmit={e => { e.preventDefault(); onSubmit({ name, email, password }); }}>
+        <form className={`space-y-4 ${spaced ? 'mt-6' : ''}`} onSubmit={e => {
+            e.preventDefault();
+            // What the fields show, even when Safari's AutoFill filled them without telling React (formFields.ts).
+            const f = e.currentTarget;
+            onSubmit({ name: fieldValue(f, 'a-name', name).trim(), email: fieldValue(f, 'a-email', email).trim(), password: fieldValue(f, 'a-pass', password) });
+        }}>
             {signup && (
                 <Field label="Your name" htmlFor="a-name"><Input id="a-name" required autoComplete="name" value={name} onChange={e => setName(e.target.value)} /></Field>
             )}
@@ -539,14 +545,16 @@ const ForgotPassword: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     const [busy, setBusy] = useState(false);
     const [sentTo, setSentTo] = useState<string | null>(null);
     const [problem, setProblem] = useState<string | null>(null);
-    const send = async (e: React.FormEvent) => {
+    const send = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
+        const address = fieldValue(e.currentTarget, 'f-email', email).trim();
+        setEmail(address);
         setBusy(true);
         setProblem(null);
-        const { error } = await authClient.requestPasswordReset({ email, redirectTo: `${location.pathname}?mode=reset` });
+        const { error } = await authClient.requestPasswordReset({ email: address, redirectTo: `${location.pathname}?mode=reset` });
         setBusy(false);
         if (error) setProblem(error.message || 'That did not work. Try again in a minute.');
-        else setSentTo(email);
+        else setSentTo(address);
     };
     return (
         <Card padding="lg" className="!p-6 sm:!p-8">
@@ -585,12 +593,15 @@ const ResetPassword: React.FC<{ token: string | null; failed: boolean }> = ({ to
     const [expired, setExpired] = useState(failed || !token);
     const signInUrl = `${location.pathname}?mode=signin`;
 
-    const save = async (e: React.FormEvent) => {
+    const save = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
-        if (password !== again) { setProblem('The two passwords are different.'); return; }
+        // Safari's suggested strong password can fill both fields without telling React (formFields.ts).
+        const first = fieldValue(e.currentTarget, 'r-pass', password);
+        const second = fieldValue(e.currentTarget, 'r-pass2', again);
+        if (first !== second) { setProblem('The two passwords are different.'); return; }
         setBusy(true);
         setProblem(null);
-        const { error } = await authClient.resetPassword({ newPassword: password, token: token ?? '' });
+        const { error } = await authClient.resetPassword({ newPassword: first, token: token ?? '' });
         setBusy(false);
         if (!error) setDone(true);
         else if (/token/i.test(error.message ?? '')) setExpired(true);

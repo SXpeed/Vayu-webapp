@@ -4,6 +4,7 @@ import { authService, AuthUser } from '../services/authService';
 import { authClient, myWorkspaces, platformUser, type Workspace } from '../services/workspace';
 import { SITE_ORIGIN } from '../brand';
 import { useBranding } from '../useBranding';
+import { fieldValue } from '../formFields';
 
 interface LoginViewProps {
   onLogin: (user: AuthUser) => void;
@@ -142,18 +143,23 @@ const SignInForm: React.FC<{
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState<'email' | 'google' | null>(null);
 
-  const submit = async (e: React.FormEvent) => {
+  const submit = async (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError('');
-    if (!email.trim() || !password) { setError('Enter your email and password.'); return; }
+    // What the fields show, even when Safari's AutoFill filled them without telling React (formFields.ts).
+    const address = fieldValue(e.currentTarget, 'login-email', email).trim();
+    const secret = fieldValue(e.currentTarget, 'login-password', password);
+    setEmail(address);
+    setPassword(secret);
+    if (!address || !secret) { setError('Enter your email and password.'); return; }
     setBusy('email');
     try {
-      const { error: platformError } = await authClient.signIn.email({ email: email.trim(), password });
-      if (!platformError) { await onPlatform(email.trim()); return; }
+      const { error: platformError } = await authClient.signIn.email({ email: address, password: secret });
+      if (!platformError) { await onPlatform(address); return; }
       if (platformError.status !== 401) { setError(platformError.message || 'Sign-in did not work. Please try again.'); return; }
       // Not a platform account (yet): the original app's own sign-in.
       try {
-        onOriginal(await authService.login(email.trim(), password));
+        onOriginal(await authService.login(address, secret));
       } catch {
         setError('Wrong email or password.');
       }
@@ -214,15 +220,17 @@ const ForgotPassword: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [busy, setBusy] = useState(false);
   const [sentTo, setSentTo] = useState('');
   const [error, setError] = useState('');
-  const send = async (e: React.FormEvent) => {
+  const send = async (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
+    const address = fieldValue(e.currentTarget, 'forgot-email', email).trim();
+    setEmail(address);
     setBusy(true);
     setError('');
     const redirectTo = import.meta.env.DEV ? `${location.origin}/signup.html?mode=reset` : `${SITE_ORIGIN}/signup?mode=reset`;
-    const { error: resetError } = await authClient.requestPasswordReset({ email: email.trim(), redirectTo });
+    const { error: resetError } = await authClient.requestPasswordReset({ email: address, redirectTo });
     setBusy(false);
     if (resetError) setError(resetError.message || 'That did not work. Try again in a minute.');
-    else setSentTo(email.trim());
+    else setSentTo(address);
   };
   return (
     <div className="space-y-5">
@@ -308,15 +316,19 @@ const FirstRunSetup: React.FC<{ onLogin: (user: AuthUser) => void }> = ({ onLogi
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const submit = async (e: React.FormEvent) => {
+  const submit = async (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError('');
-    if (!name.trim() || !email.trim() || !password) { setError('All fields are required.'); return; }
-    if (password.length < 10) { setError('Password must be at least 10 characters.'); return; }
+    const form = e.currentTarget;
+    const fullName = fieldValue(form, 'setup-name', name).trim();
+    const address = fieldValue(form, 'setup-email', email).trim();
+    const secret = fieldValue(form, 'setup-password', password);
+    if (!fullName || !address || !secret) { setError('All fields are required.'); return; }
+    if (secret.length < 10) { setError('Password must be at least 10 characters.'); return; }
     setBusy(true);
     try {
-      await authService.setup(name.trim(), email.trim(), password);
-      onLogin(await authService.login(email.trim(), password));
+      await authService.setup(fullName, address, secret);
+      onLogin(await authService.login(address, secret));
     } catch (err) {
       setError((err as Error).message);
     } finally {
