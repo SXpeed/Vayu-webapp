@@ -5,13 +5,15 @@ import { AuthUser } from '../../services/authService';
 import { AttendanceRecord, StoreConfig } from '../../types';
 import { attendanceService } from '../../services/attendanceService';
 import {
-    DAY_MS, HOUR_MS, LONG_SHIFT_MS, dayRange, downloadCsv, fmtDay, fmtHours, fmtTime, peopleFrom, startOfDay,
-    storeName, toDateInput, workedMs,
+    ALL_STORES, DAY_MS, HOUR_MS, LONG_SHIFT_MS, dayRange, downloadCsv, fmtDay, fmtHours, fmtTime, inStore, peopleFrom, startOfDay,
+    storeName, toDateInput, workedMs, type StoreScope,
 } from './attendanceUtils';
 
 interface DayViewProps {
     team: AuthUser[];
     stores: StoreConfig[];
+    /** All stores, or one store's people and check-ins. */
+    scope: StoreScope;
     refreshKey: number;
     /** Start of the day being shown (controlled, so the month grid can open a day). */
     day: number;
@@ -39,9 +41,11 @@ interface Row {
 const toLocalInput = (ms: number) => `${toDateInput(ms)}T${new Date(ms).toTimeString().slice(0, 5)}`;
 
 /** Admin: one day, everyone on it — who came, when, for how long. */
-export const DayView: React.FC<DayViewProps> = ({ team, stores, refreshKey, day, onDayChange }) => {
-    const [records, setRecords] = useState<AttendanceRecord[]>([]);
-    const [openElsewhere, setOpenElsewhere] = useState<AttendanceRecord[]>([]);
+export const DayView: React.FC<DayViewProps> = ({ team: everyone, stores, scope, refreshKey, day, onDayChange }) => {
+    const [allRecords, setRecords] = useState<AttendanceRecord[]>([]);
+    const [allOpenElsewhere, setOpenElsewhere] = useState<AttendanceRecord[]>([]);
+    const { team, records } = useMemo(() => inStore(everyone, allRecords, scope), [everyone, allRecords, scope]);
+    const openElsewhere = scope === ALL_STORES ? allOpenElsewhere : allOpenElsewhere.filter(r => r.storeId === scope);
     const [loading, setLoading] = useState(true);
     const [query, setQuery] = useState('');
     const [closing, setClosing] = useState<{ id: string; value: string } | null>(null);
@@ -117,7 +121,8 @@ export const DayView: React.FC<DayViewProps> = ({ team, stores, refreshKey, day,
                 r.records.length && r.status !== 'forgot' ? fmtHours(r.worked) : '', last ? storeName(stores, last.storeId) : '',
             ];
         });
-        downloadCsv(`attendance-${toDateInput(day)}.csv`, [head, ...lines]);
+        const where = scope === ALL_STORES ? '' : `-${storeName(stores, scope).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+        downloadCsv(`attendance-${toDateInput(day)}${where}.csv`, [head, ...lines]);
         toast.success('Exported');
     };
 
@@ -144,6 +149,12 @@ export const DayView: React.FC<DayViewProps> = ({ team, stores, refreshKey, day,
     };
 
     const attention = [...openElsewhere, ...(isToday ? [] : records.filter(r => r.status === 'checked-in'))];
+    /** Why the list is empty: a search, a store with nobody, or no team yet. */
+    const emptyText = (() => {
+        if (q) return `No one matches “${query}”.`;
+        if (scope !== ALL_STORES) return `No one is assigned to ${storeName(stores, scope)}, and no one checked in there ${isToday ? 'today' : 'that day'}. Assign people under Stores.`;
+        return 'No team members yet.';
+    })();
 
     return (
         <div className="space-y-4">
@@ -260,7 +271,7 @@ export const DayView: React.FC<DayViewProps> = ({ team, stores, refreshKey, day,
                                     </React.Fragment>
                                 );
                             })}
-                            {shown.length === 0 && <p className="text-center text-xs text-[var(--neu-text-dim)] py-8">No one matches “{query}”.</p>}
+                            {shown.length === 0 && <p className="text-center text-xs text-[var(--neu-text-dim)] py-8 px-4">{emptyText}</p>}
                         </div>
 
                         {/* Desktop: a table */}
@@ -291,7 +302,7 @@ export const DayView: React.FC<DayViewProps> = ({ team, stores, refreshKey, day,
                                     );
                                 })}
                                 {shown.length === 0 && (
-                                    <tr><td colSpan={6} className="text-center text-xs text-[var(--neu-text-dim)] py-8">No one matches “{query}”.</td></tr>
+                                    <tr><td colSpan={6} className="text-center text-xs text-[var(--neu-text-dim)] py-8 px-4">{emptyText}</td></tr>
                                 )}
                             </tbody>
                         </table>

@@ -110,6 +110,13 @@ const AddShiftButton: React.FC<{ phone: boolean; onClick: () => void }> = ({ pho
         : <Button variant="primary" onClick={onClick} icon={<Plus size={15} />}>Add shift</Button>
 );
 
+/** A header action: labelled where there's room, an icon on phones. */
+const HeaderAction: React.FC<{ phone: boolean; label: string; short: string; icon: React.ReactNode; onClick: () => void }> = ({ phone, label, short, icon, onClick }) => (
+    phone
+        ? <GhostIconButton onClick={onClick} label={label} icon={icon} />
+        : <Button onClick={onClick} icon={icon} aria-label={label}>{short}</Button>
+);
+
 /** The week's figures in one strip: two to a row on phones, four across on wide screens. */
 const RosterStats: React.FC<{ stats: Stat[] }> = ({ stats }) => <StatStrip label="This week" stats={stats} />;
 
@@ -178,12 +185,10 @@ const RosterLegend: React.FC<{
     </div>
 );
 
-/** Managers: fill a week fast (copy last week, import a spreadsheet) and take it out again. */
-const PlanToolbar: React.FC<{ onCopy: () => void; onImport: () => void; onExport: () => void }> = ({ onCopy, onImport, onExport }) => (
+/** Managers: fill a week fast from last week's plan (import and export are in the header). */
+const PlanToolbar: React.FC<{ onCopy: () => void }> = ({ onCopy }) => (
     <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Plan faster">
         <Button onClick={onCopy} icon={<CopyPlus size={15} />}>Copy last week</Button>
-        <Button onClick={onImport} icon={<FileUp size={15} />}>Import</Button>
-        <Button onClick={onExport} icon={<Download size={15} />}>Export</Button>
         <p className="hidden lg:block ml-auto text-[11.5px] text-[var(--neu-text-dim)]">Tip: drag a shift to another person or day to move it; hold Ctrl to copy.</p>
     </div>
 );
@@ -352,6 +357,8 @@ export const StaffRosterView: React.FC = () => {
                         <span className={`hidden sm:inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-semibold ${STATUS_CLS[status]}`} role="status">
                             <span className="w-1.5 h-1.5 rounded-full bg-current" aria-hidden="true" />{STATUS_TEXT[status]}
                         </span>
+                        <HeaderAction phone={isPhone} label="Import roster" short="Import" onClick={() => setOverlay({ kind: 'import' })} icon={<FileUp size={15} className="text-brand-900 dark:text-gold-400" />} />
+                        <HeaderAction phone={isPhone} label="Export this week" short="Export" onClick={() => setOverlay({ kind: 'export' })} icon={<Download size={15} className="text-brand-900 dark:text-gold-400" />} />
                         <GhostIconButton onClick={() => setOverlay({ kind: 'publish' })} label="Publish roster" icon={<Send size={15} className="text-brand-900 dark:text-gold-400" />} />
                         <AddShiftButton phone={isPhone} onClick={addAnywhere} />
                     </>
@@ -372,7 +379,7 @@ export const StaffRosterView: React.FC = () => {
                 {view !== 'requests' && <RosterStats stats={stats} />}
 
                 {manage && data && (view === 'week' || view === 'store') && (
-                    <PlanToolbar onCopy={() => setOverlay({ kind: 'copy' })} onImport={() => setOverlay({ kind: 'import' })} onExport={() => setOverlay({ kind: 'export' })} />
+                    <PlanToolbar onCopy={() => setOverlay({ kind: 'copy' })} />
                 )}
 
                 {view !== 'requests' && view !== 'month' && (

@@ -8,7 +8,7 @@ import { PageRoot, PageHeader, PageBody, GhostIconButton } from '../components/u
 import { MyAttendance } from './attendance/MyAttendance';
 import { DayView } from './attendance/DayView';
 import { MonthRegister } from './attendance/MonthRegister';
-import { startOfDay } from './attendance/attendanceUtils';
+import { ALL_STORES, startOfDay, type StoreScope } from './attendance/attendanceUtils';
 import { StoresPanel } from './attendance/StoresPanel';
 
 interface AttendanceViewProps {
@@ -19,6 +19,20 @@ interface AttendanceViewProps {
 }
 
 type Tab = 'day' | 'month' | 'mine' | 'stores';
+
+const STORE_KEY = 'vayu.attendance.store';
+
+/** All stores, or one: the Day and Month tabs show that part of the team. */
+const StoreFilter: React.FC<{ stores: StoreConfig[]; value: StoreScope; onChange: (v: StoreScope) => void }> = ({ stores, value, onChange }) => (
+    <div className="flex gap-1 p-1 rounded-full neu-inset overflow-x-auto no-scrollbar max-w-full w-fit" role="radiogroup" aria-label="Store">
+        {[{ id: ALL_STORES, name: 'All stores' }, ...stores].map(s => (
+            <button key={s.id} type="button" role="radio" aria-checked={value === s.id} onClick={() => onChange(s.id)}
+                className={`shrink-0 rounded-full px-3.5 py-1.5 text-[12px] font-semibold whitespace-nowrap ${value === s.id ? 'neu-raised-sm text-gold-700 dark:text-gold-300' : 'text-[var(--neu-text-dim)]'}`}>
+                {s.name}
+            </button>
+        ))}
+    </div>
+);
 
 const ADMIN_TABS: { id: Tab; label: string; Icon: React.ElementType }[] = [
     { id: 'day', label: 'Day', Icon: CalendarDays },
@@ -46,6 +60,10 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ authUser, canMan
     const [loading, setLoading] = useState(true);
     /** Bumped after any change so the admin panels reload their records. */
     const [refreshKey, setRefreshKey] = useState(0);
+    // Remembered on this device; a store that no longer exists falls back to all.
+    const [storeScope, setStoreScopeState] = useState<StoreScope>(() => { try { return localStorage.getItem(STORE_KEY) || ALL_STORES; } catch { return ALL_STORES; } });
+    const setStoreScope = (v: StoreScope) => { setStoreScopeState(v); try { localStorage.setItem(STORE_KEY, v); } catch { /* private mode */ } };
+    const scope = storeScope === ALL_STORES || stores.some(s => s.id === storeScope) ? storeScope : ALL_STORES;
 
     const load = useCallback(async () => {
         try {
@@ -123,9 +141,12 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ authUser, canMan
                                 onChanged={reload}
                             />
                         )}
-                        {canManage && tab === 'day' && <DayView team={team} stores={stores} refreshKey={refreshKey} day={day} onDayChange={setDay} />}
+                        {canManage && (tab === 'day' || tab === 'month') && stores.length > 0 && (
+                            <div className="mb-4"><StoreFilter stores={stores} value={scope} onChange={setStoreScope} /></div>
+                        )}
+                        {canManage && tab === 'day' && <DayView team={team} stores={stores} scope={scope} refreshKey={refreshKey} day={day} onDayChange={setDay} />}
                         {canManage && tab === 'month' && (
-                            <MonthRegister team={team} refreshKey={refreshKey} onOpenDay={d => { setDay(d); setTab('day'); }} />
+                            <MonthRegister team={team} stores={stores} scope={scope} refreshKey={refreshKey} onOpenDay={d => { setDay(d); setTab('day'); }} />
                         )}
                         {canManage && tab === 'stores' && <StoresPanel stores={stores} team={team} onChanged={reload} />}
                     </div>

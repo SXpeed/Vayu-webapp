@@ -176,6 +176,22 @@ export const toDateInput = (ms: number): string => {
 export const fmtHours = (ms: number): string => (ms / HOUR_MS).toFixed(1);
 
 /** Everyone to list: the team, plus anyone with records who has since left. */
+/** 'all', or one store's id: which part of the team the Day and Month tabs show. */
+export type StoreScope = string;
+export const ALL_STORES: StoreScope = 'all';
+
+/**
+ * The team and records for one store: its check-ins, and the people assigned
+ * to it (so absences show) plus anyone who checked in there from elsewhere.
+ * With 'all', everything.
+ */
+export function inStore<T extends { id: string; storeId?: string }>(team: T[], records: AttendanceRecord[], scope: StoreScope): { team: T[]; records: AttendanceRecord[] } {
+    if (scope === ALL_STORES) return { team, records };
+    const here = records.filter(r => r.storeId === scope);
+    const visitors = new Set(here.map(r => r.employeeId));
+    return { team: team.filter(u => u.storeId === scope || visitors.has(u.id)), records: here };
+}
+
 export function peopleFrom(team: { id: string; name: string }[], records: AttendanceRecord[]): { id: string; name: string }[] {
     const map = new Map(team.map(u => [u.id, u.name]));
     for (const r of records) if (!map.has(r.employeeId)) map.set(r.employeeId, r.employeeName || 'Former employee');

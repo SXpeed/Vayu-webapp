@@ -2,12 +2,15 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast';
 import { ChevronLeft, ChevronRight, Download, Loader2 } from 'lucide-react';
 import { AuthUser } from '../../services/authService';
-import { AttendanceRecord } from '../../types';
+import { AttendanceRecord, StoreConfig } from '../../types';
 import { attendanceService } from '../../services/attendanceService';
-import { LONG_SHIFT_MS, MONTHS, downloadCsv, fmtHours, monthRange, peopleFrom, startOfDay, toDateInput, workedMs } from './attendanceUtils';
+import { ALL_STORES, LONG_SHIFT_MS, MONTHS, downloadCsv, fmtHours, inStore, monthRange, peopleFrom, startOfDay, storeName, toDateInput, workedMs, type StoreScope } from './attendanceUtils';
 
 interface MonthRegisterProps {
     team: AuthUser[];
+    stores: StoreConfig[];
+    /** All stores, or one store's people and check-ins. */
+    scope: StoreScope;
     refreshKey: number;
     /** Open the day view for a date (start of day). */
     onOpenDay: (day: number) => void;
@@ -23,10 +26,11 @@ const WEEKDAY_LETTER = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
  */
 
 const workedText = (c: { forgot: boolean; worked: number }): string => (c.forgot ? 'not checked out' : fmtHours(c.worked) + ' h');
-export const MonthRegister: React.FC<MonthRegisterProps> = ({ team, refreshKey, onOpenDay }) => {
+export const MonthRegister: React.FC<MonthRegisterProps> = ({ team: everyone, stores, scope, refreshKey, onOpenDay }) => {
     const [year, setYear] = useState(() => new Date().getFullYear());
     const [month, setMonth] = useState(() => new Date().getMonth());
-    const [records, setRecords] = useState<AttendanceRecord[]>([]);
+    const [allRecords, setRecords] = useState<AttendanceRecord[]>([]);
+    const { team, records } = useMemo(() => inStore(everyone, allRecords, scope), [everyone, allRecords, scope]);
     const [loading, setLoading] = useState(true);
     const now = Date.now();
     const today = startOfDay(now);
@@ -109,7 +113,8 @@ export const MonthRegister: React.FC<MonthRegisterProps> = ({ team, refreshKey, 
                 t.days, fmtHours(t.worked),
             ];
         });
-        downloadCsv(`attendance-${year}-${String(month + 1).padStart(2, '0')}.csv`, [head, ...lines]);
+        const where = scope === ALL_STORES ? '' : `-${storeName(stores, scope).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+        downloadCsv(`attendance-${year}-${String(month + 1).padStart(2, '0')}${where}.csv`, [head, ...lines]);
         toast.success('Exported');
     };
 
@@ -192,6 +197,12 @@ export const MonthRegister: React.FC<MonthRegisterProps> = ({ team, refreshKey, 
                             </tbody>
                         </table>
                     </div>
+                )}
+                {/* Under the table, not in it: the table opens scrolled across to today. */}
+                {!loading && people.length === 0 && (
+                    <p className="px-2 py-6 text-xs text-[var(--neu-text-dim)]">
+                        {scope === ALL_STORES ? 'No check-ins this month.' : `No one is assigned to ${storeName(stores, scope)}, and no one checked in there this month. Assign people under Stores.`}
+                    </p>
                 )}
             </section>
         </div>
