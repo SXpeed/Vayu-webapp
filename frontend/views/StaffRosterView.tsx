@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
-    AlertTriangle, CalendarClock, ChevronLeft, ChevronRight, CopyPlus, Download, FileUp, Leaf, Plus, Send, Store as StoreIcon, Users,
+    AlertTriangle, CalendarClock, ChevronLeft, ChevronRight, CopyPlus, Download, FileUp, Leaf, Loader2, Plus, Send, Store as StoreIcon, Users,
 } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
 import { StatStrip, type Stat } from '../components/StatStrip';
@@ -11,9 +11,8 @@ import { useMediaQuery } from '../hooks/useMediaQuery';
 import { realtimeService } from '../services/realtimeService';
 import { staffRosterService, type StaffRosterData, type WeekInfo, type WeekStatus } from '../services/staffRosterService';
 import { addDays, defaultBreakMin, mondayOf, paidMin, weekDates, weekdayIdx, type StaffShift } from '../staffRosterRules';
-import { DayAgenda, PhoneWeek, RosterSkeleton, WeekGrid } from './staffRoster/WeekViews';
+import { DayAgenda, PhoneWeek, WeekGrid } from './staffRoster/WeekViews';
 import { CopyWeekPanel, ImportPanel } from './staffRoster/PlanTools';
-import { SkeletonStats } from '../components/Skeleton';
 import { ByStoreView, MonthView, RequestsView } from './staffRoster/OtherViews';
 import { ExportPanel, OpenShiftsPanel, PublishDialog, ShiftEditor, rosterCsv, type EditorState } from './staffRoster/Panels';
 import { derive, hoursText, inWeek, matchesPerson, matchesStore, rangeLabel, todayIso, type Filters } from './staffRoster/shared';
@@ -334,7 +333,7 @@ export const StaffRosterView: React.FC = () => {
         onMove: manage && !isPhone ? (s: StaffShift, e: string | null, date: string, copy: boolean) => { void moveShift(s, e, date, copy); } : undefined,
     } : null;
     const openDayView = (date: string) => { setWeekStart(mondayOf(date)); setDayIdx(weekdayIdx(date)); setView('week'); setLayout('day'); };
-    let body: React.ReactNode = <RosterSkeleton phone={isPhone} />;
+    let body: React.ReactNode = <div className="py-20 flex justify-center text-[var(--neu-text-dim)]"><Loader2 size={22} className="animate-spin" /></div>;
     if (error && !data) {
         body = <EmptyState icon={<CalendarClock size={22} strokeWidth={1.5} />} title="The roster didn’t load" message={error} action={<Button onClick={() => { void load(); }}>Try again</Button>} />;
     } else if (common) {
@@ -370,7 +369,7 @@ export const StaffRosterView: React.FC = () => {
                     </div>
                 )}
 
-                {view !== 'requests' && (data ? <RosterStats stats={stats} /> : !error && <SkeletonStats />)}
+                {view !== 'requests' && <RosterStats stats={stats} />}
 
                 {manage && data && (view === 'week' || view === 'store') && (
                     <PlanToolbar onCopy={() => setOverlay({ kind: 'copy' })} onImport={() => setOverlay({ kind: 'import' })} onExport={() => setOverlay({ kind: 'export' })} />

@@ -4,7 +4,6 @@ import {
     WEEKLY_LIMIT_MIN, leaveOn, paidMin, weekdayIdx, type StaffShift,
 } from '../../staffRosterRules';
 import type { StaffRosterData } from '../../services/staffRosterService';
-import { Skeleton, SkeletonBlock } from '../../components/Skeleton';
 import { usePageChrome } from '../../components/ui';
 import {
     DOW, dayLabel, dayOfMonth, dm, hoursText, initials, matchesPerson, matchesStore, nextDay, shortRange, timeRange, todayIso,
@@ -404,34 +403,3 @@ export const DayAgenda: React.FC<WeekProps & { dayIdx: number; onDay: (i: number
     );
 };
 
-/** While the roster loads: the week's shape, on the desktop grid or the phone tiles. */
-export const RosterSkeleton: React.FC<{ phone: boolean }> = ({ phone }) => (
-    <SkeletonBlock label="Loading the roster" className="neu-card p-3 space-y-3">
-        {phone ? (
-            <>
-                <div className="grid grid-cols-7 gap-1">{Array.from({ length: 7 }, (_, i) => <Skeleton key={i} className="h-8" />)}</div>
-                {Array.from({ length: 5 }, (_, r) => (
-                    <div key={r} className="space-y-1.5">
-                        <div className="flex items-center gap-2"><Skeleton className="w-7 h-7 !rounded-full" /><Skeleton className="h-3.5 w-32" /><span className="flex-1" /><Skeleton className="h-3.5 w-8" /></div>
-                        <div className="grid grid-cols-7 gap-1">{Array.from({ length: 7 }, (_, i) => <Skeleton key={i} className="h-[52px] !rounded-[10px]" />)}</div>
-                    </div>
-                ))}
-            </>
-        ) : (
-            <>
-                <div className="grid grid-cols-[13rem_repeat(7,minmax(0,1fr))_5.5rem] gap-2 items-end pb-2 border-b border-[var(--neu-line)]">
-                    <Skeleton className="h-3.5 w-20" />
-                    {Array.from({ length: 7 }, (_, i) => <div key={i} className="space-y-1.5"><Skeleton className="h-2.5 w-8" /><Skeleton className="h-4 w-12" /></div>)}
-                    <Skeleton className="h-3.5 w-10 justify-self-end" />
-                </div>
-                {Array.from({ length: 6 }, (_, r) => (
-                    <div key={r} className="grid grid-cols-[13rem_repeat(7,minmax(0,1fr))_5.5rem] gap-2 items-start pb-2 border-b border-[var(--neu-line)]">
-                        <div className="flex items-center gap-2.5"><Skeleton className="w-9 h-9 !rounded-full" /><div className="space-y-1.5 flex-1"><Skeleton className="h-3.5 w-24" /><Skeleton className="h-3 w-16" /></div></div>
-                        {Array.from({ length: 7 }, (_, i) => <Skeleton key={i} className="h-[52px] !rounded-[11px]" style={{ opacity: (r + i) % 5 === 4 ? 0.35 : 1 }} />)}
-                        <Skeleton className="h-4 w-10 justify-self-end" />
-                    </div>
-                ))}
-            </>
-        )}
-    </SkeletonBlock>
-);

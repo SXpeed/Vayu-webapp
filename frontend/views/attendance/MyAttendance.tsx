@@ -8,7 +8,6 @@ import {
     fmtTime, getPosition, haversineMeters, locationAlreadyGranted, monthGrid, monthRange, recordFlags, startOfDay,
     storeName, workedMs,
 } from './attendanceUtils';
-import { SkeletonRows } from '../../components/Skeleton';
 
 interface MyAttendanceProps {
     userId: string;
@@ -260,7 +259,7 @@ const MonthCalendar: React.FC<{ year: number; month: number; byDay: Map<number, 
 const RecordList: React.FC<{ loading: boolean; shown: AttendanceRecord[]; selectedDay: number | null; stores: StoreConfig[]; now: number }> = ({ loading: loadingMonth, shown, selectedDay, stores, now }) => (
     <>
         {loadingMonth && (
-            <SkeletonRows rows={4} avatar={false} className="py-2" />
+            <div className="py-8 flex justify-center"><Loader2 size={18} className="animate-spin text-gold-500" /></div>
         )}
         {!loadingMonth && shown.length === 0 && (
             <p className="text-xs text-[var(--neu-text-dim)] px-1 py-4">No check-ins {selectedDay ? 'that day' : 'this month'}.</p>

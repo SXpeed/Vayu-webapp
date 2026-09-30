@@ -30,7 +30,6 @@ import { APP_NAME } from './brand';
 import { useBranding } from './useBranding';
 import { authClient, currentWorkspace, refreshCurrentWorkspace } from './services/workspace';
 import { emailChangeLanding } from './services/emailChange';
-import { SkeletonPage } from './components/Skeleton';
 
 /** Views a push-notification click may deep-link into. */
 const PUSH_VIEWS = ['messaging', 'inquiry', 'payments', 'schedule'] as const;
@@ -111,8 +110,11 @@ const NoAccessView: React.FC<{ onHome: () => void }> = ({ onHome }) => (
     </PageRoot>
 );
 
-/** While a screen's code loads: the shape of a page, not a spinner. */
-const ViewFallback = () => <SkeletonPage />;
+const ViewFallback = () => (
+    <div className="h-full flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
+    </div>
+);
 
 /** How long the splash waits for the first sync before opening on the saved copy. */
 const BOOT_SYNC_WAIT_MS = 3500;

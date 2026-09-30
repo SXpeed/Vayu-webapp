@@ -8,7 +8,6 @@ import {
     DAY_MS, HOUR_MS, LONG_SHIFT_MS, dayRange, downloadCsv, fmtDay, fmtHours, fmtTime, peopleFrom, startOfDay,
     storeName, toDateInput, workedMs,
 } from './attendanceUtils';
-import { SkeletonRows } from '../../components/Skeleton';
 
 interface DayViewProps {
     team: AuthUser[];
@@ -233,7 +232,7 @@ export const DayView: React.FC<DayViewProps> = ({ team, stores, refreshKey, day,
                     <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Find a person…" aria-label="Find a person" className="neu-field pl-9 py-2 text-sm" />
                 </div>
                 {loading ? (
-                    <SkeletonRows rows={6} className="py-2" />
+                    <div className="py-10 flex justify-center"><Loader2 size={20} className="animate-spin text-gold-500" /></div>
                 ) : (
                     <>
                         {/* Phone: a simple list */}

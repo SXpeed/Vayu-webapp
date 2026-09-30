@@ -6,7 +6,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { CopyPlus, FileUp, Loader2 } from 'lucide-react';
 import { Button } from '../../components/ui';
-import { Skeleton, SkeletonBlock } from '../../components/Skeleton';
 import { addDays, leaveOn, type StaffShift } from '../../staffRosterRules';
 import { staffRosterService, type ShiftInput, type StaffRosterData } from '../../services/staffRosterService';
 import { dayLabel, rangeLabel } from './shared';
@@ -96,10 +95,7 @@ export const CopyWeekPanel: React.FC<{ data: StaffRosterData; weekStart: string;
             <p className="text-[12.5px] text-[var(--neu-text-dim)]">From {rangeLabel(from)} into {rangeLabel(weekStart)}, same days and times. It stays a draft until you publish.</p>
             {problem && <Msg kind="error">{problem}</Msg>}
             {!plan && !problem && (
-                <SkeletonBlock className="space-y-3" label="Loading last week">
-                    <Skeleton className="h-20 !rounded-2xl" />
-                    <Skeleton className="h-10" />
-                </SkeletonBlock>
+                <p className="flex items-center gap-2 text-[12.5px] text-[var(--neu-text-dim)]"><Loader2 size={14} className="animate-spin" />Loading last week…</p>
             )}
             {plan && (
                 <>
@@ -213,7 +209,7 @@ export const ImportPanel: React.FC<{ data: StaffRosterData; onClose: () => void;
             {tooLong && <Msg kind="error">The rows span more than {MAX_SPAN_DAYS} days. Import a month at a time.</Msg>}
             {read && !read.problem && !tooLong && (
                 checking || !plan ? (
-                    good.length ? <SkeletonBlock label="Checking the rows"><Skeleton className="h-24 !rounded-2xl" /></SkeletonBlock> : null
+                    good.length ? <p className="flex items-center gap-2 text-[12.5px] text-[var(--neu-text-dim)]"><Loader2 size={14} className="animate-spin" />Checking the rows…</p> : null
                 ) : (
                     <dl className="neu-inset rounded-2xl p-3.5 grid grid-cols-[1fr_auto] gap-y-2 text-[13.5px]">
                         <dt className="text-[var(--neu-text-dim)]">Ready to add</dt><dd className="font-semibold text-right tabular-nums">{plan.add.length}</dd>

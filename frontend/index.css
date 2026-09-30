@@ -211,20 +211,6 @@ html.dark {
     box-shadow: inset 4px 4px 9px var(--neu-shadow-dark), inset -4px -4px 9px var(--neu-shadow-light);
 }
 
-/* Loading placeholder in the shape of what is coming (components/Skeleton.tsx):
- * a softly pressed-in block with a slow shimmer. Static when motion is reduced. */
-.neu-skeleton {
-    border-radius: 0.75rem;
-    background: linear-gradient(90deg, var(--neu-bg-lo) 0%, var(--neu-bg-hi) 50%, var(--neu-bg-lo) 100%);
-    background-size: 200% 100%;
-    box-shadow: inset 2px 2px 5px var(--neu-shadow-dark), inset -2px -2px 5px var(--neu-shadow-light);
-    animation: neu-shimmer 1.4s linear infinite;
-}
-@keyframes neu-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-@media (prefers-reduced-motion: reduce) {
-    .neu-skeleton { animation: none; }
-}
-
 /* Vibrant gold accent — primary CTAs (Soft UI Evolution signature):
  * filled gradient + dark text for strong affordance and AA contrast */
 .neu-accent {
