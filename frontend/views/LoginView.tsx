@@ -5,6 +5,7 @@ import { authClient, myWorkspaces, platformUser, type Workspace } from '../servi
 import { SITE_ORIGIN } from '../brand';
 import { useBranding } from '../useBranding';
 import { fieldValue } from '../formFields';
+import { CAPTCHA_MISSING, useCaptcha } from '../components/Turnstile';
 
 interface LoginViewProps {
   onLogin: (user: AuthUser) => void;
@@ -20,7 +21,14 @@ interface LoginViewProps {
 //     tried, so nobody is locked out during the move.
 type Screen = 'checking' | 'setup' | 'signin' | 'forgot' | 'workspaces' | 'none';
 
-interface LoginMethods { emailPassword: { signIn: boolean }; google: { signIn: boolean } }
+interface LoginMethods {
+  emailPassword: { signIn: boolean };
+  google: { signIn: boolean };
+  /** Whether the original app's own sign-in is still open (closed from the control centre). */
+  original?: boolean;
+  /** Bot protection on "Forgot password?", when on (components/Turnstile.tsx). */
+  turnstileSiteKey?: string;
+}
 
 const field = 'neu-field';
 const label = 'block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider';
@@ -102,7 +110,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
   } else if (screen === 'none') {
     body = <NoWorkspace account={account} />;
   } else if (screen === 'forgot') {
-    body = <ForgotPassword onBack={() => { setError(''); setScreen('signin'); }} />;
+    body = <ForgotPassword siteKey={methods?.turnstileSiteKey} onBack={() => { setError(''); setScreen('signin'); }} />;
   } else if (screen === 'setup') {
     body = <FirstRunSetup onLogin={onLogin} />;
   } else {
@@ -157,7 +165,9 @@ const SignInForm: React.FC<{
       const { error: platformError } = await authClient.signIn.email({ email: address, password: secret });
       if (!platformError) { await onPlatform(address); return; }
       if (platformError.status !== 401) { setError(platformError.message || 'Sign-in did not work. Please try again.'); return; }
-      // Not a platform account (yet): the original app's own sign-in.
+      // Not a platform account (yet): the original app's own sign-in, while
+      // it is still open.
+      if (methods?.original === false) { setError('Wrong email or password.'); return; }
       try {
         onOriginal(await authService.login(address, secret));
       } catch {
@@ -215,20 +225,23 @@ const SignInForm: React.FC<{
 };
 
 /** The reset link lands on the website's page for choosing a new password. */
-const ForgotPassword: React.FC<{ onBack: () => void }> = ({ onBack }) => {
+const ForgotPassword: React.FC<{ siteKey?: string; onBack: () => void }> = ({ siteKey, onBack }) => {
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [sentTo, setSentTo] = useState('');
   const [error, setError] = useState('');
+  const captcha = useCaptcha(siteKey);
   const send = async (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
     const address = fieldValue(e.currentTarget, 'forgot-email', email).trim();
     setEmail(address);
+    if (captcha.missing) { setError(CAPTCHA_MISSING); return; }
     setBusy(true);
     setError('');
     const redirectTo = import.meta.env.DEV ? `${location.origin}/signup.html?mode=reset` : `${SITE_ORIGIN}/signup?mode=reset`;
-    const { error: resetError } = await authClient.requestPasswordReset({ email: address, redirectTo });
+    const { error: resetError } = await authClient.requestPasswordReset({ email: address, redirectTo, fetchOptions: captcha.fetchOptions });
     setBusy(false);
+    captcha.used();
     if (resetError) setError(resetError.message || 'That did not work. Try again in a minute.');
     else setSentTo(address);
   };
@@ -247,6 +260,7 @@ const ForgotPassword: React.FC<{ onBack: () => void }> = ({ onBack }) => {
             <label htmlFor="forgot-email" className={label}>Email</label>
             <input id="forgot-email" type="email" required value={email} onChange={e => setEmail(e.target.value)} className={field} autoComplete="email" />
           </div>
+          {captcha.widget}
           <button type="submit" disabled={busy} className={primary}>{busy ? 'Sending…' : 'Send reset link'}</button>
         </form>
       )}

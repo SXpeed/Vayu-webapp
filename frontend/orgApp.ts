@@ -80,8 +80,18 @@ export async function ensureAppUser(
 ): Promise<StoredUser> {
   const key = `auth:user:${member.appUserId}`;
   const raw = await orgEnv.VAYU_KV.get(key);
-  if (raw) return JSON.parse(raw) as StoredUser;
   const email = member.email.toLowerCase();
+  if (raw) {
+    const existing = JSON.parse(raw) as StoredUser;
+    if (existing.email?.toLowerCase() === email) return existing;
+    // The account's email changed (platform/accountEmail.ts): follow it.
+    const moved: StoredUser = { ...existing, email };
+    await orgEnv.VAYU_KV.put(key, JSON.stringify(moved));
+    await orgEnv.VAYU_KV.put(`auth:email:${email}`, member.appUserId);
+    const old = existing.email?.toLowerCase();
+    if (old && (await orgEnv.VAYU_KV.get(`auth:email:${old}`)) === member.appUserId) await orgEnv.VAYU_KV.delete(`auth:email:${old}`);
+    return moved;
+  }
   const record: StoredUser = {
     id: member.appUserId,
     name: member.name || email,

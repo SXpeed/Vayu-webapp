@@ -20,6 +20,7 @@ import { useBranding } from '../useBranding';
 import { HOME_URL, PlanCard, SiteHeader, usePublicPlans, type PublicPlan } from './common';
 import { fieldValue } from '../formFields';
 import './site.css';
+import { CAPTCHA_MISSING, useCaptcha } from '../components/Turnstile';
 
 const authClient = createAuthClient({ basePath: '/api/v2/auth' });
 
@@ -39,7 +40,7 @@ interface Application {
     requestedPlanKey: string; billingCycle: 'monthly' | 'annual'; applicantNote: string; providerMessage: string | null; orgId: string | null;
 }
 interface AppEvent { at: number; actor_kind: string; action: string; message: string | null }
-interface LoginMethods { emailPassword: { signIn: boolean; signUp: boolean }; google: { signIn: boolean; signUp: boolean } }
+interface LoginMethods { emailPassword: { signIn: boolean; signUp: boolean }; google: { signIn: boolean; signUp: boolean }; turnstileSiteKey?: string }
 
 type Step = 'loading' | 'account' | 'business' | 'plan' | 'review' | 'status';
 
@@ -320,6 +321,8 @@ const AccountStep: React.FC<{ initialMode: Mode; returnError: string | null; onD
     const [busy, setBusy] = useState<Busy>(null);
     const [problem, setProblem] = useState<string | null>(returnError ? googleErrorText(returnError) : null);
     const [forgot, setForgot] = useState(false);
+    // Bot protection on creating an account (components/Turnstile.tsx), when on.
+    const captcha = useCaptcha(mode === 'signup' ? methods?.turnstileSiteKey : null);
 
     useEffect(() => { api<LoginMethods>('/public/login-methods').then(setMethods).catch(() => setMethods(null)); }, []);
 
@@ -336,13 +339,15 @@ const AccountStep: React.FC<{ initialMode: Mode; returnError: string | null; onD
     };
 
     const withEmail = async (details: { name: string; email: string; password: string }) => {
+        if (mode === 'signup' && captcha.missing) { setProblem(CAPTCHA_MISSING); return; }
         setBusy('email');
         setProblem(null);
         const result = mode === 'signup'
             // The confirmation link brings them back here, signed in.
-            ? await authClient.signUp.email({ ...details, callbackURL: location.pathname })
+            ? await authClient.signUp.email({ ...details, callbackURL: location.pathname, fetchOptions: captcha.fetchOptions })
             : await authClient.signIn.email({ email: details.email, password: details.password });
         setBusy(null);
+        if (mode === 'signup') captcha.used();
         if (result.error) { setProblem(result.error.message || 'That did not work. Check the details and try again.'); return; }
         onDone();
     };
@@ -351,7 +356,7 @@ const AccountStep: React.FC<{ initialMode: Mode; returnError: string | null; onD
     if (forgot) {
         return (
             <main className="max-w-md mx-auto px-5 pt-10 pb-16 mk-settle">
-                <ForgotPassword onBack={() => { setForgot(false); switchMode('signin'); }} />
+                <ForgotPassword siteKey={methods?.turnstileSiteKey} onBack={() => { setForgot(false); switchMode('signin'); }} />
             </main>
         );
     }
@@ -379,7 +384,8 @@ const AccountStep: React.FC<{ initialMode: Mode; returnError: string | null; onD
                                 <span className="h-px flex-1 bg-gray-300/80 dark:bg-white/10" /> or use your email <span className="h-px flex-1 bg-gray-300/80 dark:bg-white/10" />
                             </div>
                         )}
-                        {emailHere && <EmailForm key={mode} mode={mode} busy={busy} spaced={!googleHere} onSubmit={withEmail} onForgot={() => setForgot(true)} />}
+                        {emailHere && captcha.widget && <div className="mt-6">{captcha.widget}</div>}
+                        {emailHere && <EmailForm key={mode} mode={mode} busy={busy} spaced={!googleHere && !captcha.widget} onSubmit={withEmail} onForgot={() => setForgot(true)} />}
                         {!googleHere && !emailHere && methods && (
                             <p className="mt-6 text-sm text-gray-700 dark:text-gray-300">Signing in is switched off at the moment. Please contact us.</p>
                         )}
@@ -540,19 +546,22 @@ const InvitationOnly: React.FC<{ onSignIn: () => void }> = ({ onSignIn }) => (
 /* -------------------------------- Passwords and email confirmation */
 
 /** Asks for a reset link. The answer is the same whether or not the address has an account. */
-const ForgotPassword: React.FC<{ onBack: () => void }> = ({ onBack }) => {
+const ForgotPassword: React.FC<{ siteKey?: string; onBack: () => void }> = ({ siteKey, onBack }) => {
     const [email, setEmail] = useState('');
     const [busy, setBusy] = useState(false);
     const [sentTo, setSentTo] = useState<string | null>(null);
     const [problem, setProblem] = useState<string | null>(null);
+    const captcha = useCaptcha(siteKey);
     const send = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
         const address = fieldValue(e.currentTarget, 'f-email', email).trim();
         setEmail(address);
+        if (captcha.missing) { setProblem(CAPTCHA_MISSING); return; }
         setBusy(true);
         setProblem(null);
-        const { error } = await authClient.requestPasswordReset({ email: address, redirectTo: `${location.pathname}?mode=reset` });
+        const { error } = await authClient.requestPasswordReset({ email: address, redirectTo: `${location.pathname}?mode=reset`, fetchOptions: captcha.fetchOptions });
         setBusy(false);
+        captcha.used();
         if (error) setProblem(error.message || 'That did not work. Try again in a minute.');
         else setSentTo(address);
     };
@@ -571,6 +580,7 @@ const ForgotPassword: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                     <p className="text-[13px] text-gray-600 dark:text-gray-400">Enter the email you sign in with. We will send you a link to choose a new password.</p>
                     {problem && <p role="alert" className="rounded-xl px-3.5 py-2.5 text-[13px] bg-red-500/10 text-red-700 dark:text-red-300">{problem}</p>}
                     <Field label="Email" htmlFor="f-email"><Input id="f-email" required type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} /></Field>
+                    {captcha.widget}
                     <Button type="submit" variant="primary" block disabled={busy}>{busy ? 'Sending…' : 'Send reset link'}</Button>
                 </form>
             )}

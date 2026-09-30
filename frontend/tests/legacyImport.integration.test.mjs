@@ -27,7 +27,7 @@ function legacyHash(password) {
 before(async () => {
     // Seeds the legacy shared database and KV exactly as the current app has
     // them, before the Worker starts.
-    worker = await startDevWorker({ port: 8812, inspectorPort: 9242, adminPassword: ADMIN_PASSWORD, seedLegacy: {
+    worker = await startDevWorker({ adminPassword: ADMIN_PASSWORD, seedLegacy: {
         sql: [
             `CREATE TABLE IF NOT EXISTS artworks (id TEXT PRIMARY KEY, custom_id TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '',
                artist TEXT DEFAULT '', artwork_year TEXT DEFAULT '', description_title TEXT DEFAULT '', description TEXT DEFAULT '',

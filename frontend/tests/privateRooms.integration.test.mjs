@@ -42,7 +42,7 @@ before(async () => {
     const schema = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8')
         .split('\n').filter(line => !/^ *(is_private INTEGER|created_by TEXT, +-- creator)/.test(line)).join('\n');
     assert.ok(!/is_private/.test(schema.split('CREATE TABLE IF NOT EXISTS messages')[0]), 'old schema');
-    worker = await startDevWorker({ port: 8818, inspectorPort: 9248, seedLegacy: { sql: schema } });
+    worker = await startDevWorker({ seedLegacy: { sql: schema } });
     assert.equal((await api(null, '/auth/setup', { method: 'POST', body: OWNER })).status, 200);
     owner = await login(OWNER.email, OWNER.password);
     for (const [name, email, role] of [['Other admin', 'other@example.com', 'admin'], ['Alice', 'alice@example.com'], ['Mallory', 'mallory@example.com']]) {

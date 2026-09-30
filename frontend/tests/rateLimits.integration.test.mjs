@@ -22,7 +22,7 @@ const call = (path, token, init = {}) => fetch(`${worker.origin}/api${path}`, { 
 
 before(async () => {
     const schema = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
-    worker = await startDevWorker({ port: 8850, inspectorPort: 9280, seedLegacy: { sql: schema }, vars: { RAZORPAY_WEBHOOK_SECRET: WEBHOOK_SECRET } });
+    worker = await startDevWorker({ seedLegacy: { sql: schema }, vars: { RAZORPAY_WEBHOOK_SECRET: WEBHOOK_SECRET } });
     await fetch(`${worker.origin}/api/auth/setup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Owner', email: 'owner@example.com', password: 'owner-password-1234' }) });
     ownerToken = await login('owner@example.com', 'owner-password-1234');
     await call('/auth/users', ownerToken, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Staff', email: 'staff@example.com', password: 'staff-password-1234' }) });

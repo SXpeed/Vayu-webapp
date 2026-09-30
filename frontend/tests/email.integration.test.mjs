@@ -38,7 +38,7 @@ function apiPath(text, pattern) {
 }
 
 before(async () => {
-    worker = await startDevWorker({ port: 8826, inspectorPort: 9256, vars: { EMAIL_SENDING: 'on', EMAIL_FROM: 'no-reply@ateliersupport.com' } });
+    worker = await startDevWorker({ vars: { EMAIL_SENDING: 'on', EMAIL_FROM: 'no-reply@ateliersupport.com' } });
     admin = worker.browser();
     assert.equal((await admin.signIn(ADMIN.email, ADMIN.password)).status, 200);
     assert.equal((await admin.call('/admin/settings/login-methods', {

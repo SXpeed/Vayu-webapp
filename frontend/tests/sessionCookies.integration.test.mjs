@@ -38,8 +38,8 @@ const renameMe = (w, s, extra = {}) => fetch(`${w.origin}/api/auth/me`, {
 });
 
 before(async () => {
-    worker = await startDevWorker({ port: 8852, inspectorPort: 9282, seedLegacy: { sql: schema } });
-    retired = await startDevWorker({ port: 8854, inspectorPort: 9284, seedLegacy: { sql: schema }, vars: { LEGACY_BEARER_UNTIL: '2000-01-01T00:00:00Z' } });
+    worker = await startDevWorker({ seedLegacy: { sql: schema } });
+    retired = await startDevWorker({ seedLegacy: { sql: schema }, vars: { LEGACY_BEARER_UNTIL: '2000-01-01T00:00:00Z' } });
     for (const w of [worker, retired]) {
         await fetch(`${w.origin}/api/auth/setup`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: w.origin }, body: JSON.stringify(OWNER) });
     }

@@ -18,6 +18,8 @@ import { BrandingPanel } from './BrandingPanel';
 import { OverviewPanel } from './OverviewPanel';
 import { ApplicationsPanel } from './ApplicationsPanel';
 import { AccountsPanel } from './AccountsPanel';
+import { OriginalSignInPanel } from './OriginalSignInPanel';
+import { emailChangeLanding } from '../services/emailChange';
 import { ProfilePanel } from './ProfilePanel';
 import { AdminsPanel, HealthPanel, NotificationsPanel, PaymentKeysPanel } from './SystemPanels';
 import { DialogProvider, EmptyState, PageHeader, Section, Segmented, SkeletonRows, StatusPill, useHashRoute, type Tone } from './kit';
@@ -120,6 +122,17 @@ const ControlCentre: React.FC = () => {
             else setScreen({ kind: 'unavailable', message: err.message || 'The control centre is unavailable.' });
         }
     }, []);
+
+    // Arriving from an email-change link (services/emailChange.ts): say what
+    // happened, and show the profile with the address it now has.
+    useEffect(() => {
+        emailChangeLanding(authClient).then(result => {
+            if (!result) return;
+            toast[result.ok ? 'success' : 'error'](result.message, { duration: 10_000 });
+            go('profile');
+            refresh();
+        }).catch(() => { /* offline: nothing to say */ });
+    }, [go, refresh]);
 
     // Counts in the menu. Refreshed on navigation and when the window regains
     // focus — no background timer.
@@ -251,6 +264,7 @@ const ControlCentre: React.FC = () => {
                             {tab === 'security' && (
                                 <div className="space-y-6">
                                     <LoginMethodsPanel reauth={reauth} />
+                                    {(screen.role === 'owner' || screen.role === 'admin') && <OriginalSignInPanel reauth={reauth} />}
                                     <AdminsPanel reauth={reauth} myRole={screen.role} myEmail={screen.email} />
                                     {(screen.role === 'owner' || screen.role === 'admin') && <PaymentKeysPanel reauth={reauth} />}
                                 </div>

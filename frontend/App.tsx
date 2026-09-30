@@ -28,7 +28,8 @@ import { PlanBlockedView } from './views/PlanBlockedView';
 import { PageRoot, PageHeader, PageBody, EmptyState, Button } from './components/ui';
 import { APP_NAME } from './brand';
 import { useBranding } from './useBranding';
-import { currentWorkspace, refreshCurrentWorkspace } from './services/workspace';
+import { authClient, currentWorkspace, refreshCurrentWorkspace } from './services/workspace';
+import { emailChangeLanding } from './services/emailChange';
 
 /** Views a push-notification click may deep-link into. */
 const PUSH_VIEWS = ['messaging', 'inquiry', 'payments', 'schedule'] as const;
@@ -126,6 +127,12 @@ const App: React.FC = () => {
     const [isLoading, setIsLoading] = useState(true);
     // The workspace's plan isn't active: the app shows only its plan, to pay.
     const [planBlocked, setPlanBlocked] = useState(false);
+    // Arriving from an email-change link (services/emailChange.ts): say what happened.
+    useEffect(() => {
+        emailChangeLanding(authClient).then(result => {
+            if (result) toast[result.ok ? 'success' : 'error'](result.message, { duration: 10_000 });
+        }).catch(() => { /* offline: nothing to say */ });
+    }, []);
     useEffect(() => {
         const onBlocked = () => setPlanBlocked(true);
         window.addEventListener(PLAN_BLOCKED_EVENT, onBlocked);
@@ -193,6 +200,7 @@ const App: React.FC = () => {
                 if (reason === 'device-limit') message = 'You were signed out because your account was signed in on another device.';
                 else if (reason === 'signed-out-remotely') message = 'This device was signed out from another device.';
                 else if (reason === 'signed-out-by-admin') message = 'An admin signed this device out. Please sign in again.';
+                else if (reason === 'original-signin-closed') message = 'Sign-in has moved to your email account. Sign in with your email and the same password.';
                 toast.error(message, { duration: 8000 });
             }
         };

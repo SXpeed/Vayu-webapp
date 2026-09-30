@@ -21,7 +21,7 @@ let orgA;
 let orgB;
 
 before(async () => {
-    worker = await startDevWorker({ port: 8810, inspectorPort: 9240, adminPassword: ADMIN_PASSWORD });
+    worker = await startDevWorker({ adminPassword: ADMIN_PASSWORD });
     admin = worker.browser();
     assert.equal((await admin.signIn('admin@example.com', ADMIN_PASSWORD)).status, 200);
 

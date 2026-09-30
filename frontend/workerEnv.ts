@@ -69,6 +69,12 @@ export interface Env {
   // AND a provider admin switches it on in the control panel.
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
+  // Cloudflare Turnstile on sign-up and "Forgot password?" (platform/auth.ts).
+  // Off until both are set: the site key is public, the secret is a secret.
+  TURNSTILE_SITE_KEY?: string;
+  TURNSTILE_SECRET_KEY?: string;
+  // Tests only: a stand-in for Cloudflare's siteverify endpoint.
+  TURNSTILE_VERIFY_URL?: string;
   // Host the provider control panel is served on (e.g.
   // admin.ateliersupport.com). When set, admin APIs answer only there. This
   // is defense in depth; the provider_admins check is the real boundary.

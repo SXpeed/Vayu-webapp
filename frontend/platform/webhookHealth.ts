@@ -115,7 +115,9 @@ interface HealthRow {
 export function healthVerdict(r: HealthRow | null): { state: HealthState; detail: string } {
   if (!r) return { state: 'no_events', detail: 'No verified webhook yet. That is normal until a payment is made.' };
   const lastOk = r.last_processed_ok_at ?? r.last_verified_at ?? 0;
-  if (r.last_processing_error_at && r.last_processing_error_at > lastOk) {
+  // A tie (both in the same millisecond) counts as a failure: never report
+  // healthy when the order can't be told.
+  if (r.last_processing_error_at && r.last_processing_error_at >= lastOk) {
     return { state: 'attention', detail: 'The last verified delivery could not be applied; Razorpay retries it for 24 hours.' };
   }
   if (r.last_missed_at && r.last_missed_at > (r.last_verified_at ?? 0)) {

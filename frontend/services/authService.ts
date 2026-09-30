@@ -115,7 +115,8 @@ async function exchangeLegacyToken(): Promise<void> {
   if (res.ok) {
     localStorage.removeItem(LEGACY_TOKEN_KEY);
     markSignedIn();
-  } else if (res.status === 401 || res.status === 410) {
+  } else if (res.status === 401 || res.status === 410 || res.status === 403) {
+    // 403: the original sign-in has been closed; the platform account is the way in.
     forgetSignIn();
   }
 }

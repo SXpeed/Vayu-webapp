@@ -50,7 +50,8 @@ async function render(pdfUrl: string): Promise<Blob | null> {
     const data = new Uint8Array(await res.arrayBuffer());
 
     const pdfjs = await loadPdfjs();
-    const doc = await pdfjs.getDocument({ data }).promise;
+    const task = pdfjs.getDocument({ data });
+    const doc = await task.promise;
     try {
         const page = await doc.getPage(1);
         const base = page.getViewport({ scale: 1 });
@@ -65,7 +66,7 @@ async function render(pdfUrl: string): Promise<Blob | null> {
         await page.render({ canvas, canvasContext: ctx, viewport }).promise;
         return await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85));
     } finally {
-        await doc.destroy();
+        await task.destroy(); // pdf.js 6 releases a document through its loading task
     }
 }
 

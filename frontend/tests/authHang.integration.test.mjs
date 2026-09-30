@@ -18,7 +18,7 @@ let worker;
 before(async () => {
     // Starting up calls /api/v2/public/login-methods, which is what builds the
     // instance in production too (the landing and sign-up pages call it first).
-    worker = await startDevWorker({ port: 8816, inspectorPort: 9246 });
+    worker = await startDevWorker();
 });
 after(async () => { await worker?.stop(); });
 

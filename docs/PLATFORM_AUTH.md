@@ -35,6 +35,29 @@ the app's users onto this layer is a later, explicit migration step.
   set *and* an admin switches it on.
 - **Append-only platform audit log.** The database refuses updates, and refuses
   deletes of rows younger than 365 days.
+- **Changing the sign-in email** (`platform/accountEmail.ts`, `services/emailChange.ts`):
+  - *Yourself*, from Profile in the app or the control centre. A confirmed
+    address takes two links: one to the current address to approve, then one
+    to the new address to confirm. An unconfirmed address gets only the second.
+    It needs a sign-in newer than 30 minutes (the form asks for the password, or
+    the control centre's "Confirm it's you"). An address someone else already
+    has gets the same answer and no email, so nobody can probe for accounts.
+  - *A provider admin*, for someone who lost the old mailbox (control centre →
+    Accounts → Change email). The new address starts unconfirmed, and the
+    account is signed out everywhere.
+  - Either way both addresses are told, the change is in the audit log
+    (`user.email.change`, from/to), and the app's own copy of the address
+    follows on the person's next request.
+- **Other administrators' accounts are owner-only.** Changing the email,
+  resetting the password, signing out or disabling another active provider
+  admin needs the owner role, so a support admin cannot take over an owner.
+- **Bot protection (Cloudflare Turnstile)** on the public forms that send email:
+  sign-up and "Forgot password?" (in the app and on the website). Signing in is
+  left alone: it is already rate limited. Off until both keys are set; see
+  "Turning on bot protection" below. The answer is checked on the server
+  (Better Auth's captcha plugin), never trusted from the page.
+- **Closing the original app's sign-in** (`platform/originalSignIn.ts`, Login &
+  security → Original app sign-in): see `APP_ORGANIZATIONS.md`.
 
 ### Lockout guards
 
@@ -114,6 +137,17 @@ How Google identities are handled:
   organization; membership is checked separately.
 - Google login doesn't make an account secure by itself. Provider admins still
   need 2FA.
+
+## Turning on bot protection (Turnstile)
+
+Owner, in the Cloudflare dashboard, then a deploy:
+
+1. Turnstile → Add widget. Hostnames: `ateliersupport.com`, `app.ateliersupport.com`.
+   Mode: Managed.
+2. Put the **site key** (public) in `wrangler.jsonc` vars as `TURNSTILE_SITE_KEY`.
+3. Set the **secret key**: `npx wrangler secret put TURNSTILE_SECRET_KEY`.
+4. Deploy. `/api/v2/public/login-methods` now carries `turnstileSiteKey`, and the
+   sign-up and reset forms show the check. Remove either key to switch it off.
 
 ## Secrets
 

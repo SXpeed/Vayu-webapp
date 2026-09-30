@@ -99,7 +99,7 @@ async function publishPlan(name, version) {
 
 before(async () => {
     razorpay = await startRazorpay();
-    worker = await startDevWorker({ port: 8834, inspectorPort: 9264, vars: { RAZORPAY_API_BASE: `http://127.0.0.1:${razorpay.address().port}` } });
+    worker = await startDevWorker({ vars: { RAZORPAY_API_BASE: `http://127.0.0.1:${razorpay.address().port}` } });
     admin = worker.browser();
     assert.equal((await admin.signIn('admin@example.com', 'provider-admin-password')).status, 200);
     for (const [email, name] of [['owner@example.com', 'Owner'], ['staff@example.com', 'Staff']]) {

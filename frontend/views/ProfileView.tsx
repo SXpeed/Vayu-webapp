@@ -4,7 +4,7 @@ import { UserProfile } from '../types';
 import { Moon, Sun, LogOut, Check, Bell, BellOff, Pencil, X, Type, Image as ImageIcon } from 'lucide-react';
 import { pushService } from '../services/pushService';
 import { MyDevicesCard } from '../components/MyDevicesCard';
-import { PasswordCard, WorkspaceCard } from '../components/AccountCards';
+import { EmailCard, PasswordCard, WorkspaceCard } from '../components/AccountCards';
 import { getUiSize, setUiSize, type UiSize } from '../uiSize';
 import { TILE_BACKDROPS, getTileBackdrop, setTileBackdrop, type TileBackdrop } from '../tileBackdrop';
 import {
@@ -161,6 +161,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ profile, onUpdateProfi
                 </Card>
 
                 <WorkspaceCard />
+                <EmailCard />
                 <PasswordCard />
                 <MyDevicesCard />
 

@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import toast from 'react-hot-toast';
-import { ArrowLeftRight, Building2, KeyRound } from 'lucide-react';
+import { ArrowLeftRight, AtSign, Building2, KeyRound } from 'lucide-react';
 import { Button, Card, Field, Input, SectionTitle } from './ui';
 import { authClient, currentWorkspace, setWorkspace } from '../services/workspace';
+import { startEmailChange } from '../services/emailChange';
 
 // Profile cards for a platform sign-in: which workspace this is (and a way to
-// switch), and the account's password. The original sign-in has neither.
+// switch), and the account's email and password. The original sign-in has
+// none of these.
 
 /** Opens the workspace chooser: the sign-in screen lists this account's workspaces. */
 function switchWorkspace() {
@@ -76,6 +78,66 @@ export const PasswordCard: React.FC = () => {
                     <div className="flex gap-2">
                         <Button type="submit" variant="primary" disabled={busy}>{busy ? 'Saving…' : 'Save password'}</Button>
                         <Button type="button" onClick={() => { setOpen(false); setError(''); }}>Cancel</Button>
+                    </div>
+                </form>
+            )}
+        </Card>
+    );
+};
+
+/** The email you sign in with, and changing it (confirmed by email links; services/emailChange.ts). */
+export const EmailCard: React.FC = () => {
+    const { data } = authClient.useSession();
+    const [open, setOpen] = useState(false);
+    const [next, setNext] = useState('');
+    const [password, setPassword] = useState('');
+    const [needsPassword, setNeedsPassword] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+    const [sent, setSent] = useState('');
+    if (!currentWorkspace() || !data) return null;
+    const email = data.user.email;
+
+    const close = () => { setOpen(false); setError(''); setNext(''); setPassword(''); setNeedsPassword(false); };
+
+    const save = async (e: React.SubmitEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        setError('');
+        setBusy(true);
+        const result = await startEmailChange(authClient, { email, verified: data.user.emailVerified }, next, password);
+        setBusy(false);
+        if (!result.ok) {
+            if (result.needsPassword) setNeedsPassword(true);
+            setError(result.message);
+            return;
+        }
+        setSent(result.message);
+        close();
+    };
+
+    return (
+        <Card className="animate-fade-in-up">
+            <SectionTitle actions={!open && <Button onClick={() => { setOpen(true); setSent(''); }} icon={<AtSign size={14} />}>Change</Button>}>Email</SectionTitle>
+            {!open ? (
+                <div className="space-y-2">
+                    <p className="text-sm text-gray-900 dark:text-gray-100 break-all">{email}</p>
+                    <p className="text-xs text-gray-600 dark:text-gray-400">You sign in with this address, on the website and in the app.</p>
+                    {sent && <p role="status" className="neu-inset rounded-xl text-[11px] text-gray-700 dark:text-gray-300 px-3 py-2">{sent}</p>}
+                </div>
+            ) : (
+                <form onSubmit={save} className="space-y-3">
+                    {error && <p role="alert" className="neu-inset rounded-xl text-[11px] text-red-600 dark:text-red-400 px-3 py-2">{error}</p>}
+                    <Field label="New email" htmlFor="em-new" hint="We send a link to confirm it. Your password stays the same.">
+                        <Input id="em-new" type="email" autoComplete="off" value={next} onChange={e => setNext(e.target.value)} />
+                    </Field>
+                    {needsPassword && (
+                        <Field label="Current password" htmlFor="em-password" hint="Asked when you signed in more than 30 minutes ago.">
+                            <Input id="em-password" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} />
+                        </Field>
+                    )}
+                    <div className="flex gap-2">
+                        <Button type="submit" variant="primary" disabled={busy || !next.trim()}>{busy ? 'Sending…' : 'Send confirmation'}</Button>
+                        <Button type="button" onClick={close}>Cancel</Button>
                     </div>
                 </form>
             )}

@@ -37,7 +37,7 @@ before(async () => {
     const schema = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
     const now = Date.now();
     worker = await startDevWorker({
-        port: 8832, inspectorPort: 9262, adminPassword: ADMIN_PASSWORD,
+        adminPassword: ADMIN_PASSWORD,
         seedLegacy: {
             sql: `${schema}\nINSERT INTO artworks (id, custom_id, title, status, price, image_urls, created_at) VALUES ('vayu-art-1', 'V-001', 'Old Banyan', 'Available', 50000, '[]', ${now});`,
             kv: [
@@ -118,6 +118,12 @@ test('someone who already had an account keeps it and their original app id', as
     assert.deepEqual(team.body.map(u => u.id).sort(), ['admin_1700000000000', 'user_1700000000001']);
 });
 
+test('the control centre opens the accounts of people who kept their original app id', async () => {
+    const res = await admin.call('/admin/accounts/user_1700000000001');
+    assert.equal(res.status, 200, res.text);
+    assert.equal(res.body.user.email, 'staff@vayu.example');
+});
+
 test('old installs keep signing in the original way meanwhile', async () => {
     const res = await fetch(`${worker.origin}/api/auth/login`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': testAddress(3, '1') },
@@ -130,4 +136,58 @@ test('old installs keep signing in the original way meanwhile', async () => {
     const artworks = await fetch(`${worker.origin}/api/artworks`, { headers: { Cookie: `vayu_session=${token}` } });
     assert.equal(artworks.status, 200);
     assert.equal((await artworks.json())[0].title, 'Old Banyan');
+});
+
+test('closing the original sign-in: no new or existing original sessions, platform sign-in unaffected, and it reopens', async () => {
+    // An install signed in the original way before it closes.
+    const before = await fetch(`${worker.origin}/api/auth/login`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': testAddress(4, '1') },
+        body: JSON.stringify({ email: 'staff@vayu.example', password: STAFF_OLD_PASSWORD }),
+    });
+    assert.equal(before.status, 200);
+    const oldCookie = `vayu_session=${sessionTokenFrom(before)}`;
+
+    const status = await admin.call('/admin/settings/original-signin');
+    assert.equal(status.status, 200, status.text);
+    assert.equal(status.body.open, true);
+    assert.equal(status.body.connectedOrg.id, org.id);
+    assert.deepEqual(status.body.people, { total: 2, withAccount: 2, withoutAccount: [] });
+
+    const closed = await admin.call('/admin/settings/original-signin', { method: 'PUT', body: { open: false } });
+    assert.equal(closed.status, 200, closed.text);
+    assert.equal(closed.body.open, false);
+    assert.equal((await worker.browser().call('/public/login-methods')).body.original, false);
+
+    const login = await fetch(`${worker.origin}/api/auth/login`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': testAddress(5, '1') },
+        body: JSON.stringify({ email: 'staff@vayu.example', password: STAFF_OLD_PASSWORD }),
+    });
+    assert.equal(login.status, 403);
+    assert.equal((await login.json()).code, 'original_signin_closed');
+
+    const old = await fetch(`${worker.origin}/api/artworks`, { headers: { Cookie: oldCookie } });
+    assert.equal(old.status, 401);
+    assert.equal((await old.json()).reason, 'original-signin-closed', 'the app can say why');
+
+    const staff = worker.browser();
+    assert.equal((await signIn(staff, 'staff@vayu.example', STAFF_OLD_PASSWORD, testAddress(6, '1'))).status, 200);
+    assert.equal((await staff.call(app('/artworks'))).status, 200, 'the platform account still works');
+
+    const audit = (await admin.call('/admin/audit')).body.entries;
+    assert.ok(audit.some(e => e.action === 'settings.original_signin.close'));
+
+    const reopened = await admin.call('/admin/settings/original-signin', { method: 'PUT', body: { open: true } });
+    assert.equal(reopened.status, 200);
+    const again = await fetch(`${worker.origin}/api/artworks`, { headers: { Cookie: oldCookie } });
+    assert.equal(again.status, 200, 'nothing was deleted: reopening brings the old session back');
+});
+
+test('only provider owners and admins, with a recent sign-in, can change it; closing needs a connected organization', async () => {
+    const released = await post(admin, `/admin/orgs/${org.id}/app-storage`, { storage: 'own', confirm: org.slug });
+    assert.equal(released.status, 200, released.text);
+    const refused = await admin.call('/admin/settings/original-signin', { method: 'PUT', body: { open: false } });
+    assert.equal(refused.status, 409);
+    assert.equal(refused.body.code, 'not_connected');
+    assert.equal((await post(admin, `/admin/orgs/${org.id}/app-storage`, { storage: 'original', confirm: org.slug })).status, 200);
+    assert.equal((await worker.browser().call('/admin/settings/original-signin', { method: 'PUT', body: { open: false } })).status, 401);
 });

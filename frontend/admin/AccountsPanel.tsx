@@ -9,7 +9,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { KeyRound, LogOut, Monitor, Search, ShieldCheck, Smartphone, UserCheck, UserX, Users } from 'lucide-react';
+import { AtSign, KeyRound, LogOut, Monitor, Search, ShieldCheck, Smartphone, UserCheck, UserX, Users } from 'lucide-react';
 import { Input } from '../components/ui';
 import { api, guarded, postJson, timeAgo, type ApiError, type Reauth } from './api';
 import { Avatar, Detail, Drawer, EmptyState, PageHeader, Section, SkeletonRows, StatusPill, device, useDialogs } from './kit';
@@ -114,6 +114,15 @@ const AccountDrawer: React.FC<{ id?: string; reauth: Reauth; onClose: () => void
         const pw = tempPassword();
         if (await run('reset-password', { temporaryPassword: pw }, 'Password reset')) setNewPassword(pw);
     };
+    // For someone who lost the old mailbox. Changing your own email is on your Profile (both addresses confirm).
+    const changeEmail = async () => {
+        const email = await dialogs.prompt({
+            title: 'Change sign-in email?',
+            body: `${d?.user.name} is signed out everywhere and signs in with the new address from now on (same password). Both addresses are told. For your own account, use your Profile.`,
+            label: 'New email', inputType: 'email', defaultValue: d?.user.email, confirmLabel: 'Change email',
+        });
+        if (email && email.trim().toLowerCase() !== d?.user.email) await run('email', { email: email.trim() }, 'Email changed');
+    };
     const toggle = async () => {
         if (disabled) {
             if (await dialogs.confirm({ title: 'Enable this account?', body: 'They will be able to sign in again.', confirmLabel: 'Enable' })) await run('status', { status: 'active' }, 'Account enabled');
@@ -132,6 +141,7 @@ const AccountDrawer: React.FC<{ id?: string; reauth: Reauth; onClose: () => void
                 <>
                     <button type="button" className="neu-button" onClick={signOutAll}><LogOut size={15} /> Sign out everywhere</button>
                     <button type="button" className="neu-button" onClick={reset}><KeyRound size={15} /> Reset password</button>
+                    <button type="button" className="neu-button" onClick={changeEmail}><AtSign size={15} /> Change email</button>
                     <button type="button" className={`neu-button ${disabled ? 'neu-button-primary' : 'neu-button-danger'}`} onClick={toggle}>
                         {disabled ? <><UserCheck size={15} /> Enable</> : <><UserX size={15} /> Disable</>}
                     </button>

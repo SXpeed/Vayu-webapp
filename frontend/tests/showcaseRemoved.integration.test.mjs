@@ -34,7 +34,7 @@ async function api(token, path, { method = 'GET', body } = {}) {
 
 before(async () => {
     const schema = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
-    worker = await startDevWorker({ port: 8840, inspectorPort: 9270, seedLegacy: { sql: `${schema}\n${SHOWCASE_DATA}` } });
+    worker = await startDevWorker({ seedLegacy: { sql: `${schema}\n${SHOWCASE_DATA}` } });
     assert.equal((await api(null, '/auth/setup', { method: 'POST', body: OWNER })).status, 200);
     owner = (await api(null, '/auth/login', { method: 'POST', body: { email: OWNER.email, password: OWNER.password } })).body.token;
 });

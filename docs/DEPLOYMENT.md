@@ -43,6 +43,16 @@ config + deploy. Watch for a day between steps.
    image loading in the installed PWA** before leaving it on. Users signed in
    before this step get their cookie on their next app start (`/auth/me`).
 
+## Scheduled jobs and alerts
+
+The cron (every 10 minutes) runs email delivery, key rotation and payment
+reconciliation as separate jobs (`platform/jobs.ts`). Each outcome is kept;
+System health shows "Scheduled jobs" (last run, and any job failing), and a
+failing job emails the **provider notification address** (control centre →
+Notifications) at most once an hour per job. Set that address, or failures only
+show in System health. For errors outside the cron, add a Cloudflare
+Notification in the dashboard (Workers → error rate) — owner.
+
 ## Rollback
 
 - Set the flag back to `off`. Clients fall back automatically: a 404 from

@@ -41,7 +41,7 @@ async function login(email, password) {
 before(async () => {
     // The app's own tables, as a fresh install has them.
     const schema = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
-    worker = await startDevWorker({ port: 8814, inspectorPort: 9244, seedLegacy: { sql: schema } });
+    worker = await startDevWorker({ seedLegacy: { sql: schema } });
     assert.equal((await api(null, '/auth/setup', { method: 'POST', body: ADMIN })).status, 200);
     admin = await login(ADMIN.email, ADMIN.password);
     for (const [name, email] of [['Alice', 'alice@example.com'], ['Bob', 'bob@example.com'], ['Mallory', 'mallory@example.com']]) {

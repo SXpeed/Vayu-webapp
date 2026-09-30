@@ -47,7 +47,7 @@ test('fails closed without a platform database or on an unknown origin', async (
 test('default login methods: local sign-in on, sign-up off, Google off', async () => {
     const res = await browser().call('/public/login-methods');
     assert.equal(res.status, 200);
-    assert.deepEqual(res.body, { emailPassword: { signIn: true, signUp: false }, google: { signIn: false, signUp: false } });
+    assert.deepEqual(res.body, { emailPassword: { signIn: true, signUp: false }, google: { signIn: false, signUp: false }, original: true }, "the original app's own sign-in stays open until closed");
     assert.equal(res.headers.get('Cache-Control'), 'no-store');
 });
 

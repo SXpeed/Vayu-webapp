@@ -24,7 +24,7 @@ const get = (url, headers = {}) => fetch(`${worker.origin}${url}`, { headers });
 
 before(async () => {
     const schema = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
-    worker = await startDevWorker({ port: 8824, inspectorPort: 9254, seedLegacy: { sql: schema }, vars: { FILE_AUTH: 'on' } });
+    worker = await startDevWorker({ seedLegacy: { sql: schema }, vars: { FILE_AUTH: 'on' } });
     await fetch(`${worker.origin}/api/auth/setup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(OWNER) });
     const login = await fetch(`${worker.origin}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: OWNER.email, password: OWNER.password }) });
     token = sessionTokenFrom(login);

@@ -50,7 +50,7 @@ const week = (token) => api(token, `/staff-roster?from=${WEEK}&to=2026-10-04`);
 
 before(async () => {
     const schema = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
-    worker = await startDevWorker({ port: 8836, inspectorPort: 9266, adminPassword: ADMIN_PASSWORD, seedLegacy: { sql: schema } });
+    worker = await startDevWorker({ adminPassword: ADMIN_PASSWORD, seedLegacy: { sql: schema } });
     assert.equal((await api(null, '/auth/setup', { method: 'POST', body: OWNER })).status, 200);
     owner = (await api(null, '/auth/login', { method: 'POST', body: { email: OWNER.email, password: OWNER.password } })).body.token;
     for (const [name, lat] of [['Flagship', 19.07], ['Studio', 19.08]]) {

@@ -8,13 +8,14 @@
 // depends on the switches the control panel sets, so a change builds a new one.
 
 import { betterAuth } from 'better-auth';
-import { twoFactor } from 'better-auth/plugins';
+import { captcha, twoFactor } from 'better-auth/plugins';
 import { APIError } from 'better-auth/api';
 import { hashPassword, verifyPassword } from 'better-auth/crypto';
 import { APP_NAME } from '../brand';
 import type { Env } from '../workerEnv';
 import type { LoginMethods } from './settings';
 import { emailConfigured, sendEmail } from './email';
+import { emailChangeFromLink, recordOwnEmailChange } from './accountEmail';
 
 export const AUTH_BASE_PATH = '/api/v2/auth';
 
@@ -74,6 +75,20 @@ export function resolveAuthOrigin(env: Env, url: URL): string | null {
   return null;
 }
 
+// ── Bot protection ────────────────────────────────────────────────────────
+
+/**
+ * The Turnstile site key when bot protection is on (both keys set), else
+ * null. It guards the public forms that send email: sign-up and "Forgot
+ * password?". Signing in is left alone: it is already rate limited, and staff
+ * sign in often.
+ */
+export function turnstileSiteKey(env: Env): string | null {
+  return env.TURNSTILE_SITE_KEY && env.TURNSTILE_SECRET_KEY ? env.TURNSTILE_SITE_KEY : null;
+}
+
+export const TURNSTILE_ENDPOINTS = ['/sign-up/email', '/request-password-reset'];
+
 // ── Instance ──────────────────────────────────────────────────────────────
 
 function buildAuth(env: Env, db: D1Database, origin: string, methods: LoginMethods) {
@@ -118,12 +133,44 @@ function buildAuth(env: Env, db: D1Database, origin: string, methods: LoginMetho
       autoSignInAfterVerification: true,
       expiresIn: 86_400,
       sendVerificationEmail: async ({ user, url }) => {
+        // Changing email (accountEmail.ts): the link goes to the new address
+        // while the account still has the old one.
+        const current = await db.prepare('SELECT email FROM "user" WHERE id = ?').bind(user.id).first<{ email: string }>();
+        if (current && current.email !== user.email) {
+          await sendEmail(env, user.email, 'Confirm your new email address', {
+            heading: 'Confirm your new email address',
+            paragraphs: [`You asked to sign in with ${user.email} instead of ${current.email}. Confirm it with the button below and it takes effect at once.`],
+            action: { label: 'Confirm new email', url },
+            footnote: 'The link works for 24 hours. If you did not ask for this, ignore this email: nothing changes.',
+          });
+          return;
+        }
         await sendEmail(env, user.email, 'Confirm your email address', {
           heading: 'Confirm your email address',
           paragraphs: [`Confirm that ${user.email} is yours, so we can reach you about your account and your application.`],
           action: { label: 'Confirm email', url },
           footnote: 'The link works for 24 hours. If you did not create an account, ignore this email.',
         });
+      },
+    },
+    user: {
+      changeEmail: {
+        enabled: true,
+        // A confirmed address approves the change first (a link to it), then
+        // the new address is confirmed (sendVerificationEmail above). An
+        // unconfirmed one skips the first step. Never changed without a link.
+        updateEmailWithoutVerification: false,
+        sendChangeEmailConfirmation: async ({ user, newEmail, url }) => {
+          await sendEmail(env, user.email, 'Approve your email change', {
+            heading: 'Approve your email change',
+            paragraphs: [
+              `Someone signed in to your account asked to change its email from ${user.email} to ${newEmail}.`,
+              `If it was you, approve it below. We then send a link to ${newEmail} to confirm the new address.`,
+            ],
+            action: { label: 'Approve the change', url },
+            footnote: 'The link works for 24 hours. If you did not ask for this, ignore this email and change your password.',
+          });
+        },
       },
     },
     socialProviders: methods.google.signIn
@@ -164,6 +211,7 @@ function buildAuth(env: Env, db: D1Database, origin: string, methods: LoginMetho
         '/two-factor/verify-totp': { window: 60, max: 5 },
         '/two-factor/verify-backup-code': { window: 60, max: 5 },
         '/two-factor/enable': { window: 60, max: 5 },
+        '/change-email': { window: 3600, max: 5 },
       },
     },
     advanced: {
@@ -179,6 +227,17 @@ function buildAuth(env: Env, db: D1Database, origin: string, methods: LoginMetho
       defaultCookieAttributes: { sameSite: 'lax', httpOnly: true, secure },
     },
     databaseHooks: {
+      user: {
+        update: {
+          // An email change finished by its confirmation link: audit it and
+          // tell both addresses (accountEmail.ts).
+          after: async (user, context) => {
+            const change = emailChangeFromLink(context);
+            if (!change || change.to !== user.email.toLowerCase()) return;
+            await recordOwnEmailChange(db, user.id, change, context?.request?.headers.get('cf-connecting-ip') ?? null);
+          },
+        },
+      },
       session: {
         create: {
           // A disabled account cannot start a session by any sign-in method.
@@ -195,6 +254,13 @@ function buildAuth(env: Env, db: D1Database, origin: string, methods: LoginMetho
     },
     plugins: [
       twoFactor({ issuer: APP_NAME }),
+      // The form sends the widget's answer in the x-captcha-response header.
+      ...(turnstileSiteKey(env) ? [captcha({
+        provider: 'cloudflare-turnstile',
+        secretKey: env.TURNSTILE_SECRET_KEY!,
+        endpoints: TURNSTILE_ENDPOINTS,
+        ...(env.TURNSTILE_VERIFY_URL ? { siteVerifyURLOverride: env.TURNSTILE_VERIFY_URL } : {}),
+      })] : []),
     ],
   });
 }

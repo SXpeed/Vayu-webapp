@@ -13,6 +13,7 @@
 //   POST   /admin/accounts/:id/status             { status, reason }
 //   POST   /admin/accounts/:id/revoke-sessions
 //   POST   /admin/accounts/:id/reset-password     { temporaryPassword }
+//   POST   /admin/accounts/:id/email              { email }  (platform/accountEmail.ts)
 //   GET    /admin/admins
 //   POST   /admin/admins                          { email, role }        owner only
 //   PATCH  /admin/admins/:userId                  { role?, status? }     owner only
@@ -39,6 +40,7 @@ import {
 import {
   cancelNotification, getNotificationSettings, listOutbox, retryNotification, updateNotificationSettings,
 } from './notify';
+import { adminChangeEmail, guardAccountTarget } from './accountEmail';
 
 export interface CenterAdmin {
   userId: string;
@@ -47,7 +49,8 @@ export interface CenterAdmin {
   fresh: boolean;
 }
 
-const ID = '([A-Za-z0-9-]{1,64})';
+// Ids: UUIDs, and the original app's ids ("user_1700000000001") that its people keep.
+const ID = '([A-Za-z0-9_-]{1,64})';
 
 /** One control-centre request. */
 interface CenterCtx {
@@ -82,9 +85,21 @@ const CENTER_ROUTES: CenterRoute[] = [
   // Accounts (people who can sign in)
   route('GET', '/admin/accounts', async c => reply({ accounts: await listUsers(c.db, c.url.searchParams) })),
   route('GET', at(`accounts/${ID}`), async (c, m) => reply(await getUser(c.db, m[1]))),
-  route('POST', at(`accounts/${ID}/status`), async (c, m) => reply(await setUserStatus(c.db, m[1], await jsonBody(c.request), c.actor)), true),
-  route('POST', at(`accounts/${ID}/revoke-sessions`), async (c, m) => { await jsonBody(c.request); return reply(await revokeSessions(c.db, m[1], c.actor)); }, true),
-  route('POST', at(`accounts/${ID}/reset-password`), async (c, m) => reply(await resetPassword(c.db, m[1], await jsonBody(c.request), c.actor)), true),
+  // Another administrator's account: owners only (guardAccountTarget).
+  route('POST', at(`accounts/${ID}/status`), async (c, m) => {
+    await guardAccountTarget(c.db, m[1], withRole(c));
+    return reply(await setUserStatus(c.db, m[1], await jsonBody(c.request), c.actor));
+  }, true),
+  route('POST', at(`accounts/${ID}/revoke-sessions`), async (c, m) => {
+    await jsonBody(c.request);
+    await guardAccountTarget(c.db, m[1], withRole(c));
+    return reply(await revokeSessions(c.db, m[1], c.actor));
+  }, true),
+  route('POST', at(`accounts/${ID}/reset-password`), async (c, m) => {
+    await guardAccountTarget(c.db, m[1], withRole(c));
+    return reply(await resetPassword(c.db, m[1], await jsonBody(c.request), c.actor));
+  }, true),
+  route('POST', at(`accounts/${ID}/email`), async (c, m) => reply(await adminChangeEmail(c.db, m[1], await jsonBody(c.request), withRole(c))), true),
 
   // Provider administrators
   route('GET', '/admin/admins', async c => reply({ admins: await listAdmins(c.db) })),

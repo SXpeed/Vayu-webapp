@@ -5,6 +5,7 @@
 //   GET  /api/v2/admin/me             provider-admin identity check
 //   GET  /api/v2/admin/settings/login-methods
 //   PUT  /api/v2/admin/settings/login-methods
+//   GET|PUT /api/v2/admin/settings/original-signin   the original app's own sign-in, open or closed
 //   GET  /api/v2/admin/audit
 //   GET|POST        /api/v2/admin/orgs                       list / create (with owner)
 //   GET             /api/v2/admin/orgs/:id                   detail + members
@@ -61,7 +62,7 @@
 // internal details.
 
 import type { Env } from '../workerEnv';
-import { AUTH_BASE_PATH, getAuth, resolveAuthOrigin, type PlatformAuth } from './auth';
+import { AUTH_BASE_PATH, getAuth, resolveAuthOrigin, turnstileSiteKey, type PlatformAuth } from './auth';
 import {
   SettingsError, getEffectiveLoginMethods, getStoredLoginMethods, googleConfigured,
   parseLoginMethods, rememberLoginMethods, saveLoginMethodsStmt, validateLoginMethods, type LoginMethods,
@@ -102,6 +103,7 @@ import { importOriginalPeople, setAppStorage } from './originalApp';
 import { emailConfigured } from './email';
 import { forgetPlanActive } from '../orgApp';
 import { listMySessions, signOutMySessions } from './mySessions';
+import { originalSignInOpen, originalSignInStatus, setOriginalSignIn } from './originalSignIn';
 
 interface AdminContext {
   userId: string;
@@ -233,6 +235,14 @@ const SETTINGS_ROUTES: AdminRoute[] = [
   {
     path: '/admin/settings/login-methods', methods: ['PUT'],
     run: (c) => (c.fresh ? saveLoginMethods(c) : Promise.resolve(fail(403, 'reauth_required', 'Sign in again to change login methods.'))),
+  },
+  // The original app's own sign-in (platform/originalSignIn.ts).
+  { path: '/admin/settings/original-signin', methods: ['GET'], run: async (c) => reply(await originalSignInStatus(c.env, c.db)) },
+  {
+    path: '/admin/settings/original-signin', methods: ['PUT'], fresh: true,
+    run: async (c) => (managesSecrets(c)
+      ? reply(await setOriginalSignIn(c.env, c.db, await c.request.json().catch(() => ({})) as Record<string, unknown>, c.actor))
+      : fail(403, 'forbidden', 'Only provider owners and admins can change sign-in.')),
   },
   { path: '/admin/settings/branding', methods: ['GET'], run: async (c) => reply(await getBranding(c.db)) },
   {
@@ -474,7 +484,9 @@ export async function handlePlatformRequest(request: Request, env: Env, hooks: P
   const res = await routePlatformRequest(request, env, hooks);
   // A change may have queued notices (application sent, approved, ...):
   // send them now rather than waiting for the scheduled run.
-  if (res && res.ok && request.method !== 'GET' && emailConfigured(env) && env.PLATFORM_DB && hooks.waitUntil) {
+  // An email change finishes on its confirmation link, a GET.
+  const changed = request.method !== 'GET' || new URL(request.url).pathname === `${AUTH_BASE_PATH}/verify-email`;
+  if (res && res.status < 400 && changed && emailConfigured(env) && env.PLATFORM_DB && hooks.waitUntil) {
     const db = env.PLATFORM_DB;
     hooks.waitUntil(deliverOutbox(env, db).catch(e => console.error('outbox delivery failed', e)));
   }
@@ -549,7 +561,13 @@ async function handlePublic(env: Env, db: D1Database, request: Request, path: st
   if (orgLogo) return serveOrgLogo(env, db, orgLogo[1]);
   // Public: only published, public plans, and only what a price card needs.
   if (path === '/public/plans') return cachedFor(reply({ plans: await publicPlans(db) }), 'public, max-age=60');
-  if (path === '/public/login-methods') return reply({ emailPassword: methods.emailPassword, google: methods.google });
+  if (path === '/public/login-methods') {
+    return reply({
+      emailPassword: methods.emailPassword, google: methods.google, original: await originalSignInOpen(db),
+      // Bot protection on sign-up and password reset, when switched on.
+      ...(turnstileSiteKey(env) ? { turnstileSiteKey: turnstileSiteKey(env) } : {}),
+    });
+  }
   return null;
 }
 

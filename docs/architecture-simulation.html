@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vayu / ateliersupport — live architecture simulation</title>
+<style>
+  :root{
+    --bg:#0b0f17; --panel:#0f1520; --panel2:#131a26; --line:#2a3a52;
+    --txt:#dbe4f3; --dim:#8ea3c0; --acc:#38bdf8; --acc2:#7dd3fc;
+    --gold:#fbbf24; --purple:#c4b5fd; --green:#6ee7b7; --pink:#f472b6;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid var(--line)}
+  header h1{font-size:15px;margin:0;font-weight:600}
+  header .sub{color:var(--dim);font-size:12px}
+  .seqchip{margin-left:auto;font:600 12px/1 ui-monospace,Consolas,monospace;color:var(--gold);
+    border:1px solid #5a4a14;background:#241f0d;padding:7px 10px;border-radius:8px}
+  .seqchip.pop{animation:pop .35s}
+  @keyframes pop{0%{transform:scale(1)}40%{transform:scale(1.18)}100%{transform:scale(1)}}
+  .wrap{display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:12px;padding:12px 16px}
+  @media (max-width:1100px){.wrap{grid-template-columns:1fr}}
+  .diacol{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px}
+  svg{width:100%;height:auto;display:block}
+  aside{display:flex;flex-direction:column;gap:10px;min-height:0}
+  .scen{display:flex;flex-wrap:wrap;gap:6px}
+  .scen button{background:var(--panel2);border:1px solid var(--line);color:var(--txt);
+    padding:7px 10px;border-radius:8px;font-size:12px;cursor:pointer}
+  .scen button:hover{border-color:var(--acc)}
+  .scen button.sel{border-color:var(--acc);color:var(--acc2);background:#0e2233}
+  .capbox{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-height:64px}
+  .capbox .cap{font-weight:600;font-size:14px}
+  .capbox .prog{color:var(--dim);font-size:11px;margin-top:4px}
+  .ctrl{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .ctrl button{background:var(--panel2);border:1px solid var(--line);color:var(--txt);
+    padding:7px 12px;border-radius:8px;cursor:pointer;font-size:13px}
+  .ctrl button:hover{border-color:var(--acc)}
+  .ctrl select{background:var(--panel2);border:1px solid var(--line);color:var(--txt);
+    padding:6px 8px;border-radius:8px;font-size:12px}
+  .logbox{flex:1;min-height:180px;overflow:auto;background:#0a0e15;border:1px solid var(--line);
+    border-radius:10px;padding:8px 10px;font:11.5px/1.55 ui-monospace,Consolas,monospace}
+  .logbox .l{margin:2px 0;white-space:pre-wrap;word-break:break-word}
+  .logbox .t{color:#4c5b74;margin-right:6px}
+  .k-req{color:var(--acc2)} .k-db{color:var(--gold)} .k-signal{color:var(--purple)}
+  .k-sec{color:var(--green)} .k-info{color:var(--dim)} .k-ok{color:#4ade80;font-weight:700}
+  .cardbox{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;
+    max-height:170px;overflow:auto;font-size:12.5px}
+  .cardbox h4{margin:0 0 6px;font-size:12px;color:var(--acc2);text-transform:uppercase;letter-spacing:.4px}
+  .cardbox p{margin:0;color:var(--txt)}
+  footer{padding:8px 16px 16px;color:var(--dim);font-size:11.5px;border-top:1px solid var(--line)}
+  footer b{color:var(--txt)}
+
+  /* SVG */
+  .zone{fill:#0d1320;stroke:#26354d;stroke-width:1.5}
+  .zlab{fill:#5f7292;font-size:12px;font-weight:700;letter-spacing:.8px}
+  .node{cursor:pointer}
+  .node rect{fill:#17202f;stroke:#3d5a80;stroke-width:1.6;rx:10;transition:all .25s}
+  .node text{fill:var(--txt);pointer-events:none}
+  .node .tt{font-size:13px;font-weight:700}
+  .node .ln{font-size:11px;fill:var(--dim)}
+  .node.n-gold rect{fill:#241f0d;stroke:#b8860b}
+  .node.n-blue rect{fill:#10233d;stroke:#3b82f6}
+  .node.n-purple rect{fill:#241536;stroke:#a78bfa}
+  .node.n-api rect{stroke:#e2e8f0;stroke-width:2}
+  .node.n-pink rect{fill:#2a1420;stroke:#f472b6}
+  .node.on rect{stroke:var(--acc2);stroke-width:2.5;filter:drop-shadow(0 0 7px rgba(56,189,248,.75))}
+  .node.on.n-gold rect{stroke:var(--gold);filter:drop-shadow(0 0 7px rgba(251,191,36,.7))}
+  .node.on.n-blue rect{stroke:#60a5fa;filter:drop-shadow(0 0 7px rgba(59,130,246,.7))}
+  .node.on.n-purple rect{stroke:var(--purple);filter:drop-shadow(0 0 7px rgba(167,139,250,.7))}
+  .node.on.n-pink rect{stroke:var(--pink);filter:drop-shadow(0 0 7px rgba(244,114,182,.7))}
+  .edge-p{stroke:#38bdf8;stroke-width:3;fill:none;marker-end:url(#ap)}
+  .edge-t{stroke:#4b5b74;stroke-width:1.5;fill:none;stroke-dasharray:5 4;marker-end:url(#at)}
+  .edge-w{stroke:#f472b6;stroke-width:2;fill:none;stroke-dasharray:6 4;marker-end:url(#aw)}
+  .badge circle{fill:#0b0f17;stroke:#38bdf8;stroke-width:1.5}
+  .badge text{fill:var(--acc2);font-size:11px;font-weight:700;text-anchor:middle}
+  .dot{fill:var(--acc2);filter:drop-shadow(0 0 5px rgba(125,211,252,.9))}
+  .dot.d-gold{fill:var(--gold);filter:drop-shadow(0 0 5px rgba(251,191,36,.9))}
+  .dot.d-pink{fill:var(--pink);filter:drop-shadow(0 0 5px rgba(244,114,182,.9))}
+</style>
+</head>
+<body>
+<header>
+  <h1>Vayu / ateliersupport — live architecture simulation</h1>
+  <span class="sub">pick a scenario, then play · click any component or zone for its card</span>
+  <span class="seqchip" id="seq">change_log seq: 1040</span>
+</header>
+
+<div class="wrap">
+  <div class="diacol">
+  <svg id="dia" viewBox="0 0 1460 940" role="img" aria-label="architecture diagram">
+    <defs>
+      <marker id="ap" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="#38bdf8"/></marker>
+      <marker id="at" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="#4b5b74"/></marker>
+      <marker id="aw" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="#f472b6"/></marker>
+    </defs>
+
+    <g id="zones">
+      <rect id="z1" class="zone" data-card="b1" x="20" y="20" width="380" height="900" rx="14"/>
+      <text class="zlab" x="34" y="46">B1 · BROWSER &amp; PUBLIC — UNTRUSTED</text>
+      <rect id="z2" class="zone" data-card="b2" x="440" y="20" width="420" height="900" rx="14"/>
+      <text class="zlab" x="454" y="46">B2 · CLOUDFLARE WORKERS — TRUSTED</text>
+      <text class="zlab" x="454" y="62" font-size="10">/api via service binding (no CORS) · AUTH_ORIGINS · ADMIN_HOST · WS origin allow-list</text>
+      <rect id="z3" class="zone" data-card="b3" x="880" y="20" width="300" height="900" rx="14"/>
+      <text class="zlab" x="894" y="46">B3 · DATA — API-WORKER-ONLY</text>
+      <rect id="z4" class="zone" data-card="b4" x="1220" y="20" width="220" height="560" rx="14"/>
+      <text class="zlab" x="1234" y="46">B4 · OUTSIDE TRUST</text>
+    </g>
+
+    <g id="edges">
+      <path id="ep1" class="edge-p" d="M240,120 C330,125 380,245 460,250"/>
+      <path id="ep2" class="edge-p" d="M660,265 C700,330 690,480 690,618"/>
+      <path id="ep3" class="edge-p" d="M840,660 C875,640 875,180 900,150"/>
+      <path id="ep4" class="edge-p" d="M840,700 C875,690 875,430 900,410"/>
+      <path id="ep5" class="edge-p" d="M840,720 C875,710 875,545 900,545"/>
+      <path id="ep6" class="edge-p" d="M900,545 C760,600 620,620 480,560 C380,515 300,420 255,320 C245,300 240,290 240,275"/>
+      <path id="ep7" class="edge-p" d="M240,240 C320,230 380,232 460,243"/>
+      <path id="et1" class="edge-t" d="M240,380 C340,380 380,300 460,290"/>
+      <path id="et2" class="edge-t" d="M240,510 C340,510 380,516 460,515"/>
+      <path id="et3" class="edge-t" d="M240,630 C360,630 420,200 460,130"/>
+      <path id="et4" class="edge-t" d="M660,130 C710,200 718,400 715,618"/>
+      <path id="et10" class="edge-t" d="M660,515 C700,545 740,560 750,618"/>
+      <path id="et6" class="edge-t" d="M840,645 C868,630 872,300 900,258"/>
+      <path id="et7" class="edge-t" d="M840,762 C872,762 872,664 900,660"/>
+      <path id="et8" class="edge-t" d="M840,795 C872,798 872,758 900,755"/>
+      <path id="et9" class="edge-t" d="M840,830 C880,842 878,864 900,864"/>
+      <path id="ew1" class="edge-w" d="M1330,90 C1300,30 950,25 880,60 C848,76 836,300 832,618"/>
+    </g>
+
+    <g id="badges">
+      <g class="badge"><circle cx="352" cy="190" r="11"/><text x="352" y="194">1</text></g>
+      <g class="badge"><circle cx="700" cy="442" r="11"/><text x="700" y="446">2</text></g>
+      <g class="badge"><circle cx="874" cy="398" r="11"/><text x="874" y="402">3</text></g>
+      <g class="badge"><circle cx="874" cy="558" r="11"/><text x="874" y="562">4</text></g>
+      <g class="badge"><circle cx="874" cy="632" r="11"/><text x="874" y="636">5</text></g>
+      <g class="badge"><circle cx="505" cy="588" r="11"/><text x="505" y="592">6</text></g>
+      <g class="badge"><circle cx="352" cy="237" r="11"/><text x="352" y="241">7</text></g>
+    </g>
+
+    <g id="nodes">
+      <g class="node" id="staff1" data-card="staff1"><rect x="40" y="70" width="200" height="110"/>
+        <text class="tt" x="52" y="95">1 · Staff PWA (you)</text>
+        <text class="ln" x="52" y="115">React 19 · service worker</text>
+        <text class="ln" x="52" y="133">offline copy · leader tab</text>
+        <text class="ln" x="52" y="151">BroadcastChannel relay</text></g>
+      <g class="node" id="staff2" data-card="staff2"><rect x="40" y="220" width="200" height="90"/>
+        <text class="tt" x="52" y="245">1b · Staff PWA — 2nd device</text>
+        <text class="ln" x="52" y="265">same user · ≤6 sockets</text>
+        <text class="ln" x="52" y="283">receives WS invalidate</text></g>
+      <g class="node" id="clients" data-card="clients"><rect x="40" y="350" width="200" height="90"/>
+        <text class="tt" x="52" y="375">Clients — no account</text>
+        <text class="ln" x="52" y="395">/room/:secret</text>
+        <text class="ln" x="52" y="413">token + passcode + expiry</text></g>
+      <g class="node" id="admins" data-card="admins"><rect x="40" y="480" width="200" height="80"/>
+        <text class="tt" x="52" y="505">Provider admins</text>
+        <text class="ln" x="52" y="525">control centre · TOTP 2FA</text></g>
+      <g class="node" id="pub" data-card="pub"><rect x="40" y="600" width="200" height="80"/>
+        <text class="tt" x="52" y="625">Public visitors</text>
+        <text class="ln" x="52" y="645">landing · signup · legal</text></g>
+
+      <g class="node" id="welcome" data-card="welcome"><rect x="460" y="90" width="200" height="70"/>
+        <text class="tt" x="472" y="115">2 · Welcome Worker</text>
+        <text class="ln" x="472" y="135">ateliersupport.com</text></g>
+      <g class="node" id="appw" data-card="appw"><rect x="460" y="220" width="200" height="90"/>
+        <text class="tt" x="472" y="245">3 · App Worker</text>
+        <text class="ln" x="472" y="265">PWA assets · /room/:secret</text>
+        <text class="ln" x="472" y="283">forwards /api (binding)</text></g>
+      <g class="node" id="adminw" data-card="adminw"><rect x="460" y="480" width="200" height="70"/>
+        <text class="tt" x="472" y="505">4 · Admin Worker</text>
+        <text class="ln" x="472" y="525">admin.ateliersupport.com</text></g>
+      <g class="node n-api" id="api" data-card="api"><rect x="660" y="620" width="180" height="260"/>
+        <text class="tt" x="672" y="645">5 · API Worker</text>
+        <text class="tt" x="672" y="663">«vayu-webapp»</text>
+        <text class="ln" x="672" y="685">/api/v2 platform · /api app</text>
+        <text class="ln" x="672" y="703">Better Auth · rate limits</text>
+        <text class="ln" x="672" y="721">email outbox · cron 10m</text>
+        <text class="ln" x="672" y="739">web push (VAPID)</text>
+        <text class="ln" x="672" y="757">holidays proxy</text>
+        <text class="ln" x="672" y="775">Analytics Engine</text>
+        <text class="ln" x="672" y="793">FILE_AUTH gate</text>
+        <text class="ln" x="672" y="811">audit · webhook verify</text></g>
+
+      <g class="node" id="pdb" data-card="pdb"><rect x="900" y="80" width="260" height="80"/>
+        <text class="tt" x="912" y="105">6 · PLATFORM_DB (D1)</text>
+        <text class="ln" x="912" y="123">auth · orgs · billing · audit</text>
+        <text class="ln" x="912" y="141">encrypted Razorpay keys</text></g>
+      <g class="node" id="kv" data-card="kv"><rect x="900" y="220" width="260" height="80"/>
+        <text class="tt" x="912" y="245">7 · KV VAYU_KV</text>
+        <text class="ln" x="912" y="263">sessions · settings · file cookie</text>
+        <text class="ln" x="912" y="281">presence · push · caches</text></g>
+      <g class="node n-gold" id="d1" data-card="d1"><rect x="900" y="360" width="260" height="90"/>
+        <text class="tt" x="912" y="385">8 · VAYU_DB (D1) — SOURCE OF TRUTH</text>
+        <text class="ln" x="912" y="405">business tables + change_log</text>
+        <text class="ln" x="912" y="423">same-batch atomic writes</text></g>
+      <g class="node n-blue" id="hub" data-card="hub"><rect x="900" y="500" width="260" height="80"/>
+        <text class="tt" x="912" y="525">9 · SyncHub DO (WebSocket hub)</text>
+        <text class="ln" x="912" y="543">tickets · leases · invalidate</text>
+        <text class="ln" x="912" y="561">signals only — never data</text></g>
+      <g class="node" id="orgstore" data-card="orgstore"><rect x="900" y="630" width="260" height="60"/>
+        <text class="tt" x="912" y="655">10 · OrgStore DO (unused)</text>
+        <text class="ln" x="912" y="673">fail-closed per-org pipeline</text></g>
+      <g class="node n-purple" id="orgappdb" data-card="orgappdb"><rect x="900" y="720" width="260" height="70"/>
+        <text class="tt" x="912" y="745">11 · OrgAppDb DO</text>
+        <text class="ln" x="912" y="763">one SQLite per organization</text>
+        <text class="ln" x="912" y="781">artworks + audit (migrating)</text></g>
+      <g class="node" id="r2" data-card="r2"><rect x="900" y="830" width="260" height="70"/>
+        <text class="tt" x="912" y="855">12 · R2 VAYU_R2</text>
+        <text class="ln" x="912" y="873">files · images · PDFs (FILE_AUTH)</text></g>
+
+      <g class="node n-pink" id="rzp" data-card="rzp"><rect x="1240" y="90" width="180" height="80"/>
+        <text class="tt" x="1252" y="115">Razorpay</text>
+        <text class="ln" x="1252" y="133">per-org links + webhooks</text>
+        <text class="ln" x="1252" y="151">platform plan checkout</text></g>
+      <g class="node" id="extothers" data-card="extothers"><rect x="1240" y="220" width="180" height="150"/>
+        <text class="tt" x="1252" y="245">More externals</text>
+        <text class="ln" x="1252" y="263">Calendarific → KV cache</text>
+        <text class="ln" x="1252" y="281">CF Email Service + outbox</text>
+        <text class="ln" x="1252" y="299">Browser push (VAPID)</text>
+        <text class="ln" x="1252" y="317">Google OAuth (OFF)</text>
+        <text class="ln" x="1252" y="347">— details in card —</text></g>
+    </g>
+
+    <g id="dots"></g>
+  </svg>
+  </div>
+
+  <aside>
+    <div class="scen" id="scen"></div>
+    <div class="capbox"><div class="cap" id="cap">Pick a scenario above — the primary path ①–⑦ lights up as it runs.</div><div class="prog" id="prog">idle</div></div>
+    <div class="ctrl">
+      <button id="play">▶ Play</button>
+      <button id="step">⏭ Step</button>
+      <button id="reset">↺ Reset</button>
+      <select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
+    </div>
+    <div class="logbox" id="log"></div>
+    <div class="cardbox" id="card"><h4>Inspector</h4><p>Click any component, zone, or user in the diagram to see its card (supporting detail lives here, not in extra edges).</p></div>
+  </aside>
+</div>
+
+<footer>
+  <b>Legend:</b> thick arrows ①–⑦ = the one primary path (staff edit → every screen current) · dashed = supporting · pink = inbound webhook · gold = source of truth · blue = realtime · purple = multi-tenant layer (migrating).
+  <b>Unknowns (marked, not invented):</b> U1 resolved: organizations with their own storage keep every business table in their OrgAppDb; only Vayu (original storage) still uses the shared VAYU_DB · U2 shared Razorpay account in TEST mode · U3 hub still one workspace-wide instance · U4 seat/plan limits not enforced · U5 docs conflict on plan-billing status (treated live per newer BILLING.md).
+</footer>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const SVGNS = 'http://www.w3.org/2000/svg';
+
+/* ---------- cards (supporting detail lives here, not in edges) ---------- */
+const CARDS = {
+  staff1:['1 · Staff PWA','React 19 + Vite + Tailwind v4 · service worker · offline copy of data · leader tab elected with Web Locks, relays invalidate/presence/typing via BroadcastChannel · reconnect with exponential backoff + jitter, fresh HMAC ticket per attempt · hidden tabs defer sync until visible · 10-minute safety sync.'],
+  staff2:['1b · Second device, same user','One socket per user per browser · ≤ 6 sockets per user · logout revokes every socket (valid sessions reconnect with a new ticket).'],
+  clients:['Clients — no accounts','Viewing rooms at /room/:secret with token + passcode + expiry · pay through Razor payment links · room page served by the App Worker.'],
+  admins:['Provider admins','Control centre at admin.ateliersupport.com · Better Auth + mandatory TOTP 2FA + backup codes · separate provider_admins table — no org API can grant it.'],
+  pub:['Public visitors','Landing page · /signup application flow (needs a confirmed email while email is on) · /legal · old app deep links redirect to app.'],
+  welcome:['2 · Welcome site Worker','Static landing / signup / legal at ateliersupport.com · retires the old service worker · forwards /api over the service binding.'],
+  appw:['3 · App site Worker','PWA assets + viewing-room page at app.ateliersupport.com · forwards /api unchanged (same URL, cookies, headers, WS upgrade) over the service binding — no CORS, no cross-site cookies.'],
+  adminw:['4 · Admin site Worker','Control-centre assets · forwards only /api/v2 (the original app API 404s here).'],
+  api:['5 · API Worker «vayu-webapp»','All business logic: platform /api/v2 (Better Auth, orgs, billing, webhooks) + original /api routes · rate limiters (login IP/email · API · costly user/org · payment links · webhook ingress) · email outbox + cron 10-min retries · VAPID web push · Calendarific proxy · Analytics Engine (1 point/request, no PII) · FILE_AUTH gate · keeps its name because every DO and secret belongs to it.'],
+  pdb:['6 · PLATFORM_DB (D1)','Better Auth users · HttpOnly SameSite=Lax 14-day cookie sessions · TOTP 2FA · organizations + memberships (owner/admin/manager/staff) · provider admins · append-only audit (DB refuses updates, deletes < 365 days) · billing payments · Razorpay credentials AES-256-GCM bound to org + provider + field, never returned by any API.'],
+  kv:['7 · KV VAYU_KV','Original app sessions (HttpOnly cookie + CSRF since 2026-09-30; bearer fallback until 2026-11-30; closable from the control centre) · login-method settings · vayu_files capability cookie (random, 7 days, Path=/api) · presence fallback · push subscriptions + VAPID keys · Calendarific holiday cache · ⚠ KV cannot join a D1 transaction, so all of this stays REST-refreshed.'],
+  d1:['8 · VAYU_DB (D1) — source of truth','change_log rows written in the same db.batch() as every mutation (changeLogStmt) · seq AUTOINCREMENT → commit order · 30-day retention, MAX(seq) never rewinds · a put whose row was deleted degrades to a tombstone · /api/sync filtered by role-readable entities + scope (chat participants, attendance employee).'],
+  hub:['9 · SyncHub DO','WebSocket Hibernation API, one instance per workspace · HMAC tickets: 60 s, single-use, jti burned · 10-minute leases → 4401 on lapse · ≤ 6 sockets/user · Origin allow-list · logout revokes all sockets · carries signals only, never data — a lost notify is harmless because the cursor pull covers it.'],
+  orgstore:['10 · OrgStore DO (unused)','Not in the request path: only tests use it (to be removed). The fail-closed checks run in front of OrgAppDb instead (orgApp.ts): session → membership → org status → plan → database · unknown or non-member organization: 401 signed out, 404 signed in · suspended/closed refused before any DB opens · membership re-checked on every request.'],
+  orgappdb:['11 · OrgAppDb DO','One SQLite database per organization — physical isolation, a forgotten WHERE cannot leak across businesses · holds every business table (schema.sql, applied on open); only Vayu still works on the shared VAYU_DB.'],
+  r2:['12 · R2 VAYU_R2','Private files, images, PDFs · /api/files/* gated by FILE_AUTH (app session or vayu_files cookie) · Cache-Control: private, max-age=86400 — browser cache only, never shared caches · logout clears the cookie and sends Clear-Site-Data: "cache".'],
+  rzp:['Razorpay','Per-organization accounts: customer payment links + per-org signed webhooks (event-id idempotent, retries acknowledged without effect) · platform account: plan checkout only · the two never mix, and there is never a fallback to the shared account · shared account still in TEST mode (U2).'],
+  extothers:['More external dependencies','Calendarific (Indian holidays, cached per year in KV) · Cloudflare Email Service via the EMAIL binding (confirm · reset · invites · notices; outbox retried 5m/30m/2h/12h by the 10-min cron) · Browser push services (VAPID web push, WebCrypto) · Google OAuth (built, OFF until credentials set + admin switch).'],
+  b1:['B1 · Browser & public — untrusted','Anyone with the URL can reach the sites; nothing sensitive lives here without a session. Clients open viewing rooms with capability tokens only.'],
+  b2:['B2 · Cloudflare Workers — trusted compute','One Worker per address; every site hands same-address /api to the API Worker over a service binding (same URL/cookies/headers, WebSocket upgrades included) · host checks: AUTH_ORIGINS, ADMIN_HOST (admin API 404s elsewhere), WS Origin allow-list · deploy order: sites first, then the API.'],
+  b3:['B3 · Data — reachable only by the API Worker','D1 is the only source of truth; the hub carries signals only; KV-held data keeps REST refresh paths because KV cannot transact with D1 · one SQLite database per organization for physical tenant isolation.'],
+  b4:['B4 · Outside the trust boundary','Inbound is verified (per-org webhook signatures, event-id idempotency) · outbound credentials are encrypted (AES-256-GCM, bound to org/provider/field) · money boundaries: per-org account ≠ platform account, never mixed, no fallback to the shared account.']
+};
+
+/* ---------- scenarios ---------- */
+const L=(k,txt)=>({k,txt});
+const SCEN=[
+{id:'A',label:'①–⑦ Staff saves an artwork',steps:[
+ {cap:'① Staff taps Save — REST mutation from the PWA',
+  logs:[L('req','PWA → PUT /api/artworks/a-42  {version:7, title:"Bronze Lotus"}'),
+        L('info','offline-first: the write is queued locally if the device is offline')],
+  acts:[{g:'staff1'},{dot:'ep1',dur:1100},{g:'appw'}]},
+ {cap:'② App Worker forwards /api via the service binding',
+  logs:[L('info','same URL · cookies · headers — WebSocket upgrades pass through too · no CORS, no cross-site cookies')],
+  acts:[{dot:'ep2',dur:900},{g:'api'}]},
+ {cap:'③ Session + membership check — on every request',
+  logs:[L('sec','Better Auth cookie verified (HttpOnly · SameSite=Lax · 14-day)'),
+        L('sec','role: staff · origin app.ateliersupport.com ∈ AUTH_ORIGINS'),
+        L('sec','rate limiter API_LIMITER 600/min per device — allowed')],
+  acts:[{dot:'ep3',dur:1000},{g:'pdb'}]},
+ {cap:'④ One atomic D1 batch — business write + change_log',
+  logs:[L('db','db.batch([ UPDATE artworks SET … WHERE id=\'a-42\' AND version=7 ,'),
+        L('db','            INSERT INTO change_log(seq=1041, entity=\'artwork\', id=\'a-42\', op=\'put\') ])'),
+        L('db','seq order = commit order · MAX(seq) never rewinds'),
+        L('ok','conflict guard: version mismatch → refused, never silently overwritten')],
+  acts:[{dot:'ep4',dur:1000},{g:'d1'},{seq:1}]},
+ {cap:'⑤ After commit (waitUntil): notify the hub — best effort',
+  logs:[L('signal','POST hub /notify {workspace:"default"}'),
+        L('info','a lost notify is harmless — the cursor pull still covers it')],
+  acts:[{dot:'ep5',dur:900},{g:'hub'}]},
+ {cap:'⑥ SyncHub fans a filtered invalidate over WebSocket',
+  logs:[L('signal','→ {type:"invalidate", events:[{entity:"artwork", id:"a-42", op:"put"}]}'),
+        L('sec','HMAC ticket 60 s single-use · lease 10 min · ≤6 sockets/user · origin allow-list')],
+  acts:[{dot:'ep6',dur:1700},{g:'staff2'}]},
+ {cap:'⑦ Other tabs/devices pull the delta and merge',
+  logs:[L('req','GET /api/sync?cursor=1040 → {mode:"incremental", changes:[{seq:1041, …, record}]}'),
+        L('info','leader tab relays via BroadcastChannel · hidden tabs defer until visible'),
+        L('ok','merged into React state + offline copy · receipt "delivered" (forward-only — re-acks write nothing)')],
+  acts:[{dot:'ep7',dur:1000},{dot:'ep2',dur:900},{g:'d1'}]},
+ {cap:'Every open screen is current — no per-tab polling.',
+  logs:[L('ok','done · Analytics Engine: 1 point per request (route, status, ms, D1 rows) — no PII')]}
+]},
+{id:'B',label:'Client pays a payment link',steps:[
+ {cap:'Razorpay fires a signed webhook',
+  logs:[L('req','POST /api/v2/webhooks/razorpay/<orgId>  event: payment_link.paid'),
+        L('info','webhook ingress limiter 1000/min — generous, Razorpay retries anything refused')],
+  acts:[{dot:'ew1',dur:1500,dotc:'d-pink'},{g:'api'}]},
+ {cap:'Signature verified against THAT organization\'s secret',
+  logs:[L('sec','per-org webhook secret — one org\'s events can never be accepted for another'),
+        L('sec','event id stored once — retries and replays are acknowledged but change nothing'),
+        L('sec','unknown org / bad signature / missing id → the same 401, nothing revealed')],
+  acts:[{g:'pdb'}]},
+ {cap:'Link marked paid · staff notified',
+  logs:[L('signal','signal-only invalidate "payments" → an open Payments screen refetches (KV-held links are not in the change log)'),
+        L('info','email notice via the outbox — retried 5m / 30m / 2h / 12h by the 10-min cron')],
+  acts:[{g:'hub'},{g:'extothers'}]},
+ {cap:'The money path — the boundary that matters',
+  logs:[L('ok','customer → the organization\'s OWN Razorpay account — never through the platform\'s (which only takes plan payments)'),
+        L('sec','credentials AES-256-GCM bound to org + provider + field · no API ever returns a secret')],
+  acts:[{g:'rzp'}]},
+ {cap:'The Payments screen refetches the links list: payment links live in KV, outside the sync change log.',
+  logs:[L('ok','done')]}
+]},
+{id:'C',label:'Client opens a viewing room',steps:[
+ {cap:'Client opens /room/:secret — no account needed',
+  logs:[L('info','token + passcode + expiry checked · staff shared the link')],
+  acts:[{g:'clients'},{dot:'et1',dur:1100},{g:'appw'}]},
+ {cap:'The room page requests its files through /api/files',
+  logs:[L('req','GET /api/files/<key> — forwarded over the service binding, same-origin cookies intact')],
+  acts:[{dot:'ep2',dur:900},{g:'api'}]},
+ {cap:'FILE_AUTH decides what the address can open',
+  logs:[L('sec','app session (cookie) — or HttpOnly vayu_files capability cookie (random · KV-backed · 7 days · Path=/api)'),
+        L('sec','logout clears the cookie and sends Clear-Site-Data: "cache"')],
+  acts:[{g:'kv'}]},
+ {cap:'R2 serves the private object',
+  logs:[L('ok','Cache-Control: private, max-age=86400 — browser cache only, never shared caches'),
+        L('info','Analytics Engine logs the route + status — never tokens, cookies, or query strings')],
+  acts:[{dot:'et9',dur:1000},{g:'r2'}]},
+ {cap:'The client sees the artwork — nothing else is reachable.',
+  logs:[L('ok','done')]}
+]},
+{id:'D',label:'Provider admin signs in (2FA)',steps:[
+ {cap:'Admin opens the control centre',
+  logs:[L('info','https://admin.ateliersupport.com — its own Worker, its own build')],
+  acts:[{g:'admins'},{dot:'et2',dur:1000},{g:'adminw'}]},
+ {cap:'The admin API answers on one host only',
+  logs:[L('sec','ADMIN_HOST check — /api/v2/admin/* 404s on every other address'),
+        L('info','/api/v2 forwarded over the service binding')],
+  acts:[{dot:'et10',dur:900},{g:'api'}]},
+ {cap:'Better Auth + mandatory 2FA',
+  logs:[L('req','POST /api/v2/auth/sign-in · email + password'),
+        L('sec','HttpOnly SameSite=Lax Secure cookie · 14-day session'),
+        L('sec','provider_admins row checked (separate table) + TOTP 2FA required'),
+        L('sec','login limiters: 10/min per IP · 5/min per email (Workers rate-limit binding)')],
+  acts:[{dot:'ep3',dur:1000},{g:'pdb'}]},
+ {cap:'Everything is audited',
+  logs:[L('ok','append-only audit row — the database refuses updates and deletes < 365 days old'),
+        L('info','lockout guards: at least one sign-in method always stays on')],
+  acts:[{g:'pdb'}]},
+ {cap:'Control centre loads: orgs · members · Razorpay · plans · billing.',
+  logs:[L('ok','done')]}
+]},
+{id:'E',label:'Offline edit, then reconnect',steps:[
+ {cap:'The device goes offline mid-edit',
+  logs:[L('info','mutation queued in the local copy (localStorage) · the UI keeps working')],
+  acts:[{g:'staff1'}]},
+ {cap:'Back online — the leader tab reconnects',
+  logs:[L('req','fresh HMAC ticket (60 s, single-use, jti burned) · exponential backoff + jitter'),
+        L('info','Web Locks elect a new leader if the old leader tab died')],
+  acts:[{dot:'ep1',dur:1000},{dot:'ep2',dur:800},{g:'api'}]},
+ {cap:'Sync pass: boundary, full copy, then replay',
+  logs:[L('req','GET /api/sync (no cursor) → {mode:"boundary", cursor:maxSeq}'),
+        L('req','full copy via list endpoints → replay after the cursor (idempotent — writes landing mid-copy aren\'t missed)')],
+  acts:[{dot:'ep4',dur:900},{g:'d1'}]},
+ {cap:'The queued mutation uploads',
+  logs:[L('db','PUT /api/artworks/a-42 applied atomically with its change_log row · seq=1042'),
+        L('signal','hub invalidate → this user\'s other devices')],
+  acts:[{seq:1},{dot:'ep5',dur:800},{g:'hub'}]},
+ {cap:'Converged — optimistic-concurrency guards on every save.',
+  logs:[L('ok','done')]}
+]}];
+
+/* ---------- engine ---------- */
+let scen=null, idx=0, playing=false, paused=false, speed=1, token=0, seq=1040;
+let clock=new Date(2026,8,30,10,0,0); // fake timestamps for the log
+
+function wait(ms){ return new Promise(res=>{ let left=ms/speed, t0=null;
+  function f(ts){ if(myTok!==token){res();return;} if(!t0)t0=ts; if(!paused) left-=(ts-t0); t0=ts;
+    if(left<=0) res(); else requestAnimationFrame(f); }
+  const myTok=token; requestAnimationFrame(f); }); }
+
+function animateDot(pathId,dur,cls){ return new Promise(res=>{
+  const p=$(pathId); if(!p){res();return;}
+  const len=p.getTotalLength(), myTok=token;
+  const c=document.createElementNS(SVGNS,'circle');
+  c.setAttribute('r','7'); c.setAttribute('class','dot'+(cls?' '+cls:''));
+  $('dots').appendChild(c);
+  let t0=null, prog=0;
+  function f(ts){ if(myTok!==token){c.remove();res();return;}
+    if(!t0)t0=ts; if(!paused) prog+=(ts-t0);
+    const fr=Math.min(1,prog/(dur/speed)), pt=p.getPointAtLength(fr*len);
+    c.setAttribute('cx',pt.x); c.setAttribute('cy',pt.y);
+    if(fr<1) requestAnimationFrame(f); else { c.remove(); res(); } }
+  requestAnimationFrame(f); }); }
+
+function glow(id){ const n=$(id); if(n) n.classList.add('on'); }
+function unglowAll(){ document.querySelectorAll('.node.on').forEach(n=>n.classList.remove('on')); }
+
+function stamp(){ clock=new Date(clock.getTime()+700+Math.random()*900);
+  const p=n=>String(n).padStart(2,'0');
+  return `${p(clock.getHours())}:${p(clock.getMinutes())}:${p(clock.getSeconds())}`; }
+
+function addLog(l){ const d=document.createElement('div'); d.className='l';
+  d.innerHTML=`<span class="t">${stamp()}</span><span class="k-${l.k}">${l.txt.replace(/</g,'&lt;')}</span>`;
+  const box=$('log'); box.appendChild(d); box.scrollTop=box.scrollHeight; }
+
+function bumpSeq(n){ seq+=n; const el=$('seq'); el.textContent='change_log seq: '+seq;
+  el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); }
+
+function setCap(s,i){ $('cap').textContent=s.cap;
+  $('prog').textContent=`step ${i+1} of ${scen.steps.length} · scenario ${scen.id}`; }
+
+async function runStep(i,myTok){ const s=scen.steps[i]; setCap(s,i);
+  s.logs.forEach((l,j)=>setTimeout(()=>addLog(l), j*140));
+  for(const a of (s.acts||[])){
+    if(myTok!==token) return;
+    if(a.g) glow(a.g);
+    if(a.dot) await animateDot(a.dot,a.dur||900,a.dotc);
+    if(a.seq) bumpSeq(a.seq);
+  } }
+
+async function play(){ if(!scen||playing) return; playing=true; paused=false; $('play').textContent='⏸ Pause';
+  const myTok=token;
+  while(idx<scen.steps.length){ if(myTok!==token) return; await runStep(idx,myTok); idx++;
+    if(idx<scen.steps.length){ await wait(650); if(myTok!==token) return; } }
+  playing=false; paused=false; $('play').textContent='▶ Play'; $('prog').textContent+=' · complete'; }
+
+function reset(){ token++; playing=false; paused=false; idx=0; seq=1040; clock=new Date(2026,8,30,10,0,0);
+  $('seq').textContent='change_log seq: 1040'; $('dots').innerHTML=''; unglowAll();
+  $('log').innerHTML=''; $('cap').textContent=scen? 'Ready — press Play.' : 'Pick a scenario above — the primary path ①–⑦ lights up as it runs.';
+  $('prog').textContent=scen? 'scenario '+scen.id+' · 0 of '+scen.steps.length : 'idle';
+  $('play').textContent='▶ Play'; }
+
+/* ---------- wiring ---------- */
+const sc=$('scen');
+SCEN.forEach(s=>{ const b=document.createElement('button'); b.textContent=s.label; b.id='sb-'+s.id;
+  b.onclick=()=>{ document.querySelectorAll('.scen button').forEach(x=>x.classList.remove('sel'));
+    b.classList.add('sel'); scen=s; reset(); play(); }; sc.appendChild(b); });
+
+$('play').onclick=()=>{ if(!scen) return;
+  if(playing){ paused=!paused; $('play').textContent=paused?'▶ Resume':'⏸ Pause'; return; }
+  play(); };
+$('step').onclick=async()=>{ if(!scen||playing) return;
+  if(idx<scen.steps.length){ await runStep(idx,token); idx++;
+    $('prog').textContent+=idx>=scen.steps.length?' · complete':''; } };
+$('reset').onclick=()=>reset();
+$('speed').onchange=e=>{ speed=parseFloat(e.target.value); };
+
+document.querySelectorAll('#nodes .node, #zones .zone').forEach(n=>{
+  n.addEventListener('click',()=>{ const c=CARDS[n.dataset.card]; if(!c) return;
+    $('card').innerHTML=`<h4>${c[0]}</h4><p>${c[1]}</p>`; }); });
+
+reset();
+</script>
+</body>
+</html>

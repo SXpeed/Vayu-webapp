@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
+import { createServer } from 'node:net';
 
 const frontend = fileURLToPath(new URL('../..', import.meta.url));
 const wranglerBin = join(dirname(createRequire(import.meta.url).resolve('wrangler/package.json')), 'bin', 'wrangler.js');
@@ -15,13 +16,35 @@ const wranglerBin = join(dirname(createRequire(import.meta.url).resolve('wrangle
 const runWrangler = (args, opts = {}) =>
     execFileSync(process.execPath, [wranglerBin, ...args], { cwd: frontend, encoding: 'utf8', ...opts });
 
+/** A port nothing is listening on right now, chosen by the system. */
+function freePort() {
+    return new Promise((resolve, reject) => {
+        const server = createServer();
+        server.unref();
+        server.on('error', reject);
+        server.listen(0, '127.0.0.1', () => {
+            const { port } = server.address();
+            server.close(() => resolve(port));
+        });
+    });
+}
+
+/** Ends a wrangler process. On Windows, killing wrangler leaves its workerd child running, so end the whole tree. */
+function stopTree(child) {
+    if (process.platform === 'win32') {
+        try { execFileSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* already gone */ }
+    } else {
+        child.kill();
+    }
+}
+
 /**
  * Applies the platform migrations to a fresh local database, creates one
  * provider admin, and starts the Worker.
  */
-export async function startDevWorker({ port = 8810, inspectorPort = 9240, adminEmail = 'admin@example.com', adminPassword = 'provider-admin-password', seedLegacy, vars = {} } = {}) {
+export async function startDevWorker({ port, inspectorPort, adminEmail = 'admin@example.com', adminPassword = 'provider-admin-password', seedLegacy, vars = {} } = {}) {
     const persistDir = mkdtempSync(join(tmpdir(), 'as-dev-'));
-    const origin = `http://127.0.0.1:${port}`;
+    const fixedPorts = port !== undefined;
 
     /** Runs SQL against a local D1 database in this test's storage. */
     const execSql = (binding, sql) => {
@@ -43,25 +66,40 @@ export async function startDevWorker({ port = 8810, inspectorPort = 9240, adminE
         '--email', adminEmail, '--name', 'Test Admin', '--persist-to', persistDir],
         { cwd: frontend, stdio: 'pipe', env: { ...process.env, ADMIN_PASSWORD: adminPassword } });
 
-    const child = spawn(process.execPath, [wranglerBin, 'dev', '-c', 'wrangler.json', '--local',
-        '--persist-to', persistDir, '--port', String(port), '--inspector-port', String(inspectorPort), '--test-scheduled',
-        '--var', `AUTH_ORIGINS:${origin}`, '--var', 'PLATFORM_ENV:development', '--var', 'ADMIN_REQUIRE_2FA:off',
-        '--var', `PAYMENT_SECRETS_KEY:${randomBytes(32).toString('base64')}`,
-        '--var', `BETTER_AUTH_SECRET:${randomBytes(32).toString('base64')}`,
-        ...Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}:${v}`]),
-    ], { cwd: frontend, stdio: ['ignore', 'pipe', 'pipe'] });
-
+    let child;
     let log = '';
-    child.stdout.on('data', d => { log += d; });
-    child.stderr.on('data', d => { log += d; });
+    let origin = '';
+    // With many test files starting at once, workerd occasionally dies while
+    // starting (seen on Windows). That is the machine, not the code under
+    // test: start it again, on fresh ports, a couple of times.
+    for (let attempt = 1; ; attempt++) {
+        // Free ports by default, so test files running side by side never collide.
+        if (!fixedPorts || attempt > 1) {
+            port = await freePort();
+            inspectorPort = await freePort();
+        }
+        origin = `http://127.0.0.1:${port}`;
+        child = spawn(process.execPath, [wranglerBin, 'dev', '-c', 'wrangler.json', '--local',
+            '--persist-to', persistDir, '--port', String(port), '--inspector-port', String(inspectorPort), '--test-scheduled',
+            '--var', `AUTH_ORIGINS:${origin}`, '--var', 'PLATFORM_ENV:development', '--var', 'ADMIN_REQUIRE_2FA:off',
+            '--var', `PAYMENT_SECRETS_KEY:${randomBytes(32).toString('base64')}`,
+            '--var', `BETTER_AUTH_SECRET:${randomBytes(32).toString('base64')}`,
+            ...Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}:${v}`]),
+        ], { cwd: frontend, stdio: ['ignore', 'pipe', 'pipe'] });
 
-    const deadline = Date.now() + 90_000;
-    while (Date.now() < deadline) {
+        log = '';
+        child.stdout.on('data', d => { log += d; });
+        child.stderr.on('data', d => { log += d; });
+
+        const deadline = Date.now() + 90_000;
+        while (Date.now() < deadline && !/Ready on/.test(log) && child.exitCode === null) {
+            await new Promise(r => setTimeout(r, 400));
+        }
         if (/Ready on/.test(log)) break;
-        if (child.exitCode !== null) throw new Error(`wrangler dev exited: ${log.slice(-1500)}`);
-        await new Promise(r => setTimeout(r, 400));
+        const why = child.exitCode === null ? 'did not start' : 'exited';
+        stopTree(child);
+        if (attempt >= 3) throw new Error(`wrangler dev ${why}: ${log.slice(-1500)}`);
     }
-    if (!/Ready on/.test(log)) throw new Error(`wrangler dev did not start: ${log.slice(-1500)}`);
     // Wait for the first request to succeed (workerd finishes wiring up bindings).
     for (let i = 0; i < 40; i++) {
         try {
@@ -136,13 +174,7 @@ export async function startDevWorker({ port = 8810, inspectorPort = 9240, adminE
         /** Stops the Worker; storage stays so it can still be inspected. */
         async stop() {
             if (child.exitCode === null) {
-                // On Windows, killing wrangler leaves its workerd child running,
-                // so end the whole process tree.
-                if (process.platform === 'win32') {
-                    try { execFileSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* already gone */ }
-                } else {
-                    child.kill();
-                }
+                stopTree(child);
                 await new Promise(r => setTimeout(r, 500));
             }
         },

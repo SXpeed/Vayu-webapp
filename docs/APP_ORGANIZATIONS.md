@@ -85,6 +85,19 @@ Each workspace keeps its own offline copy on the device, removed on sign-out.
    account keeps it. Running it again changes nothing.
 4. Staff sign in to the app as they do today. Their old installed copies keep
    working until they sign in again.
+5. When everyone has signed in with their email account, close the original
+   sign-in: control centre → Login & security → **Original app sign-in**. It
+   shows how many of the original people have an email account and who is
+   still missing, and refuses to close before an organization owns the data.
+   Closing it:
+   - refuses `/api/auth/login`, `/api/auth/setup` and `/api/auth/session`;
+   - treats any original session as signed out (401 with reason
+     `original-signin-closed`, so the app says why and shows its sign-in
+     screen, where the same email and password work);
+   - drops the sign-in form's fallback to the original sign-in.
+   Nothing is deleted: reopening brings the old sessions back. Files keep
+   working, since they use their own cookie. It needs an owner or admin with a
+   recent sign-in, and is audited.
 
 Vayu's data is not moved or copied: the organization simply works on it.
 

@@ -19,6 +19,7 @@ import {
   bearerToken, getSession, getRoles, permissionsFor, primeSession, saveRoles, SESSION_TTL_DAYS,
   type StoredUser,
 } from './workerRoles';
+import { originalSignInOpen } from './platform/originalSignIn';
 import { ORG_PATH, forgetPlanActive, openOrgRequest, orgMemberDevices, orgMemberRecords, orgStorageEnv, signOutOrgMemberDevices } from './orgApp';
 import { orgAccountRoutes } from './orgTeam';
 import { OrgAppDb } from './orgAppDb';
@@ -63,6 +64,7 @@ import { OrgError } from './platform/orgs';
 import { planAndUsage } from './planUsage';
 import { OrgStore } from './platform/orgStore';
 import { deliverOutbox } from './platform/notify';
+import { recordRun, runJob } from './platform/jobs';
 import { emailConfigured } from './platform/email';
 import {
   deviceLimit, enforceDeviceLimit, forgetAllDevices, forgetDevice, listDevices,
@@ -5413,6 +5415,7 @@ export default {
     // The original app's sign-in: cookie (or, until the cutoff, the old
     // bearer token), and CSRF checks on cookie-signed changes. Organization
     // requests use the platform session and are checked in openOrgRequest.
+    let originalClosed = false;
     if (!ORG_PATH.test(new URL(request.url).pathname)) {
       const auth = normalizeAuth(request, env);
       request = auth.request;
@@ -5422,6 +5425,19 @@ export default {
         // upsets the connection for the caller's next request.
         await request.arrayBuffer().catch(() => undefined);
         return json(problem, 403);
+      }
+      // Closed from the control centre (platform/originalSignIn.ts): no new
+      // original session, and an existing one counts as signed out, so the
+      // app shows its sign-in screen, which uses the platform account.
+      if (!(await originalSignInOpen(env.PLATFORM_DB))) {
+        if (CSRF_TOKEN_EXEMPT.has(new URL(request.url).pathname)) {
+          await request.arrayBuffer().catch(() => undefined);
+          return json({ error: 'Sign in with your email account on the sign-in screen.', code: 'original_signin_closed' }, 403);
+        }
+        if (auth.token) {
+          primeSession(request, null);
+          originalClosed = true;
+        }
       }
     }
     const scope = await organizationScope(request, env);
@@ -5449,7 +5465,9 @@ export default {
       console.error(`Unhandled error on ${request.method} ${route}:`, e);
       response = json({ error: 'Something went wrong. Please try again.' }, 500);
     }
-    response = await explainSignedOut(response, request, env);
+    response = originalClosed && response.status === 401
+      ? json({ error: 'Unauthorized', reason: 'original-signin-closed' }, 401)
+      : await explainSignedOut(response, request, env);
     // 101 marks the WebSocket upgrade; everything else is an ordinary call.
     execCtx.waitUntil(Promise.resolve().then(() =>
       writeAnalytics(env, execCtx, request, route, response.status, Date.now() - startedAt, response.status === 101),
@@ -5468,15 +5486,18 @@ export default {
       execCtx.waitUntil(reconcileAllWorkspaces(env, execCtx).catch(e => console.error('scheduled payment reconciliation failed', safeError(e))));
       return;
     }
+    // Each job's outcome is recorded, shown in System health, and a failure
+    // is emailed to the provider (platform/jobs.ts).
+    execCtx.waitUntil(recordRun(db));
     if (emailConfigured(env)) {
-      execCtx.waitUntil(deliverOutbox(env, db, 50).then(
-        r => { if (r.sent || r.failed) console.log(`outbox: ${r.sent} sent, ${r.failed} failed`); },
-        e => console.error('scheduled outbox delivery failed', e),
-      ));
+      execCtx.waitUntil(runJob(db, 'email', async () => {
+        const r = await deliverOutbox(env, db, 50);
+        if (r.sent || r.failed) console.log(`outbox: ${r.sent} sent, ${r.failed} failed`);
+      }));
     }
     if (secretsConfigured(env)) {
-      execCtx.waitUntil(runRotationBatch(env, db, null).catch(e => console.error('scheduled key rotation batch failed', e)));
+      execCtx.waitUntil(runJob(db, 'key-rotation', () => runRotationBatch(env, db, null)));
     }
-    execCtx.waitUntil(reconcileAllWorkspaces(env, execCtx).catch(e => console.error('scheduled payment reconciliation failed', safeError(e))));
+    execCtx.waitUntil(runJob(db, 'payment-reconciliation', () => reconcileAllWorkspaces(env, execCtx)));
   },
 };

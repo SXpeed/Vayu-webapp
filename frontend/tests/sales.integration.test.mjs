@@ -77,7 +77,7 @@ const sale = (extra = {}) => ({
 
 before(async () => {
     const schema = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
-    worker = await startDevWorker({ port: 8838, inspectorPort: 9268, seedLegacy: { sql: `${schema}
+    worker = await startDevWorker({ seedLegacy: { sql: `${schema}
 ${SALES_TABLE_V1}` } });
     assert.equal((await api(null, '/auth/setup', { method: 'POST', body: OWNER })).status, 200);
     owner = (await api(null, '/auth/login', { method: 'POST', body: { email: OWNER.email, password: OWNER.password } })).body.token;

@@ -116,6 +116,8 @@ export function noticeContent(kind: string, subject: string, body: string): Emai
         paragraphs: [body, 'Sign in to the app with the same account you applied with.'],
         action: { label: 'Open the app', url: APP_ORIGIN },
       };
+    case 'system_alert':
+      return { heading: subject, paragraphs: [body], action: { label: 'Open System health', url: `${ADMIN_ORIGIN}/#/health` } };
     default:
       return { heading: subject, paragraphs: [body] };
   }

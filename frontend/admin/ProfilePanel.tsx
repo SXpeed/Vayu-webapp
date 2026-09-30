@@ -4,15 +4,16 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Check, Copy, KeyRound, LogOut, Monitor, Moon, ShieldCheck, Smartphone, Sun } from 'lucide-react';
+import { AtSign, Check, Copy, KeyRound, LogOut, Monitor, Moon, ShieldCheck, Smartphone, Sun } from 'lucide-react';
 import { Button, Field, Input, ReadOnlyValue, ToggleRow } from '../components/ui';
 import { api, authClient, timeAgo, type ApiError, type Reauth } from './api';
 import { Avatar, PageHeader, Section, Skeleton, SkeletonRows, StatusPill, device, useDialogs } from './kit';
+import { startEmailChange } from '../services/emailChange';
 
 interface Me { userId: string; email: string; role: string }
 interface SessionRow { id: string; created_at: string; last_active: string; user_agent: string | null; ip: string | null }
 interface Account {
-    user: { id: string; name: string; email: string; two_factor: number | null; created_at: string };
+    user: { id: string; name: string; email: string; email_verified: number | null; two_factor: number | null; created_at: string };
     sessions: SessionRow[];
     loginMethods: string[];
 }
@@ -84,6 +85,7 @@ export const ProfilePanel: React.FC<{
             <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,26rem)] items-start">
                 <div className="space-y-6 min-w-0">
                     <DetailsCard name={name} email={me.email} onSaved={n => { setAccount(a => a && { ...a, user: { ...a.user, name: n } }); onNameChange(n); }} />
+                    <EmailCard email={me.email} verified={!!account.user.email_verified} reauth={reauth} />
                     <PasswordCard hasPassword={account.loginMethods.includes('credential')} onChanged={load} />
                     <DevicesCard sessions={account.sessions} currentId={currentSession} reauth={reauth} onChanged={load} />
                 </div>
@@ -125,12 +127,47 @@ const DetailsCard: React.FC<{ name: string; email: string; onSaved: (name: strin
                 <Field label="Full name" htmlFor="pf-name" hint="Shown in the audit log and to other administrators.">
                     <Input id="pf-name" value={value} maxLength={80} onChange={e => setValue(e.target.value)} autoComplete="name" />
                 </Field>
-                <Field label="Email address" hint="This is how you sign in, so it can't be changed here.">
+                <Field label="Email address" hint="How you sign in. Change it under Sign-in email.">
                     <ReadOnlyValue className="break-all">{email}</ReadOnlyValue>
                 </Field>
                 <div className="flex flex-wrap justify-end gap-2.5">
                     <Button type="button" onClick={() => setValue(name)} disabled={!dirty || busy}>Discard</Button>
                     <Button type="submit" variant="primary" icon={<Check size={14} />} disabled={!dirty || !valid || busy}>{busy ? 'Saving…' : 'Save'}</Button>
+                </div>
+            </form>
+        </Section>
+    );
+};
+
+/* ───────────────────────────── Email ─────────────────────────────────── */
+
+/** Changing the sign-in email: confirmed by links to both addresses (services/emailChange.ts). */
+const EmailCard: React.FC<{ email: string; verified: boolean; reauth: Reauth }> = ({ email, verified, reauth }) => {
+    const [next, setNext] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [sent, setSent] = useState('');
+
+    const send = async (e: React.SubmitEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        setBusy(true);
+        let result = await startEmailChange(authClient, { email, verified }, next, '');
+        // Older than 30 minutes: the shared "Confirm it's you" sign-in, then again.
+        if (result.needsPassword && await reauth()) result = await startEmailChange(authClient, { email, verified }, next, '');
+        setBusy(false);
+        if (!result.ok) { if (!result.needsPassword) toast.error(result.message); return; }
+        setSent(result.message);
+        setNext('');
+    };
+
+    return (
+        <Section title="Sign-in email" description={verified ? 'Confirmed.' : 'Not confirmed yet.'} actions={<AtSign size={16} className="ac-faint" />}>
+            <form onSubmit={send} className="space-y-4">
+                <Field label="New email address" htmlFor="pf-email" hint={`A link goes to ${verified ? `${email} to approve, then to the new address` : 'the new address'} to confirm. Your password and two-factor stay as they are.`}>
+                    <Input id="pf-email" type="email" autoComplete="off" value={next} onChange={e => setNext(e.target.value)} />
+                </Field>
+                {sent && <p role="status" className="text-[12px] ac-muted">{sent}</p>}
+                <div className="flex justify-end">
+                    <Button type="submit" variant="primary" disabled={busy || !next.trim()}>{busy ? 'Sending…' : 'Send confirmation'}</Button>
                 </div>
             </form>
         </Section>

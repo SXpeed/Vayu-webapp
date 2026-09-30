@@ -42,7 +42,7 @@ const open = (passcode, token = room.token) => api(null, `/viewing/${token}/open
 
 before(async () => {
     const schema = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
-    worker = await startDevWorker({ port: 8820, inspectorPort: 9250, seedLegacy: { sql: schema } });
+    worker = await startDevWorker({ seedLegacy: { sql: schema } });
     assert.equal((await api(null, '/auth/setup', { method: 'POST', body: OWNER })).status, 200);
     owner = (await api(null, '/auth/login', { method: 'POST', body: { email: OWNER.email, password: OWNER.password } })).body.token;
 

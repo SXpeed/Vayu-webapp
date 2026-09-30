@@ -128,7 +128,7 @@ before(async () => {
     razorpay = await startRazorpay();
     const schema = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
     worker = await startDevWorker({
-        port: 8822, inspectorPort: 9252, seedLegacy: { sql: schema },
+        seedLegacy: { sql: schema },
         vars: { RAZORPAY_API_BASE: `http://127.0.0.1:${razorpay.address().port}`, RAZORPAY_KEY_ID: SHARED_KEY, RAZORPAY_KEY_SECRET: 'shared-secret-value' },
     });
     // The app's own admin (bearer token), and the control centre's (cookies).

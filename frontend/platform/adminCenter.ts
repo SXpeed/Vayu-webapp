@@ -16,6 +16,7 @@ import { getNotificationSettings } from './notify';
 import { getAppPaymentsOrg } from './payments';
 import { keyUsage } from './secretRotation';
 import { emailConfigured } from './email';
+import { jobsHealth } from './jobs';
 
 // ── Overview ──────────────────────────────────────────────────────────────
 
@@ -293,6 +294,8 @@ export async function systemHealth(env: Env, db: D1Database) {
   const links = await appPaymentLinksCheck(env, db);
   check('App payment links', links.ok, links.detail);
   check('Private file access', ...status(env.FILE_AUTH === 'on', 'Files need a session', 'OFF — files are reachable by URL'));
+  const jobs = await jobsHealth(db);
+  check('Scheduled jobs', jobs.ok, jobs.detail);
 
   let migrations: string[] = [];
   try {
@@ -306,6 +309,7 @@ export async function systemHealth(env: Env, db: D1Database) {
     checks,
     migrations,
     loginMethods: methods,
+    jobs: jobs.jobs,
     authOrigins: (env.AUTH_ORIGINS ?? '').split(',').map(s => s.trim()).filter(Boolean),
     flags: { realtime: env.REALTIME_ENABLED ?? 'off', deltaSync: env.DELTA_SYNC_ENABLED ?? 'off', fileAuth: env.FILE_AUTH ?? 'off' },
   };
