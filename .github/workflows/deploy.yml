@@ -48,6 +48,10 @@ jobs:
       - name: Type-check (app + worker)
         run: npm run typecheck --prefix frontend
 
+      # The test Worker serves the built pages (assets.directory = dist).
+      - name: Build frontend
+        run: npm run build --prefix frontend
+
       # Each integration test starts the real Worker locally (workerd).
       - name: Tests
         run: npm test --prefix frontend
