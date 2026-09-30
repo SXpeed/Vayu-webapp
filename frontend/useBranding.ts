@@ -22,6 +22,18 @@ export const FALLBACK_BRANDING: PublicBranding = {
 
 let cache: PublicBranding | null = null;
 
+/**
+ * Pages whose tab icon follows the platform logo mark it `data-brand-icon`
+ * (the website and the control centre; the installed app keeps its own
+ * icons). Without a logo, the built-in icon.
+ */
+function applyBrandIcon(logoUrl: string | null): void {
+  for (const link of document.querySelectorAll<HTMLLinkElement>('link[data-brand-icon]')) {
+    const next = logoUrl ?? '/icon.png';
+    if (link.getAttribute('href') !== next) link.href = next;
+  }
+}
+
 export function useBranding(): PublicBranding {
   const [branding, setBranding] = useState<PublicBranding>(cache ?? FALLBACK_BRANDING);
 
@@ -34,6 +46,7 @@ export function useBranding(): PublicBranding {
         if (!data || cancelled || typeof data.appName !== 'string') return;
         cache = { ...FALLBACK_BRANDING, ...data };
         setBranding(cache);
+        applyBrandIcon(cache.logoUrl);
       })
       .catch(() => { /* keep the built-in name */ });
     return () => { cancelled = true; };
