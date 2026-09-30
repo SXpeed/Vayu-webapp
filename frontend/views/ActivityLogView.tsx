@@ -3,6 +3,7 @@ import { authService, ActivityLog } from '../services/authService';
 import { SearchBar } from '../components/SearchBar';
 import { PageRoot, PageHeader, PageBody, GhostIconButton } from '../components/ui';
 import { RefreshCw, Plus, Pencil, Trash2, LogIn, LogOut, Send, Activity, History } from 'lucide-react';
+import { SkeletonRows } from '../components/Skeleton';
 
 interface ActivityLogViewProps {
     readonly onBack: () => void;
@@ -124,12 +125,7 @@ export function ActivityLogView({ onBack, embedded = false }: ActivityLogViewPro
 
     let body: React.ReactNode;
     if (isLoading && logs.length === 0) {
-        body = (
-            <div className="flex flex-col items-center justify-center py-20 text-[var(--neu-text-dim)]">
-                <div className="w-8 h-8 border-2 border-gold-500/30 border-t-gold-500 rounded-full animate-spin mb-4" />
-                <p className="text-xs">Loading activity logs…</p>
-            </div>
-        );
+        body = <div className="neu-card p-4"><SkeletonRows rows={8} /></div>;
     } else if (error) {
         body = (
             <div className="neu-card flex flex-col items-center justify-center py-12 px-6 text-center">

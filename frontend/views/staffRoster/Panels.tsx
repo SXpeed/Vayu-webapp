@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { AlertTriangle, Copy, Download, Loader2, Send, X } from 'lucide-react';
+import { AlertTriangle, Check, Copy, Download, Loader2, Send, UserPlus, X } from 'lucide-react';
 import { FullScreenPortal } from '../../components/FullScreenPortal';
 import { Button, Field, Input, Select, Textarea, Toggle } from '../../components/ui';
 import {
@@ -9,6 +9,7 @@ import {
 } from '../../staffRosterRules';
 import { staffRosterService, type ShiftInput, type StaffRosterData } from '../../services/staffRosterService';
 import { DOW, dayLabel, dayOfMonth, hoursText, inWeek, rangeLabel, timeRange, type Derived } from './shared';
+import { assignable, candidateLabel, candidatesFor, type Candidate } from './assign';
 
 /** A panel on the right on desktop, the whole screen on a phone. Focus stays inside; Escape closes. */
 
@@ -130,6 +131,16 @@ export interface EditorState { id: string | null; draft: ShiftInput; duplicate?:
 
 const BREAKS = [0, 15, 30, 45, 60, 90];
 
+/** The shift times used most in the roster (then common defaults), as one-tap choices. */
+function timePresets(data: StaffRosterData): [number, number][] {
+    const count = new Map<string, number>();
+    for (const x of data.shifts) if (x.kind === 'shift') count.set(`${x.startMin}-${x.endMin}`, (count.get(`${x.startMin}-${x.endMin}`) ?? 0) + 1);
+    const used = [...count.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k.split('-').map(Number) as [number, number]);
+    const defaults: [number, number][] = [[540, 1020], [600, 1080], [720, 1200]];
+    const all = [...used, ...defaults].filter((v, i, list) => list.findIndex(w => w[0] === v[0] && w[1] === v[1]) === i);
+    return all.slice(0, 5);
+}
+
 /** Add or change a shift or a day off. Managers only; the server checks again. */
 export const ShiftEditor: React.FC<{ data: StaffRosterData; d: Derived; start: EditorState; onClose: () => void; onSaved: () => void }> = ({ data, d, start, onClose, onSaved }) => {
     const [state, setState] = useState(start);
@@ -192,6 +203,13 @@ export const ShiftEditor: React.FC<{ data: StaffRosterData; d: Derived; start: E
     const weekOfDate = weekDates(mondayOf(s.date));
     const heading = editorHeading(s.kind === 'off', isNew, !!state.duplicate);
     const roles = [...new Set([...data.jobTitles, s.role].filter(Boolean))];
+    const presets = useMemo(() => timePresets(data), [data]);
+    // Who is free for this shift, so the list says it before saving does.
+    const candidates = useMemo(() => new Map(candidatesFor(data, d, { ...s, id: state.id ?? '__new' }).map(c => [c.id, c])), [data, d, s, state.id]);
+    const personOption = (p: Person) => {
+        const c = candidates.get(p.id);
+        return s.kind === 'shift' && c ? candidateLabel(c) : `${p.name}${p.title ? ` · ${p.title}` : ''}`;
+    };
 
     return (
         <Drawer title={heading} onClose={onClose} footer={
@@ -226,7 +244,7 @@ export const ShiftEditor: React.FC<{ data: StaffRosterData; d: Derived; start: E
                     set({ employeeId: id, ...(p?.title && isNew ? { role: p.title } : {}) });
                 }}>
                     {s.kind === 'shift' && <option value="">Unassigned (open shift)</option>}
-                    {data.people.map(p => <option key={p.id} value={p.id}>{p.name}{p.title ? ` · ${p.title}` : ''}</option>)}
+                    {data.people.map(p => <option key={p.id} value={p.id}>{personOption(p)}</option>)}
                 </Select>
             </Field>
             <div className="grid grid-cols-2 gap-3">
@@ -244,6 +262,17 @@ export const ShiftEditor: React.FC<{ data: StaffRosterData; d: Derived; start: E
             </div>
             {s.kind === 'shift' && (
                 <>
+                    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Common times">
+                        {presets.map(([a, b]) => {
+                            const on = s.startMin === a && s.endMin === b;
+                            return (
+                                <button key={`${a}-${b}`} type="button" aria-pressed={on} onClick={() => setTimes(minToTime(a), minToTime(b))}
+                                    className={`rounded-full px-3 py-1.5 text-[12px] tabular-nums ${on ? 'neu-inset text-gold-700 dark:text-gold-300 font-semibold' : 'neu-raised-sm text-gray-700 dark:text-gray-300'}`}>
+                                    {minToTime(a)}–{minToTime(b)}
+                                </button>
+                            );
+                        })}
+                    </div>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                         <Field label="Start" htmlFor="sh-start"><Input id="sh-start" type="time" step={900} value={startText} onChange={e => setTimes(e.target.value, endText)} className="tabular-nums" /></Field>
                         <Field label="End" htmlFor="sh-end"><Input id="sh-end" type="time" step={900} value={endText} onChange={e => setTimes(startText, e.target.value)} className="tabular-nums" /></Field>
@@ -306,8 +335,44 @@ export const ShiftEditor: React.FC<{ data: StaffRosterData; d: Derived; start: E
 };
 
 /** Shifts needing someone this week: open ones, and ones that fall in approved leave. */
+/** One tap assigns: who is free for this shift, the least busy first; everyone else on request. */
+const AssignList: React.FC<{ data: StaffRosterData; d: Derived; shift: StaffShift; busy: boolean; onAssign: (c: Candidate) => void }> = ({ data, d, shift, busy, onAssign }) => {
+    const [all, setAll] = useState(false);
+    const list = candidatesFor(data, d, shift).filter(c => c.id !== shift.employeeId);
+    const free = list.filter(assignable);
+    const shown = all ? list : free.slice(0, 5);
+    return (
+        <div className="space-y-1.5" role="group" aria-label={`Assign ${dayLabel(shift.date)} ${timeRange(shift)}`}>
+            {shown.map(c => (
+                <button key={c.id} type="button" disabled={busy || !assignable(c)} onClick={() => onAssign(c)}
+                    className="w-full neu-raised-sm rounded-xl px-3 py-2 flex items-center gap-3 text-left active-scale disabled:opacity-50">
+                    <span className="flex-1 min-w-0">
+                        <span className="block text-[13px] font-semibold truncate">{c.name}{c.title ? <span className="font-normal text-[var(--neu-text-dim)]"> · {c.title}</span> : null}</span>
+                        <span className={`block text-[11.5px] ${assignable(c) && !c.note ? 'text-green-700 dark:text-green-400' : 'text-[var(--neu-text-dim)]'}`}>{c.note || 'Free'} · {hoursText(c.weekMin)} h this week</span>
+                    </span>
+                    {assignable(c) && <UserPlus size={15} className="shrink-0 text-[var(--neu-gold)]" />}
+                </button>
+            ))}
+            {!free.length && !all && <p className="text-[12.5px] text-[var(--neu-text-dim)]">No one is free for these times.</p>}
+            {list.length > shown.length && (
+                <button type="button" onClick={() => setAll(true)} className="text-[11.5px] font-semibold uppercase tracking-wider text-gold-700 dark:text-gold-300">Show everyone ({list.length})</button>
+            )}
+        </div>
+    );
+};
+
 export const OpenShiftsPanel: React.FC<{ data: StaffRosterData; d: Derived; weekStart: string; onEdit: (s: StaffShift) => void; onClose: () => void; onChanged: () => void }> = ({ data, d, weekStart, onEdit, onClose, onChanged }) => {
     const [busy, setBusy] = useState<string | null>(null);
+    const [picking, setPicking] = useState<string | null>(null);
+    const assign = async (s: StaffShift, c: Candidate) => {
+        setBusy(s.id);
+        try {
+            await staffRosterService.updateShift(s.id, { ...s, employeeId: c.id });
+            toast.success(`${c.name.split(' ')[0]} is on ${dayLabel(s.date)}, ${timeRange(s)}`);
+            setPicking(null);
+            onChanged();
+        } catch (e) { toast.error((e as Error).message || 'Could not assign it'); } finally { setBusy(null); }
+    };
     const opens = data.shifts.filter(s => s.kind === 'shift' && !s.employeeId && inWeek(s, weekStart)).sort((a, b) => a.date.localeCompare(b.date) || a.startMin - b.startMin);
     const onLeave = data.shifts.filter(s => inWeek(s, weekStart) && (d.conflicts.get(s.id) ?? []).some(c => c.type === 'leave'));
     const makeOpen = async (s: StaffShift) => {
@@ -316,16 +381,25 @@ export const OpenShiftsPanel: React.FC<{ data: StaffRosterData; d: Derived; week
         catch (e) { toast.error((e as Error).message || 'Could not change it'); } finally { setBusy(null); }
     };
     const item = (s: StaffShift, leave: boolean) => (
-        <div key={s.id} className="neu-card p-3 flex items-center justify-between gap-3">
-            <div className="min-w-0">
-                <p className="font-semibold text-[13.5px]">{leave ? `${d.personName(s.employeeId)} · on leave` : s.role}</p>
-                <p className="text-[12px] text-[var(--neu-text-dim)] tabular-nums">{dayLabel(s.date)} · {timeRange(s)}{endsNextDay(s) ? ' (+1 day)' : ''} · {d.storeName(s.storeId)}</p>
-                {s.note && <p className="text-[12px] text-[var(--neu-text-dim)]">{s.note}</p>}
+        <div key={s.id} className="neu-card p-3 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                    <p className="font-semibold text-[13.5px]">{leave ? `${d.personName(s.employeeId)} · on leave` : s.role}</p>
+                    <p className="text-[12px] text-[var(--neu-text-dim)] tabular-nums">{dayLabel(s.date)} · {timeRange(s)}{endsNextDay(s) ? ' (+1 day)' : ''} · {d.storeName(s.storeId)}</p>
+                    {s.note && <p className="text-[12px] text-[var(--neu-text-dim)]">{s.note}</p>}
+                </div>
+                <div className="flex flex-wrap gap-2 justify-end shrink-0">
+                    {leave && <Button disabled={busy === s.id} onClick={() => { void makeOpen(s); }}>Make open</Button>}
+                    <Button variant={picking === s.id ? 'default' : 'primary'} aria-expanded={picking === s.id} onClick={() => setPicking(p => (p === s.id ? null : s.id))}
+                        icon={picking === s.id ? <Check size={14} /> : <UserPlus size={14} />}>{picking === s.id ? 'Close' : (leave ? 'Reassign' : 'Assign')}</Button>
+                </div>
             </div>
-            <div className="flex flex-wrap gap-2 justify-end shrink-0">
-                {leave && <Button disabled={busy === s.id} onClick={() => { void makeOpen(s); }}>Make open</Button>}
-                <Button variant="primary" onClick={() => onEdit(s)}>{leave ? 'Reassign' : 'Assign'}</Button>
-            </div>
+            {picking === s.id && (
+                <>
+                    <AssignList data={data} d={d} shift={s} busy={busy === s.id} onAssign={c => { void assign(s, c); }} />
+                    <button type="button" onClick={() => onEdit(s)} className="text-[11.5px] font-semibold uppercase tracking-wider text-[var(--neu-text-dim)]">Edit the shift instead</button>
+                </>
+            )}
         </div>
     );
     return (

@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { ChevronLeft, ChevronRight, Download, Loader2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download } from 'lucide-react';
 import { AuthUser } from '../../services/authService';
 import { AttendanceRecord } from '../../types';
 import { attendanceService } from '../../services/attendanceService';
 import { LONG_SHIFT_MS, MONTHS, downloadCsv, fmtHours, monthRange, peopleFrom, startOfDay, toDateInput, workedMs } from './attendanceUtils';
+import { Skeleton, SkeletonBlock } from '../../components/Skeleton';
 
 interface MonthRegisterProps {
     team: AuthUser[];
@@ -137,7 +138,14 @@ export const MonthRegister: React.FC<MonthRegisterProps> = ({ team, refreshKey, 
 
             <section className="neu-card p-2">
                 {loading ? (
-                    <div className="py-12 flex justify-center"><Loader2 size={20} className="animate-spin text-gold-500" /></div>
+                    <SkeletonBlock label="Loading the register" className="p-2 space-y-2">
+                        {Array.from({ length: 7 }, (_, r) => (
+                            <div key={r} className="flex items-center gap-2">
+                                <Skeleton className="h-4 w-28 shrink-0" />
+                                {Array.from({ length: 14 }, (_, c) => <Skeleton key={c} className="h-6 flex-1 !rounded-md" style={{ opacity: (r + c) % 6 === 5 ? 0.4 : 1 }} />)}
+                            </div>
+                        ))}
+                    </SkeletonBlock>
                 ) : (
                     <div ref={scrollerRef} className="overflow-x-auto no-scrollbar">
                         <table className="border-separate border-spacing-0 text-[11px] tabular-nums">

@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { AlertTriangle, Leaf, Plus } from 'lucide-react';
 import {
     WEEKLY_LIMIT_MIN, leaveOn, paidMin, weekdayIdx, type StaffShift,
 } from '../../staffRosterRules';
 import type { StaffRosterData } from '../../services/staffRosterService';
+import { Skeleton, SkeletonBlock } from '../../components/Skeleton';
+import { usePageChrome } from '../../components/ui';
 import {
     DOW, dayLabel, dayOfMonth, dm, hoursText, initials, matchesPerson, matchesStore, nextDay, shortRange, timeRange, todayIso,
     type Derived, type Filters,
@@ -19,7 +21,44 @@ export interface WeekProps {
     onNew?: (employeeId: string | null, date: string) => void;
     /** Phone grid: a day with more than one entry opens in the day agenda. */
     onOpenDay?: (dayIdx: number) => void;
+    /** Desktop grid: a shift dropped on another person or day (null: unassigned). Ctrl or Alt copies instead. */
+    onMove?: (shift: StaffShift, employeeId: string | null, date: string, copy: boolean) => void;
 }
+
+/** The shift being dragged, between dragstart and drop (the data transfer can't be read during dragover). */
+let dragging: StaffShift | null = null;
+
+/** A day cell that takes a dropped shift. */
+function useDrop(employeeId: string | null, date: string, onMove: WeekProps['onMove']) {
+    const [over, setOver] = useState(false);
+    if (!onMove) return { over: false, props: {} };
+    const same = () => !!dragging && dragging.employeeId === employeeId && dragging.date === date;
+    return {
+        over,
+        props: {
+            onDragOver: (e: React.DragEvent) => {
+                if (!dragging || same()) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = e.ctrlKey || e.altKey ? 'copy' : 'move';
+                if (!over) setOver(true);
+            },
+            onDragLeave: () => setOver(false),
+            onDrop: (e: React.DragEvent) => {
+                e.preventDefault();
+                setOver(false);
+                const s = dragging;
+                dragging = null;
+                if (s && !same()) onMove(s, employeeId, date, e.ctrlKey || e.altKey);
+            },
+        },
+    };
+}
+
+/** A table cell that takes dropped shifts, outlined while one hovers over it. */
+const DropCell: React.FC<{ employeeId: string | null; date: string; onMove: WeekProps['onMove']; className: string; children: React.ReactNode }> = ({ employeeId, date, onMove, className, children }) => {
+    const drop = useDrop(employeeId, date, onMove);
+    return <td className={`${className} ${drop.over ? 'sr-drop-target' : ''}`} {...drop.props}>{children}</td>;
+};
 
 /** People to show, the signed-in person first when they only read the roster. */
 function peopleFor(data: StaffRosterData, filters: Filters) {
@@ -34,7 +73,7 @@ const weekPaid = (data: StaffRosterData, employeeId: string, dates: string[]) =>
     data.shifts.filter(s => s.kind === 'shift' && s.employeeId === employeeId && dates.includes(s.date)).reduce((sum, s) => sum + paidMin(s), 0);
 
 /** One shift, as on the desktop grid and the agenda. */
-export const ShiftCard: React.FC<{ s: StaffShift; d: Derived; data: StaffRosterData; showName?: boolean; onEdit?: (s: StaffShift) => void }> = ({ s, d, data, showName, onEdit }) => {
+export const ShiftCard: React.FC<{ s: StaffShift; d: Derived; data: StaffRosterData; showName?: boolean; onEdit?: (s: StaffShift) => void; draggable?: boolean }> = ({ s, d, data, showName, onEdit, draggable }) => {
     const issues = d.conflicts.get(s.id) ?? [];
     const overlap = issues.some(c => c.type === 'overlap');
     const onLeave = issues.some(c => c.type === 'leave');
@@ -54,8 +93,14 @@ export const ShiftCard: React.FC<{ s: StaffShift; d: Derived; data: StaffRosterD
         </>
     );
     const cls = `w-full flex flex-col items-start gap-0.5 text-left rounded-[11px] border px-2.5 py-1.5 text-[12px] leading-tight ${open ? 'sr-open border-[1.5px]' : d.storeClass(s.storeId)} ${overlap || onLeave ? 'sr-conflict' : ''} ${mine ? 'ring-1 ring-gold-500/60' : ''}`;
+    const drag = draggable ? {
+        draggable: true,
+        onDragStart: (e: React.DragEvent) => { dragging = s; e.dataTransfer.effectAllowed = 'copyMove'; e.dataTransfer.setData('text/plain', s.id); },
+        onDragEnd: () => { dragging = null; },
+        title: 'Drag to another person or day to move it. Hold Ctrl (or Alt) to copy.',
+    } : {};
     return onEdit
-        ? <button type="button" onClick={() => onEdit(s)} aria-label={`${label}. Edit`} className={`${cls} active-scale`}>{body}</button>
+        ? <button type="button" onClick={() => onEdit(s)} aria-label={`${label}. Edit`} className={`${cls} active-scale ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`} {...drag}>{body}</button>
         : <div className={cls} aria-label={label}>{body}</div>;
 };
 
@@ -66,7 +111,7 @@ const Avatar: React.FC<{ name: string; open?: boolean; small?: boolean }> = ({ n
 );
 
 /** Desktop and tablet: a table with the people down the side and the days across. */
-export const WeekGrid: React.FC<WeekProps> = ({ data, d, dates, filters, onEdit, onNew }) => {
+export const WeekGrid: React.FC<WeekProps> = ({ data, d, dates, filters, onEdit, onNew, onMove }) => {
     const today = todayIso();
     const people = peopleFor(data, filters);
     const opens = data.shifts.filter(s => !s.employeeId && dates.includes(s.date) && matchesStore(s, filters) && (filters.title === 'all' || s.role === filters.title));
@@ -114,10 +159,10 @@ export const WeekGrid: React.FC<WeekProps> = ({ data, d, dates, filters, onEdit,
                                         const leave = leaveOn(data.leaves, p.id, date);
                                         const pending = leaveOn(data.leaves, p.id, date, 'pending');
                                         return (
-                                            <td key={date} className="align-top p-1.5 border-b border-[var(--neu-line)]">
+                                            <DropCell key={date} employeeId={p.id} date={date} onMove={onMove} className="align-top p-1.5 border-b border-[var(--neu-line)]">
                                                 <div className="flex flex-col gap-1.5 min-h-[56px]">
                                                     {leave && <span className="sr-leave border rounded-[11px] px-2.5 py-1.5 text-[12px] font-medium inline-flex items-center gap-1.5"><Leaf size={12} />{leave.type}</span>}
-                                                    {shown.map(s => <ShiftCard key={s.id} s={s} d={d} data={data} onEdit={onEdit} />)}
+                                                    {shown.map(s => <ShiftCard key={s.id} s={s} d={d} data={data} onEdit={onEdit} draggable={!!onMove} />)}
                                                     {off && !work.length && !leave && (
                                                         onEdit
                                                             ? <button type="button" onClick={() => onEdit(off)} className="sr-off border rounded-[11px] px-2.5 py-1.5 text-[12px] font-medium text-left active-scale" aria-label={`${p.name}, ${dayLabel(date)}: day off. Edit`}>Day off</button>
@@ -131,7 +176,7 @@ export const WeekGrid: React.FC<WeekProps> = ({ data, d, dates, filters, onEdit,
                                                         </button>
                                                     )}
                                                 </div>
-                                            </td>
+                                            </DropCell>
                                         );
                                     })}
                                     <td className={`align-top text-right px-3 py-2.5 border-b border-[var(--neu-line)] font-semibold tabular-nums ${over ? 'sr-bad-text' : ''}`}>
@@ -154,11 +199,11 @@ export const WeekGrid: React.FC<WeekProps> = ({ data, d, dates, filters, onEdit,
                             {dates.map(date => {
                                 const list = opens.filter(s => s.date === date);
                                 return (
-                                    <td key={date} className="align-top p-1.5">
+                                    <DropCell key={date} employeeId={null} date={date} onMove={onMove} className="align-top p-1.5">
                                         <div className="flex flex-col gap-1.5 min-h-[44px]">
-                                            {list.length ? list.map(s => <ShiftCard key={s.id} s={s} d={d} data={data} onEdit={onEdit} />) : <span className="m-auto text-[var(--neu-text-dim)] opacity-60" aria-hidden="true">—</span>}
+                                            {list.length ? list.map(s => <ShiftCard key={s.id} s={s} d={d} data={data} onEdit={onEdit} draggable={!!onMove} />) : <span className="m-auto text-[var(--neu-text-dim)] opacity-60" aria-hidden="true">—</span>}
                                         </div>
-                                    </td>
+                                    </DropCell>
                                 );
                             })}
                             <td />
@@ -233,6 +278,7 @@ function describeDay(a: DayArgs): TileLook {
  * than one entry opens that day's agenda.
  */
 export const PhoneWeek: React.FC<WeekProps> = ({ data, d, dates, filters, onEdit, onNew, onOpenDay }) => {
+    const chrome = usePageChrome();
     const today = todayIso();
     const people = peopleFor(data, filters);
     const opens = data.shifts.filter(s => !s.employeeId && dates.includes(s.date) && matchesStore(s, filters) && (filters.title === 'all' || s.role === filters.title));
@@ -243,8 +289,12 @@ export const PhoneWeek: React.FC<WeekProps> = ({ data, d, dates, filters, onEdit
 
     return (
         <div className="neu-card p-3 space-y-3">
-            {/* Day header, lined up with the tiles below */}
-            <div className="grid grid-cols-7 gap-1 sticky top-0 z-10 -mx-3 px-3 py-1.5 bg-[var(--neu-bg)] rounded-t-2xl">
+            {/* Day header, lined up with the tiles below. While the list scrolls it
+                stays under the header as a solid bar: under the tools row while it
+                shows, under the title once it folds away (the scroller keeps its
+                padding for the folded row, so the bar then sticks that much higher). */}
+            <div className="grid grid-cols-7 gap-1 sticky z-10 -mx-3 -mt-3 px-3 pt-3 pb-2 bg-[var(--neu-bg)] rounded-t-2xl border-b border-[var(--neu-line)] shadow-[0_6px_10px_-8px_var(--neu-shadow-dark)]"
+                style={{ top: chrome.collapsed ? 'calc(-1 * var(--page-tools-h, 0px))' : 0 }}>
                 {dates.map(date => (
                     <div key={date} className={`text-center leading-tight ${date === today ? 'text-[var(--neu-gold)]' : 'text-[var(--neu-text-dim)]'}`}>
                         <span className="block text-[10px] font-semibold uppercase tracking-wider">{DOW[weekdayIdx(date)].slice(0, 2)}</span>
@@ -353,3 +403,35 @@ export const DayAgenda: React.FC<WeekProps & { dayIdx: number; onDay: (i: number
         </div>
     );
 };
+
+/** While the roster loads: the week's shape, on the desktop grid or the phone tiles. */
+export const RosterSkeleton: React.FC<{ phone: boolean }> = ({ phone }) => (
+    <SkeletonBlock label="Loading the roster" className="neu-card p-3 space-y-3">
+        {phone ? (
+            <>
+                <div className="grid grid-cols-7 gap-1">{Array.from({ length: 7 }, (_, i) => <Skeleton key={i} className="h-8" />)}</div>
+                {Array.from({ length: 5 }, (_, r) => (
+                    <div key={r} className="space-y-1.5">
+                        <div className="flex items-center gap-2"><Skeleton className="w-7 h-7 !rounded-full" /><Skeleton className="h-3.5 w-32" /><span className="flex-1" /><Skeleton className="h-3.5 w-8" /></div>
+                        <div className="grid grid-cols-7 gap-1">{Array.from({ length: 7 }, (_, i) => <Skeleton key={i} className="h-[52px] !rounded-[10px]" />)}</div>
+                    </div>
+                ))}
+            </>
+        ) : (
+            <>
+                <div className="grid grid-cols-[13rem_repeat(7,minmax(0,1fr))_5.5rem] gap-2 items-end pb-2 border-b border-[var(--neu-line)]">
+                    <Skeleton className="h-3.5 w-20" />
+                    {Array.from({ length: 7 }, (_, i) => <div key={i} className="space-y-1.5"><Skeleton className="h-2.5 w-8" /><Skeleton className="h-4 w-12" /></div>)}
+                    <Skeleton className="h-3.5 w-10 justify-self-end" />
+                </div>
+                {Array.from({ length: 6 }, (_, r) => (
+                    <div key={r} className="grid grid-cols-[13rem_repeat(7,minmax(0,1fr))_5.5rem] gap-2 items-start pb-2 border-b border-[var(--neu-line)]">
+                        <div className="flex items-center gap-2.5"><Skeleton className="w-9 h-9 !rounded-full" /><div className="space-y-1.5 flex-1"><Skeleton className="h-3.5 w-24" /><Skeleton className="h-3 w-16" /></div></div>
+                        {Array.from({ length: 7 }, (_, i) => <Skeleton key={i} className="h-[52px] !rounded-[11px]" style={{ opacity: (r + i) % 5 === 4 ? 0.35 : 1 }} />)}
+                        <Skeleton className="h-4 w-10 justify-self-end" />
+                    </div>
+                ))}
+            </>
+        )}
+    </SkeletonBlock>
+);

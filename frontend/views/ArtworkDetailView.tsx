@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowLeft, Edit2, X, Image as ImageIcon, Palette, Ruler, MapPin } from 'lucide-react';
+import { ArrowLeft, Edit2, X, Image as ImageIcon } from 'lucide-react';
 import { Artwork } from '../types';
 import { ArtworkFormModal } from './ArtworksView';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
@@ -96,9 +96,9 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
 
     const artistLine = [artwork.artist, artwork.artworkYear].filter(Boolean).join(', ');
 
-    let statusClass = 'neu-status text-yellow-700 dark:text-yellow-400';
-    if (artwork.status === 'Available') statusClass = 'neu-status text-green-700 dark:text-green-400';
-    else if (artwork.status === 'Sold') statusClass = 'neu-status text-red-700 dark:text-red-400';
+    let statusClass = 'text-yellow-700 dark:text-yellow-400';
+    if (artwork.status === 'Available') statusClass = 'text-green-700 dark:text-green-400';
+    else if (artwork.status === 'Sold') statusClass = 'text-red-700 dark:text-red-400';
 
     const imageCount = artwork.imageUrls.length;
 
@@ -108,11 +108,12 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
         if (el) el.scrollTo({ left: idx * el.clientWidth, behavior: 'smooth' });
     };
 
-    const specs: { label: string; value?: string; icon: React.ElementType; wide?: boolean }[] = [
-        { label: 'Medium', value: artwork.medium, icon: Palette },
-        { label: 'Dimensions', value: artwork.dimensions, icon: Ruler },
-        { label: 'Location', value: artwork.location, icon: MapPin, wide: true },
-    ];
+    // Only what is filled in: an empty field says nothing worth a row.
+    const specs = [
+        { label: 'Medium', value: artwork.medium },
+        { label: 'Dimensions', value: artwork.dimensions },
+        { label: 'Location', value: artwork.location },
+    ].filter(x => x.value?.trim());
 
     return (
         <div className="absolute inset-0 bg-[var(--neu-bg)] z-[60] flex flex-col animate-fade-in-up">
@@ -130,59 +131,51 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto no-scrollbar neu-scroll-fade px-5 lg:px-10 pt-3">
-                <div className="max-w-6xl mx-auto lg:grid lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)] lg:gap-10 lg:items-start">
+            <div className="flex-1 overflow-y-auto no-scrollbar neu-scroll-fade px-5 lg:px-10 pt-2">
+                <div className="max-w-6xl mx-auto lg:grid lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)] lg:gap-14 lg:items-start">
 
-                    {/* Picture — raised frame around a recessed, colour-matched well */}
+                    {/* Picture: on the page itself, with room around it and a soft shadow; no frames. */}
                     <div className="lg:sticky lg:top-0">
-                        <div className="neu-raised rounded-[1.75rem] p-2.5">
-                            <div className="neu-picture-well rounded-[1.35rem] h-[46dvh] min-h-[260px] lg:h-[min(calc(100dvh-10rem),720px)] flex flex-col">
-                                {/* Dominant-colour glow */}
+                        <div className="relative h-[52dvh] min-h-[280px] lg:h-[min(calc(100dvh-9rem),760px)] flex flex-col">
+                            {imageCount > 0 ? (
                                 <div
-                                    className="absolute inset-0 transition-colors duration-700 ease-in-out z-0"
-                                    style={{ background: `radial-gradient(circle at center, ${glowColor} 0%, transparent 70%)` }}
-                                />
-
-                                {imageCount > 0 ? (
-                                    <div
-                                        ref={mainCarouselRef}
-                                        className="flex-1 w-full flex overflow-x-auto snap-x snap-mandatory no-scrollbar relative z-10"
-                                        onScroll={(e) => {
-                                            const scrollLeft = (e.target as HTMLElement).scrollLeft;
-                                            const width = (e.target as HTMLElement).clientWidth;
-                                            setActiveImageIndex(Math.round(scrollLeft / width));
-                                        }}
-                                    >
-                                        {artwork.imageUrls.map((url, idx) => (
-                                            <div key={url} className="w-full h-full snap-center shrink-0 p-5">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setIsFullScreen(true)}
-                                                    aria-label="View full screen"
-                                                    className="w-full h-full p-0 border-none bg-transparent cursor-zoom-in flex items-center justify-center"
-                                                >
-                                                    <img
-                                                        src={url}
-                                                        alt={`${artwork.title} - ${idx + 1}`}
-                                                        loading="lazy"
-                                                        decoding="async"
-                                                        className="max-w-full max-h-full object-contain rounded-xl shadow-[0_14px_28px_-12px_rgba(0,0,0,0.45)]"
-                                                    />
-                                                </button>
-                                            </div>
-                                        ))}
-                                    </div>
-                                ) : (
-                                    <div className="flex-1 w-full flex items-center justify-center text-[var(--neu-text-dim)] relative z-10">
-                                        <ImageIcon size={64} strokeWidth={1} />
-                                    </div>
-                                )}
-                            </div>
+                                    ref={mainCarouselRef}
+                                    className="flex-1 w-full flex overflow-x-auto snap-x snap-mandatory no-scrollbar"
+                                    onScroll={(e) => {
+                                        const scrollLeft = (e.target as HTMLElement).scrollLeft;
+                                        const width = (e.target as HTMLElement).clientWidth;
+                                        setActiveImageIndex(Math.round(scrollLeft / width));
+                                    }}
+                                >
+                                    {artwork.imageUrls.map((url, idx) => (
+                                        <div key={url} className="w-full h-full snap-center shrink-0 px-2 pt-2 pb-8 lg:p-6 lg:pb-10">
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsFullScreen(true)}
+                                                aria-label="View full screen"
+                                                className="w-full h-full p-0 border-none bg-transparent cursor-zoom-in flex items-center justify-center"
+                                            >
+                                                <img
+                                                    src={url}
+                                                    alt={`${artwork.title} - ${idx + 1}`}
+                                                    loading="lazy"
+                                                    decoding="async"
+                                                    className="max-w-full max-h-full object-contain rounded-md shadow-[0_16px_28px_-16px_rgba(0,0,0,0.35)]"
+                                                />
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="flex-1 w-full flex items-center justify-center rounded-2xl neu-inset text-[var(--neu-text-dim)]">
+                                    <ImageIcon size={48} strokeWidth={1} />
+                                </div>
+                            )}
                         </div>
 
-                        {/* Pager — gold pill marks the current image */}
+                        {/* Pager: small dots, the current one longer */}
                         {imageCount > 1 && (imageCount <= 8 ? (
-                            <div className="flex justify-center items-center gap-0.5 mt-3">
+                            <div className="flex justify-center items-center gap-0.5 mt-2">
                                 {artwork.imageUrls.map((url, idx) => (
                                     <button
                                         key={url}
@@ -192,61 +185,49 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                                         aria-current={idx === activeImageIndex ? 'true' : undefined}
                                         className="p-1.5"
                                     >
-                                        <span className={`block h-2 rounded-full transition-all duration-300 ${idx === activeImageIndex ? 'w-5 neu-accent' : 'w-2 neu-inset'}`} />
+                                        <span className={`block h-1.5 rounded-full transition-all duration-300 ${idx === activeImageIndex ? 'w-4 bg-[var(--neu-gold)]' : 'w-1.5 bg-[var(--neu-text-dim)] opacity-40'}`} />
                                     </button>
                                 ))}
                             </div>
                         ) : (
-                            <div className="flex justify-center mt-3">
-                                <span className="neu-status px-3 py-1 text-[11px] font-medium tracking-widest text-[var(--neu-text-dim)]">
-                                    {activeImageIndex + 1} / {imageCount}
-                                </span>
-                            </div>
+                            <p className="mt-2 text-center text-[11px] tracking-widest tabular-nums text-[var(--neu-text-dim)]">
+                                {activeImageIndex + 1} / {imageCount}
+                            </p>
                         ))}
                     </div>
 
-                    {/* Details */}
-                    <div className="mt-5 lg:mt-0 space-y-4">
-                        {/* Summary */}
-                        <div className="neu-card p-4">
-                            <div className="flex items-center justify-between gap-3">
-                                <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--neu-gold)] truncate">{artwork.customId}</p>
-                                <span className={`shrink-0 text-[10px] px-2.5 py-1 font-semibold uppercase tracking-wider ${statusClass}`}>
-                                    <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                                    {artwork.status}
-                                </span>
-                            </div>
-                            <h1 className="mt-2 text-xl lg:text-2xl font-serif leading-snug text-[var(--neu-text)] break-words">{artwork.title}</h1>
-                            {artistLine && <p className="mt-1 text-xs text-[var(--neu-text-dim)]">{artistLine}</p>}
+                    {/* Details: type and hairlines, no boxes */}
+                    <div className="mt-8 lg:mt-6 lg:sticky lg:top-6">
+                        <p className="flex items-center gap-3 text-[11px] font-medium uppercase tracking-[0.18em]">
+                            {artwork.customId && <span className="text-[var(--neu-text-dim)] truncate">{artwork.customId}</span>}
+                            <span className={`inline-flex items-center gap-1.5 shrink-0 ${statusClass}`}>
+                                <span className="w-1.5 h-1.5 rounded-full bg-current" aria-hidden="true" />
+                                {artwork.status}
+                            </span>
+                        </p>
+                        <h1 className="mt-3 text-[1.75rem] lg:text-[2.1rem] font-serif leading-tight text-[var(--neu-text)] break-words">{artwork.title}</h1>
+                        {artistLine && <p className="mt-1.5 text-sm text-[var(--neu-text-dim)]">{artistLine}</p>}
 
-                            <div className="neu-inset rounded-2xl mt-4 px-4 py-3 flex items-center justify-between gap-3">
-                                <span className="neu-label !mb-0">Price</span>
-                                <p className="text-lg font-semibold text-[var(--neu-gold)] text-right">
-                                    ₹{artwork.price.toLocaleString('en-IN')}
-                                    {artwork.plusGst && <span className="ml-1 text-[11px] font-medium text-[var(--neu-text-dim)]">+ GST</span>}
-                                </p>
-                            </div>
-                        </div>
+                        <p className="mt-6 text-2xl font-light tabular-nums text-[var(--neu-text)]">
+                            ₹{artwork.price.toLocaleString('en-IN')}
+                            {artwork.plusGst && <span className="ml-1.5 text-xs text-[var(--neu-text-dim)]">+ GST</span>}
+                        </p>
 
-                        {/* Specs — inset tiles */}
-                        <div className="grid grid-cols-2 gap-3">
-                            {specs.map(({ label, value, icon: Icon, wide }) => (
-                                <div key={label} className={`neu-inset rounded-2xl p-3 flex items-center gap-3 min-w-0 ${wide ? 'col-span-2' : ''}`}>
-                                    <span className="neu-raised-sm w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-[var(--neu-gold)]">
-                                        <Icon size={15} strokeWidth={1.8} />
-                                    </span>
-                                    <div className="min-w-0">
-                                        <p className="neu-label !mb-0.5">{label}</p>
-                                        <p className="text-[13px] font-medium text-[var(--neu-text)] break-words">{value || '—'}</p>
+                        {specs.length > 0 && (
+                            <dl className="mt-7 border-t border-[var(--neu-line)]">
+                                {specs.map(({ label, value }) => (
+                                    <div key={label} className="flex items-baseline justify-between gap-6 py-3 border-b border-[var(--neu-line)]">
+                                        <dt className="text-[11px] uppercase tracking-[0.14em] text-[var(--neu-text-dim)] shrink-0">{label}</dt>
+                                        <dd className="text-sm text-[var(--neu-text)] text-right break-words min-w-0">{value}</dd>
                                     </div>
-                                </div>
-                            ))}
-                        </div>
+                                ))}
+                            </dl>
+                        )}
 
                         {artwork.description && (
-                            <div className="neu-card p-4">
-                                <p className="neu-label">{artwork.descriptionTitle || 'About this piece'}</p>
-                                <p className="text-[13px] text-[var(--neu-text-dim)] leading-relaxed whitespace-pre-wrap">
+                            <div className="mt-7">
+                                <h2 className="text-[11px] uppercase tracking-[0.14em] text-[var(--neu-text-dim)]">{artwork.descriptionTitle || 'About this piece'}</h2>
+                                <p className="mt-2.5 text-sm leading-relaxed text-[var(--neu-text)] opacity-85 whitespace-pre-wrap">
                                     {artwork.description}
                                 </p>
                             </div>

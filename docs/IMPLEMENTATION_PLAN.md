@@ -20,6 +20,9 @@ Sources: the architecture review of 2026-09-30, a SaaS gap check against
 | Security: pdf.js 5 ran scripts from malicious PDFs (GHSA-hq66-cqwq-w95j); now 6.3.289; DOMPurify updated | `frontend/package.json` |
 | A flaky webhook-health verdict when two signals landed in the same millisecond | `platform/webhookHealth.ts` |
 | CI: secret scan, dependency audit, type-check and all tests before any deploy | `.github/workflows/deploy.yml` |
+| Staff roster: date bar no longer floats on phones; one-tap Assign (who is free, fewest hours first); drag and drop on desktop; copy last week; CSV import beside the export; time presets | `views/staffRoster/` |
+| Skeleton loading instead of spinners (roster, sales, attendance, activity log, lazy screens); new screens must have one | `components/Skeleton.tsx` |
+| Artwork page redesigned: minimal, type-led | `views/ArtworkDetailView.tsx` |
 
 ## Step 1 — Now (small, low risk, a day or two)
 

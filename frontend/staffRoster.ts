@@ -25,7 +25,8 @@ import type { ChangeEvent, Ctx, SessionData } from './workerEnv';
 import { getSession, type StoredUser } from './workerRoles';
 
 const MAX_RANGE_DAYS = 62;
-const MAX_SHIFTS_PER_SAVE = 14;
+// A save: one shift, the same shift on several days, a copied week or an import.
+const MAX_SHIFTS_PER_SAVE = 100;
 const MAX_LEAVE_DAYS = 60;
 
 export function ensureStaffRosterTables(db: D1Database): Promise<void> {

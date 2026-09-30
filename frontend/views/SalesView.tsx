@@ -19,6 +19,7 @@ import type { Artwork, Contact } from '../types';
 import { Drawer, Msg } from './staffRoster/Panels';
 import { itemsText, rupees, saleDayLabel as dayLabel } from '../components/SalesSummary';
 import { ItemNote, ItemThumb, SalesFigures, SalesList, TagChips, TagFilterBar, sameTag } from './sales/SalesParts';
+import { SkeletonRows } from '../components/Skeleton';
 
 interface SalesViewProps {
     artworks: Artwork[];
@@ -257,7 +258,7 @@ const SalesBody: React.FC<{
 }> = ({ error, data, shown, rangeText, canRecord, onRetryLoad, onShowAll, children }) => {
     if (!data) {
         if (error) return <EmptyState icon={<HandCoins size={22} strokeWidth={1.5} />} title="The sales didn’t load" message={error} action={<Button onClick={onRetryLoad}>Try again</Button>} />;
-        return <div className="py-20 flex justify-center text-[var(--neu-text-dim)]"><Loader2 size={22} className="animate-spin" /></div>;
+        return <div className="neu-card p-4"><SkeletonRows rows={7} /></div>;
     }
     if (data.pending.length) return <>{children}</>;
     if (!data.sales.length) {

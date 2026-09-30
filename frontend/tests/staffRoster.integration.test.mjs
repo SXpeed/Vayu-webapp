@@ -181,6 +181,19 @@ test('job titles show on the roster for everyone', async () => {
     assert.ok((await week(owner)).body.jobTitles.includes('Cashier'));
 });
 
+test('a whole week saves in one go (copy last week, import); over 100 at once is refused', async () => {
+    // Open shifts in a far-off week, so the other tests' weeks stay as they are.
+    const dates = Array.from({ length: 7 }, (_, i) => `2027-01-${String(4 + i).padStart(2, '0')}`);
+    const many = dates.flatMap(date => [8, 10, 12].map(h => shift(null, date, h, h + 6)));
+    const made = await api(owner, '/staff-roster/shifts', { method: 'POST', body: { shifts: many } });
+    assert.equal(made.status, 201, made.text);
+    assert.equal(made.body.length, 21);
+    const tooMany = Array.from({ length: 101 }, () => shift(null, '2027-01-11', 9, 17));
+    const refused = await api(owner, '/staff-roster/shifts', { method: 'POST', body: { shifts: tooMany } });
+    assert.equal(refused.status, 400);
+    assert.match(refused.text, /at most 100/);
+});
+
 test('an organization whose plan leaves the staff roster out: closed to everyone', async () => {
     const admin = worker.browser();
     assert.equal((await admin.signIn('admin@example.com', ADMIN_PASSWORD)).status, 200);

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { CalendarDays, CalendarRange, Loader2, RefreshCw, Store as StoreIcon, User as UserIcon } from 'lucide-react';
+import { CalendarDays, CalendarRange, RefreshCw, Store as StoreIcon, User as UserIcon } from 'lucide-react';
 import { AuthUser, authService } from '../services/authService';
 import { AttendanceRecord, StoreConfig } from '../types';
 import { attendanceService } from '../services/attendanceService';
@@ -10,6 +10,7 @@ import { DayView } from './attendance/DayView';
 import { MonthRegister } from './attendance/MonthRegister';
 import { startOfDay } from './attendance/attendanceUtils';
 import { StoresPanel } from './attendance/StoresPanel';
+import { SkeletonRows, SkeletonStats } from '../components/Skeleton';
 
 interface AttendanceViewProps {
     authUser: AuthUser;
@@ -110,7 +111,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ authUser, canMan
 
             <PageBody space="none">
                 {loading ? (
-                    <div className="py-16 flex justify-center"><Loader2 size={22} className="animate-spin text-gold-500" /></div>
+                    <div className="space-y-4 pt-2"><SkeletonStats /><div className="neu-card p-4"><SkeletonRows rows={6} /></div></div>
                 ) : (
                     <div className="animate-fade-in">
                         {tab === 'mine' && (

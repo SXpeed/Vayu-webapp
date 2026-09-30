@@ -36,6 +36,9 @@ const PageChromeContext = createContext<PageChrome>({
     width: 'default', isPhone: false, collapsed: false, expand: () => { },
 });
 
+/** The page's chrome, for content that lines up with it (e.g. a bar that sticks under the header). */
+export const usePageChrome = (): PageChrome => useContext(PageChromeContext);
+
 /** Set by a SearchBar sitting in the header's tools row, so the title row can
  *  carry the magnifier that stands in for it once the row folds away — and
  *  focus it again on tap. */

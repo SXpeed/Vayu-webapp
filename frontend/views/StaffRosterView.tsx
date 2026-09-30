@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import toast from 'react-hot-toast';
 import {
-    AlertTriangle, CalendarClock, ChevronLeft, ChevronRight, Download, Leaf, Loader2, Plus, Send, Store as StoreIcon, Users,
+    AlertTriangle, CalendarClock, ChevronLeft, ChevronRight, CopyPlus, Download, FileUp, Leaf, Plus, Send, Store as StoreIcon, Users,
 } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
 import { StatStrip, type Stat } from '../components/StatStrip';
@@ -10,7 +11,9 @@ import { useMediaQuery } from '../hooks/useMediaQuery';
 import { realtimeService } from '../services/realtimeService';
 import { staffRosterService, type StaffRosterData, type WeekInfo, type WeekStatus } from '../services/staffRosterService';
 import { addDays, defaultBreakMin, mondayOf, paidMin, weekDates, weekdayIdx, type StaffShift } from '../staffRosterRules';
-import { DayAgenda, PhoneWeek, WeekGrid } from './staffRoster/WeekViews';
+import { DayAgenda, PhoneWeek, RosterSkeleton, WeekGrid } from './staffRoster/WeekViews';
+import { CopyWeekPanel, ImportPanel } from './staffRoster/PlanTools';
+import { SkeletonStats } from '../components/Skeleton';
 import { ByStoreView, MonthView, RequestsView } from './staffRoster/OtherViews';
 import { ExportPanel, OpenShiftsPanel, PublishDialog, ShiftEditor, rosterCsv, type EditorState } from './staffRoster/Panels';
 import { derive, hoursText, inWeek, matchesPerson, matchesStore, rangeLabel, todayIso, type Filters } from './staffRoster/shared';
@@ -18,7 +21,7 @@ import { derive, hoursText, inWeek, matchesPerson, matchesStore, rangeLabel, tod
 type View = 'week' | 'month' | 'store' | 'requests';
 type Overlay =
     | { kind: 'edit'; state: EditorState }
-    | { kind: 'open' } | { kind: 'publish' } | { kind: 'export' } | null;
+    | { kind: 'open' } | { kind: 'publish' } | { kind: 'export' } | { kind: 'copy' } | { kind: 'import' } | null;
 
 const NOTIFY_KEY = 'vayu.staffRoster.notify';
 const STATUS_TEXT = { draft: 'Draft', published: 'Published', changed: 'Unpublished changes' } as const;
@@ -176,6 +179,16 @@ const RosterLegend: React.FC<{
     </div>
 );
 
+/** Managers: fill a week fast (copy last week, import a spreadsheet) and take it out again. */
+const PlanToolbar: React.FC<{ onCopy: () => void; onImport: () => void; onExport: () => void }> = ({ onCopy, onImport, onExport }) => (
+    <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Plan faster">
+        <Button onClick={onCopy} icon={<CopyPlus size={15} />}>Copy last week</Button>
+        <Button onClick={onImport} icon={<FileUp size={15} />}>Import</Button>
+        <Button onClick={onExport} icon={<Download size={15} />}>Export</Button>
+        <p className="hidden lg:block ml-auto text-[11.5px] text-[var(--neu-text-dim)]">Tip: drag a shift to another person or day to move it; hold Ctrl to copy.</p>
+    </div>
+);
+
 type Common = Parameters<typeof WeekGrid>[0];
 
 /** The roster in the chosen view. */
@@ -277,6 +290,20 @@ export const StaffRosterView: React.FC = () => {
         else if (inWeek({ date: today }, weekStart)) date = today;
         newShift(null, date);
     };
+    /** A shift dragged to someone else or another day (null: unassigned). Ctrl/Alt copies it. */
+    const moveShift = async (s: StaffShift, employeeId: string | null, date: string, copy: boolean) => {
+        if (s.kind === 'off' && !employeeId) { toast.error('A day off needs a person.'); return; }
+        const who = employeeId ? (data?.people.find(p => p.id === employeeId)?.name.split(' ')[0] ?? 'them') : 'open shifts';
+        const { id: _id, ...fields } = s;
+        try {
+            if (copy) await staffRosterService.createShifts([{ ...fields, employeeId, date }]);
+            else await staffRosterService.updateShift(s.id, { ...fields, employeeId, date });
+            toast.success(`${copy ? 'Copied' : 'Moved'} to ${who}, ${new Date(`${date}T00:00:00Z`).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })}`);
+        } catch (e) {
+            toast.error((e as Error).message || 'Could not move it');
+        }
+        void load();
+    };
     const moveWeek = (by: number) => setWeekStart(w => (view === 'month' ? shiftMonthOfWeek(w, by) : addDays(w, by * 7)));
     const goToday = () => { setWeekStart(mondayOf(todayIso())); setDayIdx(weekdayIdx(todayIso())); };
 
@@ -299,11 +326,15 @@ export const StaffRosterView: React.FC = () => {
 
     // ── Layout ───────────────────────────────────────────────────────────
     const TABS: [View, string][] = [['week', 'Week'], ['month', 'Month'], ['store', 'By store'], ['requests', pendingCount ? `Requests (${pendingCount})` : 'Requests']];
-    const subtitle = rosterSubtitle(manage, isPhone, status, needCover, data?.weeks[weekStart]);
+    // Nothing until the roster arrives: before then it isn't known whether the week is published.
+    const subtitle = data ? rosterSubtitle(manage, isPhone, status, needCover, data.weeks[weekStart]) : '';
 
-    const common = data && d ? { data, d, dates, filters, onEdit: manage ? edit : undefined, onNew: manage ? newShift : undefined } : null;
+    const common = data && d ? {
+        data, d, dates, filters, onEdit: manage ? edit : undefined, onNew: manage ? newShift : undefined,
+        onMove: manage && !isPhone ? (s: StaffShift, e: string | null, date: string, copy: boolean) => { void moveShift(s, e, date, copy); } : undefined,
+    } : null;
     const openDayView = (date: string) => { setWeekStart(mondayOf(date)); setDayIdx(weekdayIdx(date)); setView('week'); setLayout('day'); };
-    let body: React.ReactNode = <div className="py-20 flex justify-center text-[var(--neu-text-dim)]"><Loader2 size={22} className="animate-spin" /></div>;
+    let body: React.ReactNode = <RosterSkeleton phone={isPhone} />;
     if (error && !data) {
         body = <EmptyState icon={<CalendarClock size={22} strokeWidth={1.5} />} title="The roster didn’t load" message={error} action={<Button onClick={() => { void load(); }}>Try again</Button>} />;
     } else if (common) {
@@ -322,7 +353,6 @@ export const StaffRosterView: React.FC = () => {
                         <span className={`hidden sm:inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-semibold ${STATUS_CLS[status]}`} role="status">
                             <span className="w-1.5 h-1.5 rounded-full bg-current" aria-hidden="true" />{STATUS_TEXT[status]}
                         </span>
-                        <GhostIconButton onClick={() => setOverlay({ kind: 'export' })} label="Export this week" icon={<Download size={16} className="text-brand-900 dark:text-gold-400" />} />
                         <GhostIconButton onClick={() => setOverlay({ kind: 'publish' })} label="Publish roster" icon={<Send size={15} className="text-brand-900 dark:text-gold-400" />} />
                         <AddShiftButton phone={isPhone} onClick={addAnywhere} />
                     </>
@@ -340,7 +370,11 @@ export const StaffRosterView: React.FC = () => {
                     </div>
                 )}
 
-                {view !== 'requests' && <RosterStats stats={stats} />}
+                {view !== 'requests' && (data ? <RosterStats stats={stats} /> : !error && <SkeletonStats />)}
+
+                {manage && data && (view === 'week' || view === 'store') && (
+                    <PlanToolbar onCopy={() => setOverlay({ kind: 'copy' })} onImport={() => setOverlay({ kind: 'import' })} onExport={() => setOverlay({ kind: 'export' })} />
+                )}
 
                 {view !== 'requests' && view !== 'month' && (
                     <RosterFilters view={view} filters={filters} stores={data?.stores ?? []} titles={titles} layout={layout}
@@ -365,6 +399,8 @@ export const StaffRosterView: React.FC = () => {
                 <PublishDialog data={data} d={d} weekStart={weekStart} notify={notify} onNotify={setNotify} onFix={edit} onClose={() => setOverlay(null)} onPublished={done} />
             )}
             {data && d && overlay?.kind === 'export' && <ExportPanel csv={csv()} weekStart={weekStart} onClose={() => setOverlay(null)} />}
+            {data && overlay?.kind === 'copy' && <CopyWeekPanel data={data} weekStart={weekStart} onClose={() => setOverlay(null)} onDone={done} />}
+            {data && overlay?.kind === 'import' && <ImportPanel data={data} onClose={() => setOverlay(null)} onDone={done} />}
         </PageRoot>
     );
 };

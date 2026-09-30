@@ -211,6 +211,20 @@ html.dark {
     box-shadow: inset 4px 4px 9px var(--neu-shadow-dark), inset -4px -4px 9px var(--neu-shadow-light);
 }
 
+/* Loading placeholder in the shape of what is coming (components/Skeleton.tsx):
+ * a softly pressed-in block with a slow shimmer. Static when motion is reduced. */
+.neu-skeleton {
+    border-radius: 0.75rem;
+    background: linear-gradient(90deg, var(--neu-bg-lo) 0%, var(--neu-bg-hi) 50%, var(--neu-bg-lo) 100%);
+    background-size: 200% 100%;
+    box-shadow: inset 2px 2px 5px var(--neu-shadow-dark), inset -2px -2px 5px var(--neu-shadow-light);
+    animation: neu-shimmer 1.4s linear infinite;
+}
+@keyframes neu-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) {
+    .neu-skeleton { animation: none; }
+}
+
 /* Vibrant gold accent — primary CTAs (Soft UI Evolution signature):
  * filled gradient + dark text for strong affordance and AA contrast */
 .neu-accent {
@@ -1357,6 +1371,8 @@ html.dark {
     .sr-open { background: transparent; color: var(--sr-open); border-color: currentColor; border-style: dashed; }
     .sr-pending { background: transparent; color: var(--sr-leave-ink); border-color: var(--sr-leave-edge); border-style: dashed; }
     .sr-conflict { box-shadow: 0 0 0 2px var(--sr-bad); }
+    /* A day cell with a dragged shift over it (staff roster week grid). */
+    .sr-drop-target { background: color-mix(in srgb, var(--neu-bg) 80%, var(--neu-gold)); box-shadow: inset 0 0 0 2px var(--neu-gold); }
     .sr-bad-text { color: var(--sr-bad); }
     .sr-open-text { color: var(--sr-open); }
     .sr-open-row { background: color-mix(in srgb, var(--neu-bg) 86%, var(--sr-open-bg)); }
