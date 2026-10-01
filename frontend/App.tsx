@@ -469,7 +469,7 @@ const App: React.FC = () => {
                     />
                 );
             case 'calendar':
-                return <CalendarView events={events} onBack={() => navigateTo('home')} />;
+                return <CalendarView events={events} onBack={() => navigateTo('home')} onUpdateEvent={handlers.handleUpdateEvent} teamMembers={teamMembers} canEdit={can('calendar', 'edit')} />;
             case 'attendance':
                 return authUser ? <AttendanceView authUser={authUser} canManage={can('attendance', 'edit')} onBack={() => navigateTo('home')} /> : null;
             case 'invoice':

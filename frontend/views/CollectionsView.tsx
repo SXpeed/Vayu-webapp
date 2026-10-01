@@ -408,7 +408,7 @@ export const CollectionFormModal: React.FC<CollectionFormModalProps> = ({ initia
                             value={description}
                             onChange={e => setDescription(e.target.value)}
                             rows={2}
-                            className="w-full bg-transparent border border-gray-300 dark:border-gray-700 rounded-lg p-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors resize-none"
+                            className="w-full bg-transparent border border-gray-300 dark:border-gray-700 rounded-lg p-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-[var(--ink-focus)] transition-colors resize-none"
                             placeholder="Brief description of this collection..."
                         ></textarea>
                     </div>

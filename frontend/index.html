@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport"
-        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+        content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <!-- Single theme-color; the inline theme script below keeps it in sync
          with the user's app-level theme preference (from localStorage). -->
     <meta name="theme-color" content="#e9edf4">
@@ -367,8 +367,13 @@
                     && !/^(button|checkbox|color|file|hidden|image|radio|range|reset|submit)$/i.test(el.type);
             }
             // Visible height with no keyboard, per viewport width (a rotation
-            // changes the width; the keyboard never does). Measured whenever
-            // nothing is being typed into.
+            // changes the width; the keyboard never does): the TALLEST seen
+            // while nothing was being typed into. It used to be overwritten
+            // whenever no field had focus, including the instant between
+            // leaving one field and entering the next; on Android that took
+            // the keyboard-up height as "full", the app decided the keyboard
+            // had closed, grew, then shrank again: the jump when moving
+            // between fields.
             const fullHeight = {};
             /**
              * Whether the on-screen keyboard is up. iOS normally leaves the
@@ -384,52 +389,66 @@
                 if (!vv || vv.scale >= 1.01) return false;
                 const key = Math.round(globalThis.innerWidth);
                 const typing = typingInto(document.activeElement);
-                if (!typing || !fullHeight[key]) fullHeight[key] = vv.height;
+                if (!typing) fullHeight[key] = Math.max(fullHeight[key] || 0, vv.height);
                 if (globalThis.innerHeight - vv.height > 120) return true;
-                return typing && fullHeight[key] - vv.height > 120;
+                return typing && (fullHeight[key] || vv.height) - vv.height > 120;
             }
+
+            // Safe-area insets change only with the layout viewport (rotation,
+            // window size), so they are measured once per size, not per frame:
+            // reading them forces a style recalculation.
+            let insetCache = { size: '', value: null };
+            function cachedInsets() {
+                const size = globalThis.innerWidth + 'x' + globalThis.innerHeight;
+                if (insetCache.size !== size) insetCache = { size: size, value: safeInsets() };
+                return insetCache.value;
+            }
+
+            // CSS variables are written only when they change: each write
+            // re-lays out the whole app.
+            const written = {};
+            function setVar(name, value) {
+                if (written[name] === value) return;
+                written[name] = value;
+                if (value === null) document.documentElement.style.removeProperty(name);
+                else document.documentElement.style.setProperty(name, value);
+            }
+
+            /** One measurement and update. Returns what it set, to tell when things have settled. */
             function setAppHeight() {
                 const root = document.documentElement;
                 const vv = globalThis.visualViewport;
                 const keyboardOpen = keyboardIsOpen(vv);
-                const h = keyboardOpen ? vv.height : null;
-                if (h) {
-                    root.style.setProperty('--app-height', h + 'px');
-                    // iOS reveals a focused field by panning the visual
-                    // viewport down over the (unshrunk) layout viewport, which
-                    // carries the fixed app up and its header off screen.
-                    // Follow the pan instead of snapping it back: the app sits
-                    // exactly in the visible strip whatever iOS does.
-                    root.style.setProperty('--app-top', Math.max(0, vv.offsetTop) + 'px');
-                } else {
-                    root.style.removeProperty('--app-height');
-                    root.style.removeProperty('--app-top');
-                }
+                const h = keyboardOpen ? Math.round(vv.height) : null;
+                // While the keyboard is up the app is pinned to the visible
+                // strip: its height, and its top following iOS's pan of the
+                // visual viewport (which otherwise carries the fixed app, and
+                // its header, up off screen).
+                const top = keyboardOpen ? Math.max(0, Math.round(vv.offsetTop)) : null;
+                setVar('--app-height', h === null ? null : h + 'px');
+                setVar('--app-top', top === null ? null : top + 'px');
                 // Lets CSS drop what only makes sense without a keyboard —
                 // the dock, which would otherwise ride on top of it.
-                root.classList.toggle('kb-open', keyboardOpen);
+                if (root.classList.contains('kb-open') !== keyboardOpen) root.classList.toggle('kb-open', keyboardOpen);
 
-                const insets = safeInsets();
+                const insets = cachedInsets();
                 const shortBy = keyboardOpen ? 0 : viewShortfall(insets);
                 // The keyboard covers the home indicator, so nothing needs to
                 // clear it: a message bar sits right on the keyboard.
                 let safeBottom = shortBy > 0 ? Math.max(0, insets.bottom - shortBy) : null;
                 if (keyboardOpen) safeBottom = 0;
-                if (safeBottom === null) {
-                    root.style.removeProperty('--safe-bottom');
-                } else {
-                    root.style.setProperty('--safe-bottom', safeBottom + 'px');
-                }
+                setVar('--safe-bottom', safeBottom === null ? null : safeBottom + 'px');
                 if (debug) showDebug({ vv, insets, shortBy, h, safeBottom, keyboardOpen });
-                if (globalThis.scrollY > 0) {
-                    globalThis.scrollTo(0, 0);
-                }
-                // The app just shrank to the strip above the keyboard (or that
-                // strip changed): bring the field being typed into back up.
-                if (keyboardOpen && h !== lastKeyboardHeight) scheduleReveal();
+                // Only with the keyboard down: while it is up, putting the
+                // page back fought iOS's own scroll to the field (the snap).
+                if (!keyboardOpen && globalThis.scrollY > 0) globalThis.scrollTo(0, 0);
+                if (keyboardOpen && h !== lastKeyboardHeight) revealPending = true;
                 lastKeyboardHeight = h;
+                return h + '|' + top + '|' + (vv ? Math.round(vv.height) : 0);
             }
             let lastKeyboardHeight = null;
+            let revealPending = false;
+
             /**
              * Keeps the field being typed into above the keyboard. iOS only
              * pans the page to show a field; it never scrolls the app's own
@@ -459,11 +478,36 @@
                     else if (r.top < top) node.scrollTop -= top - r.top;
                 }
             }
-            let revealTimers = [];
-            /** After the layout settles, and again once the keyboard has finished sliding up. */
-            function scheduleReveal() {
-                revealTimers.forEach(clearTimeout);
-                revealTimers = [60, 320].map(function (ms) { return setTimeout(revealFocused, ms); });
+
+            // ── Frame loop ──────────────────────────────────────────────────
+            // Viewport events arrive many times a frame while the keyboard
+            // slides and iOS pans; they only ask for the next frame, where
+            // one update runs. After a change the loop keeps checking, frame
+            // by frame, until three frames in a row measure the same (the
+            // keyboard has finished moving), then reveals the field once.
+            // No timers guessing how long the keyboard takes.
+            let frameId = 0;
+            let watchFrames = 0;
+            let stableFrames = 0;
+            let lastSignature = '';
+            function onFrame() {
+                frameId = 0;
+                const signature = setAppHeight();
+                stableFrames = signature === lastSignature ? stableFrames + 1 : 0;
+                lastSignature = signature;
+                if (watchFrames > 0) watchFrames--;
+                if (stableFrames >= 3 || watchFrames === 0) {
+                    watchFrames = 0;
+                    if (revealPending) { revealPending = false; revealFocused(); }
+                    return;
+                }
+                frameId = requestAnimationFrame(onFrame);
+            }
+            /** Something may have moved: update on the next frame and follow it until it settles. */
+            function watch() {
+                watchFrames = 60;
+                stableFrames = 0;
+                if (!frameId) frameId = requestAnimationFrame(onFrame);
             }
             /** ?vpdebug readout, pinned under the status bar. */
             function showDebug(m) {
@@ -488,25 +532,19 @@
             setAppHeight();
             if (debug) document.addEventListener('DOMContentLoaded', setAppHeight);
             if (globalThis.visualViewport) {
-                globalThis.visualViewport.addEventListener('resize', setAppHeight);
-                globalThis.visualViewport.addEventListener('scroll', setAppHeight);
+                globalThis.visualViewport.addEventListener('resize', watch);
+                globalThis.visualViewport.addEventListener('scroll', watch);
             }
-            globalThis.addEventListener('resize', setAppHeight);
-            // Leaving a field can close the keyboard before any resize says
-            // so; check again once focus has settled.
-            document.addEventListener('focusin', setAppHeight);
+            globalThis.addEventListener('resize', watch);
+            globalThis.addEventListener('orientationchange', watch);
             // Moving to the next field with the keyboard already up resizes
-            // nothing, so that field is brought into view here.
+            // nothing, so that field is brought into view once things settle.
             document.addEventListener('focusin', function (e) {
-                if (typingInto(e.target)) scheduleReveal();
+                if (typingInto(e.target)) revealPending = true;
+                watch();
             });
-            document.addEventListener('focusout', function () {
-                setTimeout(setAppHeight, 60);
-                setTimeout(setAppHeight, 350);
-            });
-            globalThis.addEventListener('orientationchange', function () {
-                setTimeout(setAppHeight, 200);
-            });
+            // Leaving a field can close the keyboard before any resize says so.
+            document.addEventListener('focusout', watch);
         })();
     </script>
 

@@ -1,13 +1,19 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { CalendarEvent } from '../types';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { CalendarEvent, UserProfile } from '../types';
 import { apiCall } from '../services/apiClient';
 import { eventColor, eventTimeLabel } from '../services/eventService';
-import { ChevronLeft, ChevronRight, ChevronDown, X, CalendarDays } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronDown, X } from 'lucide-react';
 import { PageRoot, PageHeader, Button } from '../components/ui';
+import { DayTasks } from './tasks/TaskList';
+import { dayKeyOf } from './tasks/taskModel';
 
 interface CalendarViewProps {
     events: CalendarEvent[];
     onBack: () => void;
+    /** Tasks are ticked, added and edited here too (they are saved with their event). */
+    onUpdateEvent?: (ev: CalendarEvent) => void;
+    teamMembers?: UserProfile[];
+    canEdit?: boolean;
 }
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -29,32 +35,70 @@ interface CalendarCell {
     inMonth: boolean;
 }
 
-/** Build the 6-week grid (Sun-start) for the given month, padded with nulls. */
-function buildMonthGrid(year: number, month: number): Array<CalendarCell | null> {
-    const cells: Array<CalendarCell | null> = [];
-    const firstWeekday = new Date(year, month, 1).getDay();
-    for (let i = 0; i < firstWeekday; i++) cells.push(null);
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    for (let d = 1; d <= daysInMonth; d++) {
-        cells.push({ date: new Date(year, month, d), inMonth: true });
-    }
-    while (cells.length % 7 !== 0) cells.push(null);
-    return cells;
+/**
+ * The month as six weeks (Sunday first), always: every month is the same
+ * height, so moving between months never makes the page jump. Days of the
+ * neighbouring months fill the edges.
+ */
+function buildMonthGrid(year: number, month: number): CalendarCell[][] {
+    const first = new Date(year, month, 1 - new Date(year, month, 1).getDay());
+    return Array.from({ length: 6 }, (_, w) => Array.from({ length: 7 }, (_, d) => {
+        const date = new Date(first.getFullYear(), first.getMonth(), first.getDate() + w * 7 + d);
+        return { date, inMonth: date.getMonth() === month };
+    }));
 }
 
+type CellSize = 'phone' | 'mini' | 'large';
+const CELL: Record<CellSize, { cls: string; num: string; top: string; size: string; dots: string }> = {
+    phone: { cls: 'aspect-square w-full pt-[7px]', num: 'text-[13px]', top: '7px', size: '13px', dots: 'mt-auto mb-[6px]' },
+    mini: { cls: 'h-7 w-full pt-[5px] !rounded-[0.45rem]', num: 'text-[10px]', top: '5px', size: '10px', dots: 'mt-auto mb-[3px] scale-75' },
+    large: { cls: 'aspect-square w-full pt-2.5', num: 'text-[15px]', top: '10px', size: '15px', dots: 'mt-auto mb-2' },
+};
 
-/** A day cell's background: chosen, today (its own look per view), or plain. */
-function dayCellClass(selected: boolean, today: boolean, todayClass: string): string {
-    if (selected) return 'bg-gold-500/15 ring-1 ring-gold-500/70';
-    return today ? todayClass : 'neu-hoverable';
-}
+/**
+ * One day. Today: its number in full ink with a short accent bar under it.
+ * Selected: a soft ink surface. Past days and the neighbouring months recede.
+ * Up to three event dots in a fixed slot, then "+n".
+ */
+const DayCell: React.FC<{
+    cell: CalendarCell; size: CellSize; selected: boolean; today: boolean; past: boolean;
+    holiday?: string; dayEvents: CalendarEvent[]; hideOutside?: boolean; onSelect: () => void;
+}> = ({ cell, size, selected, today, past, holiday, dayEvents, hideOutside = false, onSelect }) => {
+    const v = CELL[size];
+    if (!cell.inMonth && hideOutside) return <div className={v.cls} aria-hidden />;
+    const label = [
+        cell.date.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' }),
+        today ? 'today' : '',
+        holiday ?? '',
+        dayEvents.length ? `${dayEvents.length} event${dayEvents.length === 1 ? '' : 's'}` : '',
+    ].filter(Boolean).join(', ');
+    return (
+        <button
+            type="button"
+            onClick={onSelect}
+            aria-pressed={selected}
+            aria-label={label}
+            data-today={today || undefined}
+            data-past={past || undefined}
+            data-outside={!cell.inMonth || undefined}
+            data-holiday={holiday ? '' : undefined}
+            title={holiday}
+            className={`cal-day ${v.cls}`}
+            style={{ '--cal-num-top': v.top, '--cal-num-size': v.size } as React.CSSProperties}
+        >
+            <span className={`cal-day-num ${v.num}`}>{cell.date.getDate()}</span>
+            <span className={`cal-dots ${v.dots}`} aria-hidden>
+                {dayEvents.slice(0, 3).map(ev => (
+                    <span key={ev.id} className="cal-dot" style={{ backgroundColor: eventColor(ev) }} />
+                ))}
+                {dayEvents.length > 3 && <span className="cal-more">+{dayEvents.length - 3}</span>}
+                {dayEvents.length === 0 && holiday && <span className="cal-dot bg-[#b0544a] dark:bg-[#e3958b] opacity-70" />}
+            </span>
+        </button>
+    );
+};
 
-/** A day number's colour: holidays in red, today in bold. */
-function dayNumberClass(holiday: boolean, today: boolean, plainClass: string): string {
-    if (holiday) return 'text-red-600 dark:text-red-400';
-    return today ? 'text-brand-900 dark:text-gold-400 font-bold' : plainClass;
-}
-export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) => {
+export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack, onUpdateEvent, teamMembers = [], canEdit = false }) => {
     const today = useMemo(() => new Date(), []);
     const [viewYear, setViewYear] = useState(today.getFullYear());
     const [viewMonth, setViewMonth] = useState(today.getMonth());
@@ -104,21 +148,44 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) =>
         return () => { cancelled = true; };
     }, [viewYear]);
 
-    const gridCells = useMemo(() => buildMonthGrid(viewYear, viewMonth), [viewYear, viewMonth]);
+    const weeks = useMemo(() => buildMonthGrid(viewYear, viewMonth), [viewYear, viewMonth]);
+    /** Which way the month grid slides in: 1 from the right (later), -1 from the left. */
+    const [direction, setDirection] = useState<1 | -1>(1);
 
-    const goPrevMonth = () => {
-        if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1); }
-        else setViewMonth(m => m - 1);
+    /** Shows this month, sliding in from the side it lies on. */
+    const showMonth = (year: number, month: number) => {
+        const target = year * 12 + month;
+        const current = viewYear * 12 + viewMonth;
+        if (target === current) return;
+        setDirection(target > current ? 1 : -1);
+        setViewYear(year);
+        setViewMonth(month);
     };
-    const goNextMonth = () => {
-        if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1); }
-        else setViewMonth(m => m + 1);
-    };
+    const goPrevMonth = () => showMonth(viewMonth === 0 ? viewYear - 1 : viewYear, (viewMonth + 11) % 12);
+    const goNextMonth = () => showMonth(viewMonth === 11 ? viewYear + 1 : viewYear, (viewMonth + 1) % 12);
     const goToday = () => {
         const now = new Date();
-        setViewYear(now.getFullYear());
-        setViewMonth(now.getMonth());
+        showMonth(now.getFullYear(), now.getMonth());
         setSelectedDate(startOfTodayMs());
+    };
+    /** A day was picked; one from a neighbouring month brings that month in. */
+    const pickDay = (cell: CalendarCell) => {
+        setSelectedDate(startOfDayMs(cell.date));
+        if (!cell.inMonth) showMonth(cell.date.getFullYear(), cell.date.getMonth());
+    };
+
+    // Phones: swipe the month sideways to move between months.
+    const swipe = useRef<{ x: number; y: number } | null>(null);
+    const swipeHandlers = {
+        onPointerDown: (e: React.PointerEvent) => { if (e.pointerType !== 'mouse') swipe.current = { x: e.clientX, y: e.clientY }; },
+        onPointerUp: (e: React.PointerEvent) => {
+            const start = swipe.current;
+            swipe.current = null;
+            if (!start) return;
+            const dx = e.clientX - start.x;
+            if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(e.clientY - start.y) * 1.5) (dx < 0 ? goNextMonth : goPrevMonth)();
+        },
+        onPointerCancel: () => { swipe.current = null; },
     };
 
     /** Events that visually cover the given day (start..endDate inclusive). */
@@ -130,6 +197,20 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) =>
 
     const holidayOn = (day: Date): string | undefined => holidayMap[dayKey(day)];
     const isToday = (day: Date): boolean => dayKey(day) === dayKey(today);
+    const todayStart = startOfDayMs(today);
+    /** Everything a day cell needs, the same in every view. */
+    const cellProps = (cell: CalendarCell) => {
+        const dayStart = startOfDayMs(cell.date);
+        return {
+            cell,
+            selected: dayStart === selectedDate,
+            today: isToday(cell.date),
+            past: dayStart < todayStart,
+            holiday: holidayOn(cell.date),
+            dayEvents: eventsOnDay(cell.date),
+            onSelect: () => pickDay(cell),
+        };
+    };
 
     const selectedDay = new Date(selectedDate);
     const selectedHoliday = holidayOn(selectedDay);
@@ -178,72 +259,29 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) =>
                 </div>
             </PageHeader>
 
-            {/* Legend — events use their own colour; holidays/festivals are always red */}
-            <div className="flex items-center gap-3 px-[10px] pb-1.5 text-[10px] text-gray-600 dark:text-gray-300 uppercase tracking-wider">
-                <span className="flex items-center gap-1">
-                    <span className="w-[6px] h-[6px] rounded-full bg-brand-900 dark:bg-gold-400 inline-block" />
-                    Event (own colour)
-                </span>
-                <span className="flex items-center gap-1">
-                    <span className="w-[6px] h-[6px] rounded-full bg-red-500 inline-block" />
-                    Holiday / Festival
-                </span>
+            {/* Legend: events in their own colour, holidays a muted red, today's bar */}
+            <div className="flex items-center gap-4 px-4 pb-2 text-[11px] text-[var(--neu-text-dim)]">
+                <span className="flex items-center gap-1.5"><span className="cal-dot bg-[var(--neu-text-dim)]" />Event</span>
+                <span className="flex items-center gap-1.5"><span className="cal-dot bg-[#b0544a] dark:bg-[#e3958b]" />Holiday</span>
+                <span className="flex items-center gap-1.5"><span className="w-3 h-[2px] rounded-full bg-[var(--neu-gold)]" />Today</span>
             </div>
 
-            {/* Month card (phone) */}
+            {/* Month (phone): six weeks, a hairline between them; swipe for the next month */}
             <div className="px-3 pb-1 lg:hidden">
-                <div className="neu-raised rounded-2xl p-2">
-                    <div className="grid grid-cols-7 gap-[2px] pb-1.5">
+                <div className="neu-card px-2 pt-2 pb-1 overflow-hidden touch-pan-y" {...swipeHandlers}>
+                    <div className="grid grid-cols-7 pb-1">
                         {WEEKDAYS.map(day => (
-                            <div key={day} className="text-center text-[10px] font-bold text-gray-600 dark:text-gray-300 uppercase tracking-widest py-1">
-                                {day}
+                            <div key={day} className="text-center text-[10px] font-semibold text-[var(--neu-text-dim)] uppercase tracking-[0.12em] py-1">
+                                {day.charAt(0)}
                             </div>
                         ))}
                     </div>
-                    <div className="grid grid-cols-7 gap-[2px]">
-                {gridCells.map((cell, i) => {
-                    if (!cell) return <div key={`pad-${i}`} className="aspect-square" />;
-                    const dayStart = startOfDayMs(cell.date);
-                    const isSelected = dayStart === selectedDate;
-                    const isTodayCell = isToday(cell.date);
-                    const holiday = holidayOn(cell.date);
-                    const dayEvents = eventsOnDay(cell.date);
-                    const selectedCls = dayCellClass(isSelected, isTodayCell, 'neu-inset ring-1 ring-gray-300/70 dark:ring-gray-600/70');
-                    return (
-                        <button
-                            key={dayKey(cell.date)}
-                            type="button"
-                            onClick={() => setSelectedDate(dayStart)}
-                            aria-label={`${cell.date.getDate()} ${MONTHS[viewMonth]}${holiday ? ', ' + holiday : ''}${dayEvents.length ? ', ' + dayEvents.length + ' event(s)' : ''}`}
-                            className={`aspect-square w-full flex flex-col items-center justify-start pt-[3px] rounded-lg transition-colors ${selectedCls}`}
-                        >
-                            <span className={`text-[11px] leading-none font-medium ${dayNumberClass(!!holiday, isTodayCell, 'text-gray-900 dark:text-gray-100')}`}>
-                                {cell.date.getDate()}
-                            </span>
-                            {holiday && (
-                                <span className="text-[5px] leading-[1.1] text-red-500 truncate w-full px-[1px] mt-[1px]">
-                                    {holiday}
-                                </span>
-                            )}
-                            {dayEvents.length > 0 && (
-                                <span className="mt-auto mb-[2px] flex items-center gap-[2px]">
-                                    {dayEvents.slice(0, 3).map(ev => (
-                                        <span
-                                            key={ev.id}
-                                            className="w-[5px] h-[5px] rounded-full shrink-0"
-                                            style={{ backgroundColor: eventColor(ev) }}
-                                        />
-                                    ))}
-                                    {dayEvents.length > 3 && (
-                                        <span className="text-[6px] font-bold leading-none text-gray-700 dark:text-gray-300">
-                                            +{dayEvents.length - 3}
-                                        </span>
-                                    )}
-                                </span>
-                            )}
-                        </button>
-                    );
-                })}
+                    <div key={`${viewYear}-${viewMonth}`} className="cal-swap" style={{ '--cal-dir': direction } as React.CSSProperties}>
+                        {weeks.map((week, w) => (
+                            <div key={w} className="cal-week grid grid-cols-7 gap-1 py-1">
+                                {week.map(cell => <DayCell key={dayKey(cell.date)} size="phone" {...cellProps(cell)} />)}
+                            </div>
+                        ))}
                     </div>
                 </div>
             </div>
@@ -280,7 +318,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) =>
                                         aria-label={`Enlarge ${MONTHS[m]} ${viewYear}`}
                                         className="w-full flex items-center justify-between mb-1 px-0.5 cursor-pointer select-none"
                                     >
-                                        <p className="gold-text text-[10px] font-bold uppercase tracking-widest">{MONTHS[m]}</p>
+                                        <p className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-[var(--neu-text)]">{MONTHS[m]}</p>
                                         <span className="flex items-center gap-1">
                                             {isCurrentMonth && <span className="w-1.5 h-1.5 rounded-full bg-gold-500" title="This month" />}
                                             <ChevronDown
@@ -289,42 +327,16 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) =>
                                             />
                                         </span>
                                     </button>
-                                    <div className="grid grid-cols-7 gap-[2px]">
+                                    <div className="grid grid-cols-7 gap-x-[2px]">
                                         {WEEKDAYS.map((d, i) => (
-                                            <div key={i} className="text-center text-[7px] font-bold text-gray-400 dark:text-gray-500 py-0.5">{d.charAt(0)}</div>
+                                            <div key={i} className="text-center text-[8px] font-semibold text-[var(--neu-text-dim)] py-0.5">{d.charAt(0)}</div>
                                         ))}
-                                        {miniCells.map((cell, i) => {
-                                            if (!cell) return <div key={`pad-${i}`} className="h-6" />;
-                                            const dayStart = startOfDayMs(cell.date);
-                                            const isSel = dayStart === selectedDate;
-                                            const isTodayCell = isToday(cell.date);
-                                            const holiday = holidayOn(cell.date);
-                                            const dayEvents = eventsOnDay(cell.date);
-                                            return (
-                                                <button
-                                                    key={dayKey(cell.date)}
-                                                    type="button"
-                                                    onClick={() => setSelectedDate(dayStart)}
-                                                    aria-label={`${cell.date.getDate()} ${MONTHS[m]}${holiday ? ', ' + holiday : ''}${dayEvents.length ? ', ' + dayEvents.length + ' event(s)' : ''}`}
-                                                    className={`h-6 rounded-[3px] flex flex-col items-center justify-center transition-colors ${dayCellClass(isSel, isTodayCell, 'neu-inset')}`}
-                                                >
-                                                    <span className={`text-[9px] leading-none font-medium ${dayNumberClass(!!holiday, isTodayCell, 'text-gray-800 dark:text-gray-200')}`}>
-                                                        {cell.date.getDate()}
-                                                    </span>
-                                                    {dayEvents.length > 0 && (
-                                                        <span className="flex items-center gap-[1px] mt-[1px]">
-                                                            {dayEvents.slice(0, 3).map(ev => (
-                                                                <span key={ev.id} className="w-[3px] h-[3px] rounded-full" style={{ backgroundColor: eventColor(ev) }} />
-                                                            ))}
-                                                        </span>
-                                                    )}
-{dayEvents.length === 0 && !!holiday && (
-                                                        <span className="w-[3px] h-[3px] rounded-full bg-red-500 mt-[1px]" />
-                                                    )}
-                                                </button>
-                                            );
-                                        })}
                                     </div>
+                                    {miniCells.map((week, w) => (
+                                        <div key={w} className="cal-week grid grid-cols-7 gap-x-[2px] py-[2px]">
+                                            {week.map(cell => <DayCell key={dayKey(cell.date)} size="mini" hideOutside {...cellProps(cell)} />)}
+                                        </div>
+                                    ))}
                                 </div>
                             );
                         })}
@@ -343,47 +355,40 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) =>
                 </div>
 
                 {selectedHoliday && (
-                    <div className="flex items-center gap-2 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/40 rounded-lg px-3 py-2 mb-2 animate-fade-in">
-                        <CalendarDays size={14} className="text-red-600 dark:text-red-400 shrink-0" />
-                        <p className="text-xs font-medium text-red-600 dark:text-red-400 truncate">
-                            Public Holiday — {selectedHoliday}
-                        </p>
-                    </div>
+                    <p className="px-1 pb-2 text-[12px] text-[#b0544a] dark:text-[#e3958b]">Public holiday · {selectedHoliday}</p>
                 )}
 
-                {selectedEvents.map(ev => {
-                    const todos = ev.todos || [];
-                    const doneCount = todos.filter(t => t.done).length;
-                    const isRange = !!ev.endDate && dayKey(new Date(ev.endDate)) !== dayKey(new Date(ev.date));
-                    return (
-                        <div
-                            key={ev.id}
-                            className="neu-raised rounded-2xl p-3 mb-2 animate-fade-in-up"
-                        >
-                            <div className="flex items-center gap-3">
-                                <div className="w-1 self-stretch rounded-full shrink-0" style={{ backgroundColor: eventColor(ev) }}></div>
-                                <div className="flex-1 min-w-0">
-                                    <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm line-clamp-1">{ev.title}</h3>
-                                    <p className="text-[11px] text-gray-700 dark:text-gray-300 uppercase tracking-wider mt-0.5">
-                                        {isRange
-                                            ? fmtRange(selectedDate, ev)
-                                            : eventTimeLabel(ev.date)}
-                                        {ev.createdByName ? ` • by ${ev.createdByName}` : ''}
-                                    </p>
-                                </div>
-                                {todos.length > 0 && (
-                                    <span className="text-[10px] font-bold text-gold-700 dark:text-gold-300 uppercase tracking-wider shrink-0">
-                                        {doneCount}/{todos.length} tasks
+                {/* The day's events: quiet rows on one surface */}
+                {selectedEvents.length > 0 && (
+                    <ul className="neu-card px-3 py-1 mb-4">
+                        {selectedEvents.map(ev => {
+                            const todos = ev.todos || [];
+                            const doneCount = todos.filter(t => t.done).length;
+                            const isRange = !!ev.endDate && dayKey(new Date(ev.endDate)) !== dayKey(new Date(ev.date));
+                            return (
+                                <li key={ev.id} className="task-row flex items-stretch gap-3 py-2.5">
+                                    <span className="w-[3px] rounded-full shrink-0" style={{ backgroundColor: eventColor(ev) }} aria-hidden />
+                                    <span className="flex-1 min-w-0">
+                                        <span className="block font-serif text-[15px] leading-snug text-[var(--neu-text)] truncate">{ev.title}</span>
+                                        <span className="block mt-0.5 text-[11.5px] text-[var(--neu-text-dim)] truncate">
+                                            {isRange ? fmtRange(selectedDate, ev) : eventTimeLabel(ev.date)}
+                                            {todos.length > 0 ? ` · ${doneCount}/${todos.length} tasks` : ''}
+                                            {ev.createdByName ? ` · ${ev.createdByName}` : ''}
+                                        </span>
+                                        {ev.notes && <span className="block mt-0.5 text-[11.5px] text-[var(--neu-text-dim)] line-clamp-2">{ev.notes}</span>}
                                     </span>
-                                )}
-                            </div>
-                            {ev.notes && <p className="text-[11px] text-gray-600 dark:text-gray-300 font-light line-clamp-1 mt-1 pl-[10px]">{ev.notes}</p>}
-                        </div>
-                    );
-                })}
+                                </li>
+                            );
+                        })}
+                    </ul>
+                )}
                 {selectedEvents.length === 0 && !selectedHoliday && (
-                    <div className="text-center py-10 text-gray-600 dark:text-gray-300 text-xs font-light">
-                        Nothing scheduled for this day.
+                    <p className="px-1 py-3 text-[12.5px] text-[var(--neu-text-dim)]">Nothing scheduled for this day.</p>
+                )}
+
+                {onUpdateEvent && (
+                    <div className="px-1">
+                        <DayTasks events={events} day={dayKeyOf(selectedDay)} teamMembers={teamMembers} canEdit={canEdit} onUpdateEvent={onUpdateEvent} />
                     </div>
                 )}
             </div>
@@ -406,7 +411,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) =>
                         className={`neu-raised rounded-3xl w-[min(92vw,700px)] max-h-[86dvh] overflow-y-auto no-scrollbar p-5 ${floatClosing ? 'cal-float-out' : 'cal-float-in'}`}
                     >
                         <div className="flex items-center justify-between mb-3 px-1">
-                            <p className="gold-text text-sm font-bold uppercase tracking-widest">
+                            <p className="font-serif text-lg text-[var(--neu-text)]">
                                 {MONTHS[openMonth]} {viewYear}
                             </p>
                             <button
@@ -421,51 +426,14 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack }) =>
 
                         <div className="grid grid-cols-7 gap-1">
                             {WEEKDAYS.map((d, i) => (
-                                <div key={i} className="text-center text-[10px] font-bold text-gray-400 dark:text-gray-500 py-1">{d}</div>
+                                <div key={i} className="text-center text-[10px] font-semibold text-[var(--neu-text-dim)] uppercase tracking-[0.12em] py-1">{d}</div>
                             ))}
-                            {buildMonthGrid(viewYear, openMonth).map((cell, i) => {
-                                if (!cell) return <div key={`pad-${i}`} className="aspect-square" />;
-                                const dayStart = startOfDayMs(cell.date);
-                                const isSel = dayStart === selectedDate;
-                                const isTodayCell = isToday(cell.date);
-                                const holiday = holidayOn(cell.date);
-                                const dayEvents = eventsOnDay(cell.date);
-                                return (
-                                    <button
-                                        key={dayKey(cell.date)}
-                                        type="button"
-                                        onClick={() => setSelectedDate(dayStart)}
-                                        aria-label={`${cell.date.getDate()} ${MONTHS[openMonth]}${holiday ? ', ' + holiday : ''}${dayEvents.length ? ', ' + dayEvents.length + ' event(s)' : ''}`}
-                                        className={`aspect-square w-full flex flex-col items-center justify-start pt-1.5 rounded-xl transition-colors ${dayCellClass(isSel, isTodayCell, 'neu-inset ring-1 ring-gray-300/70 dark:ring-gray-600/70')}`}
-                                    >
-                                        <span className={`text-sm leading-none font-medium ${dayNumberClass(!!holiday, isTodayCell, 'text-gray-900 dark:text-gray-100')}`}>
-                                            {cell.date.getDate()}
-                                        </span>
-                                        {holiday && (
-                                            <span className="text-[7px] leading-[1.2] text-red-500 truncate w-full px-1 mt-0.5">
-                                                {holiday}
-                                            </span>
-                                        )}
-                                        {dayEvents.length > 0 && (
-                                            <span className="mt-auto mb-1.5 flex items-center gap-1">
-                                                {dayEvents.slice(0, 3).map(ev => (
-                                                    <span
-                                                        key={ev.id}
-                                                        className="w-1.5 h-1.5 rounded-full shrink-0"
-                                                        style={{ backgroundColor: eventColor(ev) }}
-                                                    />
-                                                ))}
-                                                {dayEvents.length > 3 && (
-                                                    <span className="text-[8px] font-bold text-gray-700 dark:text-gray-300">
-                                                        +{dayEvents.length - 3}
-                                                    </span>
-                                                )}
-                                            </span>
-                                        )}
-                                    </button>
-                                );
-                            })}
                         </div>
+                        {buildMonthGrid(viewYear, openMonth).map((week, w) => (
+                            <div key={w} className="cal-week grid grid-cols-7 gap-1 py-1">
+                                {week.map(cell => <DayCell key={dayKey(cell.date)} size="large" hideOutside {...cellProps(cell)} />)}
+                            </div>
+                        ))}
                     </div>
                 </div>
             )}

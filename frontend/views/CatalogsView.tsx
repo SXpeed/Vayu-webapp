@@ -813,7 +813,7 @@ export const CatalogFormModal: React.FC<CatalogFormModalProps> = ({ initialData,
                             value={description}
                             onChange={e => setDescription(e.target.value)}
                             rows={1}
-                            className="w-full bg-transparent border border-gray-300 dark:border-gray-700 rounded-lg py-1.5 px-2 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors resize-none"
+                            className="w-full bg-transparent border border-gray-300 dark:border-gray-700 rounded-lg py-1.5 px-2 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-[var(--ink-focus)] transition-colors resize-none"
                             placeholder="Brief description of this catalog..."
                         ></textarea>
                     </div>

@@ -360,7 +360,7 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
                             <input id="artwork-description-title" name="descriptionTitle" value={formData.descriptionTitle} onChange={handleChange} className="neu-field mb-3" placeholder="e.g. Provenance or Exhibition History" />
 
                             <label htmlFor="artwork-description" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-2 uppercase tracking-wider">Description</label>
-                            <textarea id="artwork-description" name="description" value={formData.description} onChange={handleChange} rows={3} className="w-full bg-transparent border border-gray-300 dark:border-gray-700 rounded-lg p-2 text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors resize-none text-sm" placeholder="Details about the artwork..."></textarea>
+                            <textarea id="artwork-description" name="description" value={formData.description} onChange={handleChange} rows={3} className="w-full bg-transparent border border-gray-300 dark:border-gray-700 rounded-lg p-2 text-gray-900 dark:text-white focus:outline-none focus:border-[var(--ink-focus)] transition-colors resize-none text-sm" placeholder="Details about the artwork..."></textarea>
                         </div>
                     </div>
                     <div className="h-10"></div> {/* Spacer */}

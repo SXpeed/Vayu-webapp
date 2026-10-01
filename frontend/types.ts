@@ -126,6 +126,8 @@ export interface Inquiry {
     imageUrls?: string[];
 }
 
+export type TaskPriority = 'high' | 'medium' | 'low';
+
 export interface EventTodo {
     id: string;
     text: string;
@@ -134,6 +136,12 @@ export interface EventTodo {
     assigneeName?: string;
     done: boolean;
     createdAt: number;
+    /** Due day (YYYY-MM-DD). Unset: the day its event starts. */
+    due?: string;
+    /** Due time (HH:MM, 24h); optional. */
+    dueTime?: string;
+    priority?: TaskPriority;
+    notes?: string;
 }
 
 export interface CalendarEvent {

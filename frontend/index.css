@@ -245,11 +245,45 @@ html.dark {
     box-shadow: inset 3px 3px 7px var(--neu-shadow-dark), inset -3px -3px 7px var(--neu-shadow-light);
 }
 
-/* Accessibility: always-visible keyboard focus ring */
-:where(button, [role='button'], input, select, textarea, a):focus-visible {
-    outline: 2px solid #9a7b1c;
+/* ── Focus ────────────────────────────────────────────────────────────────
+ * One quiet system instead of the old 2px gold ring (which every text field
+ * showed on any click: browsers treat a click into a field as focus-visible).
+ *
+ *  - Controls (buttons, links, checkboxes…), keyboard only: a thin neutral
+ *    ink outline, a little off the edge.
+ *  - Text entry (input, textarea, select), mouse, touch or keyboard: the
+ *    field shows its own focus — its 1px border turns ink (see .neu-field).
+ *    Fields without .neu-field get the same 1px ink outline, flush.
+ *  --ink-focus is the text colour at 58%: about 3:1 against the surface in
+ *  both themes, so it stays a clear indicator without colour. */
+:root {
+    --ink-focus: color-mix(in srgb, var(--neu-text) 58%, transparent);
+    --ink-hover: color-mix(in srgb, var(--neu-text) 16%, transparent);
+    /* Motion: micro interactions, then panels / sections. */
+    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --dur-micro: 150ms;
+    --dur-panel: 220ms;
+}
+
+:where(button, [role='button'], a, summary, [tabindex], input[type='checkbox'], input[type='radio'], input[type='range']):focus-visible {
+    outline: 1.5px solid var(--ink-focus);
     outline-offset: 2px;
-    border-radius: 6px;
+}
+
+:where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='button'], [type='submit'], [type='reset']), textarea, select):focus {
+    outline: none;
+}
+
+/* (.neu-field and .neu-search draw their own focus — no second line.) */
+:where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='button'], [type='submit'], [type='reset']), textarea, select):not(.neu-field, .neu-search):focus-visible {
+    outline: 1px solid var(--ink-focus);
+    outline-offset: 0;
+}
+
+/* Pinch-zoom stays available (no maximum-scale); double-tap zoom on the
+   app's controls is switched off so taps stay taps. */
+html {
+    touch-action: manipulation;
 }
 
 /* Accessibility: respect reduced-motion preferences */
@@ -365,9 +399,8 @@ html.dark {
 
 /* Focus-visible ring for keyboard / accessibility navigation */
 .focus-ring:focus-visible {
-    outline: 2px solid var(--color-gold-500);
+    outline: 1.5px solid var(--ink-focus);
     outline-offset: 2px;
-    border-radius: 4px;
 }
 
 /* Smooth scroll snap for carousels on mobile */
@@ -489,7 +522,7 @@ html.dark {
         font-size: 0.875rem;
         line-height: 1.4;
         color: var(--neu-text);
-        transition: box-shadow 0.2s ease;
+        transition: box-shadow var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out);
         appearance: none;
     }
 
@@ -498,11 +531,13 @@ html.dark {
         opacity: 0.85;
     }
 
+    /* Focus: the field's own hairline turns ink — clear, but no ring. */
     .neu-field:focus,
     .neu-field:focus-visible {
         outline: none;
-        box-shadow: inset 4px 4px 9px var(--neu-shadow-dark), inset -4px -4px 9px var(--neu-shadow-light);
-        caret-color: var(--neu-gold);
+        border-color: var(--ink-focus);
+        box-shadow: inset 2px 2px 5px var(--neu-shadow-dark), inset -2px -2px 5px var(--neu-shadow-light);
+        caret-color: var(--neu-text);
     }
 
     .neu-field:disabled {
@@ -714,7 +749,7 @@ html.dark {
     }
 
     .neu-field:hover:not(:focus) {
-        box-shadow: inset 4px 4px 8px var(--neu-shadow-dark), inset -4px -4px 8px var(--neu-shadow-light);
+        border-color: var(--ink-hover);
     }
 }
 
@@ -767,8 +802,7 @@ html.dark {
    same-structure shadow, so the interpolation is continuous. */
 .neu-search {
     position: relative; /* paints above the wrapper overlay */
-    border-radius: 9999px; /* stay pill-shaped — the global :focus-visible
-        rule forces border-radius:6px on focused inputs, which squared the bar */
+    border-radius: 9999px;
     background: linear-gradient(145deg, var(--neu-bg-lo), var(--neu-bg-hi));
     box-shadow: inset 0 0 0 0 rgba(163, 177, 198, 0), inset 0 0 0 0 rgba(255, 255, 255, 0);
     caret-color: var(--neu-text);
@@ -790,7 +824,7 @@ html.dark {
     outline: none;
     border-radius: 9999px;
     box-shadow: inset 3px 3px 7px var(--neu-shadow-dark), inset -3px -3px 7px var(--neu-shadow-light);
-    caret-color: var(--neu-gold);
+    caret-color: var(--neu-text);
 }
 
 /* The chip's gold state is its own fading overlay — raised gold surface
@@ -1407,4 +1441,255 @@ html.dark {
 @layer components {
     .tile-backdrop { background: var(--tile-bg); }
     .tile-backdrop-icon { color: var(--tile-icon); }
+}
+
+/* ── Calendar days ───────────────────────────────────────────────────────────
+ * Separation through spacing, a hairline between weeks and type weight —
+ * not a card per day. Today: the number in full ink with a short accent bar
+ * under it. Selected: a soft ink surface. Both together: the surface and the
+ * bar. Days of the neighbouring months and past days recede. Event dots sit
+ * in a fixed-height slot so a day never changes size. */
+@layer components {
+    .cal-week + .cal-week {
+        border-top: 1px solid var(--neu-line);
+    }
+
+    .cal-day {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        border-radius: 0.65rem;
+        color: var(--neu-text);
+        transition: background-color var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
+    }
+
+    @media (hover: hover) {
+        .cal-day:hover {
+            background-color: color-mix(in srgb, var(--neu-text) 5%, transparent);
+        }
+    }
+
+    .cal-day-num {
+        font-variant-numeric: tabular-nums;
+        line-height: 1;
+        font-weight: 450;
+    }
+
+    .cal-day[data-past] .cal-day-num {
+        color: var(--neu-text-dim);
+    }
+
+    .cal-day[data-outside] {
+        opacity: 0.35;
+    }
+
+    .cal-day[data-holiday] .cal-day-num {
+        color: #b0544a;
+    }
+
+    html.dark .cal-day[data-holiday] .cal-day-num {
+        color: #e3958b;
+    }
+
+    .cal-day[data-today] .cal-day-num {
+        font-weight: 650;
+        color: var(--neu-text);
+    }
+
+    /* Today's mark: a short accent bar under the number. */
+    .cal-day[data-today]::after {
+        content: '';
+        position: absolute;
+        left: 50%;
+        width: 0.8rem;
+        height: 2px;
+        border-radius: 2px;
+        transform: translateX(-50%);
+        top: calc(var(--cal-num-top, 0.45rem) + var(--cal-num-size, 0.75rem) + 3px);
+        background: var(--neu-gold);
+    }
+
+    .cal-day[aria-pressed='true'] {
+        background-color: color-mix(in srgb, var(--neu-text) 10%, transparent);
+    }
+
+    .cal-day[aria-pressed='true'] .cal-day-num {
+        font-weight: 650;
+        color: var(--neu-text);
+    }
+
+    .cal-dots {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 3px;
+        height: 6px;
+    }
+
+    .cal-dot {
+        width: 4px;
+        height: 4px;
+        border-radius: 9999px;
+        flex-shrink: 0;
+    }
+
+    .cal-more {
+        font-size: 7px;
+        line-height: 1;
+        font-weight: 600;
+        color: var(--neu-text-dim);
+    }
+}
+
+/* A new month slides in from the side it came from (--cal-dir: 1 or -1). */
+@keyframes cal-swap {
+    from { opacity: 0; transform: translateX(calc(var(--cal-dir, 1) * 10px)); }
+    to { opacity: 1; transform: none; }
+}
+
+.cal-swap {
+    animation: cal-swap var(--dur-panel) var(--ease-out);
+}
+
+/* ── Tasks ───────────────────────────────────────────────────────────────────
+ * Rows on one surface with hairlines between them, not a card each. Finished
+ * tasks recede; overdue reads in a quiet warm tone; priority is a 6px mark. */
+@layer components {
+    .task-row {
+        transition: opacity var(--dur-micro) var(--ease-out);
+    }
+
+    .task-row + .task-row {
+        border-top: 1px solid var(--neu-line);
+    }
+
+    .task-row[data-done] {
+        opacity: 0.55;
+    }
+
+    .task-row[data-done] .task-title {
+        text-decoration: line-through;
+        text-decoration-color: var(--neu-text-dim);
+    }
+
+    /* A small circle, with a 40px tap area around it. */
+    .task-check {
+        position: relative;
+        width: 1.15rem;
+        height: 1.15rem;
+        flex-shrink: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 9999px;
+        border: 1.5px solid color-mix(in srgb, var(--neu-text) 35%, transparent);
+        color: transparent;
+        transition: background-color var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
+    }
+
+    .task-check::before {
+        content: '';
+        position: absolute;
+        inset: -0.7rem;
+    }
+
+    @media (hover: hover) {
+        .task-check:hover:not(:disabled) {
+            border-color: var(--ink-focus);
+        }
+    }
+
+    .task-check[aria-checked='true'] {
+        background-color: var(--neu-text);
+        border-color: var(--neu-text);
+        color: var(--neu-bg);
+    }
+
+    .task-overdue {
+        color: #a3562c;
+    }
+
+    html.dark .task-overdue {
+        color: #e2a47c;
+    }
+
+    .task-priority {
+        width: 6px;
+        height: 6px;
+        border-radius: 9999px;
+        flex-shrink: 0;
+    }
+
+    .task-priority[data-p='high'] { background: #b8612f; }
+    .task-priority[data-p='medium'] { background: var(--neu-gold); }
+    .task-priority[data-p='low'] { background: color-mix(in srgb, var(--neu-text) 30%, transparent); }
+
+    html.dark .task-priority[data-p='high'] { background: #e39a6b; }
+
+    /* Quiet text button (Add task, Show more, Completed ⌄). */
+    .quiet-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        min-height: 2.25rem;
+        font-size: 0.75rem;
+        color: var(--neu-text-dim);
+        transition: color var(--dur-micro) var(--ease-out);
+    }
+
+    @media (hover: hover) {
+        .quiet-btn:hover { color: var(--neu-text); }
+    }
+}
+
+/* Height animates open/closed without measuring (Completed, task details). */
+.reveal-rows {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows var(--dur-panel) var(--ease-out);
+}
+
+.reveal-rows[data-open] {
+    grid-template-rows: 1fr;
+}
+
+.reveal-rows > * {
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* Sheets (phones) rise; the inspector (computers) slides in from the right. */
+@keyframes sheet-in {
+    from { opacity: 0; transform: translateY(18px); }
+    to { opacity: 1; transform: none; }
+}
+
+@keyframes panel-in {
+    from { opacity: 0; transform: translateX(14px); }
+    to { opacity: 1; transform: none; }
+}
+
+.sheet-in {
+    animation: sheet-in var(--dur-panel) var(--ease-out);
+}
+
+@media (min-width: 1024px) {
+    .sheet-in {
+        animation-name: panel-in;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .cal-swap,
+    .sheet-in {
+        animation: none;
+    }
+
+    .reveal-rows,
+    .cal-day,
+    .task-row,
+    .task-check {
+        transition: none;
+    }
 }

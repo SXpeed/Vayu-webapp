@@ -1142,7 +1142,7 @@ const ColourPicker: React.FC<{
                 onPointerUp={end}
                 onPointerCancel={end}
                 onKeyDown={e => nudge(e, 'area')}
-                className="relative h-36 rounded-xl cursor-crosshair touch-none select-none focus-visible:ring-2 focus-visible:ring-gold-500"
+                className="relative h-36 rounded-xl cursor-crosshair touch-none select-none focus-visible:ring-1 focus-visible:ring-[var(--ink-focus)]"
                 style={{ background: `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, ${pureHue})` }}
             >
                 <span
@@ -1169,7 +1169,7 @@ const ColourPicker: React.FC<{
                 onPointerUp={end}
                 onPointerCancel={end}
                 onKeyDown={e => nudge(e, 'hue')}
-                className="relative h-4 rounded-full cursor-pointer touch-none select-none focus-visible:ring-2 focus-visible:ring-gold-500"
+                className="relative h-4 rounded-full cursor-pointer touch-none select-none focus-visible:ring-1 focus-visible:ring-[var(--ink-focus)]"
                 style={{ background: 'linear-gradient(to right, #f00, #ff0 16.7%, #0f0 33.3%, #0ff 50%, #00f 66.7%, #f0f 83.3%, #f00)' }}
             >
                 <span
@@ -1337,7 +1337,7 @@ const LastPageSection: React.FC<{
 
                 {designs.length < MAX_END_PAGES && (
                     <div className="flex flex-col items-center gap-1.5 min-w-0">
-                        <label className="w-full aspect-[210/297] rounded-md neu-inset flex items-center justify-center cursor-pointer active-scale text-gray-500 dark:text-gray-400 focus-within:ring-2 focus-within:ring-gold-500">
+                        <label className="w-full aspect-[210/297] rounded-md neu-inset flex items-center justify-center cursor-pointer active-scale text-gray-500 dark:text-gray-400 focus-within:ring-1 focus-within:ring-[var(--ink-focus)]">
                             {uploading === 'new' ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} strokeWidth={1.8} />}
                             <span className="sr-only">Add a last page design</span>
                             <input type="file" accept="image/*" className="sr-only" disabled={uploading !== null} onChange={e => onUpload(e, null)} />
@@ -1437,7 +1437,7 @@ const EndPageTile: React.FC<{
                 </button>
                 <label
                     title="Replace"
-                    className="neu-icon-btn-sm text-gray-600 dark:text-gray-300 cursor-pointer active-scale focus-within:ring-2 focus-within:ring-gold-500"
+                    className="neu-icon-btn-sm text-gray-600 dark:text-gray-300 cursor-pointer active-scale focus-within:ring-1 focus-within:ring-[var(--ink-focus)]"
                 >
                     {busy ? <Loader2 size={11} className="animate-spin" /> : <Upload size={11} />}
                     <span className="sr-only">Replace {name.toLowerCase()}</span>

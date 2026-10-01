@@ -1230,7 +1230,7 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                         value={notes}
                         onChange={e => setNotes(e.target.value)}
                         rows={3}
-                        className="w-full bg-transparent rounded-lg p-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-gold-500 transition-colors resize-none"
+                        className="w-full bg-transparent rounded-lg p-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-[var(--ink-focus)] transition-colors resize-none"
                         placeholder="Add any notes about this inquiry..."
                     />
                 </div>

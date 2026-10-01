@@ -225,12 +225,14 @@ export function useHandlers(args: HandlerArgs) {
         setEvents((prev: CalendarEvent[]) => prev.filter((ev: CalendarEvent) => ev.id !== id));
     }, [setEvents]);
 
+    // On screen first: ticking a task used to wait for the server round trip.
+    // (A failed save was already only logged; the next sync settles it.)
     const handleUpdateEvent = useCallback(async (updated: CalendarEvent) => {
-        try { await eventService.updateEvent(updated); } catch (e) { console.error('D1 sync failed (update event):', e); }
-        await db.saveEvent(updated);
         setEvents((prev: CalendarEvent[]) => prev
             .map((ev: CalendarEvent) => ev.id === updated.id ? updated : ev)
             .sort((a, b) => a.date - b.date));
+        await db.saveEvent(updated);
+        try { await eventService.updateEvent(updated); } catch (e) { console.error('D1 sync failed (update event):', e); }
     }, [setEvents]);
 
     // ── Contacts ──────────────────────────────────────────────────────────

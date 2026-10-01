@@ -3,13 +3,14 @@ import { Artwork, CalendarEvent, Catalog, EventTodo, ViewState, UserProfile } fr
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { EVENT_COLORS, eventColor, eventTimeLabel } from '../services/eventService';
-import { Clock, Receipt, HandCoins, Eye, EyeOff, ChevronLeft, Palette, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronDown, ChevronRight, Edit2, BookOpen, ShieldCheck, User, CalendarClock } from 'lucide-react';
+import { Clock, Receipt, HandCoins, Eye, EyeOff, ChevronLeft, Palette, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronRight, BookOpen, ShieldCheck, User, CalendarClock } from 'lucide-react';
 import { PageRoot, PageHeader, PageBody, GhostIconButton } from '../components/ui';
 import { useAppChrome } from '../components/Layout';
 import { useBranding } from '../useBranding';
 import type { SectionId } from '../permissions';
 import { HIDDEN_AMOUNT, currentMonth, itemsText, rupees, useMonthSales, type MonthSales } from '../components/SalesSummary';
 import { shiftMonth } from '../salesRules';
+import { TaskBoard } from './tasks/TaskList';
 
 /** One dashboard metric — raised tile, gold glyph, serif figure. */
 const StatTile: React.FC<{ icon: React.ReactNode; label: string; children?: React.ReactNode }> = ({ icon, label, children }) => (
@@ -105,7 +106,7 @@ const toInputValue = (ms?: number): string => {
 
 const EMPTY_EVENT_FORM = { title: '', dateTime: '', endDateTime: '', notes: '', color: '', todos: [] as EventTodo[] };
 
-export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, events, teamMembers, onNavigate, onAddEvent, onUpdateEvent, onDeleteEvent }) => {
+export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, events, teamMembers, userProfile, onNavigate, onAddEvent, onUpdateEvent, onDeleteEvent }) => {
     // Admin entry + role come from the shell; on desktop the sidebar shows them
     // instead, so the header only renders these buttons on phones.
     const { isAdmin, openAdmin, can } = useAppChrome();
@@ -127,7 +128,6 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, events, 
     const [eventForm, setEventForm] = useState({ ...EMPTY_EVENT_FORM });
     const [isSavingEvent, setIsSavingEvent] = useState(false);
     const [confirmDeleteEvent, setConfirmDeleteEvent] = useState(false);
-    const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
     const [todoDraft, setTodoDraft] = useState('');
     const [todoAssignee, setTodoAssignee] = useState('');
 
@@ -202,18 +202,6 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, events, 
         setEditingEvent(null);
         setEventForm({ ...EMPTY_EVENT_FORM });
         setShowEventModal(false);
-    };
-
-    const updateEventTodos = (eventId: string, todos: EventTodo[]) => {
-        const ev = events.find(e => e.id === eventId);
-        if (!ev) return;
-        onUpdateEvent({ ...ev, todos });
-    };
-
-    const toggleTodo = (eventId: string, todoId: string) => {
-        const ev = events.find(e => e.id === eventId);
-        if (!ev) return;
-        updateEventTodos(eventId, (ev.todos || []).map(t => (t.id === todoId ? { ...t, done: !t.done } : t)));
     };
 
     const toggleFormTodo = (todoId: string) => {
@@ -360,142 +348,72 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, events, 
                             )}
                         </div>
                     </div>
-                    <div className="space-y-3">
-                        {upcomingEvents.map((ev, index) => {
-                            const isRange = !!ev.endDate && !sameCalendarDay(ev.date, ev.endDate);
-                            const todos = ev.todos || [];
-                            const doneCount = todos.filter(t => t.done).length;
-                            const isExpanded = expandedEventId === ev.id;
-                            return (
-                                <div
-                                    key={ev.id}
-                                    className="neu-raised rounded-2xl animate-fade-in-up overflow-hidden"
-                                    style={{ animationDelay: `${300 + index * 40}ms` }}
-                                >
-                                    <div
-                                        role="button"
-                                        tabIndex={0}
-                                        onClick={() => setExpandedEventId(isExpanded ? null : ev.id)}
-                                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setExpandedEventId(isExpanded ? null : ev.id); }}
-                                        className="flex items-center gap-3.5 p-3.5 lg:p-4 cursor-pointer select-none"
-                                        aria-expanded={isExpanded}
-                                    >
-                                        <div className="w-14 shrink-0 rounded-xl bg-gold-500/10 dark:bg-gold-900/20 border border-gold-500/30 text-center py-1.5">
-                                            <p className="text-[10px] font-bold text-gold-700 dark:text-gold-300 uppercase tracking-widest leading-none">
-                                                {isRange ? `${MONTHS_SHORT[new Date(ev.date).getMonth()]}-${MONTHS_SHORT[new Date(ev.endDate!).getMonth()]}` : MONTHS_SHORT[new Date(ev.date).getMonth()]}
-                                            </p>
-                                            <p className="text-xl font-serif text-gray-900 dark:text-white leading-tight mt-0.5">
-                                                {isRange ? `${new Date(ev.date).getDate()}-${new Date(ev.endDate!).getDate()}` : new Date(ev.date).getDate()}
-                                            </p>
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            <h3 className="font-serif text-gray-900 dark:text-gray-100 text-base line-clamp-1 flex items-center gap-1.5">
-                                                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: eventColor(ev) }} />
-                                                {ev.title}
-                                            </h3>
-                                            <p className="text-xs text-gray-700 dark:text-gray-300 uppercase tracking-wider mt-1">
-                                                {isRange
-                                                    ? `${fmtShortDate(ev.date)} – ${fmtShortDate(ev.endDate!)}`
-                                                    : eventTimeLabel(ev.date)}
-                                                {todos.length > 0 ? ` • ${doneCount}/${todos.length} tasks` : ''}
-                                                {ev.createdByName ? ` • by ${ev.createdByName}` : ''}
-                                            </p>
-                                            {ev.notes && <p className="text-xs text-gray-600 dark:text-gray-300 font-light line-clamp-1 mt-1">{ev.notes}</p>}
-                                        </div>
-                                        {canEditEvents && (
-                                            <button
-                                                type="button"
-                                                onClick={(e) => { e.stopPropagation(); openEditEvent(ev); }}
-                                                aria-label={`Edit event ${ev.title}`}
-                                                className="neu-icon-btn-sm text-gray-600 dark:text-gray-300 active-scale"
-                                            >
-                                                <Edit2 size={14} />
+                    {/* One surface, hairlines between events: easier to scan
+                        than a card each. Tap an event to edit it; its tasks
+                        live in Tasks below. */}
+                    {upcomingEvents.length > 0 ? (
+                        <ul className="neu-card px-2 py-1">
+                            {upcomingEvents.map(ev => {
+                                const isRange = !!ev.endDate && !sameCalendarDay(ev.date, ev.endDate);
+                                const todos = ev.todos || [];
+                                const doneCount = todos.filter(t => t.done).length;
+                                const start = new Date(ev.date);
+                                const body = (
+                                    <>
+                                        <span className="w-11 shrink-0 text-center">
+                                            <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--neu-text-dim)] leading-none">
+                                                {MONTHS_SHORT[start.getMonth()]}
+                                            </span>
+                                            <span className="block font-serif text-[22px] leading-tight text-[var(--neu-text)] tabular-nums">{start.getDate()}</span>
+                                        </span>
+                                        <span className="w-[3px] self-stretch rounded-full shrink-0 my-1" style={{ backgroundColor: eventColor(ev) }} aria-hidden />
+                                        <span className="flex-1 min-w-0">
+                                            <span className="block font-serif text-[15.5px] leading-snug text-[var(--neu-text)] truncate">{ev.title}</span>
+                                            <span className="block mt-0.5 text-[11.5px] text-[var(--neu-text-dim)] truncate">
+                                                {isRange ? `${fmtShortDate(ev.date)} – ${fmtShortDate(ev.endDate!)}` : eventTimeLabel(ev.date)}
+                                                {todos.length > 0 ? ` · ${doneCount}/${todos.length} tasks` : ''}
+                                            </span>
+                                        </span>
+                                        {canEditEvents && <ChevronRight size={16} className="shrink-0 text-[var(--neu-text-dim)]" aria-hidden />}
+                                    </>
+                                );
+                                return (
+                                    <li key={ev.id} className="task-row">
+                                        {canEditEvents ? (
+                                            <button type="button" onClick={() => openEditEvent(ev)} aria-label={`Edit event ${ev.title}`}
+                                                className="w-full flex items-center gap-3 px-2 py-2.5 text-left rounded-xl active-scale">
+                                                {body}
                                             </button>
+                                        ) : (
+                                            <div className="flex items-center gap-3 px-2 py-2.5">{body}</div>
                                         )}
-                                        <ChevronDown size={14} className={`text-gray-600 dark:text-gray-300 shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
-                                    </div>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    ) : (
+                        <div className="neu-card px-5 py-6 text-center">
+                            <p className="text-[13px] text-[var(--neu-text)]">No upcoming events</p>
+                            <p className="mt-1 text-[12px] text-[var(--neu-text-dim)]">An exhibition, a client visit, a delivery — add it to plan its tasks.</p>
+                            {canEditEvents && (
+                                <button type="button" onClick={openAddEvent} className="quiet-btn mt-2 !text-[var(--neu-text)] font-medium"><Plus size={14} /> Add event</button>
+                            )}
+                        </div>
+                    )}
+                </section>
+                )}
 
-                                    {isExpanded && (
-                                        <div className="px-3 pb-3 pt-1">
-                                            {/* Progress — thin gold fill on an inset track */}
-                                            {todos.length > 0 && (
-                                                <div className="flex items-center gap-2.5 px-1.5 pb-2">
-                                                    <div
-                                                        className="flex-1 h-1.5 rounded-full neu-inset overflow-hidden"
-                                                        role="progressbar"
-                                                        aria-valuemin={0}
-                                                        aria-valuemax={todos.length}
-                                                        aria-valuenow={doneCount}
-                                                        aria-label={`Tasks done: ${doneCount} of ${todos.length}`}
-                                                    >
-                                                        <div
-                                                            className="h-full rounded-full bg-gold-500 transition-[width] duration-500 ease-out"
-                                                            style={{ width: `${Math.round((doneCount / todos.length) * 100)}%` }}
-                                                        />
-                                                    </div>
-                                                    <span className="text-[10px] font-bold text-gold-700 dark:text-gold-300 tabular-nums shrink-0">
-                                                        {doneCount}/{todos.length}
-                                                    </span>
-                                                </div>
-                                            )}
-
-                                            {/* Tasks — soft rows; done tasks press in and dim */}
-                                            <ul className="space-y-1.5">
-                                                {todos.map(todo => (
-                                                    <li
-                                                        key={todo.id}
-                                                        className={`flex items-center gap-2.5 rounded-xl px-2.5 py-2 transition-all duration-300 ${todo.done ? 'neu-inset' : 'neu-raised-sm'}`}
-                                                    >
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => toggleTodo(ev.id, todo.id)}
-                                                            disabled={!canEditEvents}
-                                                            aria-label={todo.done ? `Mark "${todo.text}" as not done` : `Mark "${todo.text}" as done`}
-                                                            aria-pressed={todo.done}
-                                                            className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 transition-all duration-300 active-scale ${todo.done ? 'neu-check-on' : 'neu-check'}`}
-                                                        >
-                                                            <Check
-                                                                size={11}
-                                                                strokeWidth={3}
-                                                                className={`transition-transform duration-300 ${todo.done ? 'scale-100' : 'scale-0'}`}
-                                                            />
-                                                        </button>
-                                                        <span
-                                                            className={`flex-1 min-w-0 text-xs truncate transition-colors duration-300 ${todo.done
-                                                                ? 'text-gray-400 dark:text-gray-500 line-through'
-                                                                : 'text-gray-700 dark:text-gray-200 font-medium'}`}
-                                                        >
-                                                            {todo.text}
-                                                        </span>
-                                                        {todo.assigneeName && (
-                                                            <span
-                                                                className={`shrink-0 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full neu-inset transition-colors duration-300 ${todo.done
-                                                                    ? 'text-gray-400 dark:text-gray-500'
-                                                                    : 'text-gold-700 dark:text-gold-300'}`}
-                                                            >
-                                                                {todo.assigneeName}
-                                                            </span>
-                                                        )}
-                                                    </li>
-                                                ))}
-                                            </ul>
-                                            {todos.length === 0 && (
-                                                <p className="text-[11px] text-gray-600 dark:text-gray-300 font-light px-1">
-                                                    No tasks yet — edit the event to add some.
-                                                </p>
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        })}
-                        {upcomingEvents.length === 0 && (
-                            <div className="w-full text-center py-8 neu-raised rounded-2xl">
-                                <CalendarDays size={24} strokeWidth={1.25} className="mx-auto text-gray-600 dark:text-gray-300 mb-2" />
-                                <p className="text-gray-600 dark:text-gray-300 text-xs font-light">No upcoming events. Tap "+ Add" to schedule one.</p>
-                            </div>
-                        )}
-                    </div>
+                {/* Tasks: across every event, by when they are due */}
+                {can('calendar') && (
+                <section className="animate-fade-in-up lg:col-span-1" style={{ animationDelay: '280ms' }} aria-labelledby="home-tasks">
+                    <h2 id="home-tasks" className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-3">Tasks</h2>
+                    <TaskBoard
+                        events={events}
+                        teamMembers={teamMembers}
+                        currentUserId={userProfile.id}
+                        canEdit={canEditEvents}
+                        onUpdateEvent={onUpdateEvent}
+                    />
                 </section>
                 )}
             </div>
