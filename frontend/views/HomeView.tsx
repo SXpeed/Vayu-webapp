@@ -8,7 +8,7 @@ import { PageRoot, PageHeader, PageBody, GhostIconButton } from '../components/u
 import { useAppChrome } from '../components/Layout';
 import { useBranding } from '../useBranding';
 import type { SectionId } from '../permissions';
-import { HIDDEN_AMOUNT, SalesMonthCard, currentMonth, itemsText, rupees, useMonthSales, type MonthSales } from '../components/SalesSummary';
+import { HIDDEN_AMOUNT, currentMonth, itemsText, rupees, useMonthSales, type MonthSales } from '../components/SalesSummary';
 import { shiftMonth } from '../salesRules';
 
 /** One dashboard metric — raised tile, gold glyph, serif figure. */
@@ -24,8 +24,7 @@ const StatTile: React.FC<{ icon: React.ReactNode; label: string; children?: Reac
 
 /**
  * Sales for one month from the sales ledger, with the month switcher. The
- * amount stays hidden each time Home opens until the eye is tapped; the
- * Sales card further down follows the same month and the same choice.
+ * amount stays hidden each time Home opens until the eye is tapped.
  */
 const SalesTile: React.FC<{
     month: string; onMonth: (month: string) => void; sales: MonthSales; hidden: boolean; onToggleHidden: () => void;
@@ -119,7 +118,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, events, 
     const availableArtworks = useMemo(() => artworks.filter(a => a.status === 'Available').length, [artworks]);
 
     // Sales from the ledger, one month at a time. Amounts start hidden every
-    // time Home opens; the tile's eye shows them (and the card's too).
+    // time Home opens; the tile's eye shows them.
     const [salesMonth, setSalesMonth] = useState(currentMonth);
     const [amountsHidden, setAmountsHidden] = useState(true);
     const monthSales = useMonthSales(salesMonth);
@@ -316,17 +315,6 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, events, 
                         ))}
                     </div>
                     </div>
-                </section>
-                )}
-
-                {/* Sales for the month picked on the Sales tile, for everyone with the Sales permission */}
-                {can('sales') && (
-                <section className="animate-fade-in-up" style={{ animationDelay: '165ms' }}>
-                    <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-3">
-                        {/* The card names the month; the heading only says when it is this one. */}
-                        {salesMonth === currentMonth() ? 'Sales this month' : 'Sales'}
-                    </h2>
-                    <SalesMonthCard month={salesMonth} sales={monthSales} hidden={amountsHidden} onOpen={() => onNavigate('sales')} />
                 </section>
                 )}
 

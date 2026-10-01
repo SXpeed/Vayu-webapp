@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ChevronRight, CloudOff, HandCoins } from 'lucide-react';
 import { realtimeService } from '../services/realtimeService';
 import { salesService, type SalesData } from '../services/salesService';
-import { monthRange, todayIso, type PaymentMode, type SalesSummary, type TagTotal } from '../salesRules';
+import { monthRange, todayIso, type TagTotal } from '../salesRules';
 
 // Pieces of the sales ledger shared by the Sales screen and Home. Kept out of
 // views/SalesView so Home, which loads first, doesn't pull that screen in.
@@ -52,14 +51,6 @@ const Breakdown: React.FC<{ rows: BreakdownRow[]; total: number; compact?: boole
     );
 };
 
-/** How the takings split across payment modes, largest first. */
-export const ModeBreakdown: React.FC<{ summary: SalesSummary; compact?: boolean; hidden?: boolean }> = ({ summary, compact = false, hidden = false }) => {
-    const rows = (Object.entries(summary.byMode) as [PaymentMode, { count: number; amount: number }][])
-        .sort((a, b) => b[1].amount - a[1].amount)
-        .map(([mode, m]) => ({ key: mode, label: mode, count: m.count, amount: m.amount }));
-    return <Breakdown rows={rows} total={summary.totalAmount} compact={compact} label="By payment mode" hidden={hidden} />;
-};
-
 /**
  * Takings per tag (an event, say), with untagged sales last. Tapping a row
  * shows only those sales. A sale with two tags counts under both.
@@ -71,18 +62,8 @@ export const TagBreakdown: React.FC<{ rows: TagTotal[]; total: number; active?: 
     />
 );
 
-const LAST_FEW = 3;
-
 /** The first day of the current month, as YYYY-MM-01. */
 export const currentMonth = (): string => monthRange(todayIso())[0];
-
-/** "October 2026"; with `short`, just "October" for a month of this year. */
-export const monthName = (first: string, short = false): string => {
-    const sameYear = first.slice(0, 4) === currentMonth().slice(0, 4);
-    return new Date(`${first}T00:00:00Z`).toLocaleDateString('en-IN', {
-        month: 'long', ...(short && sameYear ? {} : { year: 'numeric' }), timeZone: 'UTC',
-    });
-};
 
 export interface MonthSales {
     data: SalesData | null;
@@ -118,55 +99,3 @@ export function useMonthSales(month: string): MonthSales {
     // Another month's answer is never shown under this month's name.
     return state.month === month ? state : { data: null, failed: false };
 }
-
-/**
- * Home's sales card for one month: the count and total, the split by payment
- * mode and the last few sales. Shown to anyone with the Sales permission
- * (Home leaves it out otherwise); opens the ledger. Amounts stay hidden
- * until the person chooses to see them (the eye on Home's Sales tile).
- */
-export const SalesMonthCard: React.FC<{ month: string; sales: MonthSales; hidden: boolean; onOpen: () => void }> = ({ month, sales, hidden, onOpen }) => {
-    const { data, failed } = sales;
-    const isCurrent = month === currentMonth();
-    const summary = data?.summary;
-    let figure: React.ReactNode = <span className="text-[var(--neu-text-dim)]">…</span>;
-    if (failed && !data) figure = <span className="text-[13px] font-sans text-[var(--neu-text-dim)]">Couldn’t load</span>;
-    else if (summary) figure = <>{money(summary.totalAmount, hidden)}<span className="ml-2 font-sans text-[12px] text-[var(--neu-text-dim)]">{itemsText(summary.count)}</span></>;
-
-    return (
-        <button type="button" onClick={onOpen} className="neu-card-interactive w-full p-3.5 text-left active-scale">
-            <span className="flex items-center gap-3">
-                <span className="neu-inset shrink-0 w-11 h-11 rounded-2xl flex items-center justify-center">
-                    <HandCoins size={20} strokeWidth={1.5} className="text-brand-900 dark:text-gold-400" />
-                </span>
-                <span className="min-w-0 flex-1">
-                    <span className="block text-[10.5px] font-semibold uppercase tracking-widest text-gray-700 dark:text-gray-300">
-                        {isCurrent ? `${monthName(month, true)} so far` : monthName(month)}
-                    </span>
-                    <span className="block text-xl font-serif tabular-nums text-gray-900 dark:text-white">{figure}</span>
-                </span>
-                <ChevronRight size={18} className="shrink-0 text-gold-700 dark:text-gold-300" />
-            </span>
-            {summary && summary.count > 0 && (
-                <span className="block mt-3"><ModeBreakdown summary={summary} compact hidden={hidden} /></span>
-            )}
-            {data && data.sales.length > 0 && (
-                <span className="block mt-3 pt-2.5 border-t border-[var(--neu-line)] space-y-1.5">
-                    {data.sales.slice(0, LAST_FEW).map(s => (
-                        <span key={s.id} className="flex items-baseline gap-2 text-[12px]">
-                            <span className="shrink-0 w-12 text-[var(--neu-text-dim)]">{saleDayLabel(s.saleDate)}</span>
-                            <span className="min-w-0 flex-1 truncate text-[var(--neu-text)]">{s.itemTitle} <span className="text-[var(--neu-text-dim)]">· {s.buyerName}</span></span>
-                            <span className="shrink-0 tabular-nums font-medium text-[var(--neu-gold)]">{money(s.amount, hidden)}</span>
-                        </span>
-                    ))}
-                </span>
-            )}
-            {summary && summary.count === 0 && !data?.pending.length && (
-                <span className="block mt-2 text-[12px] text-[var(--neu-text-dim)]">{isCurrent ? 'No sales recorded this month yet.' : 'No sales recorded in this month.'}</span>
-            )}
-            {(data?.pending.length ?? 0) > 0 && (
-                <span className="mt-2 flex items-center gap-1.5 text-[11.5px] sr-open-text"><CloudOff size={12} /> {data?.pending.length} recorded offline, waiting to upload</span>
-            )}
-        </button>
-    );
-};
