@@ -136,6 +136,10 @@ export interface Env {
   // 'own' when this organization has its own storage, 'original' for the
   // one that owns the original app's data (orgApp.ts).
   ORG_STORAGE?: 'own' | 'original';
+  // The whole KV namespace, unprefixed, inside an organization's requests
+  // (VAYU_KV is then that organization's own slice). For records that span
+  // organizations: which person a push device belongs to.
+  SHARED_KV?: KVNamespace;
   // App sections this organization's plan leaves out (plan modules that gate
   // a section: the staff roster so far). Nobody reaches them, admins included.
   SECTIONS_OFF?: SectionId[];

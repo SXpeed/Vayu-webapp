@@ -411,6 +411,49 @@ export function useHandlers(args: HandlerArgs) {
         }
     }, [setAllMessages]);
 
+    /**
+     * Sets (or with null, takes back) your reaction to a message. Shown at
+     * once; the server's answer then replaces it, and a refusal puts the
+     * message back as it was.
+     */
+    const handleReactToMessage = useCallback(async (messageId: string, emoji: string | null) => {
+        const me = userProfile?.id || authUser?.id || '';
+        if (!me) return;
+        let before: Message | undefined;
+        setAllMessages((prev: Message[]) => prev.map(m => {
+            if (m.id !== messageId) return m;
+            before = m;
+            const reactions = { ...m.reactions };
+            if (emoji === null) delete reactions[me]; else reactions[me] = emoji;
+            return { ...m, reactions: Object.keys(reactions).length ? reactions : undefined };
+        }));
+        try {
+            const updated = await messagingService.react(messageId, emoji);
+            if (updated) {
+                setAllMessages((prev: Message[]) => prev.map(m => (m.id === messageId ? { ...m, ...updated } : m)));
+                await db.saveMessage(updated);
+            }
+        } catch (err) {
+            if (before) { const original = before; setAllMessages((prev: Message[]) => prev.map(m => (m.id === messageId ? original : m))); }
+            toast.error(`Reaction not saved: ${(err as Error).message || 'check your connection'}`);
+        }
+    }, [userProfile, authUser, setAllMessages]);
+
+    /**
+     * Tells the server you have seen these messages (the chat is open on
+     * screen), so their senders can see who read them. Best effort: a
+     * failure is simply tried again the next time the chat is opened.
+     */
+    const handleMarkMessagesRead = useCallback(async (messageIds: string[]) => {
+        for (let i = 0; i < messageIds.length; i += 100) {
+            try {
+                await messagingService.batchUpdateStatus(messageIds.slice(i, i + 100), 'read');
+            } catch {
+                return;
+            }
+        }
+    }, []);
+
     const handleCreateGroup = useCallback(async (participantIds: string[], groupName: string, details?: ConversationDetails, isPrivate = false): Promise<Conversation> => {
         const selfId = userProfile?.id || authUser?.id || '';
         const allParticipantIds = Array.from(new Set([selfId, ...participantIds]));
@@ -478,7 +521,7 @@ export function useHandlers(args: HandlerArgs) {
         // Inquiry messages
         handleSendInquiryMessage,
         // Messaging
-        handleSendMessage, handleRetryMessage, handleTogglePinConversation, handleToggleArchiveConversation, handleDeleteConversation,
+        handleSendMessage, handleRetryMessage, handleReactToMessage, handleMarkMessagesRead, handleTogglePinConversation, handleToggleArchiveConversation, handleDeleteConversation,
         handleCreateConversation, handleCreateGroup, handleUpdateConversationDetails,
         handleUpdateGroup,
     };

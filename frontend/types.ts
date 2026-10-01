@@ -204,6 +204,10 @@ export interface Message {
     status?: MessageStatus;
     replyTo?: MessageReplyTo;
     attachment?: MessageAttachment;
+    /** Who has read it: userId → when (set by the server; never the sender). */
+    readBy?: Record<string, number>;
+    /** One reaction per person: userId → emoji. */
+    reactions?: Record<string, string>;
 }
 
 export interface Conversation {

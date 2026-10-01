@@ -35,6 +35,8 @@
     "realtimeTickets.ts",
     "entityAccess.ts",
     "privateRooms.ts",
+    "messageReceipts.ts",
+    "pushRules.ts",
     "viewingRooms.ts",
     "staffRoster.ts",
     "sales.ts",

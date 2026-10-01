@@ -23,6 +23,8 @@ import { originalSignInOpen } from './platform/originalSignIn';
 import { ORG_PATH, forgetPlanActive, openOrgRequest, orgMemberDevices, orgMemberRecords, orgStorageEnv, signOutOrgMemberDevices } from './orgApp';
 import { orgAccountRoutes } from './orgTeam';
 import { OrgAppDb } from './orgAppDb';
+import { orgKvPrefix } from './orgStorage';
+import { sectionRecipients, staleRegistration, type PushOwner } from './pushRules';
 import {
   ackStatus, changeLogStmt, changeLogStmts, ensureChangeLogTable, handleSync, queueHubNotify,
   statusUpgradeStmts,
@@ -33,6 +35,8 @@ import {
   fileCookieToken, fileCookieValid, forgetFileToken, issueFileCookie,
 } from './fileAuth';
 import { SyncHub } from './realtime';
+import { ensureMessageColumns, reactionStmts, readReceiptStmts } from './messageReceipts';
+import { isReactionEmoji } from './chatReactions';
 import { SNIFF_BYTES, delivery, downloadName, isRasterImage, safeExtension, storedContentType } from './fileTypes';
 import { APP_ORIGIN } from './brand';
 import {
@@ -412,9 +416,11 @@ async function endpointHash(endpoint: string): Promise<string> {
 async function deliverPush(env: Env, subs: Array<{ key: string; sub: StoredPushSubscription }>, payload: PushPayload): Promise<void> {
   if (subs.length === 0) return;
   const vapid = await getOrCreateVapidKeys(env.VAYU_KV);
-  const body = JSON.stringify(payload);
   await Promise.allSettled(subs.map(async ({ key, sub }) => {
     try {
+      // Addressed to its person: a device now signed in as someone else (or
+      // signed out) does not show it (sw.js).
+      const body = JSON.stringify({ ...payload, data: { ...payload.data, to: sub.userId } });
       const status = await sendWebPush(sub, body, vapid, VAPID_SUBJECT);
       // 404/410 mean the browser dropped the subscription — clean it up.
       if (status === 404 || status === 410) await env.VAYU_KV.delete(key);
@@ -434,18 +440,36 @@ async function collectSubs(env: Env, prefix: string): Promise<Array<{ key: strin
   return subs;
 }
 
+/** The people among these who still have an account here, with their role. */
+async function currentMembers(env: Env, userIds: Iterable<string>): Promise<Map<string, string>> {
+  const roles = new Map<string, string>();
+  await Promise.all([...new Set(userIds)].map(async id => {
+    const raw = await env.VAYU_KV.get(`auth:user:${id}`);
+    if (raw) roles.set(id, (JSON.parse(raw) as StoredUser).role);
+  }));
+  return roles;
+}
+
+/** These people's devices; someone removed from the team gets nothing. */
 async function sendPushToUsers(env: Env, userIds: string[], payload: PushPayload): Promise<void> {
+  const members = await currentMembers(env, userIds);
   const subs: Array<{ key: string; sub: StoredPushSubscription }> = [];
-  for (const userId of new Set(userIds)) {
+  for (const userId of members.keys()) {
     subs.push(...await collectSubs(env, `push:sub:${userId}:`));
   }
   await deliverPush(env, subs, payload);
 }
 
-async function sendPushToAllExcept(env: Env, exceptUserId: string, payload: PushPayload): Promise<void> {
+/**
+ * Everyone whose role can see `section` (inquiries, payments), except one
+ * person. It used to go to every subscribed device, so people without
+ * access to inquiries or payments were told about them too.
+ */
+async function sendPushToSection(env: Env, section: SectionId, exceptUserId: string, payload: PushPayload): Promise<void> {
   const all = await collectSubs(env, 'push:sub:');
-  const subs = all.filter(({ sub }) => sub.userId !== exceptUserId);
-  await deliverPush(env, subs, payload);
+  const members = await currentMembers(env, all.map(({ sub }) => sub.userId));
+  const chosen = new Set(sectionRecipients(all.map(({ sub }) => sub), members, await getRoles(env.VAYU_KV), section, exceptUserId));
+  await deliverPush(env, all.filter(({ sub }) => chosen.has(sub)), payload);
 }
 
 function attachmentPreviewText(msg: any): string {
@@ -493,11 +517,11 @@ async function notifyInquiryMessage(env: Env, msg: any, session: SessionData): P
     }
     const senderName = msg.senderName || session.name;
     const senderId = msg.senderId || session.userId;
-    await sendPushToAllExcept(env, senderId, {
+    await sendPushToSection(env, 'inquiries', senderId, {
       title: `${senderName} — ${label}`,
       body: attachmentPreviewText(msg),
       tag: `inquiry-${msg.inquiryId}`,
-      data: { view: 'inquiry', inquiryId: msg.inquiryId },
+      data: { view: 'inquiry', inquiryId: msg.inquiryId, chat: true },
     });
   } catch (e) {
     console.error('Push notify (inquiry message) failed:', e);
@@ -508,7 +532,7 @@ async function notifyInquiryMessage(env: Env, msg: any, session: SessionData): P
 async function notifyNewInquiry(env: Env, inq: any, session: SessionData): Promise<void> {
   try {
     const customerSuffix = inq.customerName ? ` — ${inq.customerName}` : '';
-    await sendPushToAllExcept(env, session.userId, {
+    await sendPushToSection(env, 'inquiries', session.userId, {
       title: `New inquiry${customerSuffix}`,
       body: inq.notes || `Source: ${inq.source || 'Other'}`,
       tag: `inquiry-${inq.id}`,
@@ -544,6 +568,10 @@ async function handlePushSubscribe(ctx: Ctx): Promise<Response> {
       await ctx.env.VAYU_KV.delete(key.name);
     }
   }
+  // …and in every other organization too: each keeps its own list, so a
+  // phone that moved to another workspace (or another person signed in
+  // there) used to go on getting the old one's notifications.
+  await claimPushDevice(ctx.env, id, session.userId);
   const sub: StoredPushSubscription = {
     userId: session.userId,
     endpoint: body.endpoint,
@@ -561,7 +589,36 @@ async function handlePushUnsubscribe(ctx: Ctx): Promise<Response> {
   if (!body.endpoint) return err('endpoint is required');
   const id = await endpointHash(body.endpoint);
   await ctx.env.VAYU_KV.delete(`push:sub:${session.userId}:${id}`);
+  await releasePushDevice(ctx.env, id, session.userId);
   return json({ success: true });
+}
+
+/** Where this request's push subscriptions live in the shared KV: an organization's own slice, or the top level. */
+function pushScope(env: Env): string {
+  return env.ORG_STORAGE === 'own' && env.ORG_ID ? orgKvPrefix(env.ORG_ID) : '';
+}
+
+/**
+ * Records that this device now belongs to this person in this workspace,
+ * and removes the device from whoever held it before, wherever that was.
+ */
+async function claimPushDevice(env: Env, deviceId: string, userId: string): Promise<void> {
+  const shared = env.SHARED_KV ?? env.VAYU_KV;
+  const ownerKey = `push:owner:${deviceId}`;
+  const scope = pushScope(env);
+  const raw = await shared.get(ownerKey);
+  const stale = staleRegistration(raw ? JSON.parse(raw) as PushOwner : null, { scope, userId }, deviceId);
+  if (stale) await shared.delete(stale);
+  await shared.put(ownerKey, JSON.stringify({ scope, userId } satisfies PushOwner));
+}
+
+/** Signed out, or notifications turned off: the device belongs to no one. */
+async function releasePushDevice(env: Env, deviceId: string, userId: string): Promise<void> {
+  const shared = env.SHARED_KV ?? env.VAYU_KV;
+  const ownerKey = `push:owner:${deviceId}`;
+  const raw = await shared.get(ownerKey);
+  const owner = raw ? JSON.parse(raw) as PushOwner : null;
+  if (owner && owner.scope === pushScope(env) && owner.userId === userId) await shared.delete(ownerKey);
 }
 
 // ── Razorpay payment links ──────────────────────────────────────────────────
@@ -1597,7 +1654,7 @@ async function announcePaymentReceived(ctx: Ctx, link: StoredPaymentLink): Promi
   const name = link.customerName || 'customer';
   const descriptionSuffix = link.description ? ` — ${link.description}` : '';
   await Promise.all([
-    sendPushToAllExcept(ctx.env, '', {
+    sendPushToSection(ctx.env, 'payments', '', {
       title: 'Payment received ✓',
       body: `${formatRupees(link.amount)} from ${name}${descriptionSuffix}`,
       tag: `payment-${link.id}`,
@@ -2898,11 +2955,18 @@ async function handleMessagesCreate(ctx: Ctx): Promise<Response> {
   await ensureChangeLogTable(ctx.env.VAYU_DB);
   // Message insert, conversation bump and both change-log rows commit atomically.
   await ctx.env.VAYU_DB.batch([
+    // An upsert, not INSERT OR REPLACE: a re-sent message keeps its read
+    // receipts and reactions (messageReceipts.ts), which REPLACE would wipe.
     ctx.env.VAYU_DB.prepare(
-      `INSERT OR REPLACE INTO messages
+      `INSERT INTO messages
        (id, conversation_id, sender_id, sender_name, text, tags, timestamp,
         status, reply_to, attachment, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         conversation_id = excluded.conversation_id, sender_id = excluded.sender_id,
+         sender_name = excluded.sender_name, text = excluded.text, tags = excluded.tags,
+         timestamp = excluded.timestamp, status = excluded.status, reply_to = excluded.reply_to,
+         attachment = excluded.attachment, created_at = excluded.created_at`
     ).bind(
       msg.id,
       msg.conversationId,
@@ -2969,6 +3033,16 @@ async function applyMessageStatus(ctx: Ctx, session: SessionData, messageIds: st
   const db = ctx.env.VAYU_DB;
   await ensureChangeLogTable(db);
   await ensurePrivateRoomColumns(db);
+  if (to === 'read') {
+    // Reads are recorded per person (who read it, and when), so a group
+    // shows exactly who has seen each message.
+    await ensureMessageColumns(db);
+    const pairs = ids.map(id => readReceiptStmts(db, ctx.env, id, session.userId)).filter(p => p !== null);
+    if (pairs.length === 0) return;
+    const results = await db.batch(pairs.flat());
+    queueHubNotify(ctx, changedMessages(results, pairs.length));
+    return;
+  }
   // Receipts come from conversation participants; admins may act on any
   // conversation except a private room they are not in.
   const who = session.role === ADMIN_ROLE_ID ? { adminId: session.userId } : { memberId: session.userId };
@@ -2982,6 +3056,47 @@ async function applyMessageStatus(ctx: Ctx, session: SessionData, messageIds: st
     }
   }
   queueHubNotify(ctx, events);
+}
+
+/** The messages an (UPDATE … RETURNING, change_log) pair batch changed, as hub events. */
+function changedMessages(results: D1Result[], pairs: number): ChangeEvent[] {
+  const events: ChangeEvent[] = [];
+  for (let i = 0; i < pairs; i++) {
+    for (const row of (results[i * 2].results ?? []) as { id: string; conversation_id: string }[]) {
+      events.push({ entity: 'message', id: row.id, op: 'put', conversationId: row.conversation_id });
+    }
+  }
+  return events;
+}
+
+/**
+ * PUT /messages/:id/reaction { emoji } — sets the signed-in person's
+ * reaction (one per person, replacing any earlier one); { emoji: null }
+ * removes it. Only members of the conversation can react. Answers with the
+ * message as it now stands.
+ */
+async function handleMessageReaction(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const msgId = ctx.path.slice('/messages/'.length, -'/reaction'.length);
+  const body = await ctx.request.json().catch(() => null) as { emoji?: unknown } | null;
+  const emoji = body?.emoji ?? null;
+  if (emoji !== null && !isReactionEmoji(emoji)) return err('That reaction is not available');
+  const db = ctx.env.VAYU_DB;
+  await ensureMessageColumns(db);
+  const row = await db.prepare('SELECT conversation_id FROM messages WHERE id = ?').bind(msgId).first<{ conversation_id: string }>();
+  if (!row) return err('This message no longer exists', 404);
+  const room = await conversationAccess(db, row.conversation_id);
+  // Members only: an admin reading a chat from outside it doesn't react in it.
+  if (!room?.members.includes(session.userId)) return err(NOT_A_MEMBER, 403);
+  const pair = reactionStmts(db, ctx.env, msgId, session.userId, emoji);
+  if (!pair) return err('Your account cannot react here', 400);
+  await ensureChangeLogTable(db);
+  await ensurePrivateRoomColumns(db); // the change_log scope SQL reads is_private
+  const results = await db.batch(pair);
+  queueHubNotify(ctx, changedMessages(results, 1));
+  const updated = await db.prepare('SELECT * FROM messages WHERE id = ?').bind(msgId).first<Record<string, unknown>>();
+  return json(updated ? rowToMessage(updated) : null);
 }
 
 /** Receipt batches are bounded so one request's D1 batch stays small. */
@@ -4890,7 +5005,7 @@ async function handleViewingInterest(ctx: Ctx): Promise<Response> {
     db.prepare('UPDATE viewing_rooms SET inquiry_count = inquiry_count + 1 WHERE id = ?').bind(row.id),
   ]);
   queueHubNotify(ctx, [{ entity: 'inquiry', id: inquiry.id, op: 'put' }]);
-  ctx.execCtx.waitUntil(sendPushToAllExcept(ctx.env, '', {
+  ctx.execCtx.waitUntil(sendPushToSection(ctx.env, 'inquiries', '', {
     title: `New inquiry — ${name}`,
     body: `From private room "${String(row.name)}": ${artworkIds.length} artwork${artworkIds.length === 1 ? '' : 's'}`,
     tag: `inquiry-${inquiry.id}`,
@@ -5077,6 +5192,7 @@ const routes: Route[] = [
   { method: 'GET', match: isExact('/messages'), handler: handleMessagesList },
   { method: 'POST', match: isExact('/messages'), handler: handleMessagesCreate },
   { method: 'PUT', match: (p) => p.startsWith('/messages/') && p.endsWith('/status'), handler: handleMessageStatusUpdate },
+  { method: 'PUT', match: (p) => p.startsWith('/messages/') && p.endsWith('/reaction'), handler: handleMessageReaction },
   { method: 'PUT', match: isExact('/messages/status-batch'), handler: handleMessageStatusBatch },
 
   // Artworks

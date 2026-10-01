@@ -556,7 +556,7 @@ const cachedFor = (res: Response, header: string): Response => { res.headers.set
 async function handlePublic(env: Env, db: D1Database, request: Request, path: string, methods: LoginMethods): Promise<Response | null> {
   if (request.method !== 'GET') return null;
   if (path === '/public/branding') return cachedFor(reply(await publicBranding(db)), 'public, max-age=60');
-  if (path === '/public/branding/logo') return serveLogo(env, db);
+  if (path === '/public/branding/logo') return serveLogo(env, db, new URL(request.url).searchParams.has('v'));
   const orgLogo = /^\/public\/orgs\/([A-Za-z0-9-]{1,64})\/logo$/.exec(path);
   if (orgLogo) return serveOrgLogo(env, db, orgLogo[1]);
   // Public: only published, public plans, and only what a price card needs.

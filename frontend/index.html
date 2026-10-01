@@ -424,6 +424,46 @@
                 if (globalThis.scrollY > 0) {
                     globalThis.scrollTo(0, 0);
                 }
+                // The app just shrank to the strip above the keyboard (or that
+                // strip changed): bring the field being typed into back up.
+                if (keyboardOpen && h !== lastKeyboardHeight) scheduleReveal();
+                lastKeyboardHeight = h;
+            }
+            let lastKeyboardHeight = null;
+            /**
+             * Keeps the field being typed into above the keyboard. iOS only
+             * pans the page to show a field; it never scrolls the app's own
+             * scroll areas. Once the app has shrunk to the strip above the
+             * keyboard, a field low in a form or sheet sits below that
+             * area's new bottom edge, hidden. So scroll each area holding
+             * the field (innermost first) until it shows, with a little
+             * room around it. Measured against the app frame itself, which
+             * covers exactly the visible strip, so it holds whatever the
+             * browser's coordinate system.
+             */
+            function revealFocused() {
+                const el = document.activeElement;
+                if (!typingInto(el) || !document.documentElement.classList.contains('kb-open')) return;
+                const frame = document.getElementById('root') || document.body;
+                const strip = frame.getBoundingClientRect();
+                const margin = 16;
+                for (let node = el.parentElement; node && node !== document.body; node = node.parentElement) {
+                    if (node.scrollHeight <= node.clientHeight + 1) continue;
+                    if (!/(auto|scroll)/.test(getComputedStyle(node).overflowY)) continue;
+                    const box = node.getBoundingClientRect();
+                    const top = Math.max(strip.top, box.top) + margin;
+                    const bottom = Math.min(strip.bottom, box.bottom) - margin;
+                    const r = el.getBoundingClientRect();
+                    // A field taller than the space keeps its top in view.
+                    if (r.bottom > bottom) node.scrollTop += Math.min(r.bottom - bottom, r.top - top);
+                    else if (r.top < top) node.scrollTop -= top - r.top;
+                }
+            }
+            let revealTimers = [];
+            /** After the layout settles, and again once the keyboard has finished sliding up. */
+            function scheduleReveal() {
+                revealTimers.forEach(clearTimeout);
+                revealTimers = [60, 320].map(function (ms) { return setTimeout(revealFocused, ms); });
             }
             /** ?vpdebug readout, pinned under the status bar. */
             function showDebug(m) {
@@ -455,6 +495,11 @@
             // Leaving a field can close the keyboard before any resize says
             // so; check again once focus has settled.
             document.addEventListener('focusin', setAppHeight);
+            // Moving to the next field with the keyboard already up resizes
+            // nothing, so that field is brought into view here.
+            document.addEventListener('focusin', function (e) {
+                if (typingInto(e.target)) scheduleReveal();
+            });
             document.addEventListener('focusout', function () {
                 setTimeout(setAppHeight, 60);
                 setTimeout(setAppHeight, 350);

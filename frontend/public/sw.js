@@ -1,4 +1,12 @@
-const CACHE_NAME = 'vayu-design-v13';
+const CACHE_NAME = 'vayu-design-v14';
+// Small records shared with the app, kept across updates (see activate):
+// who is signed in (pushService.setIdentity) and a notification tap the app
+// has yet to act on.
+const IDENTITY_CACHE = 'push-identity';
+const IDENTITY_URL = '/__push-identity';
+const NAV_CACHE = 'push-nav';
+const NAV_URL = '/__push-nav';
+const KEEP_CACHES = [IDENTITY_CACHE, NAV_CACHE];
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -123,6 +131,14 @@ globalThis.addEventListener('periodicsync', (event) => {
 
 // ── Web Push notifications ─────────────────────────────────────────────────
 
+/** Who the app says is signed in here: { userId } (null while signed out), or null if it never said. */
+function signedInIdentity() {
+  return caches.open(IDENTITY_CACHE)
+    .then(cache => cache.match(IDENTITY_URL))
+    .then(res => (res ? res.json() : null))
+    .catch(() => null);
+}
+
 globalThis.addEventListener('push', (event) => {
   let payload = {};
   try {
@@ -131,35 +147,64 @@ globalThis.addEventListener('push', (event) => {
     payload = { title: 'ateliersupport', body: event.data ? event.data.text() : '' };
   }
   const title = payload.title || 'ateliersupport';
+  const data = payload.data || {};
   const options = {
     body: payload.body || '',
     tag: payload.tag || undefined,
     renotify: !!payload.tag,
-    data: payload.data || {},
+    data,
   };
-  // A push means something changed server-side: open tabs catch up now
-  // instead of waiting for their next scheduled refresh.
+  // A notification names its person. One for someone else (the device has
+  // changed hands) or arriving while signed out stays hidden: its words
+  // belong to that person. Devices the app never told (older versions)
+  // show everything, as before.
   event.waitUntil(
-    globalThis.registration.showNotification(title, options).then(() => broadcastSyncRequired())
+    signedInIdentity().then((identity) => {
+      const hidden = identity && (identity.userId === null || (data.to && identity.userId !== data.to));
+      // A push means something changed server-side: open tabs catch up now
+      // instead of waiting for their next scheduled refresh.
+      if (hidden) return broadcastSyncRequired();
+      return globalThis.registration.showNotification(title, options).then(() => broadcastSyncRequired());
+    })
   );
 });
 
 globalThis.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const view = event.notification.data?.view;
+  const data = event.notification.data || {};
+  // Where to go: the page, and the chat or inquiry on it.
+  const target = {
+    view: data.view,
+    conversationId: data.conversationId,
+    inquiryId: data.inquiryId,
+    chat: data.chat === true,
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  };
+  const params = new URLSearchParams();
+  if (target.view) params.set('view', target.view);
+  if (target.conversationId) params.set('conversation', target.conversationId);
+  if (target.inquiryId) params.set('inquiry', target.inquiryId);
+  if (target.chat) params.set('chat', '1');
   event.waitUntil(
-    globalThis.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
-      // Focus an existing app window and let the app navigate itself.
-      for (const client of windowClients) {
-        if ('focus' in client) {
-          client.postMessage({ type: 'PUSH_NAVIGATE', view });
-          return client.focus();
+    // Also left where the app looks when it comes to the front: on iPhone
+    // the message below can be lost while the app wakes up, which is why
+    // some taps used to open the app without going anywhere.
+    caches.open(NAV_CACHE)
+      .then(cache => cache.put(NAV_URL, new Response(JSON.stringify({ ...target, at: Date.now() }))))
+      .catch(() => undefined)
+      .then(() => globalThis.clients.matchAll({ type: 'window', includeUncontrolled: true }))
+      .then((windowClients) => {
+        // The app's own window (not the website or control centre, which
+        // can share this origin during development).
+        const app = windowClients.find(c => !/^\/(admin|welcome|signup|legal)(\.html)?$/.test(new URL(c.url).pathname));
+        if (app) {
+          app.postMessage({ type: 'PUSH_NAVIGATE', ...target });
+          return 'focus' in app ? app.focus() : undefined;
         }
-      }
-      // No window open: launch the app with the target view in the URL.
-      const url = view ? `./?view=${encodeURIComponent(view)}` : './';
-      return globalThis.clients.openWindow(url);
-    })
+        // No window open: launch the app with the target in the URL.
+        const query = params.toString();
+        return globalThis.clients.openWindow(query ? `./?${query}` : './');
+      })
   );
 });
 
@@ -169,7 +214,7 @@ globalThis.addEventListener('activate', (event) => {
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames
-          .filter((cacheName) => cacheName !== CACHE_NAME)
+          .filter((cacheName) => cacheName !== CACHE_NAME && !KEEP_CACHES.includes(cacheName))
           .map((cacheName) => caches.delete(cacheName))
       );
     }).then(() => {

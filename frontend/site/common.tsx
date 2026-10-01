@@ -80,11 +80,12 @@ export const SiteHeader: React.FC<{ minimal?: boolean; active?: string | null }>
             <span ref={sentinel} aria-hidden className="absolute top-0 left-0 h-px w-px" />
             <header className="mk-header sticky top-0 z-30" data-scrolled={scrolled || open ? 'true' : 'false'}>
                 <div className="max-w-6xl mx-auto px-5 h-16 flex items-center gap-6">
-                    <a href={HOME_URL} className="flex items-center gap-2.5 shrink-0 rounded-lg">
-                        {b.logoUrl
-                            ? <img src={b.logoUrl} alt="" width={32} height={32} className="w-8 h-8 rounded-lg object-contain" />
-                            : <span className="w-8 h-8 rounded-lg neu-accent flex items-center justify-center font-serif">{b.appName.slice(0, 1).toUpperCase()}</span>}
-                        <span className="font-serif text-lg text-gray-900 dark:text-gray-100">{b.appName}</span>
+                    {/* The logo and name come from the control centre. Until they arrive the
+                        slot is held empty, so nothing built-in flashes first. */}
+                    <a href={HOME_URL} aria-label={b.loaded ? undefined : 'Home'} className="flex items-center gap-2.5 shrink-0 rounded-lg">
+                        {b.logoUrl && <img src={b.logoUrl} alt="" width={32} height={32} className="w-8 h-8 rounded-lg object-contain" />}
+                        {!b.loaded && <span aria-hidden className="w-8 h-8" />}
+                        <span className={`font-serif text-lg text-gray-900 dark:text-gray-100 transition-opacity ${b.loaded ? 'opacity-100' : 'opacity-0'}`}>{b.appName}</span>
                     </a>
                     {!minimal && (
                         <nav aria-label="Sections" className="hidden lg:flex items-center gap-6 text-sm text-gray-700 dark:text-gray-300">

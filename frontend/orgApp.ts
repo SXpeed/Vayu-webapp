@@ -48,7 +48,7 @@ interface OrgRow {
 /** The bindings the app's handlers use, pointed at one organization's storage. */
 export function orgStorageEnv(env: Env, org: { id: string; app_storage: AppStorage }): Env {
   if (org.app_storage === 'original') {
-    return { ...env, ORG_ID: org.id, ORG_STORAGE: 'original', FILES_BASE: '/api/files/' };
+    return { ...env, ORG_ID: org.id, ORG_STORAGE: 'original', FILES_BASE: '/api/files/', SHARED_KV: env.VAYU_KV };
   }
   if (!env.ORG_APP_DB) throw new Error('Organization app storage (ORG_APP_DB) is not configured.');
   return {
@@ -57,6 +57,7 @@ export function orgStorageEnv(env: Env, org: { id: string; app_storage: AppStora
     ORG_STORAGE: 'own',
     VAYU_DB: orgDatabase(env.ORG_APP_DB, org.id),
     VAYU_KV: prefixedKv(env.VAYU_KV, orgKvPrefix(org.id)),
+    SHARED_KV: env.VAYU_KV,
     VAYU_R2: prefixedBucket(env.VAYU_R2, orgFilePrefix(org.id)),
     // Realtime: one hub per organization, so updates never cross over.
     WORKSPACE_ID: `org-${org.id}`,

@@ -67,7 +67,7 @@ export const InvoiceView: React.FC<InvoiceViewProps> = ({ invoices, artworks, on
         invoice.invoiceNumber.toLowerCase().includes(query) ||
         (invoice.customerPhone ?? '').includes(query)
     );
-    // Proformas are quotations, so only paid ones count as revenue.
+    // Proformas are quotations, so only paid ones are added up.
     const paidTotal = invoices.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + inv.total, 0);
 
     return (

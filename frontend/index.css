@@ -76,6 +76,15 @@ body,
     top: calc(var(--app-top, 0px) / var(--ui-zoom, 1));
 }
 
+/* Keyboard open: full-screen layers (dialogs, sheets, their backdrops) are
+   placed against the window, not the app, so they would still reach down
+   behind the keyboard. Fit them to the strip above it, like the app. */
+html.kb-open .fixed.inset-0 {
+    top: calc(var(--app-top, 0px) / var(--ui-zoom, 1));
+    bottom: auto;
+    height: var(--app-h);
+}
+
 /* Pages that scroll as a normal document — the control centre and the
    public site — opt out of the app-shell lock above with this class on
    <html>. Set in the HTML itself, so it applies before any script runs.

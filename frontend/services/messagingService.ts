@@ -50,6 +50,14 @@ export const messagingService = {
         });
     },
 
+    /** Sets the signed-in person's reaction, or takes it back (null). Answers with the message as it now is. */
+    async react(messageId: string, emoji: string | null): Promise<Message> {
+        return call<Message>(`/messages/${encodeURIComponent(messageId)}/reaction`, {
+            method: 'PUT',
+            body: JSON.stringify({ emoji }),
+        });
+    },
+
     async batchUpdateStatus(messageIds: string[], status: MessageStatus): Promise<void> {
         await call<{ success: boolean }>('/messages/status-batch', {
             method: 'PUT',

@@ -56,7 +56,24 @@ export function rowToMessage(row: Record<string, unknown>): any {
     status: row.status as string,
     replyTo: row.reply_to ? JSON.parse(row.reply_to as string) : undefined,
     attachment: row.attachment ? JSON.parse(row.attachment as string) : undefined,
+    // Per person (messageReceipts.ts): who has read it, and each one's reaction.
+    readBy: userMap(row.read_by, (v): v is number => typeof v === 'number'),
+    reactions: userMap(row.reactions, (v): v is string => typeof v === 'string'),
   };
+}
+
+/** A stored { userId: value } JSON map, or undefined when empty or unreadable. */
+function userMap<T>(raw: unknown, valid: (v: unknown) => v is T): Record<string, T> | undefined {
+  if (typeof raw !== 'string' || raw === '') return undefined;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const out: Record<string, T> = {};
+    for (const [key, value] of Object.entries(parsed)) if (valid(value)) out[key] = value;
+    return Object.keys(out).length ? out : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function rowToArtwork(row: Record<string, unknown>): any {

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { pushService } from '../services/pushService';
 import { UserProfile } from '../types';
 import { authService, AuthUser } from '../services/authService';
 import { db } from '../services/db';
@@ -94,6 +95,9 @@ export function useAuth() {
     }, [theme, userProfile]);
 
     const handleLogout = useCallback(async (navigateTo: (view: any) => void) => {
+        // First, while still signed in: this device stops getting this
+        // person's notifications (it used to keep getting them after sign-out).
+        await pushService.releaseDevice();
         await authService.logout();
         clearAuth();
         navigateTo('login');

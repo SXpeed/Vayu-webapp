@@ -16,7 +16,7 @@ export type Tab =
 
 export interface NavItem { tab: Tab; label: string; short: string; icon: React.ElementType; badge?: number }
 export interface NavGroup { title: string; items: NavItem[] }
-export interface Brand { appName: string; logoUrl: string | null }
+export interface Brand { appName: string; logoUrl: string | null; loaded?: boolean }
 
 const overlayHost = () => document.getElementById('ac-overlays') ?? document.body;
 
@@ -50,10 +50,12 @@ export function useSmoothScroll(ref: React.RefObject<HTMLElement | null>) {
 /* ───────────────────────────── Brand mark ────────────────────────────── */
 
 export const BrandMark: React.FC<{ brand: Brand; size?: number; onClick?: () => void }> = ({ brand, size = 44, onClick }) => {
-    const inner = brand.logoUrl
-        ? <img src={brand.logoUrl} alt="" width={size} height={size} className="w-full h-full object-contain" />
-        : <span className="font-serif text-lg">{brand.appName.slice(0, 1).toUpperCase()}</span>;
-    const cls = `rounded-2xl shrink-0 flex items-center justify-center overflow-hidden ${brand.logoUrl ? 'neu-raised-sm p-1.5' : 'neu-accent'}`;
+    // Until the branding arrives: a plain tile, never a built-in letter that the real logo then replaces.
+    const pending = brand.loaded === false;
+    let inner: React.ReactNode = null;
+    if (brand.logoUrl) inner = <img src={brand.logoUrl} alt="" width={size} height={size} className="w-full h-full object-contain" />;
+    else if (!pending) inner = <span className="font-serif text-lg">{brand.appName.slice(0, 1).toUpperCase()}</span>;
+    const cls = `rounded-2xl shrink-0 flex items-center justify-center overflow-hidden ${brand.logoUrl || pending ? 'neu-raised-sm p-1.5' : 'neu-accent'}`;
     const style = { width: size, height: size };
     return onClick
         ? <button type="button" onClick={onClick} aria-label="Go to overview" className={`${cls} neu-btn active-scale`} style={style}>{inner}</button>

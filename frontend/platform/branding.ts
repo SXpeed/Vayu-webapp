@@ -169,15 +169,19 @@ async function readLogo(env: Env, request: Request): Promise<{ bytes: Uint8Array
   return { bytes, info, extension };
 }
 
-/** Streams a stored logo. Safe to cache hard: its address carries a version. */
-async function logoResponse(env: Env, key: string | null): Promise<Response> {
+/**
+ * Streams a stored logo. An address with a version (?v=) is safe to cache
+ * hard; the bare address always means "the current logo", so it is checked
+ * again each time (the tab icon uses it, and must follow a new logo).
+ */
+async function logoResponse(env: Env, key: string | null, versioned = true): Promise<Response> {
   if (!key || !env.VAYU_R2) return new Response('Not found', { status: 404 });
   const object = await env.VAYU_R2.get(key);
   if (!object) return new Response('Not found', { status: 404 });
   return new Response(object.body, {
     headers: {
       'Content-Type': object.httpMetadata?.contentType ?? 'image/png',
-      'Cache-Control': 'public, max-age=31536000, immutable',
+      'Cache-Control': versioned ? 'public, max-age=31536000, immutable' : 'public, max-age=300, must-revalidate',
     },
   });
 }
@@ -199,8 +203,8 @@ export async function uploadLogo(env: Env, db: D1Database, request: Request, act
 }
 
 /** Serves the current logo. Public, because it is on the sign-in screen. */
-export async function serveLogo(env: Env, db: D1Database): Promise<Response> {
-  return logoResponse(env, (await getBranding(db)).logoKey);
+export async function serveLogo(env: Env, db: D1Database, versioned = true): Promise<Response> {
+  return logoResponse(env, (await getBranding(db)).logoKey, versioned);
 }
 
 // ── Organization logos ────────────────────────────────────────────────────

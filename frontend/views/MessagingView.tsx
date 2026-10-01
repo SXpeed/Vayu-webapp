@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit2, Check, CheckCheck, Pin, Archive, MoreVertical, Paperclip, Reply, Loader2, Trash2, Camera, AlertCircle, Lock } from 'lucide-react';
+import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit2, Check, Pin, Archive, MoreVertical, Paperclip, Reply, Loader2, Trash2, Camera, AlertCircle, Lock, SmilePlus } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
 import { useIsDesktop } from '../hooks/useMediaQuery';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton, ToggleRow } from '../components/ui';
@@ -12,6 +12,8 @@ import { usePhotoCapture } from '../hooks/usePhotoCapture';
 import { useStickToBottom } from '../hooks/useStickToBottom';
 import toast from 'react-hot-toast';
 import { IfCan } from '../components/Layout';
+import { ImageViewer, type ViewedImage } from './chat/ImageViewer';
+import { Holdable, MessageActionMenu, MessageInfoSheet, ReactionChips, ReactionsSheet, ReadTicks } from './chat/MessageReactions';
 
 interface MessagingViewProps {
     conversations: Conversation[];
@@ -24,6 +26,13 @@ interface MessagingViewProps {
     onSendMessage: (conversationId: string, text: string, tags: MessageTag[], replyTo?: MessageReplyTo, attachment?: MessageAttachment) => void;
     /** Resend a message the server never accepted. */
     onRetryMessage?: (messageId: string) => void;
+    /** Your reaction to a message; null takes it back. */
+    onReactToMessage?: (messageId: string, emoji: string | null) => void;
+    /** Messages you have now seen (the chat is open on screen). */
+    onMarkMessagesRead?: (messageIds: string[]) => void;
+    /** A chat to open (a notification was tapped); onOpenedConversation once it is. */
+    openConversationId?: string;
+    onOpenedConversation?: () => void;
     onCreateConversation: (participantId: string, details?: ConversationDetails) => Promise<Conversation>;
     onCreateGroup: (participantIds: string[], groupName: string, details?: ConversationDetails, isPrivate?: boolean) => Promise<Conversation>;
     onUpdateConversationDetails: (conversationId: string, details: ConversationDetails) => void;
@@ -44,7 +53,7 @@ export const TAG_COLORS: Record<MessageTag, string> = {
 
 export const ALL_TAGS: MessageTag[] = ['General', 'Urgent', 'Follow-up', 'Artwork', 'Inquiry', 'Invoice'];
 
-export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, messages, teamMembers, currentUserId, currentUserName, isAdmin = false, onSendMessage, onRetryMessage, onCreateConversation, onCreateGroup, onUpdateConversationDetails, onUpdateGroup, onTogglePinConversation, onToggleArchiveConversation, onDeleteConversation }) => {
+export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, messages, teamMembers, currentUserId, currentUserName, isAdmin = false, onSendMessage, onRetryMessage, onReactToMessage, onMarkMessagesRead, openConversationId, onOpenedConversation, onCreateConversation, onCreateGroup, onUpdateConversationDetails, onUpdateGroup, onTogglePinConversation, onToggleArchiveConversation, onDeleteConversation }) => {
     // Desktop shows the thread inline beside the list; phones open it as a
     // full-screen overlay. That's a choice of component, not just of styling.
     const isDesktop = useIsDesktop();
@@ -70,6 +79,17 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
         setSelectedConv(conv);
         globalThis.history.pushState({ view: 'messaging', modal: 'message' }, '');
     };
+
+    // A tapped notification's chat opens as soon as it is here (a sync may
+    // still be bringing it in).
+    React.useEffect(() => {
+        if (!openConversationId) return;
+        const conv = conversations.find(c => c.id === openConversationId);
+        if (!conv) return;
+        if (selectedConv?.id !== conv.id) handleConvClick(conv);
+        onOpenedConversation?.();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [openConversationId, conversations]);
 
     const handleCloseModal = () => {
         if (globalThis.history.state?.modal === 'message') {
@@ -396,6 +416,8 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                             onClose={handleCloseModal}
                             onSendMessage={onSendMessage}
                             onRetryMessage={onRetryMessage}
+                            onReactToMessage={onReactToMessage}
+                            onMarkMessagesRead={onMarkMessagesRead}
                             onUpdateConversationDetails={onUpdateConversationDetails}
                         />
                     );
@@ -451,6 +473,8 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                             onClose={handleCloseModal}
                             onSendMessage={onSendMessage}
                             onRetryMessage={onRetryMessage}
+                            onReactToMessage={onReactToMessage}
+                            onMarkMessagesRead={onMarkMessagesRead}
                             onUpdateConversationDetails={onUpdateConversationDetails}
                         />
                     </FullScreenPortal>
@@ -527,13 +551,15 @@ interface ChatDetailModalProps {
     onSendMessage: (conversationId: string, text: string, tags: MessageTag[], replyTo?: MessageReplyTo, attachment?: MessageAttachment) => void;
     /** Resend a message the server never accepted. */
     onRetryMessage?: (messageId: string) => void;
+    onReactToMessage?: (messageId: string, emoji: string | null) => void;
+    onMarkMessagesRead?: (messageIds: string[]) => void;
     onUpdateConversationDetails: (conversationId: string, details: ConversationDetails) => void;
     /** Rendered as the right-hand pane of the desktop master-detail layout
      *  rather than as an overlay sheet over the whole app. */
     inline?: boolean;
 }
 
-const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, messages, resolveName, currentUserId, otherParticipant, isOnline, onClose, onSendMessage, onRetryMessage, onUpdateConversationDetails, inline = false }) => {
+const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, messages, resolveName, currentUserId, otherParticipant, isOnline, onClose, onSendMessage, onRetryMessage, onReactToMessage, onMarkMessagesRead, onUpdateConversationDetails, inline = false }) => {
     // Quoted replies store the sender's name at reply time; resolve it through
     // the original message so placeholders and renames show correctly.
     const replySenderName = (replyTo: MessageReplyTo) => {
@@ -558,6 +584,40 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
     // Opens on the latest message and stays there through late photos, syncing
     // messages and the keyboard — unless the reader scrolls up into history.
     const { scrollerRef, contentRef, scrollToLatest } = useStickToBottom(conversation.id);
+
+    // The hold menu, and the two sheets it leads to (by message id, so they
+    // follow the live message as reactions and reads come in).
+    const [menu, setMenu] = useState<{ msg: Message; anchor: DOMRect } | null>(null);
+    const [reactionsOf, setReactionsOf] = useState<string | null>(null);
+    const [infoOf, setInfoOf] = useState<string | null>(null);
+    /** A photo opened full screen from a message. */
+    const [viewing, setViewing] = useState<ViewedImage | null>(null);
+    const isMember = conversation.participantIds.includes(currentUserId);
+
+    // Seen: while this chat is on screen, tell the server which messages from
+    // others you have now read (each once). Old history is not reported, only
+    // the latest 100, so opening a long chat stays one small request.
+    const reported = useRef(new Set<string>());
+    useEffect(() => {
+        if (!onMarkMessagesRead || !isMember) return;
+        const report = () => {
+            if (document.visibilityState !== 'visible') return;
+            const unseen = messages.filter(m => m.senderId !== currentUserId && m.status !== 'failed'
+                && !m.readBy?.[currentUserId] && !reported.current.has(m.id));
+            if (unseen.length === 0) return;
+            for (const m of unseen) reported.current.add(m.id);
+            onMarkMessagesRead(unseen.slice(-100).map(m => m.id));
+        };
+        report();
+        document.addEventListener('visibilitychange', report);
+        return () => document.removeEventListener('visibilitychange', report);
+    }, [messages, currentUserId, isMember, onMarkMessagesRead]);
+
+    const copyText = (text: string) => {
+        navigator.clipboard?.writeText(text)
+            .then(() => toast.success('Copied'))
+            .catch(() => toast.error('Could not copy'));
+    };
 
     useEffect(() => {
         setDetailsForm({
@@ -648,18 +708,17 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
     if (conversation.isGroup) statusText = `${conversation.participantIds.length} members`;
     else if (isOnline) statusText = 'Online';
 
-    const renderMessageStatusIcon = (status?: string) => {
-        if (status === 'read') return <CheckCheck size={12} className="text-sky-500 dark:text-sky-400" />;
-        if (status === 'delivered') return <CheckCheck size={12} />;
-        return <Check size={12} />;
-    };
-
     // Rows are memoised so typing in the message box (state on this
     // component) doesn't rebuild every bubble of a long thread per keystroke.
+    const participantIds = conversation.participantIds;
     const messageRows = useMemo(() => displayedMessages.map((msg) => {
         const isMe = msg.senderId === currentUserId;
+        const openMenu = (target: HTMLElement) => {
+            if (msg.status === 'failed') return;
+            setMenu({ msg, anchor: target.getBoundingClientRect() });
+        };
         const bubble = (
-            <div className={`max-w-[80%] px-3.5 py-2.5 ${isMe ? 'neu-bubble-out' : 'neu-bubble-in'}`}>
+            <div className={`px-3.5 py-2.5 ${isMe ? 'neu-bubble-out' : 'neu-bubble-in'}`}>
                 {!isMe && (
                     <p className="text-[11px] font-bold uppercase tracking-widest mb-1 text-gold-700 dark:text-gold-300">{resolveName(msg.senderId, msg.senderName)}</p>
                 )}
@@ -671,7 +730,14 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                 )}
                 {msg.attachment && (
                     msg.attachment.type === 'image' ? (
-                        <img loading="lazy" decoding="async" src={getThumbUrl(msg.attachment.url)} alt={msg.attachment.name} className="rounded-xl max-w-full max-h-48 object-cover mb-2" />
+                        <button
+                            type="button"
+                            onClick={() => setViewing({ url: msg.attachment!.url, name: msg.attachment!.name, caption: `${isMe ? 'You' : resolveName(msg.senderId, msg.senderName)} · ${formatMessageTime(msg.timestamp)}` })}
+                            aria-label={`Open photo ${msg.attachment.name}`}
+                            className="block mb-2 rounded-xl overflow-hidden active-scale cursor-zoom-in"
+                        >
+                            <img loading="lazy" decoding="async" src={getThumbUrl(msg.attachment.url)} alt={msg.attachment.name} className="rounded-xl max-w-full max-h-48 object-cover" />
+                        </button>
                     ) : (
                         <div className="flex items-center gap-2 mb-2 p-2 neu-inset rounded-xl">
                             <Paperclip size={14} className="text-gold-700 dark:text-gold-300" />
@@ -699,10 +765,17 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                     ) : (
                         <span className="flex items-center gap-1 text-[11px] shrink-0 ml-auto text-[var(--neu-text-dim)]">
                             {formatMessageTime(msg.timestamp)}
-                            {isMe && renderMessageStatusIcon(msg.status)}
+                            {isMe && <ReadTicks msg={msg} participantIds={participantIds} />}
                         </span>
                     )}
                 </div>
+            </div>
+        );
+        // The bubble, held for the menu, with its reactions hanging under it.
+        const held = (
+            <div className={`max-w-[80%] min-w-0 flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                <Holdable onHold={openMenu} className="max-w-full">{bubble}</Holdable>
+                <ReactionChips reactions={msg.reactions} currentUserId={currentUserId} isMe={isMe} onOpen={() => setReactionsOf(msg.id)} />
             </div>
         );
         const replyButton = (
@@ -714,14 +787,31 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                 <Reply size={14} />
             </button>
         );
+        // With a mouse there is no hold: a smiley beside the message opens the
+        // same menu (right-click does too).
+        const reactButton = isMember && msg.status !== 'failed' && (
+            <button
+                type="button"
+                onClick={e => openMenu(e.currentTarget.parentElement ?? e.currentTarget)}
+                aria-label="React or more"
+                className="hidden lg:block p-1.5 mb-1 text-[var(--neu-text-dim)] hover:text-gold-600 dark:hover:text-gold-400 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity shrink-0 active-scale"
+            >
+                <SmilePlus size={14} />
+            </button>
+        );
         return (
-            <div key={msg.id} className={`flex items-end gap-1.5 ${isMe ? 'justify-end' : 'justify-start'}`}>
+            <div key={msg.id} className={`group flex items-end gap-1.5 ${isMe ? 'justify-end' : 'justify-start'}`}>
+                {isMe && reactButton}
                 {!isMe && replyButton}
-                {bubble}
+                {held}
                 {isMe && replyButton}
+                {!isMe && reactButton}
             </div>
         );
-    }), [displayedMessages, messages, currentUserId, resolveName, onRetryMessage]);
+    }), [displayedMessages, messages, currentUserId, resolveName, onRetryMessage, participantIds, isMember]);
+
+    const reactionsMsg = reactionsOf ? messages.find(m => m.id === reactionsOf) : undefined;
+    const infoMsg = infoOf ? messages.find(m => m.id === infoOf) : undefined;
 
     const renderConversationDetails = () => {
         if (isEditingDetails) {
@@ -992,6 +1082,35 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                     </button>
                 </div>
             </div>
+
+            {menu && (
+                <MessageActionMenu
+                    anchor={menu.anchor}
+                    isMe={menu.msg.senderId === currentUserId}
+                    myReaction={messages.find(m => m.id === menu.msg.id)?.reactions?.[currentUserId]}
+                    canReact={isMember && !!onReactToMessage}
+                    hasText={!!menu.msg.text}
+                    preview={menu.msg.text || (menu.msg.attachment ? (menu.msg.attachment.type === 'image' ? '📷 Photo' : `📎 ${menu.msg.attachment.name}`) : '')}
+                    onReact={emoji => onReactToMessage?.(menu.msg.id, emoji)}
+                    onReply={() => setReplyingTo({ id: menu.msg.id, senderName: resolveName(menu.msg.senderId, menu.msg.senderName), text: menu.msg.text || (menu.msg.attachment ? menu.msg.attachment.name : '') })}
+                    onCopy={() => copyText(menu.msg.text)}
+                    onInfo={menu.msg.senderId === currentUserId ? () => setInfoOf(menu.msg.id) : undefined}
+                    onClose={() => setMenu(null)}
+                />
+            )}
+            {reactionsMsg?.reactions && (
+                <ReactionsSheet
+                    reactions={reactionsMsg.reactions}
+                    currentUserId={currentUserId}
+                    resolveName={resolveName}
+                    onRemoveMine={() => onReactToMessage?.(reactionsMsg.id, null)}
+                    onClose={() => setReactionsOf(null)}
+                />
+            )}
+            {viewing && <ImageViewer image={viewing} onClose={() => setViewing(null)} />}
+            {infoMsg && (
+                <MessageInfoSheet msg={infoMsg} participantIds={participantIds} resolveName={resolveName} onClose={() => setInfoOf(null)} />
+            )}
         </div>
     );
 };

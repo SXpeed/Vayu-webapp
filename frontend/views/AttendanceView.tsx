@@ -35,9 +35,9 @@ const StoreFilter: React.FC<{ stores: StoreConfig[]; value: StoreScope; onChange
 );
 
 const ADMIN_TABS: { id: Tab; label: string; Icon: React.ElementType }[] = [
+    { id: 'mine', label: 'Mine', Icon: UserIcon },
     { id: 'day', label: 'Day', Icon: CalendarDays },
     { id: 'month', label: 'Month', Icon: CalendarRange },
-    { id: 'mine', label: 'Mine', Icon: UserIcon },
     { id: 'stores', label: 'Stores', Icon: StoreIcon },
 ];
 

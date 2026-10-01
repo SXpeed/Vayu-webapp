@@ -21,6 +21,7 @@ import {
 } from './entityAccess';
 import { ADMIN_ROLE_ID, type RoleDef } from './permissions';
 import { ackStatus, ensureChangeLogTable, statusUpgradeStmts } from './deltaSync';
+import { ensureMessageColumns, readReceiptStmts, userPath } from './messageReceipts';
 import { ensurePrivateRoomColumns, mayUseConversation, roomAccessOf, type RoomAccess } from './privateRooms';
 import { rawRealtimeSecret, workspaceId, type ChangeEvent, type Env } from './workerEnv';
 
@@ -332,10 +333,17 @@ export class SyncHub {
     await ensureChangeLogTable(db);
     await ensurePrivateRoomColumns(db); // the receipt's scope SQL reads is_private
     // conversation_id is part of the WHERE: a member of this conversation
-    // can't flip receipts on another conversation's messages.
-    const results = await db.batch(ids.flatMap(id => statusUpgradeStmts(
-      db, this.env, 'messages', id, status, { actorId: meta.userId, conversationId },
-    )));
+    // can't flip receipts on another conversation's messages. Reads are
+    // recorded per person (messageReceipts.ts), so groups show who read what.
+    let pairs: [D1PreparedStatement, D1PreparedStatement][];
+    if (status === 'read') {
+      if (userPath(meta.userId) === null) return;
+      await ensureMessageColumns(db);
+      pairs = ids.map(id => readReceiptStmts(db, this.env, id, meta.userId, conversationId)!);
+    } else {
+      pairs = ids.map(id => statusUpgradeStmts(db, this.env, 'messages', id, status, { actorId: meta.userId, conversationId }));
+    }
+    const results = await db.batch(pairs.flat());
     const changed: string[] = [];
     for (let i = 0; i < ids.length; i++) {
       if ((results[i * 2].results?.length ?? 0) > 0) changed.push(ids[i]);

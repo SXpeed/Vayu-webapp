@@ -94,7 +94,7 @@ const ShellFrame: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 
 const ControlCentre: React.FC = () => {
     const branding = useBranding();
-    const brand = { appName: branding.appName, logoUrl: branding.logoUrl };
+    const brand = { appName: branding.appName, logoUrl: branding.logoUrl, loaded: branding.loaded };
     const [screen, setScreen] = useState<Screen>({ kind: 'loading' });
     const [route, go] = useHashRoute();
     const tab: Tab = (TABS as string[]).includes(route.section) ? route.section as Tab : 'overview';

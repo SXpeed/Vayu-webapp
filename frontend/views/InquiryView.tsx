@@ -50,6 +50,9 @@ interface InquiryViewProps {
     currentUserId: string;
 
     onSendInquiryMessage: (inquiryId: string, text: string, tags: MessageTag[], replyTo?: MessageReplyTo, attachment?: MessageAttachment) => void;
+    /** An inquiry to open (a notification was tapped): its chat, or its details. */
+    openInquiry?: { id: string; chat: boolean };
+    onOpenedInquiry?: () => void;
 }
 
 const STATUS_COLORS: Record<Inquiry['status'], string> = {
@@ -76,7 +79,7 @@ const ARTWORK_STATUS_BADGE: Record<Artwork['status'], string> = {
     'Reserved': 'neu-status text-yellow-700 dark:text-yellow-400',
 };
 
-export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, onAddInquiry, onUpdateInquiry, onDeleteInquiry, onArtworkClick, inquiryMessages, invoices, onAddInvoice, teamMembers, currentUserId, onSendInquiryMessage }) => {
+export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, onAddInquiry, onUpdateInquiry, onDeleteInquiry, onArtworkClick, inquiryMessages, invoices, onAddInvoice, teamMembers, currentUserId, onSendInquiryMessage, openInquiry, onOpenedInquiry }) => {
     const resolveName = useMemberNames(teamMembers);
     // Inquiries added before creator tracking have no creator recorded.
     const addedBy = (inquiry: Inquiry) =>
@@ -101,6 +104,17 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
         setSelectedInquiry(inquiry);
         globalThis.history.pushState({ view: 'inquiry', modal: 'inquiry' }, '');
     };
+
+    // A tapped notification's inquiry opens as soon as it is here.
+    useEffect(() => {
+        if (!openInquiry) return;
+        const inquiry = inquiries.find(i => i.id === openInquiry.id);
+        if (!inquiry) return;
+        if (openInquiry.chat) setChatInquiry(inquiry);
+        else handleInquiryClick(inquiry);
+        onOpenedInquiry?.();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [openInquiry, inquiries]);
 
     const handleCloseModal = () => {
         if (globalThis.history.state?.modal === 'inquiry') {

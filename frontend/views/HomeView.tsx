@@ -1,14 +1,15 @@
 import React, { useMemo, useState } from 'react';
-import { Artwork, CalendarEvent, Catalog, EventTodo, Invoice, ViewState, UserProfile } from '../types';
+import { Artwork, CalendarEvent, Catalog, EventTodo, ViewState, UserProfile } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { EVENT_COLORS, eventColor, eventTimeLabel } from '../services/eventService';
-import { Clock, Receipt, TrendingUp, Palette, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronDown, ChevronRight, Edit2, BookOpen, ShieldCheck, User, CalendarClock } from 'lucide-react';
+import { Clock, Receipt, HandCoins, Eye, EyeOff, ChevronLeft, Palette, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronDown, ChevronRight, Edit2, BookOpen, ShieldCheck, User, CalendarClock } from 'lucide-react';
 import { PageRoot, PageHeader, PageBody, GhostIconButton } from '../components/ui';
 import { useAppChrome } from '../components/Layout';
 import { useBranding } from '../useBranding';
 import type { SectionId } from '../permissions';
-import { SalesMonthCard } from '../components/SalesSummary';
+import { HIDDEN_AMOUNT, SalesMonthCard, currentMonth, itemsText, rupees, useMonthSales, type MonthSales } from '../components/SalesSummary';
+import { shiftMonth } from '../salesRules';
 
 /** One dashboard metric — raised tile, gold glyph, serif figure. */
 const StatTile: React.FC<{ icon: React.ReactNode; label: string; children?: React.ReactNode }> = ({ icon, label, children }) => (
@@ -21,10 +22,57 @@ const StatTile: React.FC<{ icon: React.ReactNode; label: string; children?: Reac
     </div>
 );
 
+/**
+ * Sales for one month from the sales ledger, with the month switcher. The
+ * amount stays hidden each time Home opens until the eye is tapped; the
+ * Sales card further down follows the same month and the same choice.
+ */
+const SalesTile: React.FC<{
+    month: string; onMonth: (month: string) => void; sales: MonthSales; hidden: boolean; onToggleHidden: () => void;
+}> = ({ month, onMonth, sales, hidden, onToggleHidden }) => {
+    const atCurrent = month >= currentMonth();
+    const summary = sales.data?.summary;
+    let figure: React.ReactNode = <span className="text-gray-500 dark:text-gray-400">…</span>;
+    if (sales.failed && !summary) figure = <span className="text-sm font-sans text-gray-500 dark:text-gray-400">Couldn’t load</span>;
+    else if (summary && hidden) {
+        figure = (
+            <button type="button" onClick={onToggleHidden} aria-label="Show sales amount" className="tracking-wider text-left active-scale">
+                {HIDDEN_AMOUNT}
+            </button>
+        );
+    } else if (summary) figure = <span title={itemsText(summary.count)}>{rupees(summary.totalAmount)}</span>;
+    const arrow = 'w-6 h-6 shrink-0 rounded-full flex items-center justify-center text-gold-700 dark:text-gold-300 hover:neu-raised-sm active-scale disabled:opacity-30 disabled:pointer-events-none';
+
+    return (
+        <div className="neu-card p-3 lg:p-4 flex flex-col">
+            <div className="flex items-center gap-2 mb-1.5">
+                <HandCoins size={14} className="text-gold-500" />
+                <span className="text-[11px] font-medium uppercase tracking-widest text-gray-700 dark:text-gray-300 truncate">Sales</span>
+                <button type="button" onClick={onToggleHidden} aria-pressed={!hidden}
+                    aria-label={hidden ? 'Show sales amounts' : 'Hide sales amounts'} title={hidden ? 'Show amounts' : 'Hide amounts'}
+                    className="ml-auto -my-1 -mr-1 w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-gray-600 dark:text-gray-300 hover:text-gold-700 dark:hover:text-gold-300 active-scale">
+                    {hidden ? <Eye size={15} /> : <EyeOff size={15} />}
+                </button>
+            </div>
+            <p className="text-xl lg:text-2xl font-serif tabular-nums text-gray-900 dark:text-white truncate">{figure}</p>
+            <div className="mt-auto pt-1.5 flex items-center gap-1 -ml-1">
+                <button type="button" onClick={() => onMonth(shiftMonth(month, -1))} aria-label="Previous month" className={arrow}>
+                    <ChevronLeft size={14} />
+                </button>
+                <span className="min-w-0 flex-1 text-center text-[11px] text-gray-600 dark:text-gray-400 truncate" aria-live="polite">
+                    {new Date(`${month}T00:00:00Z`).toLocaleDateString('en-IN', { month: 'short', year: 'numeric', timeZone: 'UTC' })}
+                </span>
+                <button type="button" onClick={() => onMonth(shiftMonth(month, 1))} disabled={atCurrent} aria-label="Next month" className={arrow}>
+                    <ChevronRight size={14} />
+                </button>
+            </div>
+        </div>
+    );
+};
+
 interface HomeViewProps {
     artworks: Artwork[];
     catalogs: Catalog[];
-    invoices: Invoice[];
     events: CalendarEvent[];
     teamMembers: UserProfile[];
     userProfile: UserProfile;
@@ -60,7 +108,7 @@ const toInputValue = (ms?: number): string => {
 
 const EMPTY_EVENT_FORM = { title: '', dateTime: '', endDateTime: '', notes: '', color: '', todos: [] as EventTodo[] };
 
-export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices, events, teamMembers, onNavigate, onAddEvent, onUpdateEvent, onDeleteEvent }) => {
+export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, events, teamMembers, onNavigate, onAddEvent, onUpdateEvent, onDeleteEvent }) => {
     // Admin entry + role come from the shell; on desktop the sidebar shows them
     // instead, so the header only renders these buttons on phones.
     const { isAdmin, openAdmin, can } = useAppChrome();
@@ -69,8 +117,12 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
     // for sections they can't see are left out, and editing needs edit access.
     const canEditEvents = can('calendar', 'edit');
     const availableArtworks = useMemo(() => artworks.filter(a => a.status === 'Available').length, [artworks]);
-    // Proforma invoices are quotations; only paid ones count as revenue.
-    const totalRevenue = useMemo(() => invoices.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + inv.total, 0), [invoices]);
+
+    // Sales from the ledger, one month at a time. Amounts start hidden every
+    // time Home opens; the tile's eye shows them (and the card's too).
+    const [salesMonth, setSalesMonth] = useState(currentMonth);
+    const [amountsHidden, setAmountsHidden] = useState(true);
+    const monthSales = useMonthSales(salesMonth);
 
     // ── Upcoming events (calendar) ────────────────────────────────────────
     const [showEventModal, setShowEventModal] = useState(false);
@@ -220,10 +272,9 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
             <PageBody space="none">
                 {/* Top Stats */}
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-5 animate-fade-in-up">
-                    {can('invoices') && (
-                        <StatTile icon={<TrendingUp size={14} className="text-gold-500" />} label="Revenue">
-                            ₹{totalRevenue.toLocaleString('en-IN')}
-                        </StatTile>
+                    {can('sales') && (
+                        <SalesTile month={salesMonth} onMonth={setSalesMonth} sales={monthSales}
+                            hidden={amountsHidden} onToggleHidden={() => setAmountsHidden(h => !h)} />
                     )}
                     {can('inventory') && (
                         <StatTile icon={<Palette size={14} className="text-gold-500" />} label="Available">
@@ -268,11 +319,14 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, invoices
                 </section>
                 )}
 
-                {/* Sales this month, for everyone with the Sales permission */}
+                {/* Sales for the month picked on the Sales tile, for everyone with the Sales permission */}
                 {can('sales') && (
                 <section className="animate-fade-in-up" style={{ animationDelay: '165ms' }}>
-                    <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-3">Sales this month</h2>
-                    <SalesMonthCard onOpen={() => onNavigate('sales')} />
+                    <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-3">
+                        {/* The card names the month; the heading only says when it is this one. */}
+                        {salesMonth === currentMonth() ? 'Sales this month' : 'Sales'}
+                    </h2>
+                    <SalesMonthCard month={salesMonth} sales={monthSales} hidden={amountsHidden} onOpen={() => onNavigate('sales')} />
                 </section>
                 )}
 

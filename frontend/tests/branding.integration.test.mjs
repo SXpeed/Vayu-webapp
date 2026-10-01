@@ -131,6 +131,13 @@ test('a real logo is stored and served with a versioned address', async () => {
     assert.equal(again.body.logoVersion, 2);
     assert.notEqual(again.body.logoKey, res.body.logoKey);
     assert.equal((await admin.call('/public/branding')).body.logoUrl, '/api/v2/public/branding/logo?v=2');
+
+    // The bare address (the tab icon) means "the current logo", so it is checked again, not kept for a year.
+    const bare = await h.platform.handlePlatformRequest(
+        new Request('https://admin.test/api/v2/public/branding/logo'), { ...h.env, VAYU_R2: r2 },
+    );
+    assert.equal(bare.status, 200);
+    assert.doesNotMatch(bare.headers.get('Cache-Control'), /immutable/);
 });
 
 test('branding is provider-admin only', async () => {

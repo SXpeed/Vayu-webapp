@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from 'react';
 import { Lock } from 'lucide-react';
 
 import toast, { Toaster } from 'react-hot-toast';
@@ -35,11 +35,50 @@ import { emailChangeLanding } from './services/emailChange';
 const PUSH_VIEWS = ['messaging', 'inquiry', 'payments', 'schedule'] as const;
 type PushView = typeof PUSH_VIEWS[number];
 
-/** View requested by a push-notification click when the app was closed (e.g. /?view=messaging). */
-const getPushLaunchView = (): PushView | null => {
-    const view = new URLSearchParams(globalThis.location.search).get('view');
-    return (PUSH_VIEWS as readonly string[]).includes(view || '') ? view as PushView : null;
+/** Where a notification tap leads: the page, and the chat or inquiry on it. */
+interface PushTarget {
+    view: PushView;
+    conversationId?: string;
+    inquiryId?: string;
+    /** An inquiry's chat rather than its details. */
+    chat?: boolean;
+    /** Set by the service worker; the same tap is never acted on twice. */
+    id?: string;
+}
+
+const isPushView = (view: unknown): view is PushView => (PUSH_VIEWS as readonly unknown[]).includes(view);
+
+/** A tap target from untrusted data (the URL, a message, the stored record), or null. */
+function pushTargetFrom(raw: Record<string, unknown> | null | undefined): PushTarget | null {
+    if (!raw || !isPushView(raw.view)) return null;
+    const text = (v: unknown) => (typeof v === 'string' && v.length > 0 && v.length <= 128 ? v : undefined);
+    return { view: raw.view, conversationId: text(raw.conversationId), inquiryId: text(raw.inquiryId), chat: raw.chat === true, id: text(raw.id) };
+}
+
+/** Requested by a notification tap that launched the app (e.g. /?view=messaging&conversation=…). */
+const getPushLaunchTarget = (): PushTarget | null => {
+    const q = new URLSearchParams(globalThis.location.search);
+    return pushTargetFrom({ view: q.get('view'), conversationId: q.get('conversation'), inquiryId: q.get('inquiry'), chat: q.get('chat') === '1' });
 };
+
+/**
+ * A tap the service worker left for the app (sw.js), taken once. On iPhone
+ * its message to an app waking from the background can be lost, so the app
+ * also looks here whenever it comes to the front. Only a recent one counts.
+ */
+async function takeStoredPushTarget(): Promise<PushTarget | null> {
+    try {
+        if (!('caches' in globalThis)) return null;
+        const cache = await caches.open('push-nav');
+        const res = await cache.match('/__push-nav');
+        if (!res) return null;
+        await cache.delete('/__push-nav');
+        const raw = await res.json() as Record<string, unknown>;
+        return typeof raw.at === 'number' && Date.now() - raw.at < 2 * 60_000 ? pushTargetFrom(raw) : null;
+    } catch {
+        return null;
+    }
+}
 
 // Code-split: only Login and Home are needed for first paint; every other
 // view loads on demand. Heavy deps (jsPDF, background removal) are dynamic
@@ -177,6 +216,17 @@ const App: React.FC = () => {
     } = useEntityData(authUser, authUserRef, currentView);
 
     // ── Handlers ──────────────────────────────────────────────────────────
+    /** The chat or inquiry a notification tap asked for, until its page has opened it. */
+    const [pushTarget, setPushTarget] = useState<PushTarget | null>(null);
+    /**
+     * A tap that launched the app, read once at start. Sign-in also honours
+     * it: the sign-in screen shows briefly at start and, finding the person
+     * signed in already, used to send them Home over the top of it, so a
+     * tap that opened the app never got past Home. Tapped while signed out,
+     * it is where signing in leads.
+     */
+    const launchTargetRef = useRef<PushTarget | null>(getPushLaunchTarget());
+
     const handlers = useHandlers({
         authUser, userProfile, artworks, conversations, teamMembers,
         setArtworks, setCatalogs, setCollections, setInvoices, setInquiries,
@@ -193,6 +243,8 @@ const App: React.FC = () => {
             const reason = (event as CustomEvent<{ reason?: string }>).detail?.reason;
             authService.clearLocalSession();
             clearAuth();
+            // Signed out: this device shows none of that person's notifications now.
+            void pushService.setIdentity(null);
             navigateTo('login');
             if (!shown) {
                 shown = true;
@@ -217,6 +269,7 @@ const App: React.FC = () => {
     // finish, and the sync carries on in the background.
     useEffect(() => {
         const initApp = async () => {
+            let signedInAtStart = false;
             try {
                 setBootStep('Starting');
                 await db.init();
@@ -224,15 +277,19 @@ const App: React.FC = () => {
                 setBootStep('Checking your sign-in');
                 const me = await authService.getMe();
                 if (me) {
+                    signedInAtStart = true;
                     applyAuthUser(me);
-                    // Land on the view a push-notification click asked for, else home.
-                    const launchView = getPushLaunchView();
-                    if (launchView) {
+                    // Land where a notification tap asked for, else home.
+                    const launch = launchTargetRef.current;
+                    if (launch) {
                         // Strip ?view= so a refresh doesn't re-trigger the deep link.
                         globalThis.history.replaceState(null, '', globalThis.location.pathname);
+                        // The same tap is also stored for the app (sw.js): already handled.
+                        void takeStoredPushTarget();
+                        setPushTarget(launch);
                     }
-                    setCurrentView(launchView || 'home');
-                    globalThis.history.pushState({ view: launchView || 'home' }, '');
+                    setCurrentView(launch?.view || 'home');
+                    globalThis.history.pushState({ view: launch?.view || 'home' }, '');
                     pushService.syncSubscription();
                     // Picks up a logo changed in the control centre, for next launch.
                     void refreshCurrentWorkspace();
@@ -263,6 +320,8 @@ const App: React.FC = () => {
                 console.error('App initialization error:', err);
                 await loadData(false).catch(() => undefined);
             } finally {
+                // Used now; a later sign-in is a fresh start, not this tap.
+                if (signedInAtStart) launchTargetRef.current = null;
                 setIsLoading(false);
             }
         };
@@ -275,24 +334,52 @@ const App: React.FC = () => {
         syncService.init();
     }, []);
 
-    // ── Navigate when a push notification is clicked while the app is open ─
-    useEffect(() => {
-        if (!('serviceWorker' in navigator)) return;
-        const onSwMessage = (event: MessageEvent) => {
-            const { type, view } = (event.data || {}) as { type?: string; view?: string };
-            if (type === 'PUSH_NAVIGATE' && (PUSH_VIEWS as readonly string[]).includes(view || '')) {
-                navigateTo(view as PushView);
-            }
-        };
-        navigator.serviceWorker.addEventListener('message', onSwMessage);
-        return () => navigator.serviceWorker.removeEventListener('message', onSwMessage);
+    // ── Navigate when a push notification is tapped while the app is open ─
+    // Straight away from the service worker's message, or, when iOS lost
+    // that message while waking the app, from the record it also left.
+    const handledTaps = useRef(new Set<string>());
+    const goToPushTarget = useCallback((target: PushTarget | null) => {
+        if (!target || !authUserRef.current) return;
+        if (target.id) {
+            if (handledTaps.current.has(target.id)) return;
+            handledTaps.current.add(target.id);
+        }
+        setPushTarget(target);
+        navigateTo(target.view);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+    useEffect(() => {
+        const fromStore = () => {
+            if (document.visibilityState === 'visible') void takeStoredPushTarget().then(goToPushTarget);
+        };
+        const onSwMessage = (event: MessageEvent) => {
+            const data = (event.data || {}) as Record<string, unknown>;
+            if (data.type !== 'PUSH_NAVIGATE') return;
+            void takeStoredPushTarget(); // the same tap: drop the stored copy
+            goToPushTarget(pushTargetFrom(data));
+        };
+        navigator.serviceWorker?.addEventListener('message', onSwMessage);
+        document.addEventListener('visibilitychange', fromStore);
+        globalThis.addEventListener('focus', fromStore);
+        return () => {
+            navigator.serviceWorker?.removeEventListener('message', onSwMessage);
+            document.removeEventListener('visibilitychange', fromStore);
+            globalThis.removeEventListener('focus', fromStore);
+        };
+    }, [goToPushTarget]);
+
+    // Who is signed in here, for the service worker's notification check.
+    useEffect(() => {
+        if (authUser?.id) void pushService.setIdentity(authUser.id);
+    }, [authUser?.id]);
 
     // ── Login Handler (orchestrates auth + data loading) ──────────────────
     const handleLogin = async (user: AuthUser) => {
         applyAuthUser(user);
-        navigateTo('home');
+        const launch = launchTargetRef.current;
+        launchTargetRef.current = null;
+        if (launch) setPushTarget(launch);
+        navigateTo(launch?.view ?? 'home');
         pushService.syncSubscription();
         const migrated = await migrateLocalToD1();
         await loadTeamMembers();
@@ -361,7 +448,7 @@ const App: React.FC = () => {
             case 'login':
                 return <LoginView onLogin={handleLogin} />;
             case 'home':
-                return userProfile ? <HomeView artworks={artworks} catalogs={catalogs} invoices={invoices} events={events} teamMembers={teamMembers} onNavigate={navigateTo} userProfile={userProfile} onAddEvent={handlers.handleAddEvent} onUpdateEvent={handlers.handleUpdateEvent} onDeleteEvent={handlers.handleDeleteEvent} /> : null;
+                return userProfile ? <HomeView artworks={artworks} catalogs={catalogs} events={events} teamMembers={teamMembers} onNavigate={navigateTo} userProfile={userProfile} onAddEvent={handlers.handleAddEvent} onUpdateEvent={handlers.handleUpdateEvent} onDeleteEvent={handlers.handleDeleteEvent} /> : null;
             case 'artworks':
                 return <ArtworksView artworks={artworks} onAddArtwork={handlers.handleAddArtwork} onArtworkClick={handleArtworkClick} />;
             case 'collections':
@@ -390,6 +477,8 @@ const App: React.FC = () => {
             case 'inquiry':
                 return (
                     <InquiryView
+                        openInquiry={pushTarget?.view === 'inquiry' && pushTarget.inquiryId ? { id: pushTarget.inquiryId, chat: !!pushTarget.chat } : undefined}
+                        onOpenedInquiry={() => setPushTarget(null)}
                         inquiries={inquiries}
                         artworks={artworks}
                         onAddInquiry={handlers.handleAddInquiry}
@@ -415,6 +504,10 @@ const App: React.FC = () => {
                         isAdmin={authUser?.role === 'admin'}
                         onSendMessage={handlers.handleSendMessage}
                         onRetryMessage={handlers.handleRetryMessage}
+                        onReactToMessage={handlers.handleReactToMessage}
+                        openConversationId={pushTarget?.view === 'messaging' ? pushTarget.conversationId : undefined}
+                        onOpenedConversation={() => setPushTarget(null)}
+                        onMarkMessagesRead={handlers.handleMarkMessagesRead}
                         onCreateConversation={handlers.handleCreateConversation}
                         onCreateGroup={handlers.handleCreateGroup}
                         onUpdateConversationDetails={handlers.handleUpdateConversationDetails}

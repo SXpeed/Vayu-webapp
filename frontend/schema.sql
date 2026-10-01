@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS messages (
   status TEXT DEFAULT 'sent',      -- sent | delivered | read
   reply_to TEXT,                   -- JSON object or null
   attachment TEXT,                 -- JSON object or null
-  created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
+  created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+  read_by TEXT,                    -- JSON { userId: readAt } (messageReceipts.ts)
+  reactions TEXT                   -- JSON { userId: emoji }
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, timestamp);
