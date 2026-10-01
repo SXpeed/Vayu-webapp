@@ -24,32 +24,30 @@ const StatTile: React.FC<{ icon: React.ReactNode; label: string; children?: Reac
 
 /**
  * Sales for one month from the sales ledger, with the month switcher. The
- * amount stays hidden each time Home opens until the eye is tapped.
+ * amount stays hidden each time Home opens until the eye is tapped. A tap
+ * anywhere else on the tile opens the Sales page.
  */
 const SalesTile: React.FC<{
-    month: string; onMonth: (month: string) => void; sales: MonthSales; hidden: boolean; onToggleHidden: () => void;
-}> = ({ month, onMonth, sales, hidden, onToggleHidden }) => {
+    month: string; onMonth: (month: string) => void; sales: MonthSales; hidden: boolean; onToggleHidden: () => void; onOpen: () => void;
+}> = ({ month, onMonth, sales, hidden, onToggleHidden, onOpen }) => {
     const atCurrent = month >= currentMonth();
     const summary = sales.data?.summary;
     let figure: React.ReactNode = <span className="text-gray-500 dark:text-gray-400">…</span>;
     if (sales.failed && !summary) figure = <span className="text-sm font-sans text-gray-500 dark:text-gray-400">Couldn’t load</span>;
-    else if (summary && hidden) {
-        figure = (
-            <button type="button" onClick={onToggleHidden} aria-label="Show sales amount" className="tracking-wider text-left active-scale">
-                {HIDDEN_AMOUNT}
-            </button>
-        );
-    } else if (summary) figure = <span title={itemsText(summary.count)}>{rupees(summary.totalAmount)}</span>;
-    const arrow = 'w-6 h-6 shrink-0 rounded-full flex items-center justify-center text-gold-700 dark:text-gold-300 hover:neu-raised-sm active-scale disabled:opacity-30 disabled:pointer-events-none';
+    else if (summary && hidden) figure = <span className="tracking-wider" aria-label="Amount hidden">{HIDDEN_AMOUNT}</span>;
+    else if (summary) figure = <span title={itemsText(summary.count)}>{rupees(summary.totalAmount)}</span>;
+    // The tile's own controls sit above the tap target that opens Sales.
+    const arrow = 'relative z-[2] w-6 h-6 shrink-0 rounded-full flex items-center justify-center text-gold-700 dark:text-gold-300 hover:neu-raised-sm active-scale disabled:opacity-30 disabled:pointer-events-none';
 
     return (
-        <div className="neu-card p-3 lg:p-4 flex flex-col">
+        <div className="neu-card relative p-3 lg:p-4 flex flex-col">
+            <button type="button" onClick={onOpen} aria-label="Open Sales" className="absolute inset-0 z-[1] w-full h-full rounded-[inherit] cursor-pointer active-scale" />
             <div className="flex items-center gap-2 mb-1.5">
                 <HandCoins size={14} className="text-gold-500" />
                 <span className="text-[11px] font-medium uppercase tracking-widest text-gray-700 dark:text-gray-300 truncate">Sales</span>
                 <button type="button" onClick={onToggleHidden} aria-pressed={!hidden}
                     aria-label={hidden ? 'Show sales amounts' : 'Hide sales amounts'} title={hidden ? 'Show amounts' : 'Hide amounts'}
-                    className="ml-auto -my-1 -mr-1 w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-gray-600 dark:text-gray-300 hover:text-gold-700 dark:hover:text-gold-300 active-scale">
+                    className="relative z-[2] ml-auto -my-1 -mr-1 w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-gray-600 dark:text-gray-300 hover:text-gold-700 dark:hover:text-gold-300 active-scale">
                     {hidden ? <Eye size={15} /> : <EyeOff size={15} />}
                 </button>
             </div>
@@ -273,7 +271,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, events, 
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-5 animate-fade-in-up">
                     {can('sales') && (
                         <SalesTile month={salesMonth} onMonth={setSalesMonth} sales={monthSales}
-                            hidden={amountsHidden} onToggleHidden={() => setAmountsHidden(h => !h)} />
+                            hidden={amountsHidden} onToggleHidden={() => setAmountsHidden(h => !h)} onOpen={() => onNavigate('sales')} />
                     )}
                     {can('inventory') && (
                         <StatTile icon={<Palette size={14} className="text-gold-500" />} label="Available">
