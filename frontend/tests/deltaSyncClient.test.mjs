@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { load } from './helpers/load.mjs';
 
-const { createDeltaSync, memoryCursor } = await load('services/deltaSyncClient.ts');
+const { createDeltaSync, memoryCursor, savedCursor } = await load('services/deltaSyncClient.ts');
 
 /** A scripted /api/sync: `pages` maps a cursor (or 'boundary') to a response. */
 function harness(pages, extra = {}) {
@@ -134,4 +134,59 @@ test('404 (switched off) falls back, and is re-checked after 30 minutes', async 
     time = 31 * 60_000;
     assert.equal(await h.engine.run(), 'synced');
     assert.equal(h.engine.available, true);
+});
+
+// ── The cursor kept with the device's saved copy ───────────────────────────
+
+const HOUR = 60 * 60_000;
+
+/** A saved cursor over a stand-in device store. */
+function deviceCursor({ mark = null, identity = 'me', now = () => 10 * HOUR, intact = () => true } = {}) {
+    const store = { mark };
+    const cursor = savedCursor({
+        identity, read: () => store.mark, write: m => { store.mark = m; }, maxAgeMs: 6 * HOUR, copyIntact: intact, now,
+    });
+    return { cursor, store };
+}
+
+test('a start-up catches up from where the saved copy is, without a full copy', async () => {
+    const { cursor } = deviceCursor({ mark: { identity: 'me', cursor: 40, fullCopyAt: 9 * HOUR } });
+    const h = harness({ 40: { cursor: 42, hasMore: false, changes: [change(41), change(42)] } }, cursor);
+    assert.equal(await h.engine.run(), 'synced');
+    assert.deepEqual(h.log, ['page:40'], 'one small request instead of every list');
+    assert.deepEqual(h.applied, [41, 42]);
+});
+
+test('a copy for someone else, or with other access, is not caught up but taken whole', () => {
+    const { cursor } = deviceCursor({ mark: { identity: 'someone else', cursor: 40, fullCopyAt: 9 * HOUR } });
+    assert.equal(cursor.loadCursor(), null);
+});
+
+test('a copy taken whole too long ago is taken whole again', () => {
+    const { cursor } = deviceCursor({ mark: { identity: 'me', cursor: 40, fullCopyAt: 3 * HOUR } });
+    assert.equal(cursor.loadCursor(), null);
+});
+
+test('a full copy starts a new age; catching up keeps it', async () => {
+    const { cursor, store } = deviceCursor();
+    const h = harness({ boundary: { cursor: 7 }, 7: { cursor: 8, hasMore: false, changes: [change(8)] } }, {
+        ...cursor,
+        fullLoad: async () => { h.log.push('full'); cursor.tookFullCopy(); },
+    });
+    await h.engine.run();
+    assert.deepEqual(store.mark, { identity: 'me', cursor: 8, fullCopyAt: 10 * HOUR });
+});
+
+test('the position is read once: later passes go on from memory, per tab', async () => {
+    const { cursor, store } = deviceCursor({ mark: { identity: 'me', cursor: 40, fullCopyAt: 9 * HOUR } });
+    assert.equal(cursor.loadCursor(), 40);
+    store.mark = { identity: 'me', cursor: 99, fullCopyAt: 9 * HOUR }; // another tab moved on
+    assert.equal(cursor.loadCursor(), 40);
+});
+
+test('if the device could not store the copy, its position is not kept', () => {
+    const { cursor, store } = deviceCursor({ mark: { identity: 'me', cursor: 40, fullCopyAt: 9 * HOUR }, intact: () => false });
+    cursor.saveCursor(45);
+    assert.equal(store.mark, null, 'the next start takes a full copy');
+    assert.equal(cursor.loadCursor(), 45, 'this tab carries on from memory');
 });

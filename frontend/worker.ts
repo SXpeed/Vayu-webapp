@@ -20,7 +20,7 @@ import {
   type StoredUser,
 } from './workerRoles';
 import { originalSignInOpen } from './platform/originalSignIn';
-import { ORG_PATH, forgetPlanActive, openOrgRequest, orgMemberDevices, orgMemberRecords, orgStorageEnv, signOutOrgMemberDevices } from './orgApp';
+import { ORG_PATH, forgetOrgAccess, forgetPlanActive, openOrgRequest, orgMemberDevices, orgMemberRecords, orgStorageEnv, signOutOrgMemberDevices } from './orgApp';
 import { orgAccountRoutes } from './orgTeam';
 import { OrgAppDb } from './orgAppDb';
 import { orgKvPrefix } from './orgStorage';
@@ -2553,8 +2553,10 @@ async function handleFileGet(ctx: Ctx): Promise<Response> {
   }
   let obj = await ctx.env.VAYU_R2.get(key);
   // Thumbnail requested but none exists (older uploads): serve the original.
+  let previewStandIn = false;
   if (!obj && key.endsWith('__thumb')) {
     obj = await ctx.env.VAYU_R2.get(key.slice(0, -'__thumb'.length));
+    previewStandIn = !!obj;
   }
   if (!obj) return err('File not found', 404);
   const headers = new Headers();
@@ -2570,7 +2572,9 @@ async function handleFileGet(ctx: Ctx): Promise<Response> {
   if (fileAuthEnabled(ctx)) {
     // Private: this browser may reuse it, no shared cache may. Repeat views
     // then cost no Worker request, no R2 read and no CPU.
-    headers.set('Cache-Control', fileCacheHeaders());
+    headers.set('Cache-Control', fileCacheHeaders(previewStandIn));
+    // The app's saved photos (sw.js) keep a stand-in only as long as the browser would.
+    if (previewStandIn) headers.set('X-Preview-Stand-In', '1');
   } else {
     // Legacy behaviour while the flag is off (rollback path).
     headers.set('Cache-Control', 'public, max-age=31536000, immutable');
@@ -5459,11 +5463,43 @@ function writeAnalytics(
         metrics.d1RowsRead,
         metrics.d1RowsWritten,
         metrics.kvOps,
+        // Where the time went (summed waits; side-by-side calls each count).
+        metrics.gateMs,
+        metrics.d1Ms,
+        metrics.kvMs,
+        metrics.d1Queries,
       ],
     });
   } catch {
     /* telemetry must never break the request */
   }
+}
+
+/**
+ * The same timings as a Server-Timing header, readable in the browser's
+ * network panel. Durations only: no names, ids or queries.
+ */
+function withServerTiming(response: Response, request: Request, totalMs: number): Response {
+  if (response.status === 101) return response;
+  const m = requestMetrics(request);
+  try {
+    response.headers.set('Server-Timing', `gate;dur=${m.gateMs}, d1;dur=${m.d1Ms}, kv;dur=${m.kvMs}, total;dur=${totalMs}`);
+  } catch {
+    // Immutable headers (a response passed through as is): skip the timing.
+  }
+  return response;
+}
+
+/**
+ * A change to accounts, members, roles or sign-ins. This isolate then stops
+ * trusting the access answers it remembered (orgApp.ts, ACCESS_MEMO_MS), so
+ * the change applies here at once. Presence heartbeats change none of that.
+ */
+function changesAccess(request: Request): boolean {
+  if (request.method === 'GET' || request.method === 'HEAD' || request.method === 'OPTIONS') return false;
+  const path = new URL(request.url).pathname;
+  if (/\/auth\/presence(\/|$)/.test(path)) return false;
+  return path.startsWith('/api/v2/') || /^\/api\/(o\/[^/]+\/)?(auth|team)(\/|$)/.test(path);
 }
 
 /** Signing in, or swapping the old token: no session to protect yet, so a trusted origin is enough. */
@@ -5506,6 +5542,7 @@ async function organizationScope(request: Request, env: Env): Promise<Response |
 export default {
   async fetch(request: Request, env: Env, execCtx: ExecutionContext): Promise<Response> {
     const startedAt = Date.now();
+    const accessChange = changesAccess(request);
     const ingress = await webhookIngressLimit(request, env);
     if (ingress) return ingress;
     // Platform (SaaS) API. Handled first so the legacy wildcard CORS below
@@ -5521,7 +5558,10 @@ export default {
       // the workspace the account belongs to.
       onPaymentEvent: (orgId, event) => routeOrgPaymentEvent(request, env, execCtx, orgId, event),
     });
-    if (early) return early;
+    if (early) {
+      if (accessChange) forgetOrgAccess();
+      return early;
+    }
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS });
     }
@@ -5556,9 +5596,11 @@ export default {
         }
       }
     }
+    const gateStartedAt = Date.now();
     const scope = await organizationScope(request, env);
     if (scope instanceof Response) return scope;
     ({ request, env } = scope);
+    requestMetrics(request).gateMs = Date.now() - gateStartedAt;
     const orgUser = scope.orgUser;
 
     const url = new URL(request.url);
@@ -5584,11 +5626,13 @@ export default {
     response = originalClosed && response.status === 401
       ? json({ error: 'Unauthorized', reason: 'original-signin-closed' }, 401)
       : await explainSignedOut(response, request, env);
+    if (accessChange) forgetOrgAccess();
+    const totalMs = Date.now() - startedAt;
     // 101 marks the WebSocket upgrade; everything else is an ordinary call.
     execCtx.waitUntil(Promise.resolve().then(() =>
-      writeAnalytics(env, execCtx, request, route, response.status, Date.now() - startedAt, response.status === 101),
+      writeAnalytics(env, execCtx, request, route, response.status, totalMs, response.status === 101),
     ));
-    return response;
+    return withServerTiming(response, request, totalMs);
   },
 
   /**

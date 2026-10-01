@@ -60,6 +60,19 @@ test('the app opens files with its sign-in or its file cookie, privately cached'
     assert.match(withCookie.headers.get('cache-control'), /^private/, 'never cached for others');
 });
 
+test('the browser keeps a photo 30 days; a preview not made yet, a day', async () => {
+    const photo = await get(fileUrl, { Cookie: cookie });
+    assert.equal(photo.headers.get('cache-control'), 'private, max-age=2592000, immutable', 'an address never changes its contents');
+    assert.equal(photo.headers.get('x-preview-stand-in'), null);
+    // Uploaded without a preview: the original answers for it, kept briefly
+    // so the real preview takes over once made, and marked so the app's
+    // saved photos (sw.js) don't keep it.
+    const standIn = await get(`${fileUrl}__thumb`, { Cookie: cookie });
+    assert.equal(standIn.status, 200);
+    assert.equal(standIn.headers.get('cache-control'), 'private, max-age=86400');
+    assert.equal(standIn.headers.get('x-preview-stand-in'), '1');
+});
+
 test('opening the app again renews a missing cookie, and only then', async () => {
     const without = await get('/api/auth/me', { Authorization: `Bearer ${token}` });
     assert.equal(without.status, 200);

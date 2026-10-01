@@ -14,7 +14,7 @@ import { makeCan, permissionsOf } from '../access';
 import { createRefreshScheduler } from '../services/refreshScheduler';
 import { authHeaders, parseApiResponse } from '../services/apiClient';
 import { apiBase } from '../services/workspace';
-import { createDeltaSync, memoryCursor, type SyncPage } from '../services/deltaSyncClient';
+import { createDeltaSync, savedCursor, type SyncPage } from '../services/deltaSyncClient';
 import { byAsc, byDesc, conversationOrder, groupByEntity, mergeChanges, type SyncChange } from '../services/syncMerge';
 import { realtimeService } from '../services/realtimeService';
 import type { SectionId } from '../permissions';
@@ -54,6 +54,17 @@ const HELD_ENTITIES: ReadonlySet<string> = new Set([
 const SAFETY_SYNC_MS = 10 * 60_000;
 /** Without a realtime socket, a screen switch syncs only data older than this. */
 const SWITCH_STALE_MS = 30_000;
+/**
+ * A start-up catches up from the saved copy's position (one small request)
+ * instead of reloading every list, unless the copy was taken whole longer ago
+ * than this: then it is taken whole again (see savedCursor).
+ */
+const FULL_COPY_MAX_AGE_MS = 6 * 60 * 60_000;
+
+/** Who a saved copy is for: the same person with the same access. A change takes a full copy. */
+function syncIdentity(user: AuthUser): string {
+    return JSON.stringify([user.id, user.role, user.permissions ?? null, user.sectionsOff ?? []]);
+}
 
 /** GET /sync; null when the server has delta sync switched off (404). */
 async function fetchSyncPage(cursor: number | null): Promise<SyncPage | null> {
@@ -161,6 +172,9 @@ export function useEntityData(
         return DATASET_READERS[dataset].some(section => can(section, 'view'));
     }, [authUserRef]);
 
+    /** Set when the device couldn't store part of the saved copy: its sync position is then not kept. */
+    const savedCopyFailed = useRef(false);
+
     // loadData takes isAuthenticated as a parameter instead of reading from
     // state/closure, so it has NO state dependencies and a stable reference.
     const inflight = useRef<Promise<void> | null>(null);
@@ -184,7 +198,7 @@ export function useEntityData(
                     const data = await load();
                     if (authUserRef.current !== identity) return;
                     apply(data);
-                    if (savedList) await db.replaceSaved(savedList, data);
+                    if (savedList && !(await db.replaceSaved(savedList, data))) savedCopyFailed.current = true;
                 } catch (err) {
                     if (authUserRef.current !== identity) return;
                     if (selected) throw err; // scheduler backs off
@@ -207,13 +221,22 @@ export function useEntityData(
             ]);
             if (results.some(result => result.status === 'rejected')) throw new Error('Some sections could not refresh');
         } else {
-            setArtworks(await db.getArtworks());
-            setConversations(await db.getConversations());
-            setAllMessages(await db.getMessages());
-            setCollections(await db.getCollections());
-            setCatalogs(await db.getCatalogs());
-            setInquiries(await db.getInquiries());
-            setInquiryMessages(await db.getInquiryMessages());
+            // The device's saved copy, read side by side: what the app opens on.
+            // Calendar and contacts too, which used to stay empty until the first sync.
+            const [savedArtworks, savedConversations, savedMessages, savedCollections, savedCatalogs,
+                savedInquiries, savedInquiryMessages, savedEvents, savedContacts] = await Promise.all([
+                db.getArtworks(), db.getConversations(), db.getMessages(), db.getCollections(), db.getCatalogs(),
+                db.getInquiries(), db.getInquiryMessages(), db.getEvents(), db.getContacts(),
+            ]);
+            setArtworks(savedArtworks);
+            setConversations(savedConversations);
+            setAllMessages(savedMessages);
+            setCollections(savedCollections);
+            setCatalogs(savedCatalogs);
+            setInquiries(savedInquiries);
+            setInquiryMessages(savedInquiryMessages);
+            setEvents(savedEvents);
+            setContacts(savedContacts);
         }
     }, [applyIfChanged, canReadData, keepFailed, syncInvoices, authUserRef]);
 
@@ -248,11 +271,13 @@ export function useEntityData(
             // The last full-load payload no longer describes state; without
             // this, a later identical full load would be skipped as "unchanged".
             delete lastPayloads.current[key];
-            setter(prev => {
-                const next = mergeChanges(prev, group, compare);
-                if (next !== prev && savedList) queueMicrotask(() => { void db.replaceSaved(savedList, next); });
-                return next;
-            });
+            setter(prev => mergeChanges(prev, group, compare));
+            // The saved copy is updated here, from the change itself, and not
+            // later from the screen's state: the sync position saved after
+            // this page must never be ahead of what the device has saved.
+            if (savedList && !db.mergeSaved<T>(savedList, items => mergeChanges(items, group, compare))) {
+                savedCopyFailed.current = true;
+            }
         };
         merge<Artwork>('artwork', 'artworks', setArtworks, byDesc<Artwork>('createdAt'), 'artworks');
         merge<Collection>('collection', 'collections', setCollections, byDesc<Collection>('createdAt'), 'collections');
@@ -274,20 +299,35 @@ export function useEntityData(
     /** When everything was last brought up to date (delta pass or full load). */
     const lastSyncAtRef = useRef(0);
 
-    // One delta-sync engine per signed-in user (per tab: see memoryCursor).
-    const engineRef = useRef<{ userId: string; engine: ReturnType<typeof createDeltaSync> } | null>(null);
+    // One delta-sync engine per signed-in user and access, starting from where
+    // the saved copy is up to (savedCursor), then kept per tab in memory.
+    const engineRef = useRef<{ identity: string; engine: ReturnType<typeof createDeltaSync> } | null>(null);
     const getEngine = useCallback(() => {
-        const userId = authUserRef.current?.id;
-        if (!userId) return null;
-        if (engineRef.current?.userId !== userId) {
+        const user = authUserRef.current;
+        if (!user) return null;
+        const identity = syncIdentity(user);
+        if (engineRef.current?.identity !== identity) {
+            const cursor = savedCursor({
+                identity,
+                read: () => db.getSyncMark(),
+                write: mark => db.setSyncMark(mark),
+                maxAgeMs: FULL_COPY_MAX_AGE_MS,
+                copyIntact: () => !savedCopyFailed.current,
+            });
             engineRef.current = {
-                userId,
+                identity,
                 engine: createDeltaSync({
                     fetchPage: fetchSyncPage,
-                    ...memoryCursor(),
-                    fullLoad,
+                    loadCursor: cursor.loadCursor,
+                    saveCursor: cursor.saveCursor,
+                    clearCursor: cursor.clearCursor,
+                    fullLoad: async () => {
+                        savedCopyFailed.current = false;
+                        await fullLoad();
+                        cursor.tookFullCopy();
+                    },
                     applyChanges,
-                    isCurrent: () => authUserRef.current?.id === userId,
+                    isCurrent: () => !!authUserRef.current && syncIdentity(authUserRef.current) === identity,
                 }),
             };
         }

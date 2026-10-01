@@ -6,7 +6,13 @@ const IDENTITY_CACHE = 'push-identity';
 const IDENTITY_URL = '/__push-identity';
 const NAV_CACHE = 'push-nav';
 const NAV_URL = '/__push-nav';
-const KEEP_CACHES = [IDENTITY_CACHE, NAV_CACHE];
+// Photos and files kept on the device (see "Saved photos" below), also kept
+// across updates. The app (services/photoStore.ts) uses the same names.
+const PREVIEW_CACHE = 'photos-previews';
+const FULL_CACHE = 'photos-full';
+const OFFLINE_CACHE = 'photos-offline';
+const PHOTO_CACHES = [PREVIEW_CACHE, FULL_CACHE, OFFLINE_CACHE];
+const KEEP_CACHES = [IDENTITY_CACHE, NAV_CACHE, ...PHOTO_CACHES];
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -31,6 +37,13 @@ globalThis.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
 
   const url = new URL(event.request.url);
+
+  // Stored photos and files: kept on the device (see "Saved photos" below).
+  // A range request (part of a large file) goes to the network as it is.
+  if (url.origin === globalThis.location.origin && FILE_PATH.test(url.pathname) && !event.request.headers.has('Range')) {
+    event.respondWith(photoResponse(event, url));
+    return;
+  }
 
   // Never cache API calls — always go to network to prevent stale data
   if (url.pathname.startsWith('/api/')) {
@@ -78,6 +91,93 @@ globalThis.addEventListener('fetch', (event) => {
       })
   );
 });
+
+// ── Saved photos ───────────────────────────────────────────────────────────
+// Photos and files the app shows stay on the device, so they appear at once
+// and without a connection. A file's address never changes its contents (each
+// upload gets a new key), so a saved copy never goes stale. Three stores:
+//   previews  the small copies lists and tiles use; all kept (the app also
+//             downloads every one in the background, photoStore.ts)
+//   full      full-size photos and PDFs once opened, up to FULL_LIMIT_BYTES,
+//             the oldest saved removed first
+//   offline   what "Save for offline" kept; stays until taken off
+// All three are deleted when the person signs out (photoStore.clear).
+
+const FILE_PATH = /^\/api\/(?:o\/[A-Za-z0-9-]+\/)?files\//;
+const KEEPABLE_TYPE = /^(image\/|application\/pdf)/;
+const FULL_LIMIT_BYTES = 300 * 1024 * 1024;
+const TRIM_EVERY_MS = 60_000;
+
+const isPreview = (url) => url.pathname.endsWith('__thumb');
+
+/** The saved copy of a file, from whichever store holds it. */
+async function savedFile(address) {
+  for (const name of PHOTO_CACHES) {
+    const hit = await caches.open(name).then(cache => cache.match(address));
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+let lastTrimAt = 0;
+
+/** Keeps the full-size store under its limit, removing the oldest saved first. */
+async function trimFullStore() {
+  if (Date.now() - lastTrimAt < TRIM_EVERY_MS) return;
+  lastTrimAt = Date.now();
+  const cache = await caches.open(FULL_CACHE);
+  const entries = [];
+  let total = 0;
+  for (const key of await cache.keys()) {
+    const res = await cache.match(key);
+    const size = Number(res?.headers.get('X-Saved-Size')) || 0;
+    entries.push({ key, size, at: Number(res?.headers.get('X-Saved-At')) || 0 });
+    total += size;
+  }
+  if (total <= FULL_LIMIT_BYTES) return;
+  entries.sort((a, b) => a.at - b.at);
+  for (const entry of entries) {
+    if (total <= FULL_LIMIT_BYTES * 0.9) break;
+    await cache.delete(entry.key);
+    total -= entry.size;
+  }
+}
+
+/**
+ * Saves a file the server just sent. Not a preview the server answered with
+ * the original (none made yet): the real one replaces it once made.
+ */
+async function keepFile(address, response) {
+  const type = response.headers.get('Content-Type') || '';
+  if (response.status !== 200 || !KEEPABLE_TYPE.test(type)) return;
+  if (response.headers.get('X-Preview-Stand-In') === '1') return;
+  const body = await response.blob();
+  const headers = new Headers(response.headers);
+  headers.set('X-Saved-At', String(Date.now()));
+  headers.set('X-Saved-Size', String(body.size));
+  const name = isPreview(new URL(address)) ? PREVIEW_CACHE : FULL_CACHE;
+  await caches.open(name).then(cache => cache.put(address, new Response(body, { status: 200, headers })));
+  if (name === FULL_CACHE) await trimFullStore();
+}
+
+/** Saved copy first; else the network (and save it); offline, the preview of a full photo. */
+function photoResponse(event, url) {
+  return (async () => {
+    const saved = await savedFile(event.request.url);
+    if (saved) return saved;
+    try {
+      const response = await fetch(event.request);
+      if (response.ok) event.waitUntil(keepFile(event.request.url, response.clone()).catch(() => undefined));
+      return response;
+    } catch (err) {
+      if (!isPreview(url)) {
+        const preview = await savedFile(`${url.origin}${url.pathname}__thumb`);
+        if (preview) return preview;
+      }
+      throw err;
+    }
+  })();
+}
 
 // ── Background Sync & Periodic Background Sync ─────────────────────────────
 

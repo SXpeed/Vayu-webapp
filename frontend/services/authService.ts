@@ -54,7 +54,7 @@ export interface PresenceMap {
 import { apiCall as call, authHeaders, LEGACY_TOKEN_KEY } from './apiClient';
 import { db } from './db';
 import { flushPendingSales } from './salesService';
-import { apiBase, authClient, isPlatformSession, setWorkspace, type Workspace } from './workspace';
+import { apiBase, authClient, currentWorkspace, isPlatformSession, setWorkspace, type Workspace } from './workspace';
 
 type DeviceInfo = { id: string; label: string; createdAt: number; lastUsedAt: number; current?: boolean };
 
@@ -94,10 +94,34 @@ async function platformCall<T>(path: string, init?: RequestInit): Promise<T> {
  */
 const SIGNED_IN_KEY = 'vayu_signed_in';
 
+/**
+ * Who was signed in here last, per workspace, so the app opens at once on the
+ * saved copy and checks the sign-in in the background (App.tsx). Not a
+ * credential either: the server checks the session cookie on every request.
+ */
+const SAVED_USER_PREFIX = 'vayu_me:';
+const savedUserKey = () => `${SAVED_USER_PREFIX}${currentWorkspace()?.id ?? 'original'}`;
+
+function forgetSavedUsers(): void {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(SAVED_USER_PREFIX)) localStorage.removeItem(key);
+    }
+  } catch { /* private mode */ }
+}
+
 const markSignedIn = () => { try { localStorage.setItem(SIGNED_IN_KEY, '1'); } catch { /* private mode */ } };
 const forgetSignIn = () => {
   try { localStorage.removeItem(SIGNED_IN_KEY); localStorage.removeItem(LEGACY_TOKEN_KEY); } catch { /* private mode */ }
+  forgetSavedUsers();
 };
+
+/** What the server said about this device's sign-in; 'unknown' when it couldn't be asked (offline, a blip). */
+export type SignInCheck =
+  | { status: 'signed-in'; user: AuthUser }
+  | { status: 'signed-out'; reason?: string }
+  | { status: 'unknown' };
 
 /**
  * A device still holding the old JavaScript-kept token swaps it for the
@@ -177,6 +201,7 @@ export const authService = {
       await flushPendingSales().catch(() => undefined);
       try { await fetch(`${apiBase()}/auth/logout`, { method: 'POST', headers: authHeaders() }); } catch { /* signing out anyway */ }
       db.clearWorkspaceCopy();
+      forgetSavedUsers();
       try { await authClient.signOut(); } finally { setWorkspace(null); }
       return;
     }
@@ -212,28 +237,61 @@ export const authService = {
   },
 
   async getMe(): Promise<AuthUser | null> {
+    const check = await authService.checkSignIn();
+    return check.status === 'signed-in' ? check.user : null;
+  },
+
+  /** Asks the server who is signed in here, keeping the answer for the next start (savedUser). */
+  async checkSignIn(): Promise<SignInCheck> {
     if (isPlatformSession()) {
       try {
-        return await call<AuthUser>('/auth/me');
+        const user = await call<AuthUser>('/auth/me');
+        authService.rememberUser(user);
+        return { status: 'signed-in', user };
       } catch (err) {
         // Signed out, or no longer a member: back to sign-in. Anything else
-        // (offline, a blip) keeps the workspace for the next try.
+        // (offline, a blip, a plan to renew) keeps the workspace for the next try.
         const status = (err as { status?: number }).status;
-        if (status === 401 || status === 404) setWorkspace(null);
-        return null;
+        if (status === 401 || status === 404) {
+          forgetSavedUsers();
+          setWorkspace(null);
+          return { status: 'signed-out', reason: status === 404 ? 'removed-from-workspace' : undefined };
+        }
+        return { status: 'unknown' };
       }
     }
     await exchangeLegacyToken();
-    if (!localStorage.getItem(SIGNED_IN_KEY) && !localStorage.getItem(LEGACY_TOKEN_KEY)) return null;
+    if (!localStorage.getItem(SIGNED_IN_KEY) && !localStorage.getItem(LEGACY_TOKEN_KEY)) return { status: 'signed-out' };
     try {
-      return await call<AuthUser>('/auth/me');
+      const user = await call<AuthUser>('/auth/me');
+      authService.rememberUser(user);
+      return { status: 'signed-in', user };
     } catch (err) {
       // Only forget the sign-in on a genuine 401 (invalid or expired
       // session). Transient errors (network, 500, etc.) should NOT log the
       // user out — they may just be a momentary blip on hard refresh.
-      if ((err as { status?: number }).status === 401) forgetSignIn();
+      if ((err as { status?: number }).status === 401) {
+        forgetSignIn();
+        return { status: 'signed-out' };
+      }
+      return { status: 'unknown' };
+    }
+  },
+
+  /** Who was signed in here last (this workspace), if the device is still signed in. */
+  savedUser(): AuthUser | null {
+    try {
+      if (!isPlatformSession() && !localStorage.getItem(SIGNED_IN_KEY)) return null;
+      const raw = localStorage.getItem(savedUserKey());
+      const user = raw ? JSON.parse(raw) as AuthUser : null;
+      return user && typeof user.id === 'string' ? user : null;
+    } catch {
       return null;
     }
+  },
+
+  rememberUser(user: AuthUser): void {
+    try { localStorage.setItem(savedUserKey(), JSON.stringify(user)); } catch { /* private mode */ }
   },
 
   /** Devices the signed-in person is signed in on, and their limit (null = unlimited). */

@@ -1,5 +1,6 @@
 import React, { useCallback, useRef } from 'react';
 import QuickPinchZoom, { make3dTransformValue } from 'react-quick-pinch-zoom';
+import { PreviewOnlyNote } from './PreviewOnlyNote';
 
 interface ZoomableImageProps {
     src: string;
@@ -19,6 +20,7 @@ export const ZoomableImage: React.FC<ZoomableImageProps> = ({ src, alt, classNam
     }, []);
 
     return (
+        <>
         <QuickPinchZoom onUpdate={onUpdate} wheelScaleFactor={0.5} doubleTapZoomOutOnMaxScale={true} minZoom={1} maxZoom={4} draggableUnZoomed={false}>
             <div className="w-full h-full flex items-center justify-center relative">
                 <img
@@ -32,5 +34,7 @@ export const ZoomableImage: React.FC<ZoomableImageProps> = ({ src, alt, classNam
                 />
             </div>
         </QuickPinchZoom>
+        <PreviewOnlyNote src={src} className="!absolute bottom-4 left-1/2 -translate-x-1/2 z-10 pointer-events-none" />
+        </>
     );
 };

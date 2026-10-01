@@ -183,6 +183,13 @@ interface RequestMetrics {
   d1RowsRead: number;
   d1RowsWritten: number;
   kvOps: number;
+  /** Database calls, and the time spent waiting on them (summed: side-by-side calls each count). */
+  d1Queries: number;
+  d1Ms: number;
+  /** Time spent waiting on KV (summed). */
+  kvMs: number;
+  /** The organization access check (sign-in, membership, plan), before any route runs. */
+  gateMs: number;
 }
 
 const metricsByRequest = new WeakMap<Request, RequestMetrics>();
@@ -190,7 +197,7 @@ const metricsByRequest = new WeakMap<Request, RequestMetrics>();
 export function requestMetrics(request: Request): RequestMetrics {
   let metrics = metricsByRequest.get(request);
   if (!metrics) {
-    metrics = { d1RowsRead: 0, d1RowsWritten: 0, kvOps: 0 };
+    metrics = { d1RowsRead: 0, d1RowsWritten: 0, kvOps: 0, d1Queries: 0, d1Ms: 0, kvMs: 0, gateMs: 0 };
     metricsByRequest.set(request, metrics);
   }
   return metrics;
@@ -210,9 +217,15 @@ export function addD1Usage(request: Request, rowsRead: number, rowsWritten: numb
  */
 export function trackedEnv(request: Request, env: Env): Env {
   const metrics = requestMetrics(request);
+  /** Adds the wait for a promise to one of the timers. */
+  const timed = <T>(pending: Promise<T>, timer: 'd1Ms' | 'kvMs'): Promise<T> => {
+    const startedAt = Date.now();
+    return pending.finally(() => { metrics[timer] += Date.now() - startedAt; });
+  };
   const track = <T>(result: T | Promise<T>): T | Promise<T> => { // NOSONAR: hands back whatever D1 gave, a result or its promise
     if (result && typeof (result as { then?: unknown }).then === 'function') {
-      return (result as Promise<T>).then(value => { track(value); return value; });
+      metrics.d1Queries += 1;
+      return timed(result as Promise<T>, 'd1Ms').then(value => { track(value); return value; });
     }
     const meta = (result as { meta?: { rows_read?: number; rows_written?: number } })?.meta;
     if (meta) {
@@ -235,12 +248,13 @@ export function trackedEnv(request: Request, env: Env): Env {
     originals.set(wrapped, stmt);
     return wrapped;
   };
+  const kvCall = <T>(pending: Promise<T>): Promise<T> => { metrics.kvOps += 1; return timed(pending, 'kvMs'); };
   const kv = {
-    get: (...args: Parameters<KVNamespace['get']>) => { metrics.kvOps += 1; return env.VAYU_KV.get(...args); },
-    put: (...args: Parameters<KVNamespace['put']>) => { metrics.kvOps += 1; return env.VAYU_KV.put(...args); },
-    delete: (...args: Parameters<KVNamespace['delete']>) => { metrics.kvOps += 1; return env.VAYU_KV.delete(...args); },
-    list: (...args: Parameters<KVNamespace['list']>) => { metrics.kvOps += 1; return env.VAYU_KV.list(...args); },
-    getWithMetadata: (...args: Parameters<KVNamespace['getWithMetadata']>) => { metrics.kvOps += 1; return env.VAYU_KV.getWithMetadata(...args); },
+    get: (...args: Parameters<KVNamespace['get']>) => kvCall(env.VAYU_KV.get(...args)),
+    put: (...args: Parameters<KVNamespace['put']>) => kvCall(env.VAYU_KV.put(...args)),
+    delete: (...args: Parameters<KVNamespace['delete']>) => kvCall(env.VAYU_KV.delete(...args)),
+    list: (...args: Parameters<KVNamespace['list']>) => kvCall(env.VAYU_KV.list(...args)),
+    getWithMetadata: (...args: Parameters<KVNamespace['getWithMetadata']>) => kvCall(env.VAYU_KV.getWithMetadata(...args)),
   } as KVNamespace;
   const db = {
     // Which database this is, so per-database setup is remembered per database.
@@ -248,7 +262,8 @@ export function trackedEnv(request: Request, env: Env): Env {
     prepare: (query: string) => wrapStatement(env.VAYU_DB.prepare(query)),
     batch: <T = unknown>(statements: D1PreparedStatement[]) => {
       const unwrapped = statements.map(stmt => originals.get(stmt) ?? stmt);
-      return env.VAYU_DB.batch(unwrapped).then(result => {
+      metrics.d1Queries += 1;
+      return timed(env.VAYU_DB.batch(unwrapped), 'd1Ms').then(result => {
         for (const r of result) track(r);
         return result as D1Result<T>[];
       });

@@ -6,6 +6,7 @@ import { db } from '../services/db';
 import toast from 'react-hot-toast';
 import { createRefreshScheduler } from '../services/refreshScheduler';
 import { realtimeService } from '../services/realtimeService';
+import { photoStore } from '../services/photoStore';
 
 /**
  * Manages auth state: authUser, userProfile, theme, and the
@@ -34,6 +35,8 @@ export function useAuth() {
     }, [theme]);
 
     const applyAuthUser = useCallback((user: AuthUser) => {
+        // Kept so the next start opens at once as this person (App.tsx).
+        authService.rememberUser(user);
         authUserRef.current = user;
         setAuthUser(user);
         const savedTheme = (localStorage.getItem('vayu_theme') as 'light' | 'dark') || 'light';
@@ -99,6 +102,8 @@ export function useAuth() {
         // person's notifications (it used to keep getting them after sign-out).
         await pushService.releaseDevice();
         await authService.logout();
+        // The workspace's photos leave the device with the sign-in.
+        await photoStore.clear();
         clearAuth();
         navigateTo('login');
     }, [clearAuth]);

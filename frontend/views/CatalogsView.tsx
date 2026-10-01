@@ -2,6 +2,8 @@ import React, { useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { Plus, X, Edit2, Trash2, Download, Loader2, Camera, Upload, FileText, FileDown, BookOpen, Lock } from 'lucide-react';
+import { OfflineToggle } from '../components/OfflineToggle';
+import { offlineAddresses } from '../services/photoStore';
 import { SearchBar } from '../components/SearchBar';
 import { ArtworkTile, ARTWORK_TILE_GRID } from '../components/ArtworkTile';
 import { ArtworkPicker } from '../components/ArtworkPicker';
@@ -398,6 +400,11 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                                 >
                                     <FileDown size={14} />
                                 </button>
+                                <OfflineToggle
+                                    setId={`catalog:${catalog.id}`}
+                                    name={catalog.name}
+                                    addresses={() => offlineAddresses(catalog.artworkIds, artworks, [catalog.pdfUrl, catalog.coverImageUrl])}
+                                />
                                 <button
                                     type="button"
                                     onClick={(e) => { e.stopPropagation(); setDeletePdfTarget(catalog); }}
@@ -610,6 +617,12 @@ export const CatalogDetailModal: React.FC<CatalogDetailModalProps> = ({ catalog,
                                 <Edit2 size={18} />
                             </button>
                         </IfCan>
+                        <OfflineToggle
+                            setId={`catalog:${catalog.id}`}
+                            name={catalog.name}
+                            size={18}
+                            addresses={() => offlineAddresses(catalog.artworkIds, artworks, [catalog.pdfUrl, catalog.coverImageUrl])}
+                        />
                         <button onClick={onDownloadClick} disabled={isGeneratingPDF} className={`neu-icon-btn text-gold-700 dark:text-gold-300 active-scale ${isGeneratingPDF ? 'opacity-50 cursor-not-allowed' : ''}`}>
                             <Download size={20} />
                         </button>

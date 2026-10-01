@@ -151,14 +151,79 @@ async function planState(db: D1Database, orgId: string): Promise<{ active: boole
   return state;
 }
 
+// ── A short memory of the access check ──────────────────────────────────────
+// Every request used to ask the database who is signed in, whether they are a
+// member and what their app record says: about 0.7 s of each request in
+// production (2026-10). A confirmed answer is now reused for ACCESS_MEMO_MS on
+// this isolate. The cost, agreed with the owner: a removed member, a disabled
+// account or a signed-out device can keep working for up to that long on
+// other isolates. On the isolate that made the change it applies at once
+// (forgetOrgAccess, called by the router on every change to accounts,
+// members, roles or sign-ins).
+const ACCESS_MEMO_MS = 30_000;
+
+type PlatformSignIn = { user: { id: string; name: string; email: string } | null; expiresAt: number; sessionId?: string };
+const signInMemo = new Map<string, { at: number; value: PlatformSignIn }>();
+const memberMemo = new Map<string, { at: number; value: OrgRow }>();
+const appUserMemo = new Map<string, { at: number; value: StoredUser }>();
+
+function recall<T>(memo: Map<string, { at: number; value: T }>, key: string): T | undefined {
+  const hit = memo.get(key);
+  if (!hit) return undefined;
+  if (Date.now() - hit.at < ACCESS_MEMO_MS) return hit.value;
+  memo.delete(key);
+  return undefined;
+}
+
+function remember<T>(memo: Map<string, { at: number; value: T }>, key: string, value: T): void {
+  if (memo.size > 2000) memo.clear();
+  memo.set(key, { at: Date.now(), value });
+}
+
+/** Drops everything this isolate remembers about sign-ins, members and plans. */
+export function forgetOrgAccess(): void {
+  signInMemo.clear();
+  memberMemo.clear();
+  appUserMemo.clear();
+  planMemo.clear();
+}
+
+/** The Better Auth session cookie's value (prefix "as", with or without __Secure-). */
+function sessionCookie(request: Request): string | null {
+  const match = /(?:^|;\s*)(?:__Secure-)?as\.session_token=([^;]+)/.exec(request.headers.get('Cookie') ?? '');
+  return match ? match[1] : null;
+}
+
 /** The platform account signed in on this request (Better Auth cookie), if any. */
-async function platformSignIn(request: Request, env: Env, db: D1Database): Promise<{ user: { id: string; name: string; email: string } | null; expiresAt: number; sessionId?: string }> {
+async function platformSignIn(request: Request, env: Env, db: D1Database): Promise<PlatformSignIn> {
+  const cookie = sessionCookie(request);
+  const known = cookie ? recall(signInMemo, cookie) : undefined;
+  if (known && known.expiresAt > Date.now()) return known;
   const authOrigin = resolveAuthOrigin(env, new URL(request.url));
   if (!authOrigin) return { user: null, expiresAt: 0 };
   const auth = await getAuth(env, db, authOrigin, await getEffectiveLoginMethods(env, db));
   const signedIn = await auth.api.getSession({ headers: request.headers });
   if (!signedIn) return { user: null, expiresAt: 0 };
-  return { user: signedIn.user, expiresAt: new Date(signedIn.session.expiresAt).getTime(), sessionId: signedIn.session.id };
+  const value = { user: signedIn.user, expiresAt: new Date(signedIn.session.expiresAt).getTime(), sessionId: signedIn.session.id };
+  // Only a confirmed sign-in is remembered: a signed-out answer is asked again.
+  if (cookie) remember(signInMemo, cookie, value);
+  return value;
+}
+
+/** The organization, with the caller's membership in it (remembered while active). */
+async function orgMembership(db: D1Database, orgId: string, userId: string | null): Promise<OrgRow | null> {
+  const key = `${orgId}|${userId ?? ''}`;
+  const known = userId ? recall(memberMemo, key) : undefined;
+  if (known) return known;
+  const row = await db.prepare(
+    `SELECT o.id, o.name, o.status, o.app_storage, m.role, m.status AS member_status, m.app_user_id
+     FROM organizations o LEFT JOIN memberships m ON m.org_id = o.id AND m.user_id = ?
+     WHERE o.id = ?`,
+  ).bind(userId ?? '', orgId).first<OrgRow>();
+  // Only an active member of an active organization is remembered: anything
+  // else (paused, removed, not a member) is asked again every time.
+  if (row && userId && row.status === 'active' && row.member_status === 'active') remember(memberMemo, key, row);
+  return row;
 }
 
 export interface OpenedOrg {
@@ -195,26 +260,33 @@ export async function openOrgRequest(request: Request, env: Env, orgId: string, 
   // before looking it up (only the public viewing pages work signed out).
   if (!user && !isPublicPath(rest)) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const row = await db.prepare(
-    `SELECT o.id, o.name, o.status, o.app_storage, m.role, m.status AS member_status, m.app_user_id
-     FROM organizations o LEFT JOIN memberships m ON m.org_id = o.id AND m.user_id = ?
-     WHERE o.id = ?`,
-  ).bind(user?.id ?? '', orgId).first<OrgRow>();
+  const row = await orgMembership(db, orgId, user?.id ?? null);
   if (!row) return notFound();
 
   const member = user && row.role && row.member_status === 'active' ? row.role : null;
   const refused = accessRefusal(row, !!user, member, rest);
   if (refused) return refused;
 
-  const plan = member ? await planState(db, orgId) : null;
+  const storageEnv = orgStorageEnv(env, row);
+  const appUser = async (signedIn: NonNullable<PlatformSignIn['user']>, role: MemberRole): Promise<StoredUser> => {
+    const key = `${orgId}|${row.app_user_id ?? signedIn.id}|${signedIn.email.toLowerCase()}`;
+    const known = recall(appUserMemo, key);
+    if (known) return known;
+    const record = await ensureAppUser(storageEnv, { appUserId: row.app_user_id ?? signedIn.id, name: signedIn.name, email: signedIn.email, role });
+    remember(appUserMemo, key, record);
+    return record;
+  };
+  // Side by side: the plan and the member's app record don't depend on each other.
+  const [plan, record] = user && member
+    ? await Promise.all([planState(db, orgId), appUser(user, member)])
+    : [null, null];
   if (plan && !reachableWithoutPlan(rest) && !plan.active) {
     return Response.json({ error: 'This workspace opens once its plan is active (payment or renewal). Contact us if this is unexpected.', code: 'subscription_inactive' }, { status: 402 });
   }
 
-  const orgEnv: Env = { ...orgStorageEnv(env, row), SECTIONS_OFF: plan?.sectionsOff ?? [] };
+  const orgEnv: Env = { ...storageEnv, SECTIONS_OFF: plan?.sectionsOff ?? [] };
   let session: SessionData | null = null;
-  if (user && member) {
-    const record = await ensureAppUser(orgEnv, { appUserId: row.app_user_id ?? user.id, name: user.name, email: user.email, role: member });
+  if (user && member && record) {
     session = {
       userId: record.id, email: record.email, name: record.name, role: record.role, expiresAt,
       platformUserId: user.id, platformSessionId: sessionId, orgRole: member,

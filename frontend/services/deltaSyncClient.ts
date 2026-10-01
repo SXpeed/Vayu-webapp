@@ -136,6 +136,65 @@ export function createDeltaSync(options: DeltaSyncOptions, now: () => number = D
     };
 }
 
+/** Where a saved copy is up to, as kept on the device (db.ts SyncMark). */
+export interface SavedSyncMark { identity: string; cursor: number; fullCopyAt: number }
+
+export interface SavedCursorOptions {
+    /** Who the copy is for, with which access: a different identity starts afresh. */
+    identity: string;
+    read(): SavedSyncMark | null;
+    write(mark: SavedSyncMark | null): void;
+    /** A copy taken whole longer ago than this is taken whole again. */
+    maxAgeMs: number;
+    /** False once a write to the saved copy has failed: its position is then not kept. */
+    copyIntact(): boolean;
+    now?: () => number;
+}
+
+/**
+ * A cursor kept with the device's saved copy, so a start-up asks only for
+ * what changed since instead of reloading every list. Read once, at the first
+ * pass: from then on it lives in memory, per tab (see memoryCursor). Saved
+ * only after the copy itself is up to date (the caller saves its lists before
+ * the engine saves the cursor), so the saved position is never ahead of the
+ * saved data; behind is harmless, as replayed changes carry the current state.
+ * The whole copy is retaken every `maxAgeMs`: catching up never brings back
+ * what was there before the person could see it (added to an existing chat).
+ */
+export function savedCursor(options: SavedCursorOptions) {
+    const now = options.now ?? Date.now;
+    let cursor: number | null | undefined;
+    let fullCopyTaken = false;
+    return {
+        loadCursor: (): number | null => {
+            if (cursor === undefined) {
+                const mark = options.read();
+                const usable = mark !== null && mark.identity === options.identity && now() - mark.fullCopyAt < options.maxAgeMs;
+                cursor = usable ? mark.cursor : null;
+            }
+            return cursor;
+        },
+        saveCursor: (value: number): void => {
+            cursor = value;
+            if (!options.copyIntact()) {
+                options.write(null);
+                fullCopyTaken = false;
+                return;
+            }
+            const mark = options.read();
+            const fullCopyAt = fullCopyTaken ? now() : (mark?.identity === options.identity ? mark.fullCopyAt : 0);
+            fullCopyTaken = false;
+            options.write({ identity: options.identity, cursor: value, fullCopyAt });
+        },
+        clearCursor: (): void => {
+            cursor = null;
+            options.write(null);
+        },
+        /** Call when a full copy has loaded: the cursor saved next starts a new age. */
+        tookFullCopy: (): void => { fullCopyTaken = true; },
+    };
+}
+
 /**
  * The cursor lives in memory, one per tab. It describes what THIS tab's
  * in-memory state has applied: a cursor shared through localStorage would let

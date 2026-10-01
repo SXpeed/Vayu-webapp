@@ -8,6 +8,7 @@ import { AuthUser, authService } from './services/authService';
 import { HomeView } from './views/HomeView';
 import { db } from './services/db';
 import storageService from './services/storageService';
+import { photoStore } from './services/photoStore';
 
 /** Fire-and-forget: create small copies for files uploaded before thumbnails existed. */
 const backfillThumbnailsQuietly = () => {
@@ -243,8 +244,10 @@ const App: React.FC = () => {
             const reason = (event as CustomEvent<{ reason?: string }>).detail?.reason;
             authService.clearLocalSession();
             clearAuth();
-            // Signed out: this device shows none of that person's notifications now.
+            // Signed out: this device shows none of that person's notifications now,
+            // and keeps none of the workspace's photos.
             void pushService.setIdentity(null);
+            void photoStore.clear();
             navigateTo('login');
             if (!shown) {
                 shown = true;
@@ -252,6 +255,7 @@ const App: React.FC = () => {
                 if (reason === 'device-limit') message = 'You were signed out because your account was signed in on another device.';
                 else if (reason === 'signed-out-remotely') message = 'This device was signed out from another device.';
                 else if (reason === 'signed-out-by-admin') message = 'An admin signed this device out. Please sign in again.';
+                else if (reason === 'removed-from-workspace') message = 'You no longer have access to this workspace.';
                 else if (reason === 'original-signin-closed') message = 'Sign-in has moved to your email account. Sign in with your email and the same password.';
                 toast.error(message, { duration: 8000 });
             }
@@ -262,56 +266,92 @@ const App: React.FC = () => {
     }, []);
 
     // ── Initialize DB and load data — runs ONCE on mount ──────────────────
-    // The splash used to wait for the whole first sync. Every read has a 20s
-    // timeout and a sync can take many pages, so on a slow phone connection
-    // it could sit on the logo for minutes — it looked stuck. Now it opens on
-    // the device's saved copy once the sync has had BOOT_SYNC_WAIT_MS to
-    // finish, and the sync carries on in the background.
+    // A device signed in before opens at once on its saved copy, as the
+    // person it saved, and asks the server in the background (both who is
+    // signed in and what changed). It used to wait on the sign-in check first:
+    // on a slow connection that sat on the logo for seconds ("taking longer
+    // than usual"), and a check that timed out landed on the sign-in screen.
+    // A server that says "signed out" still signs the device out, a moment
+    // later. Only a first start on this device waits, for the sign-in check
+    // and up to BOOT_SYNC_WAIT_MS of the first sync.
     useEffect(() => {
+        /** Signed in: land where a notification tap asked for, else home. */
+        const openSignedIn = (user: AuthUser) => {
+            applyAuthUser(user);
+            const launch = launchTargetRef.current;
+            if (launch) {
+                // Strip ?view= so a refresh doesn't re-trigger the deep link.
+                globalThis.history.replaceState(null, '', globalThis.location.pathname);
+                // The same tap is also stored for the app (sw.js): already handled.
+                void takeStoredPushTarget();
+                setPushTarget(launch);
+            }
+            setCurrentView(launch?.view || 'home');
+            globalThis.history.pushState({ view: launch?.view || 'home' }, '');
+        };
+
+        /** Notifications, the workspace's logo, then everything brought up to date. */
+        const connect = (): Promise<void> => {
+            pushService.syncSubscription();
+            // Picks up a logo changed in the control centre, for next launch.
+            void refreshCurrentWorkspace();
+            const firstSync = (async () => {
+                const migrated = await migrateLocalToD1();
+                await syncAll();
+                await loadTeamMembers();
+                if (migrated) {
+                    await syncAll();
+                }
+            })().catch(err => console.error('First sync failed:', err));
+            void firstSync.then(() => {
+                backfillThumbnailsQuietly();
+                void photoStore.downloadPreviews();
+            });
+            return firstSync;
+        };
+
+        /** The background check after opening on the saved user; runs beside the first sync. */
+        const confirmSignIn = async (saved: AuthUser) => {
+            const sync = connect();
+            const check = await authService.checkSignIn();
+            if (check.status === 'signed-in') {
+                // Role, permissions or name may have changed since last time.
+                if (JSON.stringify(check.user) !== JSON.stringify(saved)) applyAuthUser(check.user);
+            } else if (check.status === 'signed-out') {
+                globalThis.dispatchEvent(new CustomEvent(SIGNED_OUT_EVENT, { detail: { reason: check.reason ?? 'session-ended' } }));
+            }
+            await sync;
+        };
+
         const initApp = async () => {
             let signedInAtStart = false;
             try {
                 setBootStep('Starting');
                 await db.init();
 
+                const saved = authService.savedUser();
+                if (saved) {
+                    signedInAtStart = true;
+                    openSignedIn(saved);
+                    await loadData(false);
+                    void confirmSignIn(saved);
+                    prefetchViews();
+                    return;
+                }
+
                 setBootStep('Checking your sign-in');
                 const me = await authService.getMe();
                 if (me) {
                     signedInAtStart = true;
-                    applyAuthUser(me);
-                    // Land where a notification tap asked for, else home.
-                    const launch = launchTargetRef.current;
-                    if (launch) {
-                        // Strip ?view= so a refresh doesn't re-trigger the deep link.
-                        globalThis.history.replaceState(null, '', globalThis.location.pathname);
-                        // The same tap is also stored for the app (sw.js): already handled.
-                        void takeStoredPushTarget();
-                        setPushTarget(launch);
-                    }
-                    setCurrentView(launch?.view || 'home');
-                    globalThis.history.pushState({ view: launch?.view || 'home' }, '');
-                    pushService.syncSubscription();
-                    // Picks up a logo changed in the control centre, for next launch.
-                    void refreshCurrentWorkspace();
+                    openSignedIn(me);
 
                     // Saved copy first (local, instant): what shows if the
                     // sync below is still running when the splash lifts.
                     await loadData(false);
 
                     setBootStep('Syncing');
-                    const firstSync = (async () => {
-                        const migrated = await migrateLocalToD1();
-                        await syncAll();
-                        await loadTeamMembers();
-                        if (migrated) {
-                            await syncAll();
-                        }
-                    })().catch(err => console.error('First sync failed:', err));
-                    void firstSync.then(() => {
-                        backfillThumbnailsQuietly();
-                        prefetchViews();
-                    });
-                    await Promise.race([firstSync, delay(BOOT_SYNC_WAIT_MS)]);
+                    prefetchViews();
+                    await Promise.race([connect(), delay(BOOT_SYNC_WAIT_MS)]);
                 } else {
                     globalThis.history.pushState({ view: 'login' }, '');
                     await loadData(false);
@@ -389,6 +429,7 @@ const App: React.FC = () => {
         }
         prefetchViews();
         backfillThumbnailsQuietly();
+        void photoStore.downloadPreviews();
     };
 
     // Hooks must run before the loading early-return below.

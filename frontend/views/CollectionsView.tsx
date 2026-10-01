@@ -1,5 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Plus, X, Image as ImageIcon, Edit2, Trash2, Camera, Loader2 } from 'lucide-react';
+import { OfflineToggle } from '../components/OfflineToggle';
+import { offlineAddresses } from '../services/photoStore';
 import { SearchBar } from '../components/SearchBar';
 import { ArtworkTile, ARTWORK_TILE_GRID } from '../components/ArtworkTile';
 import { ArtworkPicker } from '../components/ArtworkPicker';
@@ -247,6 +249,12 @@ export const CollectionDetailModal: React.FC<CollectionDetailModalProps> = ({ co
                         <h2 className="text-xl font-serif text-gray-900 dark:text-white truncate px-1">{collection.name}</h2>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
+                        <OfflineToggle
+                            setId={`collection:${collection.id}`}
+                            name={collection.name}
+                            size={18}
+                            addresses={() => offlineAddresses(collection.artworkIds, artworks, [collection.coverImageUrl])}
+                        />
                         <IfCan section="collections">
                             <button onClick={() => setIsEditing(true)} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale">
                                 <Edit2 size={18} />

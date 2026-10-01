@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import toast from 'react-hot-toast';
 import {
     Artwork, CalendarEvent, Catalog, Invoice, Collection, Contact, Inquiry, Conversation,
@@ -37,7 +37,54 @@ interface HandlerArgs {
 
 /**
  * Centralised CRUD + messaging handlers that previously lived inline in App.tsx.
+ *
+ * Changes show at once: on screen and in the device's saved copy first, then
+ * sent to the server in the background (sendInBackground). They used to wait
+ * for the server round trip, and a failed save was only logged: the change
+ * stayed on this phone until a later reload quietly dropped it.
  */
+
+/**
+ * Sends a change the screen already shows. If the server refuses it or can't
+ * be reached, `undo` puts the screen and the saved copy back as they were and
+ * a message says what wasn't saved.
+ */
+function sendInBackground(failure: string, send: () => Promise<unknown>, undo: () => unknown): void {
+    send().catch(async (err: unknown) => {
+        try { await undo(); } catch { /* the next sync settles it */ }
+        toast.error(`${failure}: ${(err as Error)?.message || 'check your connection'}`);
+    });
+}
+
+type Order<T> = (a: T, b: T) => number;
+
+/** One list's screen state and saved copy, changed together. */
+function listStore<T extends { id: string }>(
+    setter: React.Dispatch<React.SetStateAction<T[]>>,
+    saved: { all(): Promise<T[]>; save(item: T): Promise<void>; remove(id: string): Promise<void> },
+    order?: Order<T>,
+) {
+    return {
+        /** Adds (at the top, or in order) or replaces in place. */
+        async put(item: T): Promise<void> {
+            await saved.save(item);
+            setter(prev => {
+                const next = prev.some(x => x.id === item.id) ? prev.map(x => (x.id === item.id ? item : x)) : [item, ...prev];
+                return order ? [...next].sort(order) : next;
+            });
+        },
+        async drop(id: string): Promise<void> {
+            await saved.remove(id);
+            setter(prev => prev.filter(x => x.id !== id));
+        },
+        /** As saved on the device: what an undo puts back. */
+        async find(id: string): Promise<T | undefined> {
+            return (await saved.all()).find(x => x.id === id);
+        },
+    };
+}
+
+const newestFirst = <T extends { createdAt?: number }>(a: T, b: T) => (b.createdAt ?? 0) - (a.createdAt ?? 0);
 
 /**
  * Returns a state updater that marks a single message by id with the given
@@ -58,69 +105,81 @@ export function useHandlers(args: HandlerArgs) {
         setConversations, setAllMessages, setInquiryMessages, setEvents, setContacts, setSelectedArtwork,
     } = args;
 
+    const stores = useMemo(() => ({
+        artworks: listStore<Artwork>(setArtworks, { all: db.getArtworks, save: db.saveArtwork, remove: db.deleteArtwork }, newestFirst),
+        catalogs: listStore<Catalog>(setCatalogs, { all: db.getCatalogs, save: db.saveCatalog, remove: db.deleteCatalog }, newestFirst),
+        collections: listStore<Collection>(setCollections, { all: db.getCollections, save: db.saveCollection, remove: db.deleteCollection }),
+        inquiries: listStore<Inquiry>(setInquiries, { all: db.getInquiries, save: db.saveInquiry, remove: db.deleteInquiry }, (a, b) => b.date - a.date),
+        events: listStore<CalendarEvent>(setEvents, { all: db.getEvents, save: db.saveEvent, remove: db.deleteEvent }, (a, b) => a.date - b.date),
+        contacts: listStore<Contact>(setContacts, { all: db.getContacts, save: db.saveContact, remove: db.deleteContact }, newestFirst),
+        invoices: listStore<Invoice>(setInvoices, { all: db.getInvoices, save: db.saveInvoice, remove: db.deleteInvoice }, (a, b) => b.date - a.date),
+        conversations: listStore<Conversation>(setConversations, { all: db.getConversations, save: db.saveConversation, remove: db.deleteConversation }),
+    }), [setArtworks, setCatalogs, setCollections, setInquiries, setEvents, setContacts, setInvoices, setConversations]);
+
     // ── Artworks ──────────────────────────────────────────────────────────
     const handleAddArtwork = useCallback(async (newArt: Omit<Artwork, 'id' | 'createdAt'>) => {
         const artwork: Artwork = { ...newArt, id: `art_${Date.now()}`, createdAt: Date.now() };
-        try { await artworkService.saveArtwork(artwork); } catch (e) { console.error('D1 sync failed (add artwork):', e); }
-        await db.saveArtwork(artwork);
-        setArtworks((prev: Artwork[]) => [artwork, ...prev]);
+        await stores.artworks.put(artwork);
+        sendInBackground('Artwork not saved', () => artworkService.saveArtwork(artwork), () => stores.artworks.drop(artwork.id));
         return artwork;
-    }, [setArtworks]);
+    }, [stores]);
 
     const handleUpdateArtwork = useCallback(async (updatedArt: Artwork) => {
-        try { await artworkService.updateArtwork(updatedArt); } catch (e) { console.error('D1 sync failed (update artwork):', e); }
-        await db.saveArtwork(updatedArt);
-        setArtworks((prev: Artwork[]) => prev.map((a: Artwork) => a.id === updatedArt.id ? updatedArt : a));
+        const before = artworks.find(a => a.id === updatedArt.id) ?? await stores.artworks.find(updatedArt.id);
+        await stores.artworks.put(updatedArt);
         setSelectedArtwork(prev => prev?.id === updatedArt.id ? updatedArt : prev);
-    }, [setArtworks, setSelectedArtwork]);
+        sendInBackground('Artwork changes not saved', () => artworkService.updateArtwork(updatedArt), async () => {
+            if (!before) return;
+            await stores.artworks.put(before);
+            setSelectedArtwork(prev => prev?.id === before.id ? before : prev);
+        });
+    }, [artworks, stores, setSelectedArtwork]);
 
     const handleDeleteArtwork = useCallback(async (id: string) => {
-        try { await artworkService.deleteArtwork(id); } catch (e) { console.error('D1 sync failed (delete artwork):', e); }
-        await db.deleteArtwork(id);
-        setArtworks((prev: Artwork[]) => prev.filter((a: Artwork) => a.id !== id));
+        const before = artworks.find(a => a.id === id) ?? await stores.artworks.find(id);
+        await stores.artworks.drop(id);
         setSelectedArtwork(prev => prev?.id === id ? null : prev);
-    }, [setArtworks, setSelectedArtwork]);
+        sendInBackground("Couldn't delete the artwork", () => artworkService.deleteArtwork(id), () => before && stores.artworks.put(before));
+    }, [artworks, stores, setSelectedArtwork]);
 
     // ── Catalogs ──────────────────────────────────────────────────────────
     const handleAddCatalog = useCallback(async (newCat: Omit<Catalog, 'id' | 'createdAt'> & { id?: string }) => {
         const catalog: Catalog = { ...newCat, id: newCat.id || `cat_${Date.now()}`, createdAt: Date.now() };
-        try { await catalogService.saveCatalog(catalog); } catch (e) { console.error('D1 sync failed (add catalog):', e); }
-        await db.saveCatalog(catalog);
-        setCatalogs((prev: Catalog[]) => [catalog, ...prev]);
+        await stores.catalogs.put(catalog);
+        sendInBackground('Catalog not saved', () => catalogService.saveCatalog(catalog), () => stores.catalogs.drop(catalog.id));
         return catalog;
-    }, [setCatalogs]);
+    }, [stores]);
 
     const handleUpdateCatalog = useCallback(async (updatedCat: Catalog) => {
-        try { await catalogService.updateCatalog(updatedCat); } catch (e) { console.error('D1 sync failed (update catalog):', e); }
-        await db.saveCatalog(updatedCat);
-        setCatalogs((prev: Catalog[]) => prev.map((c: Catalog) => c.id === updatedCat.id ? updatedCat : c));
-    }, [setCatalogs]);
+        const before = await stores.catalogs.find(updatedCat.id);
+        await stores.catalogs.put(updatedCat);
+        sendInBackground('Catalog changes not saved', () => catalogService.updateCatalog(updatedCat), () => before && stores.catalogs.put(before));
+    }, [stores]);
 
     const handleDeleteCatalog = useCallback(async (id: string) => {
-        try { await catalogService.deleteCatalog(id); } catch (e) { console.error('D1 sync failed (delete catalog):', e); }
-        await db.deleteCatalog(id);
-        setCatalogs((prev: Catalog[]) => prev.filter((c: Catalog) => c.id !== id));
-    }, [setCatalogs]);
+        const before = await stores.catalogs.find(id);
+        await stores.catalogs.drop(id);
+        sendInBackground("Couldn't delete the catalog", () => catalogService.deleteCatalog(id), () => before && stores.catalogs.put(before));
+    }, [stores]);
 
     // ── Collections ───────────────────────────────────────────────────────
     const handleAddCollection = useCallback(async (newCol: Omit<Collection, 'id'>) => {
         const collection: Collection = { ...newCol, id: `col_${Date.now()}` };
-        try { await collectionService.saveCollection(collection); } catch (e) { console.error('D1 sync failed (add collection):', e); }
-        await db.saveCollection(collection);
-        setCollections((prev: Collection[]) => [collection, ...prev]);
-    }, [setCollections]);
+        await stores.collections.put(collection);
+        sendInBackground('Collection not saved', () => collectionService.saveCollection(collection), () => stores.collections.drop(collection.id));
+    }, [stores]);
 
     const handleUpdateCollection = useCallback(async (updatedCol: Collection) => {
-        try { await collectionService.updateCollection(updatedCol); } catch (e) { console.error('D1 sync failed (update collection):', e); }
-        await db.saveCollection(updatedCol);
-        setCollections((prev: Collection[]) => prev.map((c: Collection) => c.id === updatedCol.id ? updatedCol : c));
-    }, [setCollections]);
+        const before = await stores.collections.find(updatedCol.id);
+        await stores.collections.put(updatedCol);
+        sendInBackground('Collection changes not saved', () => collectionService.updateCollection(updatedCol), () => before && stores.collections.put(before));
+    }, [stores]);
 
     const handleDeleteCollection = useCallback(async (id: string) => {
-        try { await collectionService.deleteCollection(id); } catch (e) { console.error('D1 sync failed (delete collection):', e); }
-        await db.deleteCollection(id);
-        setCollections((prev: Collection[]) => prev.filter((c: Collection) => c.id !== id));
-    }, [setCollections]);
+        const before = await stores.collections.find(id);
+        await stores.collections.drop(id);
+        sendInBackground("Couldn't delete the collection", () => collectionService.deleteCollection(id), () => before && stores.collections.put(before));
+    }, [stores]);
 
     // ── Proforma invoices ─────────────────────────────────────────────────
     // A proforma is a quotation: its artworks only become Sold once it's Paid.
@@ -138,44 +197,44 @@ export function useHandlers(args: HandlerArgs) {
         setArtworks(prev => prev.map(art => (soldIds.has(art.id) ? { ...art, status: 'Sold' as const } : art)));
     }, [artworks, setArtworks]);
 
-    /** Save to the server (so every device sees it) and keep a device copy. */
+    /**
+     * Shown and kept on the device at once; then the server, so every device
+     * sees it. A proforma stays on the device if the server can't take it
+     * (it could always be made offline), with a message saying so.
+     */
     const syncInvoice = useCallback(async (invoice: Invoice) => {
-        await db.saveInvoice(invoice);
-        try {
-            await invoiceService.saveInvoice(invoice);
-        } catch (err) {
+        await stores.invoices.put(invoice);
+        invoiceService.saveInvoice(invoice).catch((err: unknown) => {
             if (!isSyncUnavailable(err)) {
                 toast.error(`Saved on this device only — ${(err as Error).message || 'the server could not be reached'}`);
             }
-        }
-    }, []);
+        });
+    }, [stores]);
 
     const handleAddInvoice = useCallback(async (newInv: Omit<Invoice, 'id' | 'date'>): Promise<Invoice> => {
         const invoice: Invoice = { ...newInv, id: `inv_${Date.now()}`, date: Date.now() };
         await syncInvoice(invoice);
-        setInvoices((prev: Invoice[]) => [invoice, ...prev]);
         markPaidInvoiceArtworksSold(invoice);
         return invoice;
-    }, [setInvoices, markPaidInvoiceArtworksSold, syncInvoice]);
+    }, [markPaidInvoiceArtworksSold, syncInvoice]);
 
     const handleUpdateInvoice = useCallback(async (updatedInv: Invoice) => {
         await syncInvoice(updatedInv);
-        setInvoices((prev: Invoice[]) => prev.map((i: Invoice) => i.id === updatedInv.id ? updatedInv : i));
         markPaidInvoiceArtworksSold(updatedInv);
-    }, [setInvoices, markPaidInvoiceArtworksSold, syncInvoice]);
+    }, [markPaidInvoiceArtworksSold, syncInvoice]);
 
     const handleDeleteInvoice = useCallback(async (id: string) => {
-        try {
-            await invoiceService.deleteInvoice(id);
-        } catch (err) {
-            if (!isSyncUnavailable(err)) {
-                toast.error(`Couldn't delete it on the server — ${(err as Error).message || 'try again'}`);
-                return;
+        const before = await stores.invoices.find(id);
+        await stores.invoices.drop(id);
+        sendInBackground("Couldn't delete it on the server", async () => {
+            try {
+                await invoiceService.deleteInvoice(id);
+            } catch (err) {
+                // No server sync for invoices: deleting it here is enough.
+                if (!isSyncUnavailable(err)) throw err;
             }
-        }
-        await db.deleteInvoice(id);
-        setInvoices((prev: Invoice[]) => prev.filter((i: Invoice) => i.id !== id));
-    }, [setInvoices]);
+        }, () => before && stores.invoices.put(before));
+    }, [stores]);
 
     // ── Inquiries ─────────────────────────────────────────────────────────
     const handleAddInquiry = useCallback(async (newInq: Omit<Inquiry, 'id' | 'date'>) => {
@@ -186,22 +245,21 @@ export function useHandlers(args: HandlerArgs) {
             createdBy: userProfile?.id || authUser?.id,
             createdByName: userProfile?.name || authUser?.name,
         };
-        try { await inquiryService.saveInquiry(inquiry); } catch (e) { console.error('D1 sync failed (add inquiry):', e); }
-        await db.saveInquiry(inquiry);
-        setInquiries((prev: Inquiry[]) => [inquiry, ...prev]);
-    }, [userProfile, authUser, setInquiries]);
+        await stores.inquiries.put(inquiry);
+        sendInBackground('Inquiry not saved', () => inquiryService.saveInquiry(inquiry), () => stores.inquiries.drop(inquiry.id));
+    }, [userProfile, authUser, stores]);
 
     const handleUpdateInquiry = useCallback(async (updatedInq: Inquiry) => {
-        try { await inquiryService.updateInquiry(updatedInq); } catch (e) { console.error('D1 sync failed (update inquiry):', e); }
-        await db.saveInquiry(updatedInq);
-        setInquiries((prev: Inquiry[]) => prev.map((i: Inquiry) => i.id === updatedInq.id ? updatedInq : i));
-    }, [setInquiries]);
+        const before = await stores.inquiries.find(updatedInq.id);
+        await stores.inquiries.put(updatedInq);
+        sendInBackground('Inquiry changes not saved', () => inquiryService.updateInquiry(updatedInq), () => before && stores.inquiries.put(before));
+    }, [stores]);
 
     const handleDeleteInquiry = useCallback(async (id: string) => {
-        try { await inquiryService.deleteInquiry(id); } catch (e) { console.error('D1 sync failed (delete inquiry):', e); }
-        await db.deleteInquiry(id);
-        setInquiries((prev: Inquiry[]) => prev.filter((i: Inquiry) => i.id !== id));
-    }, [setInquiries]);
+        const before = await stores.inquiries.find(id);
+        await stores.inquiries.drop(id);
+        sendInBackground("Couldn't delete the inquiry", () => inquiryService.deleteInquiry(id), () => before && stores.inquiries.put(before));
+    }, [stores]);
 
     // ── Calendar Events ───────────────────────────────────────────────────
     const handleAddEvent = useCallback(async (newEvent: Omit<CalendarEvent, 'id' | 'createdAt' | 'createdBy' | 'createdByName'>) => {
@@ -214,26 +272,22 @@ export function useHandlers(args: HandlerArgs) {
             createdBy: userProfile?.id || authUser?.id,
             createdByName: userProfile?.name || authUser?.name,
         };
-        try { await eventService.saveEvent(event); } catch (e) { console.error('D1 sync failed (add event):', e); }
-        await db.saveEvent(event);
-        setEvents((prev: CalendarEvent[]) => [...prev, event].sort((a, b) => a.date - b.date));
-    }, [userProfile, authUser, setEvents]);
+        await stores.events.put(event);
+        sendInBackground('Not saved to the calendar', () => eventService.saveEvent(event), () => stores.events.drop(event.id));
+    }, [userProfile, authUser, stores]);
 
     const handleDeleteEvent = useCallback(async (id: string) => {
-        try { await eventService.deleteEvent(id); } catch (e) { console.error('D1 sync failed (delete event):', e); }
-        await db.deleteEvent(id);
-        setEvents((prev: CalendarEvent[]) => prev.filter((ev: CalendarEvent) => ev.id !== id));
-    }, [setEvents]);
+        const before = await stores.events.find(id);
+        await stores.events.drop(id);
+        sendInBackground("Couldn't delete it from the calendar", () => eventService.deleteEvent(id), () => before && stores.events.put(before));
+    }, [stores]);
 
-    // On screen first: ticking a task used to wait for the server round trip.
-    // (A failed save was already only logged; the next sync settles it.)
+    // Ticking a task shows at once; a refused save puts it back.
     const handleUpdateEvent = useCallback(async (updated: CalendarEvent) => {
-        setEvents((prev: CalendarEvent[]) => prev
-            .map((ev: CalendarEvent) => ev.id === updated.id ? updated : ev)
-            .sort((a, b) => a.date - b.date));
-        await db.saveEvent(updated);
-        try { await eventService.updateEvent(updated); } catch (e) { console.error('D1 sync failed (update event):', e); }
-    }, [setEvents]);
+        const before = await stores.events.find(updated.id);
+        await stores.events.put(updated);
+        sendInBackground('Calendar change not saved', () => eventService.updateEvent(updated), () => before && stores.events.put(before));
+    }, [stores]);
 
     // ── Contacts ──────────────────────────────────────────────────────────
     const handleAddContact = useCallback(async (newContact: NewContact) => {
@@ -244,17 +298,17 @@ export function useHandlers(args: HandlerArgs) {
             createdBy: userProfile?.id || authUser?.id,
             createdByName: userProfile?.name || authUser?.name,
         };
-        try { await contactService.saveContact(contact); } catch (e) { console.error('D1 sync failed (add contact):', e); }
-        await db.saveContact(contact);
-        setContacts((prev: Contact[]) => [contact, ...prev]);
-    }, [userProfile, authUser, setContacts]);
+        await stores.contacts.put(contact);
+        sendInBackground('Contact not saved', () => contactService.saveContact(contact), () => stores.contacts.drop(contact.id));
+    }, [userProfile, authUser, stores]);
 
     const handleUpdateContact = useCallback(async (updated: Contact) => {
-        try { await contactService.updateContact(updated); } catch (e) { console.error('D1 sync failed (update contact):', e); }
-        await db.saveContact(updated);
-        setContacts((prev: Contact[]) => prev.map((c: Contact) => (c.id === updated.id ? updated : c)));
-    }, [setContacts]);
+        const before = await stores.contacts.find(updated.id);
+        await stores.contacts.put(updated);
+        sendInBackground('Contact changes not saved', () => contactService.updateContact(updated), () => before && stores.contacts.put(before));
+    }, [stores]);
 
+    // A bulk import waits for the server: it says how many it took.
     const handleImportContacts = useCallback(async (list: NewContact[]) => {
         const stamped: Contact[] = list.map(c => ({
             ...c,
@@ -275,10 +329,10 @@ export function useHandlers(args: HandlerArgs) {
     }, [userProfile, authUser, setContacts]);
 
     const handleDeleteContact = useCallback(async (id: string) => {
-        try { await contactService.deleteContact(id); } catch (e) { console.error('D1 sync failed (delete contact):', e); }
-        await db.deleteContact(id);
-        setContacts((prev: Contact[]) => prev.filter((c: Contact) => c.id !== id));
-    }, [setContacts]);
+        const before = await stores.contacts.find(id);
+        await stores.contacts.drop(id);
+        sendInBackground("Couldn't delete the contact", () => contactService.deleteContact(id), () => before && stores.contacts.put(before));
+    }, [stores]);
 
     // ── Inquiry Messages ──────────────────────────────────────────────────
     const handleSendInquiryMessage = useCallback(async (
@@ -292,9 +346,16 @@ export function useHandlers(args: HandlerArgs) {
             senderName: userProfile?.name || authUser?.name || 'You',
             text, tags, timestamp: Date.now(), status: 'sent', replyTo, attachment,
         };
-        try { await inquiryService.saveInquiryMessage(msg); } catch (e) { console.error('D1 sync failed (inquiry message):', e); }
+        // On screen at once; a message the server refuses is taken back, with the reason.
         await db.saveInquiryMessage(msg);
         setInquiryMessages((prev: InquiryMessage[]) => [...prev, msg]);
+        try {
+            await inquiryService.saveInquiryMessage(msg);
+        } catch (err) {
+            setInquiryMessages((prev: InquiryMessage[]) => prev.filter(m => m.id !== msg.id));
+            toast.error(`Message not sent: ${(err as Error).message || 'check your connection'}`);
+            return;
+        }
         setTimeout(
             () => setInquiryMessages(makeMessageStatusUpdater<InquiryMessage>(msg.id, 'delivered')),
             700,
@@ -322,15 +383,7 @@ export function useHandlers(args: HandlerArgs) {
         // next refresh silently removed the message. Now it stays, marked
         // "Not sent", with the reason and a retry.
         setAllMessages((prev: Message[]) => [...prev, msg]);
-        try {
-            await messagingService.sendMessage(msg);
-        } catch (err) {
-            setAllMessages(makeMessageStatusUpdater<Message>(msg.id, 'failed'));
-            toast.error(`Message not sent: ${(err as Error).message || 'check your connection'}`);
-            return;
-        }
-        await db.saveMessage(msg);
-
+        // The chat list moves it to the top at once too, not after the server answers.
         const conv = conversations.find(c => c.id === conversationId);
         if (conv) {
             const attachPreview = attachment?.type === 'image' ? '📷 Photo' : `📎 ${attachment?.name}`;
@@ -339,6 +392,14 @@ export function useHandlers(args: HandlerArgs) {
             await db.saveConversation(updatedConv);
             setConversations((prev: Conversation[]) => prev.map(c => c.id === conversationId ? updatedConv : c).sort((a, b) => b.lastMessageTime - a.lastMessageTime));
         }
+        try {
+            await messagingService.sendMessage(msg);
+        } catch (err) {
+            setAllMessages(makeMessageStatusUpdater<Message>(msg.id, 'failed'));
+            toast.error(`Message not sent: ${(err as Error).message || 'check your connection'}`);
+            return;
+        }
+        await db.saveMessage(msg);
     }, [userProfile, authUser, conversations, setAllMessages, setConversations]);
 
     // ── Messaging: Pin/Archive ────────────────────────────────────────────
@@ -346,25 +407,26 @@ export function useHandlers(args: HandlerArgs) {
         const conv = conversations.find(c => c.id === conversationId);
         if (!conv) return;
         const updatedConv = { ...conv, isPinned: !conv.isPinned };
-        try { await messagingService.updateConversation(updatedConv); } catch (e) { console.error('D1 sync failed (pin):', e); }
-        await db.saveConversation(updatedConv);
-        setConversations((prev: Conversation[]) => prev.map(c => c.id === conversationId ? updatedConv : c));
-    }, [conversations, setConversations]);
+        await stores.conversations.put(updatedConv);
+        sendInBackground(updatedConv.isPinned ? "Couldn't pin the chat" : "Couldn't unpin the chat",
+            () => messagingService.updateConversation(updatedConv), () => stores.conversations.put(conv));
+    }, [conversations, stores]);
 
     const handleToggleArchiveConversation = useCallback(async (conversationId: string) => {
         const conv = conversations.find(c => c.id === conversationId);
         if (!conv) return;
         const updatedConv = { ...conv, isArchived: !conv.isArchived };
-        try { await messagingService.updateConversation(updatedConv); } catch (e) { console.error('D1 sync failed (archive):', e); }
-        await db.saveConversation(updatedConv);
-        setConversations((prev: Conversation[]) => prev.map(c => c.id === conversationId ? updatedConv : c));
-    }, [conversations, setConversations]);
+        await stores.conversations.put(updatedConv);
+        sendInBackground(updatedConv.isArchived ? "Couldn't archive the chat" : "Couldn't unarchive the chat",
+            () => messagingService.updateConversation(updatedConv), () => stores.conversations.put(conv));
+    }, [conversations, stores]);
 
     const handleDeleteConversation = useCallback(async (conversationId: string) => {
-        try { await messagingService.deleteConversation(conversationId); } catch (e) { console.error('D1 sync failed (delete conv):', e); }
-        await db.deleteConversation(conversationId);
-        setConversations((prev: Conversation[]) => prev.filter(c => c.id !== conversationId));
-    }, [setConversations]);
+        const before = conversations.find(c => c.id === conversationId);
+        await stores.conversations.drop(conversationId);
+        sendInBackground("Couldn't delete the chat", () => messagingService.deleteConversation(conversationId),
+            () => before && stores.conversations.put(before));
+    }, [conversations, stores]);
 
     // ── Messaging: Create Conversation / Group ────────────────────────────
     const handleCreateConversation = useCallback(async (participantId: string, details?: ConversationDetails): Promise<Conversation> => {
@@ -486,10 +548,9 @@ export function useHandlers(args: HandlerArgs) {
         const conv = conversations.find(c => c.id === conversationId);
         if (!conv) return;
         const updatedConv = { ...conv, ...details };
-        try { await messagingService.updateConversation(updatedConv); } catch (e) { console.error('D1 sync failed (update details):', e); }
-        await db.saveConversation(updatedConv);
-        setConversations((prev: Conversation[]) => prev.map(c => c.id === conversationId ? updatedConv : c));
-    }, [conversations, setConversations]);
+        await stores.conversations.put(updatedConv);
+        sendInBackground('Chat details not saved', () => messagingService.updateConversation(updatedConv), () => stores.conversations.put(conv));
+    }, [conversations, stores]);
 
     const handleUpdateGroup = useCallback(async (conversationId: string, groupName: string, participantIds: string[], details?: ConversationDetails) => {
         const conv = conversations.find(c => c.id === conversationId);
@@ -500,10 +561,9 @@ export function useHandlers(args: HandlerArgs) {
             id === selfId ? (userProfile?.name || authUser?.name || 'You') : (teamMembers.find(m => m.id === id)?.name || 'Team Member')
         );
         const updatedConv: Conversation = { ...conv, groupName, participantIds: allIds, participantNames: allNames, isGroup: true, title: details?.title, reason: details?.reason, note: details?.note };
-        try { await messagingService.updateConversation(updatedConv); } catch (e) { console.error('D1 sync failed (update group):', e); }
-        await db.saveConversation(updatedConv);
-        setConversations((prev: Conversation[]) => prev.map(c => c.id === conversationId ? updatedConv : c));
-    }, [conversations, userProfile, authUser, teamMembers, setConversations]);
+        await stores.conversations.put(updatedConv);
+        sendInBackground('Group changes not saved', () => messagingService.updateConversation(updatedConv), () => stores.conversations.put(conv));
+    }, [conversations, userProfile, authUser, teamMembers, stores]);
 
     return {
         // Artworks

@@ -16,6 +16,7 @@ const STORAGE_KEYS = {
   contacts: 'vayu_contacts',
   salesPages: 'vayu_sales_pages',
   salesPending: 'vayu_sales_pending',
+  syncMark: 'vayu_sync_mark',
   seedVersion: 'vayu_seed_version',
 };
 
@@ -65,6 +66,13 @@ function upsertById<T extends { id: string }>(arr: T[], item: T): T[] {
   return arr;
 }
 
+/**
+ * Where the saved copy is up to in the server's change log, so a start-up
+ * only asks for what changed since (useEntityData). `identity`: who it was
+ * taken for, with which access; `fullCopyAt`: when it was last taken whole.
+ */
+export interface SyncMark { identity: string; cursor: number; fullCopyAt: number }
+
 /** Lists the device keeps a full offline copy of, replaced wholesale from the server. */
 export type SavedList = 'artworks' | 'catalogs' | 'collections' | 'inquiries' | 'conversations'
   | 'messages' | 'inquiryMessages' | 'events' | 'contacts';
@@ -87,12 +95,43 @@ export const db = {
    * mirrored, so e.g. the saved inquiries could be months old — and a
    * fallback to them looked like inquiries had vanished.
    */
-  async replaceSaved(list: SavedList, items: unknown[]): Promise<void> {
+  async replaceSaved(list: SavedList, items: unknown[]): Promise<boolean> {
     try {
       setArray(STORAGE_KEYS[list], items);
+      return true;
     } catch {
       /* storage full or unavailable — the offline copy just stays older */
+      return false;
     }
+  },
+
+  /** Brings a saved list up to date in place; false when the device couldn't store it. */
+  mergeSaved<T>(list: SavedList, update: (items: T[]) => T[]): boolean {
+    try {
+      const items = getArray<T>(STORAGE_KEYS[list]);
+      const next = update(items);
+      if (next !== items) setArray(STORAGE_KEYS[list], next);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
+  getSyncMark(): SyncMark | null {
+    try {
+      const raw = localStorage.getItem(scoped(STORAGE_KEYS.syncMark));
+      const mark = raw ? JSON.parse(raw) as SyncMark : null;
+      return mark && Number.isSafeInteger(mark.cursor) ? mark : null;
+    } catch {
+      return null;
+    }
+  },
+
+  setSyncMark(mark: SyncMark | null): void {
+    try {
+      if (mark) localStorage.setItem(scoped(STORAGE_KEYS.syncMark), JSON.stringify(mark));
+      else localStorage.removeItem(scoped(STORAGE_KEYS.syncMark));
+    } catch { /* unavailable: the next start takes a full copy */ }
   },
 
   async init() {

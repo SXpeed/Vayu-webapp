@@ -292,3 +292,27 @@ test('a paused organization is closed to its members', async () => {
     assert.equal(res.status, 403);
     assert.equal(res.body.code, 'org_inactive');
 });
+
+test('a device that signs out is refused on its very next request', async () => {
+    // Its own sign-in, so the other tests' sessions stay as they are.
+    const device = worker.browser();
+    const signedIn = await device.call('/auth/sign-in/email', {
+        method: 'POST', body: { email: 'owner-a@example.com', password: USER_PASSWORD }, headers: { 'cf-connecting-ip': testAddress(10, '0') },
+    });
+    assert.equal(signedIn.status, 200, signedIn.text);
+    // The access check now remembers this sign-in for a short while...
+    assert.equal((await device.call(app(orgA.id, '/auth/me'))).status, 200);
+    assert.equal((await device.call(app(orgA.id, '/artworks'))).status, 200);
+    // ...but signing out makes this server forget it at once.
+    const signedOut = await device.call('/auth/sign-out', { method: 'POST', body: {} });
+    assert.equal(signedOut.status, 200, signedOut.text);
+    assert.equal((await device.call(app(orgA.id, '/artworks'))).status, 401);
+});
+
+test('each answer says where its time went (Server-Timing)', async () => {
+    const res = await fetch(`${worker.origin}${app(orgA.id, '/artworks')}`, {
+        headers: { Cookie: [...ownerA.jar].map(([k, v]) => `${k}=${v}`).join('; ') },
+    });
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('Server-Timing') ?? '', /^gate;dur=\d+, d1;dur=\d+, kv;dur=\d+, total;dur=\d+$/);
+});

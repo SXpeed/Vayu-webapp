@@ -94,9 +94,14 @@ export async function fileAccessAllowed(ctx: Ctx): Promise<boolean> {
   return !!session;
 }
 
-/** Cache headers for private files: reusable by this browser only. */
-export function fileCacheHeaders(): string {
-  return 'private, max-age=86400';
+/**
+ * Cache headers for private files: reusable by this browser only. A file's
+ * address never changes its contents (each upload gets a new key), so the
+ * browser keeps it 30 days. A preview answered with the original (no preview
+ * made yet) is kept a day only, so the real preview replaces it once made.
+ */
+export function fileCacheHeaders(previewStandIn = false): string {
+  return previewStandIn ? 'private, max-age=86400' : 'private, max-age=2592000, immutable';
 }
 
 /** Expire the capability cookie and wipe cached copies on shared devices. */

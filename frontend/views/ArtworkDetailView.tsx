@@ -4,6 +4,7 @@ import { Artwork } from '../types';
 import { ArtworkFormModal } from './ArtworksView';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { ZoomableImage } from '../components/ZoomableImage';
+import { PreviewOnlyNote } from '../components/PreviewOnlyNote';
 import { IfCan } from '../components/Layout';
 
 /** Swaps the alpha channel of an `rgba(r, g, b, a)` color string. */
@@ -172,6 +173,12 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                                 </div>
                             )}
                         </div>
+
+                        {imageCount > 0 && (
+                            <div className="flex justify-center mt-2 empty:hidden">
+                                <PreviewOnlyNote src={artwork.imageUrls[activeImageIndex] ?? artwork.imageUrls[0]} className="!static" />
+                            </div>
+                        )}
 
                         {/* Pager: small dots, the current one longer */}
                         {imageCount > 1 && (imageCount <= 8 ? (
