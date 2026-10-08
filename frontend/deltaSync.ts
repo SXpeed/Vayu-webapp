@@ -152,18 +152,22 @@ export function statusUpgradeStmts(
  */
 export function queueHubNotify(ctx: Ctx, events: ChangeEvent[]): void {
   if (!realtimeEnabled(ctx.env) || events.length === 0) return;
-  ctx.execCtx.waitUntil((async () => {
-    try {
-      const stub = ctx.env.SYNC_HUB!.get(ctx.env.SYNC_HUB!.idFromName(workspaceId(ctx.env)));
-      await stub.fetch('https://hub.internal/notify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-hub-key': rawRealtimeSecret(ctx.env) },
-        body: JSON.stringify({ events }),
-      });
-    } catch {
-      /* clients recover through sync — never break the request for a signal */
-    }
-  })());
+  ctx.execCtx.waitUntil(notifyHub(ctx.env, events));
+}
+
+/** The same signal, for code already running after the response (push senders). */
+export async function notifyHub(env: Env, events: ChangeEvent[]): Promise<void> {
+  if (!realtimeEnabled(env) || events.length === 0) return;
+  try {
+    const stub = env.SYNC_HUB!.get(env.SYNC_HUB!.idFromName(workspaceId(env)));
+    await stub.fetch('https://hub.internal/notify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-hub-key': rawRealtimeSecret(env) },
+      body: JSON.stringify({ events }),
+    });
+  } catch {
+    /* clients recover through sync — never break the request for a signal */
+  }
 }
 
 // ── Retention ───────────────────────────────────────────────────────────────

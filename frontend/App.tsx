@@ -21,6 +21,7 @@ import { useNavigation } from './hooks/useNavigation';
 import { useAuth } from './hooks/useAuth';
 import { useEntityData } from './hooks/useEntityData';
 import { useHandlers } from './hooks/useHandlers';
+import { InboxContext, useInboxState } from './hooks/useInbox';
 import { pushService } from './services/pushService';
 import { syncService } from './services/syncService';
 import { canOpenView, makeCan, permissionsOf } from './access';
@@ -408,6 +409,10 @@ const App: React.FC = () => {
         };
     }, [goToPushTarget]);
 
+    // The bell and unread counts; a bell tap goes where the same push would.
+    const openLink = useCallback((link: Record<string, unknown>) => goToPushTarget(pushTargetFrom(link)), [goToPushTarget]);
+    const inbox = useInboxState(authUser?.id, conversations, allMessages, openLink);
+
     // Who is signed in here, for the service worker's notification check.
     useEffect(() => {
         if (authUser?.id) void pushService.setIdentity(authUser.id);
@@ -583,6 +588,7 @@ const App: React.FC = () => {
     };
 
     return (
+        <InboxContext.Provider value={inbox}>
         <Layout currentView={currentView} onNavigate={navigateTo} userProfile={authUser}>
             <Toaster position="top-center" />
             <Suspense fallback={<ViewFallback />}>
@@ -592,6 +598,7 @@ const App: React.FC = () => {
                 )}
             </Suspense>
         </Layout>
+        </InboxContext.Provider>
     );
 };
 

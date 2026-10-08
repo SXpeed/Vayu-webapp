@@ -289,3 +289,27 @@ CREATE TABLE IF NOT EXISTS change_log (
 
 CREATE INDEX IF NOT EXISTS idx_change_log_ws_seq ON change_log(workspace_id, seq);
 CREATE INDEX IF NOT EXISTS idx_change_log_ws_changed ON change_log(workspace_id, changed_at);
+
+-- Each person's notifications (the bell) and the inquiries they have not
+-- opened yet. Kept apart on purpose: dismissing a notification leaves its
+-- inquiry unread; opening the inquiry is what reads it (inbox.ts).
+CREATE TABLE IF NOT EXISTS notifications (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  group_key TEXT NOT NULL DEFAULT '',  -- the push tag: one source, e.g. inquiry-<id>
+  title TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  link TEXT NOT NULL DEFAULT '{}',     -- the push data: where a tap leads
+  created_at INTEGER NOT NULL,
+  state TEXT NOT NULL DEFAULT 'new'    -- new | opened | dismissed
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, state, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS unread_items (
+  user_id TEXT NOT NULL,
+  kind TEXT NOT NULL,                  -- inquiry
+  item_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, kind, item_id)
+);

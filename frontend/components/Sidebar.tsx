@@ -2,12 +2,14 @@ import React, { useState } from 'react';
 import {
     Home, Image, Library, BookOpen, MessageCircle, Search, Users,
     CalendarDays, Clock, FileText, CreditCard, User, ShieldCheck, Wind,
-    ChevronLeft, ChevronRight, CalendarClock, HandCoins,
+    ChevronLeft, ChevronRight, CalendarClock, HandCoins, Bell,
 } from 'lucide-react';
 import { ViewState } from '../types';
 import { CanFn, canOpenView } from '../access';
 import { useBranding } from '../useBranding';
 import { toBodyPx } from '../uiSize';
+import { CountBadge, useInbox } from '../hooks/useInbox';
+import { NotificationSheet } from './NotificationBell';
 
 interface NavItem {
     id: ViewState;
@@ -92,12 +94,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
         setTip({ label, top: toBodyPx(r.top + r.height / 2), left: toBodyPx(r.right) + 12 });
     };
     const hideTip = () => setTip(null);
+    const { notifications, unreadInquiryIds, unreadChatTotal } = useInbox();
+    const [bellOpen, setBellOpen] = useState(false);
+    const unreadOf: Partial<Record<ViewState, number>> = { inquiry: unreadInquiryIds.size, messaging: unreadChatTotal };
 
     /** One row renderer for nav items, admin and profile — same geometry,
      *  so nothing drifts between the groups and the footer. */
     const renderRow = (
-        { label, icon: Icon, isActive, onClick, key, a11yLabel }:
-            { label: string; icon: React.ElementType; isActive: boolean; onClick: () => void; key: string; a11yLabel?: string },
+        { label, icon: Icon, isActive, onClick, key, a11yLabel, count = 0 }:
+            { label: string; icon: React.ElementType; isActive: boolean; onClick: () => void; key: string; a11yLabel?: string; count?: number },
     ) => (
         <button
             key={key}
@@ -135,6 +140,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     {label}
                 </span>
             )}
+            {/* Unread: a count at the row's end, or a dot on the rail's icon. */}
+            {count > 0 && (collapsed
+                ? <span aria-label={`${count} unread`} className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-gold-600 dark:bg-gold-400" />
+                : <CountBadge count={count} className="ml-auto shrink-0" />)}
         </button>
     );
 
@@ -200,6 +209,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                 icon: item.icon,
                                 isActive: currentView === item.id,
                                 onClick: () => onNavigate(item.id),
+                                count: unreadOf[item.id],
                             }))}
                         </div>
                     </div>
@@ -209,6 +219,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {/* Footer — admin + profile */}
             <div className={collapsed ? 'mt-2 space-y-1' : 'mt-2 pt-2 w-full space-y-1 border-t border-gray-200/70 dark:border-white/5'}>
                 {collapsed && <div className="neu-divider w-7 mx-auto mb-2.5" />}
+                {renderRow({
+                    key: 'notifications',
+                    label: 'Notifications',
+                    icon: Bell,
+                    isActive: bellOpen,
+                    onClick: () => setBellOpen(true),
+                    count: notifications.length,
+                })}
                 {isAdmin && onOpenAdmin && renderRow({
                     key: 'admin',
                     label: 'Admin',
@@ -226,6 +244,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     onClick: () => onNavigate('profile'),
                 })}
             </div>
+
+            {bellOpen && <NotificationSheet onClose={() => setBellOpen(false)} />}
 
             {collapsed && tip && (
                 <span

@@ -5,6 +5,7 @@ import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { EVENT_COLORS, eventColor, eventTimeLabel } from '../services/eventService';
 import { Clock, Receipt, HandCoins, Eye, EyeOff, ChevronLeft, Palette, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronRight, BookOpen, ShieldCheck, User, CalendarClock } from 'lucide-react';
 import { PageRoot, PageHeader, PageBody, GhostIconButton } from '../components/ui';
+import { BellButton } from '../components/NotificationBell';
 import { useAppChrome } from '../components/Layout';
 import { useBranding } from '../useBranding';
 import type { SectionId } from '../permissions';
@@ -238,6 +239,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, events, 
                 title={branding.appName}
                 actions={
                     <div className="flex items-center gap-2 lg:hidden">
+                        <BellButton />
                         {isAdmin && (
                             <GhostIconButton
                                 onClick={openAdmin}

@@ -75,6 +75,7 @@ function mayReceive(
   if (event.entity === 'payments') return access.payments; // KV-backed signal
   if (event.entity === 'schedule') return access.schedule; // signal only, not in change_log
   if (event.entity === 'sales') return access.sales; // signal only, not in change_log
+  if (event.entity === 'inbox') return event.id === userId; // one person's bell (inbox.ts)
   if (!access.entities.has(event.entity as SyncEntity)) return false;
   if (!chatEvent(event)) return true;
   const room = rooms.get(event.conversationId as string);

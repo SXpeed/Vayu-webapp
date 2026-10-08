@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Home, Image, Library, BookOpen, MessageCircle, Search } from 'lucide-react';
 import { ViewState } from '../types';
 import { CanFn, canOpenView } from '../access';
+import { CountBadge, useInbox } from '../hooks/useInbox';
 
 interface BottomNavProps {
     currentView: ViewState;
@@ -27,6 +28,8 @@ const NAV_ITEMS: { id: ViewState; label: string; icon: React.ElementType }[] = [
 export const BottomNav: React.FC<BottomNavProps> = ({ currentView, onChangeView, can }) => {
     const items = NAV_ITEMS.filter(item => canOpenView(can, item.id));
     const activeIndex = items.findIndex((item) => item.id === currentView);
+    const { unreadInquiryIds, unreadChatTotal } = useInbox();
+    const unreadOf: Partial<Record<ViewState, number>> = { inquiry: unreadInquiryIds.size, messaging: unreadChatTotal };
 
     // Where the well sits. Off-dock views (Profile, Calendar…) fade it out in
     // place, so coming back it reappears there instead of sweeping from tab 0.
@@ -53,7 +56,10 @@ export const BottomNav: React.FC<BottomNavProps> = ({ currentView, onChangeView,
                             aria-current={isActive ? 'page' : undefined}
                             className="neu-dock-item relative flex-1 min-w-0 h-[52px] flex flex-col items-center justify-center gap-[5px]"
                         >
-                            <Icon size={19} strokeWidth={isActive ? 2.2 : 1.8} className="neu-dock-icon" />
+                            <span className="relative">
+                                <Icon size={19} strokeWidth={isActive ? 2.2 : 1.8} className="neu-dock-icon" />
+                                <CountBadge count={unreadOf[item.id] ?? 0} className="absolute -top-1.5 left-3" />
+                            </span>
                             <span className={`max-w-full truncate text-[9.5px] leading-[1.35] -my-[0.175em] ${isActive ? 'font-semibold' : 'font-medium'}`}>
                                 {item.label}
                             </span>

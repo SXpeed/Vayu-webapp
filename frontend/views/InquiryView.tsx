@@ -1,7 +1,7 @@
 import { getThumbUrl } from '../services/storageService';
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import toast from 'react-hot-toast';
-import { Plus, X, MessageCircle, Search, ArrowLeft, Edit2, Trash2, Phone, Mail, Image as ImageIcon, User, Clock, Tag, BookOpen, CheckCircle2, XCircle, Check, CheckCheck, Reply, Camera, MapPin, FileText } from 'lucide-react';
+import { Plus, X, MessageCircle, Search, ArrowLeft, Edit2, Trash2, Phone, Mail, Image as ImageIcon, User, Clock, Tag, BookOpen, CheckCircle2, XCircle, Check, CheckCheck, Reply, Camera, MapPin, FileText, MailWarning } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
 import { ArtworkPicker } from '../components/ArtworkPicker';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton } from '../components/ui';
@@ -15,6 +15,7 @@ import { makeDocumentNumber } from '../services/documentNumber';
 import { exportProformaPdf } from '../services/proformaPdf';
 import { InvoiceFormModal, ProformaPdfActions, type NewInvoice } from './InvoiceView';
 import { IfCan } from '../components/Layout';
+import { useInbox } from '../hooks/useInbox';
 import { chatDayLabel, withDayDividers } from './chat/DayDivider';
 import { ImageViewer, type ViewedImage } from './chat/ImageViewer';
 import { ChatComposer, MessageBubble, messageTime } from './chat/MessageParts';
@@ -117,6 +118,15 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [openInquiry, inquiries]);
 
+    // Read only once its details or chat are actually on screen, never by
+    // opening the list. While it stays open (and the tab is in view), a new
+    // message on it is read at once, as in a chat app.
+    const { unreadInquiryIds, setInquiryRead } = useInbox();
+    const onScreenId = selectedInquiry?.id ?? chatInquiry?.id;
+    useEffect(() => {
+        if (onScreenId && unreadInquiryIds.has(onScreenId) && document.visibilityState === 'visible') setInquiryRead(onScreenId, true);
+    }, [onScreenId, unreadInquiryIds, setInquiryRead]);
+
     const handleCloseModal = () => {
         if (globalThis.history.state?.modal === 'inquiry') {
             globalThis.history.back();
@@ -202,6 +212,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                             .find((a): a is Artwork => !!a);
                         const coverImage = coverArtwork?.imageUrls?.[0] ?? inquiry.imageUrls?.[0];
                         const photoCount = inquiry.imageUrls?.length ?? 0;
+                        const unread = unreadInquiryIds.has(inquiry.id);
                         return (
                             <div
                                 key={inquiry.id}
@@ -216,7 +227,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                                     type="button"
                                     onClick={() => handleInquiryClick(inquiry)}
                                     className="absolute inset-0 w-full h-full rounded-lg cursor-pointer"
-                                    aria-label={`Open inquiry ${inquiry.inquiryNumber} for ${inquiry.customerName}`}
+                                    aria-label={`Open ${unread ? 'unread ' : ''}inquiry ${inquiry.inquiryNumber} for ${inquiry.customerName}`}
                                 />
                                 <div className="relative pointer-events-none">
                                 {/* Top Row: Avatar + Name + Status */}
@@ -230,7 +241,10 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                                             </div>
                                         )}
                                         <div>
-                                            <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm">{inquiry.customerName}</h3>
+                                            <h3 className={`font-serif text-gray-900 dark:text-gray-100 text-sm flex items-center gap-1.5 ${unread ? 'font-semibold' : ''}`}>
+                                                {unread && <span aria-hidden="true" className="w-2 h-2 rounded-full bg-gold-600 dark:bg-gold-400 shrink-0" />}
+                                                {inquiry.customerName}
+                                            </h3>
                                             <p className="text-[11px] text-gray-700 dark:text-gray-300 uppercase tracking-wider mt-0.5">
                                                 {inquiry.inquiryNumber} • {new Date(inquiry.date).toLocaleDateString()}
                                             </p>
@@ -335,6 +349,13 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                         proformas={invoices.filter(inv => inv.inquiryId === selectedInquiry.id)}
                         onAddInvoice={onAddInvoice}
                         onClose={handleCloseModal}
+                        onMarkUnread={() => {
+                            // Off screen in the same render, or it would be read again at once.
+                            const id = selectedInquiry.id;
+                            setSelectedInquiry(null);
+                            if (globalThis.history.state?.modal === 'inquiry') globalThis.history.back();
+                            setInquiryRead(id, false);
+                        }}
                         onUpdateInquiry={(updated) => {
                             onUpdateInquiry(updated);
                             setSelectedInquiry(updated);
@@ -515,12 +536,13 @@ interface InquiryDetailModalProps {
     proformas: Invoice[];
     onAddInvoice: (invoice: NewInvoice) => Promise<Invoice>;
     onClose: () => void;
+    onMarkUnread: () => void;
     onUpdateInquiry: (inquiry: Inquiry) => void;
     onDeleteInquiry: () => void;
     onArtworkClick: (artwork: Artwork) => void;
 }
 
-const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedBy, artworks, proformas, onAddInvoice, onClose, onUpdateInquiry, onDeleteInquiry, onArtworkClick }) => {
+const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedBy, artworks, proformas, onAddInvoice, onClose, onMarkUnread, onUpdateInquiry, onDeleteInquiry, onArtworkClick }) => {
     const [isEditing, setIsEditing] = useState(false);
     const [isCreatingProforma, setIsCreatingProforma] = useState(false);
     const [selectedArtworkForPopup, setSelectedArtworkForPopup] = useState<Artwork | null>(null);
@@ -579,6 +601,9 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
                 </button>
                 <h2 className="text-base font-serif text-gray-900 dark:text-white truncate px-3">{inquiry.inquiryNumber}</h2>
                 <div className="flex items-center gap-2">
+                    <button onClick={onMarkUnread} aria-label="Mark unread" title="Mark unread" className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale">
+                        <MailWarning size={18} />
+                    </button>
                     <IfCan section="inquiries">
                         <button onClick={() => setIsEditing(true)} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale">
                             <Edit2 size={18} />

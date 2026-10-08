@@ -29,6 +29,7 @@ import {
   ackStatus, changeLogStmt, changeLogStmts, ensureChangeLogTable, handleSync, queueHubNotify,
   statusUpgradeStmts,
 } from './deltaSync';
+import { handleInbox, handleInboxNotifications, handleInboxRead, recordNotifications } from './inbox';
 import { signTicket, TICKET_TTL_MS } from './realtimeTickets';
 import {
   fileAccessAllowed, fileAuthEnabled, fileCacheHeaders, fileCookieClearHeaders,
@@ -454,6 +455,7 @@ async function currentMembers(env: Env, userIds: Iterable<string>): Promise<Map<
 /** These people's devices; someone removed from the team gets nothing. */
 async function sendPushToUsers(env: Env, userIds: string[], payload: PushPayload): Promise<void> {
   const members = await currentMembers(env, userIds);
+  await recordNotifications(env, [...members.keys()], payload).catch(e => console.error('Bell notify failed:', e));
   const subs: Array<{ key: string; sub: StoredPushSubscription }> = [];
   for (const userId of members.keys()) {
     subs.push(...await collectSubs(env, `push:sub:${userId}:`));
@@ -467,10 +469,22 @@ async function sendPushToUsers(env: Env, userIds: string[], payload: PushPayload
  * access to inquiries or payments were told about them too.
  */
 async function sendPushToSection(env: Env, section: SectionId, exceptUserId: string, payload: PushPayload): Promise<void> {
+  // The bell: everyone the section concerns, whether or not they turned push on.
+  await sectionMemberIds(env, section, exceptUserId)
+    .then(ids => recordNotifications(env, ids, payload))
+    .catch(e => console.error('Bell notify failed:', e));
   const all = await collectSubs(env, 'push:sub:');
   const members = await currentMembers(env, all.map(({ sub }) => sub.userId));
   const chosen = new Set(sectionRecipients(all.map(({ sub }) => sub), members, await getRoles(env.VAYU_KV), section, exceptUserId));
   await deliverPush(env, all.filter(({ sub }) => chosen.has(sub)), payload);
+}
+
+/** The people whose role can see `section`, except one. */
+async function sectionMemberIds(env: Env, section: SectionId, exceptUserId: string): Promise<string[]> {
+  const users = await userRecords(env);
+  const roleOf = new Map(users.map(u => [u.id, u.role]));
+  return sectionRecipients(users.map(u => ({ userId: u.id })), roleOf, await getRoles(env.VAYU_KV), section, exceptUserId)
+    .map(r => r.userId);
 }
 
 function attachmentPreviewText(msg: any): string {
@@ -2181,12 +2195,12 @@ async function handleAuthLogout(ctx: Ctx): Promise<Response> {
  * The people in this workspace: every stored user of the original app, or,
  * inside an organization, its active members (orgApp.ts).
  */
-async function userRecords(ctx: Ctx): Promise<StoredUser[]> {
-  if (ctx.env.ORG_ID) return orgMemberRecords(ctx.env);
-  const list = await ctx.env.VAYU_KV.list({ prefix: 'auth:user:' });
+async function userRecords(env: Env): Promise<StoredUser[]> {
+  if (env.ORG_ID) return orgMemberRecords(env);
+  const list = await env.VAYU_KV.list({ prefix: 'auth:user:' });
   const users: StoredUser[] = [];
   for (const key of list.keys) {
-    const raw = await ctx.env.VAYU_KV.get(key.name);
+    const raw = await env.VAYU_KV.get(key.name);
     if (raw) users.push(JSON.parse(raw) as StoredUser);
   }
   return users;
@@ -2197,7 +2211,7 @@ async function handleAuthUsersList(ctx: Ctx): Promise<Response> {
   if (!session) return err('Unauthorized', 401);
   if (session.role !== 'admin') return err('Forbidden', 403);
 
-  const records = await userRecords(ctx);
+  const records = await userRecords(ctx.env);
   const pushSubs = await ctx.env.VAYU_KV.list({ prefix: 'push:sub:' });
   const usersWithPush = new Set<string>();
   for (const key of pushSubs.keys) {
@@ -2228,7 +2242,7 @@ async function handleAuthUsersList(ctx: Ctx): Promise<Response> {
 async function handleAuthTeam(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
-  const records = await userRecords(ctx);
+  const records = await userRecords(ctx.env);
   const presenceMap = await combinedPresence(ctx);
   const users: PublicUser[] = [];
   for (const stored of records) {
@@ -2440,7 +2454,7 @@ async function handleRolesDelete(ctx: Ctx): Promise<Response> {
   if (!role) return err('Role not found', 404);
   if (role.builtIn) return err('Built-in roles can’t be deleted', 400);
   // Refuse while anyone still has it: they'd silently lose all access.
-  const members = (await userRecords(ctx)).filter(u => u.role === roleId).length;
+  const members = (await userRecords(ctx.env)).filter(u => u.role === roleId).length;
   if (members > 0) {
     return err(`${members} ${members === 1 ? 'person has' : 'people have'} this role. Move them to another role first.`, 409);
   }
@@ -5131,7 +5145,7 @@ const isPrefix = (p: string) => (path: string) => path.startsWith(p);
 const routes: Route[] = [
   // Staff roster (staffRoster.ts)
   ...staffRosterRoutes({
-    people: userRecords,
+    people: ctx => userRecords(ctx.env),
     stores: async (ctx) => {
       await ensureStoresTable(ctx.env.VAYU_DB);
       const { results } = await ctx.env.VAYU_DB.prepare('SELECT id, name FROM stores ORDER BY name ASC').all<{ id: string; name: string }>();
@@ -5217,6 +5231,11 @@ const routes: Route[] = [
   { method: 'POST', match: isExact('/catalogs'), handler: handleCatalogsCreate },
   { method: 'PUT', match: isPrefix('/catalogs/'), handler: handleCatalogsUpdate },
   { method: 'DELETE', match: isPrefix('/catalogs/'), handler: handleCatalogsDelete },
+
+  // The bell and unread inquiries: each person's own (inbox.ts)
+  { method: 'GET', match: isExact('/inbox'), handler: handleInbox },
+  { method: 'POST', match: isExact('/inbox/notifications'), handler: handleInboxNotifications },
+  { method: 'POST', match: isExact('/inbox/read'), handler: handleInboxRead },
 
   // Inquiries
   { method: 'GET', match: isExact('/inquiries'), handler: handleInquiriesList },

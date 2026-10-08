@@ -10,6 +10,7 @@ import { useMemberNames } from '../hooks/useMemberNames';
 import { useStickToBottom } from '../hooks/useStickToBottom';
 import toast from 'react-hot-toast';
 import { IfCan } from '../components/Layout';
+import { CountBadge, useInbox } from '../hooks/useInbox';
 import { chatDayLabel, withDayDividers } from './chat/DayDivider';
 import { ImageViewer, type ViewedImage } from './chat/ImageViewer';
 import { Holdable, MessageActionMenu, MessageInfoSheet, ReactionChips, ReactionsSheet, ReadTicks } from './chat/MessageReactions';
@@ -47,6 +48,7 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
     // full-screen overlay. That's a choice of component, not just of styling.
     const isDesktop = useIsDesktop();
     const [selectedConv, setSelectedConv] = useState<Conversation | null>(null);
+    const { unreadChats } = useInbox();
     const [searchQuery, setSearchQuery] = useState('');
     const [showNewChat, setShowNewChat] = useState(false);
     const [showArchived, setShowArchived] = useState(false);
@@ -159,6 +161,7 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
         const isOnline = getMemberOnlineStatus(other.id);
         const isMenuOpen = openMenuId === conv.id;
         const displayName = getConvDisplayName(conv);
+        const unread = unreadChats.get(conv.id) ?? 0;
         // On desktop the thread sits beside the list, so the open conversation
         // has to read as selected — pressed in, with a gold edge marker.
         const isSelected = isDesktop && selectedConv?.id === conv.id;
@@ -196,16 +199,12 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                             </div>
                         )}
                         <div className="flex justify-between items-baseline">
-                            <h3 className="font-serif text-gray-900 dark:text-gray-100 text-sm truncate">{displayName}</h3>
+                            <h3 className={`font-serif text-gray-900 dark:text-gray-100 text-sm truncate ${unread ? 'font-semibold' : ''}`}>{displayName}</h3>
                             <span className="text-[11px] text-gray-600 dark:text-gray-300 shrink-0 ml-2">{formatTime(conv.lastMessageTime)}</span>
                         </div>
                         <p className="text-[11px] text-gray-700 dark:text-gray-300 mt-0.5 line-clamp-1 font-light">{conv.lastMessage}</p>
                     </div>
-                    {conv.unreadCount > 0 && (
-                        <div className="w-5 h-5 rounded-full bg-gold-500 text-white text-[11px] font-bold flex items-center justify-center shrink-0">
-                            {conv.unreadCount}
-                        </div>
-                    )}
+                    <CountBadge count={unread} className="shrink-0" />
                     <button type="button" aria-label="Conversation options"
                         onClick={(e) => { e.stopPropagation(); setOpenMenuId(isMenuOpen ? null : conv.id); }}
                         className="relative z-[2] neu-icon-btn-sm text-gray-600 dark:text-gray-300 active-scale"
