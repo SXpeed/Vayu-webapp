@@ -12,7 +12,9 @@
 //   read, send, receipts members only
 //
 // Shared by the Worker (worker.ts, deltaSync.ts) and the SyncHub Durable
-// Object (realtime.ts), so it imports nothing from either.
+// Object (realtime.ts), so it imports nothing from either (rows.ts is shared by both).
+
+import { runSetupOnce } from './rows';
 
 /**
  * Marker appended to a private room's change-log scope. A scope containing it
@@ -67,15 +69,9 @@ export function mayManageRoom(userId: string, isAdmin: boolean, room: RoomAccess
 
 // ── Schema ────────────────────────────────────────────────────────────────
 
-/**
- * Adds is_private and created_by to conversations when missing. Remembered
- * per isolate as a plain flag once done: never a shared promise, because on
- * Workers a request must not wait on another request's unfinished work.
- */
-let columnsReady = false;
-
-export async function ensurePrivateRoomColumns(db: D1Database): Promise<void> {
-  if (columnsReady) return;
+/** Adds is_private and created_by to conversations when missing, once per database (runSetupOnce). */
+export function ensurePrivateRoomColumns(db: D1Database): Promise<void> {
+  return runSetupOnce(db, 'columns:conversations:privateRooms', async () => {
   const { results } = await db.prepare('PRAGMA table_info(conversations)').all<{ name: string }>();
   const existing = new Set(results.map(c => c.name));
   for (const [column, definition] of [['is_private', 'INTEGER DEFAULT 0'], ['created_by', 'TEXT']] as const) {
@@ -87,5 +83,5 @@ export async function ensurePrivateRoomColumns(db: D1Database): Promise<void> {
       if (!/duplicate column/i.test((e as Error).message)) throw e;
     }
   }
-  columnsReady = true;
+  });
 }

@@ -1,20 +1,19 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Search, Send, ArrowLeft, Tag, User, Users, MessageCircle, Plus, X, Edit2, Check, Pin, Archive, MoreVertical, Paperclip, Reply, Loader2, Trash2, Camera, AlertCircle, Lock, SmilePlus } from 'lucide-react';
+import { Search, ArrowLeft, User, Users, MessageCircle, Plus, X, Edit2, Check, Pin, Archive, MoreVertical, Reply, Loader2, Trash2, AlertCircle, Lock, SmilePlus } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
 import { useIsDesktop } from '../hooks/useMediaQuery';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton, ToggleRow } from '../components/ui';
 import { Conversation, ConversationDetails, Message, MessageTag, MessageReplyTo, MessageAttachment, UserProfile } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
-import storageService, { getThumbUrl } from '../services/storageService';
 import { useMemberNames } from '../hooks/useMemberNames';
-import { usePhotoCapture } from '../hooks/usePhotoCapture';
 import { useStickToBottom } from '../hooks/useStickToBottom';
 import toast from 'react-hot-toast';
 import { IfCan } from '../components/Layout';
 import { chatDayLabel, withDayDividers } from './chat/DayDivider';
 import { ImageViewer, type ViewedImage } from './chat/ImageViewer';
 import { Holdable, MessageActionMenu, MessageInfoSheet, ReactionChips, ReactionsSheet, ReadTicks } from './chat/MessageReactions';
+import { ChatComposer, MessageBubble, messageTime } from './chat/MessageParts';
 
 interface MessagingViewProps {
     conversations: Conversation[];
@@ -42,17 +41,6 @@ interface MessagingViewProps {
     onToggleArchiveConversation: (conversationId: string) => void;
     onDeleteConversation?: (conversationId: string) => void;
 }
-
-export const TAG_COLORS: Record<MessageTag, string> = {
-    'General': 'neu-inset text-gray-600 dark:text-gray-400',
-    'Urgent': 'neu-inset text-red-600 dark:text-red-400',
-    'Follow-up': 'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
-    'Artwork': 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400',
-    'Inquiry': 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-600 dark:text-yellow-400',
-    'Invoice': 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400',
-};
-
-export const ALL_TAGS: MessageTag[] = ['General', 'Urgent', 'Follow-up', 'Artwork', 'Inquiry', 'Invoice'];
 
 export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, messages, teamMembers, currentUserId, currentUserName, isAdmin = false, onSendMessage, onRetryMessage, onReactToMessage, onMarkMessagesRead, openConversationId, onOpenedConversation, onCreateConversation, onCreateGroup, onUpdateConversationDetails, onUpdateGroup, onTogglePinConversation, onToggleArchiveConversation, onDeleteConversation }) => {
     // Desktop shows the thread inline beside the list; phones open it as a
@@ -567,16 +555,10 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
         const original = messages.find(m => m.id === replyTo.id);
         return original ? resolveName(original.senderId, original.senderName) : resolveName(undefined, replyTo.senderName);
     };
-    const [newMessage, setNewMessage] = useState('');
-    const [selectedTags, setSelectedTags] = useState<Set<MessageTag>>(new Set());
-    const [showTagPicker, setShowTagPicker] = useState(false);
     const [isEditingDetails, setIsEditingDetails] = useState(false);
     const [replyingTo, setReplyingTo] = useState<MessageReplyTo | null>(null);
-    const [pendingAttachment, setPendingAttachment] = useState<MessageAttachment | null>(null);
-    const [isUploading, setIsUploading] = useState(false);
     const [showSearch, setShowSearch] = useState(false);
     const [chatSearchQuery, setChatSearchQuery] = useState('');
-    const fileInputRef = useRef<HTMLInputElement>(null);
     const [detailsForm, setDetailsForm] = useState<ConversationDetails>({
         title: conversation.title || '',
         reason: conversation.reason || '',
@@ -627,7 +609,6 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
             note: conversation.note || '',
         });
         setReplyingTo(null);
-        setPendingAttachment(null);
         setShowSearch(false);
         setChatSearchQuery('');
     }, [conversation.id]);
@@ -641,59 +622,10 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
         setIsEditingDetails(false);
     };
 
-    const toggleTag = (tag: MessageTag) => {
-        const newSet = new Set(selectedTags);
-        if (newSet.has(tag)) newSet.delete(tag);
-        else newSet.add(tag);
-        setSelectedTags(newSet);
-    };
-
-    const uploadAttachment = async (file: File) => {
-        setIsUploading(true);
-        try {
-            const result = await storageService.upload(file);
-            setPendingAttachment({
-                type: file.type.startsWith('image/') ? 'image' : 'file',
-                url: result.url,
-                name: file.name,
-            });
-        } catch (error) {
-            console.error('Upload failed:', error);
-            toast.error('Failed to upload file. Please try again.');
-        } finally {
-            setIsUploading(false);
-        }
-    };
-
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        e.target.value = '';
-        if (file) void uploadAttachment(file);
-    };
-
-    // Camera button: snap a photo and attach it straight away.
-    const camera = usePhotoCapture(([photo]) => { void uploadAttachment(photo); });
-
-    const handleSend = () => {
-        if (!newMessage.trim() && !pendingAttachment) return;
+    const handleSend = (text: string, tags: MessageTag[], attachments: MessageAttachment[]) => {
         scrollToLatest();
-        onSendMessage(conversation.id, newMessage.trim(), Array.from(selectedTags), replyingTo ?? undefined, pendingAttachment ?? undefined);
-        setNewMessage('');
-        setSelectedTags(new Set());
-        setShowTagPicker(false);
+        onSendMessage(conversation.id, text, tags, replyingTo ?? undefined, attachments[0]);
         setReplyingTo(null);
-        setPendingAttachment(null);
-    };
-
-    const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleSend();
-        }
-    };
-
-    const formatMessageTime = (timestamp: number) => {
-        return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     };
 
     const displayedMessages = useMemo(() => {
@@ -718,59 +650,29 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
             if (msg.status === 'failed') return;
             setMenu({ msg, anchor: target.getBoundingClientRect() });
         };
+        const senderName = resolveName(msg.senderId, msg.senderName);
         const bubble = (
-            <div className={`px-3.5 py-2.5 ${isMe ? 'neu-bubble-out' : 'neu-bubble-in'}`}>
-                {!isMe && (
-                    <p className="text-[11px] font-bold uppercase tracking-widest mb-1 text-gold-700 dark:text-gold-300">{resolveName(msg.senderId, msg.senderName)}</p>
+            <MessageBubble
+                msg={msg}
+                isMe={isMe}
+                senderName={senderName}
+                replySenderName={msg.replyTo ? replySenderName(msg.replyTo) : ''}
+                onOpenImage={() => msg.attachment && setViewing({ url: msg.attachment.url, name: msg.attachment.name, caption: `${isMe ? 'You' : senderName} · ${chatDayLabel(msg.timestamp)}, ${messageTime(msg.timestamp)}` })}
+                meta={isMe && msg.status === 'failed' ? (
+                    <button
+                        type="button"
+                        onClick={() => onRetryMessage?.(msg.id)}
+                        className="flex items-center gap-1 text-[11px] font-semibold shrink-0 ml-auto text-red-600 dark:text-red-400 active-scale"
+                    >
+                        <AlertCircle size={12} /> Not sent · Tap to retry
+                    </button>
+                ) : (
+                    <span className="flex items-center gap-1 text-[11px] shrink-0 ml-auto text-[var(--neu-text-dim)]">
+                        {messageTime(msg.timestamp)}
+                        {isMe && <ReadTicks msg={msg} participantIds={participantIds} />}
+                    </span>
                 )}
-                {msg.replyTo && (
-                    <div className="mb-2 pl-2.5 pr-2 py-1.5 neu-inset rounded-xl border-l-2 border-gold-500">
-                        <p className="text-[11px] font-bold text-gold-700 dark:text-gold-300">{replySenderName(msg.replyTo)}</p>
-                        <p className="text-[11px] line-clamp-1 text-[var(--neu-text-dim)]">{msg.replyTo.text}</p>
-                    </div>
-                )}
-                {msg.attachment && (
-                    msg.attachment.type === 'image' ? (
-                        <button
-                            type="button"
-                            onClick={() => setViewing({ url: msg.attachment!.url, name: msg.attachment!.name, caption: `${isMe ? 'You' : resolveName(msg.senderId, msg.senderName)} · ${chatDayLabel(msg.timestamp)}, ${formatMessageTime(msg.timestamp)}` })}
-                            aria-label={`Open photo ${msg.attachment.name}`}
-                            className="block mb-2 rounded-xl overflow-hidden active-scale cursor-zoom-in"
-                        >
-                            <img loading="lazy" decoding="async" src={getThumbUrl(msg.attachment.url)} alt={msg.attachment.name} className="rounded-xl max-w-full max-h-48 object-cover" />
-                        </button>
-                    ) : (
-                        <div className="flex items-center gap-2 mb-2 p-2 neu-inset rounded-xl">
-                            <Paperclip size={14} className="text-gold-700 dark:text-gold-300" />
-                            <span className="text-[11px] truncate">{msg.attachment.name}</span>
-                        </div>
-                    )
-                )}
-                {msg.text && <p className="text-[13px] leading-relaxed">{msg.text}</p>}
-                <div className="flex items-center justify-between mt-1.5 gap-2">
-                    {msg.tags.length > 0 && (
-                        <div className="flex gap-1 flex-wrap">
-                            {msg.tags.map(tag => (
-                                <span key={tag} className={`text-[7px] px-1.5 py-0.5 rounded-[3px] font-bold uppercase tracking-wider ${TAG_COLORS[tag]}`}>{tag}</span>
-                            ))}
-                        </div>
-                    )}
-                    {isMe && msg.status === 'failed' ? (
-                        <button
-                            type="button"
-                            onClick={() => onRetryMessage?.(msg.id)}
-                            className="flex items-center gap-1 text-[11px] font-semibold shrink-0 ml-auto text-red-600 dark:text-red-400 active-scale"
-                        >
-                            <AlertCircle size={12} /> Not sent · Tap to retry
-                        </button>
-                    ) : (
-                        <span className="flex items-center gap-1 text-[11px] shrink-0 ml-auto text-[var(--neu-text-dim)]">
-                            {formatMessageTime(msg.timestamp)}
-                            {isMe && <ReadTicks msg={msg} participantIds={participantIds} />}
-                        </span>
-                    )}
-                </div>
-            </div>
+            />
         );
         // The bubble, held for the menu, with its reactions hanging under it.
         const held = (
@@ -781,7 +683,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
         );
         const replyButton = (
             <button
-                onClick={() => setReplyingTo({ id: msg.id, senderName: resolveName(msg.senderId, msg.senderName), text: msg.text || (msg.attachment ? msg.attachment.name : '') })}
+                onClick={() => setReplyingTo({ id: msg.id, senderName, text: msg.text || (msg.attachment ? msg.attachment.name : '') })}
                 aria-label="Reply"
                 className="p-1.5 mb-1 text-[var(--neu-text-dim)] hover:text-gold-600 dark:hover:text-gold-400 transition-colors shrink-0 active-scale"
             >
@@ -963,126 +865,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                 </div>
             </div>
 
-            {/* Tag Picker */}
-            {showTagPicker && (
-                <div className="px-3 py-2 animate-fade-in">
-                    <div className="flex gap-1.5 flex-wrap">
-                        {ALL_TAGS.map(tag => (
-                            <button
-                                key={tag}
-                                onClick={() => toggleTag(tag)}
-                                className={`text-[11px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wider transition-all active-scale ${selectedTags.has(tag)
-                                    ? 'neu-raised-sm neu-btn text-gold-700 dark:text-gold-300'
-                                    : TAG_COLORS[tag] + ''
-                                    }`}
-                            >
-                                {tag}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            {/* Message Input — bottom padding follows the iPhone home indicator
-                so the bar is never cropped, even with reply/tag previews stacked */}
-            <div
-                className="px-3 pt-[9px] transition-colors"
-                style={{ paddingBottom: 'calc(9px + var(--safe-bottom-tucked))' }}
-            >
-                {replyingTo && (
-                    <div className="flex items-center justify-between gap-2 mb-2 pl-3 pr-2 py-1.5 neu-raised-sm neu-btn rounded-lg border-l-2 border-gold-500 animate-fade-in">
-                        <div className="min-w-0">
-                            <p className="text-[11px] font-bold text-gold-700 dark:text-gold-300">Replying to {replyingTo.senderName}</p>
-                            <p className="text-[11px] text-gray-700 dark:text-gray-300 truncate">{replyingTo.text}</p>
-                        </div>
-                        <button onClick={() => setReplyingTo(null)} className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 shrink-0 active-scale">
-                            <X size={14} />
-                        </button>
-                    </div>
-                )}
-                {pendingAttachment && (
-                    <div className="flex items-center justify-between gap-2 mb-2 p-2 neu-raised-sm neu-btn rounded-lg animate-fade-in">
-                        <div className="flex items-center gap-2 min-w-0">
-                            {pendingAttachment.type === 'image' ? (
-                                <img loading="lazy" decoding="async" src={getThumbUrl(pendingAttachment.url)} alt={pendingAttachment.name} className="w-10 h-10 rounded-[4px] object-cover shrink-0" />
-                            ) : (
-                                <div className="w-10 h-10 rounded-[4px] neu-inset flex items-center justify-center text-gray-700 dark:text-gray-300 shrink-0">
-                                    <Paperclip size={16} />
-                                </div>
-                            )}
-                            <p className="text-[11px] text-gray-600 dark:text-gray-300 truncate">{pendingAttachment.name}</p>
-                        </div>
-                        <button onClick={() => setPendingAttachment(null)} className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 shrink-0 active-scale">
-                            <X size={14} />
-                        </button>
-                    </div>
-                )}
-                {selectedTags.size > 0 && (
-                    <div className="flex gap-1 mb-2 flex-wrap">
-                        {Array.from(selectedTags).map(tag => (
-                            <span key={tag} className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider flex items-center gap-1 ${TAG_COLORS[tag]}`}>
-                                {tag}
-                                <button onClick={() => toggleTag(tag)} className="hover:opacity-70"><X size={8} /></button>
-                            </span>
-                        ))}
-                    </div>
-                )}
-                <div className="flex items-center gap-2">
-                    <button
-                        onClick={() => setShowTagPicker(!showTagPicker)}
-                        className={`p-2.5 rounded-full transition-colors active-scale shrink-0 ${showTagPicker ? 'neu-raised-sm neu-btn text-gold-700 dark:text-gold-300' : 'text-gray-600 dark:text-gray-300'
-                            }`}
-                    >
-                        <Tag size={18} />
-                    </button>
-                    <button
-                        type="button"
-                        onClick={camera.openCamera}
-                        disabled={isUploading}
-                        aria-label="Take photo"
-                        className="neu-icon-btn-lg text-gray-600 dark:text-gray-300 active-scale disabled:opacity-60"
-                    >
-                        <Camera size={18} />
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={isUploading}
-                        aria-label="Attach file"
-                        className="neu-icon-btn-lg text-gray-600 dark:text-gray-300 active-scale disabled:opacity-60"
-                    >
-                        {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
-                    </button>
-                    <input type="file" accept="image/*,.pdf,.doc,.docx,.txt" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
-                    {camera.inputs}
-                    {/* A one-line textarea, not an input: Chrome on Android never puts
-                        its autofill bar (passwords, cards, addresses) over a textarea. */}
-                    <textarea
-                        rows={1}
-                        value={newMessage}
-                        onChange={(e) => setNewMessage(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                        placeholder="Type a message..."
-                        enterKeyHint="send"
-                        autoComplete="off"
-                        autoCorrect="off"
-                        spellCheck={false}
-                        data-form-type="other"
-                        data-1p-ignore
-                        className="neu-field flex-1 min-w-0 text-xs [field-sizing:content] max-h-28 overflow-y-auto no-scrollbar"
-                    />
-                    <button
-                        onClick={handleSend}
-                        disabled={!newMessage.trim() && !pendingAttachment}
-                        className={`p-2.5 rounded-full transition-all active-scale shrink-0 ${newMessage.trim() || pendingAttachment
-                            ? 'neu-accent'
-                            : 'bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-300'
-                            }`}
-                    >
-                        <Send size={18} />
-                    </button>
-                </div>
-            </div>
+            <ChatComposer key={conversation.id} replyingTo={replyingTo} onCancelReply={() => setReplyingTo(null)} onSend={handleSend} />
 
             {menu && (
                 <MessageActionMenu

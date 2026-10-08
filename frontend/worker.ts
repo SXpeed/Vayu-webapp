@@ -8,7 +8,7 @@ import { salesRoutes } from './sales';
 import {
   CORS, json, err, normalizeRoute, rowToConversation, rowToMessage, rowToArtwork,
   rowToCollection, rowToCatalog, rowToInquiry, rowToInquiryMessage, rowToEvent,
-  rowToContact, rowToStore, rowToAttendance, runSetupOnce,
+  rowToContact, rowToStore, rowToAttendance, runSetupOnce, useSetupStore,
 } from './rows';
 import {
   fileKeyFromUrl, fileUrl, rawRealtimeSecret, realtimeEnabled, requestMetrics, resolveRealtimeSecret,
@@ -3145,7 +3145,7 @@ type MigratedTable = keyof typeof COLUMN_MIGRATIONS;
  * on that isolate hung.
  */
 function ensureColumns(db: D1Database, table: MigratedTable): Promise<void> {
-  return runSetupOnce(db, `columns:${table}`, () => addMissingColumns(db, table));
+  return runSetupOnce(db, `columns:${table}`, () => addMissingColumns(db, table), JSON.stringify(COLUMN_MIGRATIONS[table]));
 }
 
 async function addMissingColumns(db: D1Database, table: MigratedTable): Promise<void> {
@@ -5542,6 +5542,7 @@ async function organizationScope(request: Request, env: Env): Promise<Response |
 export default {
   async fetch(request: Request, env: Env, execCtx: ExecutionContext): Promise<Response> {
     const startedAt = Date.now();
+    useSetupStore(env.VAYU_KV);
     const accessChange = changesAccess(request);
     const ingress = await webhookIngressLimit(request, env);
     if (ingress) return ingress;

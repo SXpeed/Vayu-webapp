@@ -264,13 +264,35 @@ export function normalizeRoute(path: string): string {
  * every later request awaiting it hung forever on that isolate — which is
  * how GET /catalogs and /events stopped answering. Now each request does its
  * own (idempotent) setup until one finishes.
+ *
+ * A finished setup is also recorded in KV, so a fresh isolate skips it with
+ * one KV read instead of 3–5 database round trips (~250 ms each) — with few
+ * users most requests land on a fresh isolate. The record is keyed by the
+ * setup's code (plus `version` for setups driven by data, like a column
+ * list), so editing a setup runs it again everywhere.
  */
 const setupDone = new Set<string>();
-export async function runSetupOnce(db: D1Database, key: string, setup: () => Promise<unknown>): Promise<void> {
+let setupStore: KVNamespace | null = null;
+/** The shared, unprefixed KV namespace; set once per request by the Worker. */
+export function useSetupStore(kv: KVNamespace): void { setupStore = kv; }
+
+const fnv1a = (text: string) => {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ (text.codePointAt(i) ?? 0), 16777619);
+  return (h >>> 0).toString(36);
+};
+
+export async function runSetupOnce(db: D1Database, key: string, setup: () => Promise<unknown>, version = ''): Promise<void> {
   // Per database: one isolate serves many organizations, each with its own.
   const done = `${databaseKey(db)}|${key}`;
   if (setupDone.has(done)) return;
+  const record = `schema-setup:${done}:${fnv1a(setup.toString() + version)}`;
+  if (setupStore && await setupStore.get(record, { cacheTtl: 86400 }).catch(() => null)) {
+    setupDone.add(done);
+    return;
+  }
   await setup();
   setupDone.add(done);
+  await setupStore?.put(record, '1').catch(() => { /* next fresh isolate just runs the setup again */ });
 }
 

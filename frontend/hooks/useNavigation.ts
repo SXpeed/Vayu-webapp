@@ -11,6 +11,8 @@ export function useNavigation() {
 
     // Custom navigation handler to manage browser history
     const navigateTo = (view: ViewState) => {
+        // Re-tapping the open tab must not add a Back step that goes nowhere.
+        if (view === currentView) return;
         setCurrentView(view);
         globalThis.history.pushState({ view }, '');
     };

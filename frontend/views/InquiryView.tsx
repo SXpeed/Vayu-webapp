@@ -1,23 +1,23 @@
-import storageService, { getThumbUrl } from '../services/storageService';
+import { getThumbUrl } from '../services/storageService';
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import toast from 'react-hot-toast';
-import { Plus, X, MessageCircle, Send, Search, ArrowLeft, Edit2, Trash2, Phone, Mail, Image as ImageIcon, User, Clock, Tag, BookOpen, CheckCircle2, XCircle, Check, CheckCheck, Paperclip, Reply, Camera, Loader2, MapPin, FileText } from 'lucide-react';
+import { Plus, X, MessageCircle, Search, ArrowLeft, Edit2, Trash2, Phone, Mail, Image as ImageIcon, User, Clock, Tag, BookOpen, CheckCircle2, XCircle, Check, CheckCheck, Reply, Camera, MapPin, FileText } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
 import { ArtworkPicker } from '../components/ArtworkPicker';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton } from '../components/ui';
 import { Inquiry, Artwork, InquiryMessage, MessageReplyTo, MessageAttachment, MessageTag, UserProfile, Invoice } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
-import { TAG_COLORS, ALL_TAGS } from './MessagingView';
 import { useStickToBottom } from '../hooks/useStickToBottom';
 import { useMemberNames } from '../hooks/useMemberNames';
-import { usePhotoCapture } from '../hooks/usePhotoCapture';
 import { PhotoAttachments } from '../components/PhotoAttachments';
 import { makeDocumentNumber } from '../services/documentNumber';
 import { exportProformaPdf } from '../services/proformaPdf';
 import { InvoiceFormModal, ProformaPdfActions, type NewInvoice } from './InvoiceView';
 import { IfCan } from '../components/Layout';
-import { withDayDividers } from './chat/DayDivider';
+import { chatDayLabel, withDayDividers } from './chat/DayDivider';
+import { ImageViewer, type ViewedImage } from './chat/ImageViewer';
+import { ChatComposer, MessageBubble, messageTime } from './chat/MessageParts';
 
 const renderArtworkStatusColor = (status: string) => {
     if (status === 'Available') return 'bg-green-500';
@@ -385,90 +385,31 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
         const original = messages.find(m => m.id === replyTo.id);
         return original ? resolveName(original.senderId, original.senderName) : resolveName(undefined, replyTo.senderName);
     };
-    const [text, setText] = useState('');
-    const [selectedTags, setSelectedTags] = useState<Set<MessageTag>>(new Set());
-    const [showTagPicker, setShowTagPicker] = useState(false);
     const [replyingTo, setReplyingTo] = useState<MessageReplyTo | null>(null);
-    const [pendingAttachments, setPendingAttachments] = useState<MessageAttachment[]>([]);
     const [showSearch, setShowSearch] = useState(false);
     const [chatSearchQuery, setChatSearchQuery] = useState('');
-    const fileInputRef = useRef<HTMLInputElement>(null);
+    /** A photo opened full screen from a message. */
+    const [viewing, setViewing] = useState<ViewedImage | null>(null);
     // Opens on the latest message and stays there through late photos, syncing
     // messages and the keyboard — unless the reader scrolls up into history.
-    // (It used to re-jump 50ms after every update, reading history included.)
     const { scrollerRef, contentRef, scrollToLatest } = useStickToBottom(inquiry.id);
 
-    const [uploadingCount, setUploadingCount] = useState(0);
-    const isUploading = uploadingCount > 0;
-
-    // Attachments upload to R2 like the team chat. Inline data URLs of phone
-    // photos exceed D1's row size limit, so they never reached other devices.
-    const uploadAttachments = async (files: File[]) => {
-        setUploadingCount(count => count + files.length);
-        const results = await Promise.allSettled(files.map(file => storageService.upload(file)));
-        const uploaded: MessageAttachment[] = [];
-        results.forEach((result, i) => {
-            if (result.status === 'fulfilled') {
-                uploaded.push({ type: files[i].type.startsWith('image/') ? 'image' : 'file', url: result.value.url, name: files[i].name });
-            } else {
-                console.error('Upload failed:', result.reason);
-            }
-        });
-        if (uploaded.length < files.length) toast.error('Some files failed to upload. Please try again.');
-        setPendingAttachments(prev => [...prev, ...uploaded]);
-        setUploadingCount(count => count - files.length);
-    };
-
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const files = Array.from(e.target.files ?? []);
-        e.target.value = '';
-        if (files.length > 0) void uploadAttachments(files);
-    };
-
-    const removePendingAttachment = (url: string) => {
-        setPendingAttachments(prev => prev.filter(a => a.url !== url));
-    };
-
-    // Camera button: snap a photo and attach it straight away (repeat for more).
-    const camera = usePhotoCapture((photos) => { void uploadAttachments(photos); });
-
-    const toggleTag = (tag: MessageTag) => {
-        const newSet = new Set(selectedTags);
-        if (newSet.has(tag)) newSet.delete(tag);
-        else newSet.add(tag);
-        setSelectedTags(newSet);
-    };
-
-    const handleSend = () => {
-        if (!text.trim() && pendingAttachments.length === 0) return;
-        const [first, ...rest] = pendingAttachments;
-        const outgoing = { text: text.trim(), tags: Array.from(selectedTags), replyTo: replyingTo ?? undefined };
+    const handleSend = (text: string, tags: MessageTag[], attachments: MessageAttachment[]) => {
+        const [first, ...rest] = attachments;
+        const replyTo = replyingTo ?? undefined;
         scrollToLatest();
-        setText('');
-        setSelectedTags(new Set());
-        setShowTagPicker(false);
         setReplyingTo(null);
-        setPendingAttachments([]);
         // The text (and first attachment) goes as one message; each extra photo
         // follows as its own message, sent in order.
         void (async () => {
-            await onSendMessage(outgoing.text, outgoing.tags, outgoing.replyTo, first);
+            await onSendMessage(text, tags, replyTo, first);
             for (const attachment of rest) {
-                await onSendMessage('', outgoing.tags, undefined, attachment);
+                await onSendMessage('', tags, undefined, attachment);
             }
         })();
     };
 
-    const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleSend();
-        }
-    };
-
-    const formatMessageTime = (timestamp: number) => new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-    const renderMessageStatusIcon = (status?: string) => {
+    const statusIcon = (status?: string) => {
         if (status === 'read') return <CheckCheck size={12} className="text-sky-500 dark:text-sky-400" />;
         if (status === 'delivered') return <CheckCheck size={12} />;
         return <Check size={12} />;
@@ -483,7 +424,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
     return (
         <div className="neu-sheet z-50 animate-fade-in-up">
             <div className="flex items-center gap-3 p-3 pt-[calc(1.75rem+var(--safe-top))] z-10">
-                <button onClick={onClose} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale">
+                <button onClick={onClose} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale" aria-label="Back">
                     <ArrowLeft size={20} />
                 </button>
                 <div className="w-9 h-9 rounded-full neu-inset flex items-center justify-center text-brand-900 dark:text-gold-400 shrink-0">
@@ -495,6 +436,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                 </div>
                 <button
                     onClick={() => { setShowSearch(s => !s); setChatSearchQuery(''); }}
+                    aria-label="Search in this chat"
                     className={`p-2 rounded-full transition-colors active-scale shrink-0 ${showSearch ? 'neu-raised-sm neu-btn text-gold-700 dark:text-gold-300' : 'text-gray-700 dark:text-gray-300'}`}
                 >
                     <Search size={18} />
@@ -507,8 +449,8 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                 </div>
             )}
 
-            <div ref={scrollerRef} className="flex-1 overflow-y-auto overscroll-contain p-3 no-scrollbar">
-                <div ref={contentRef} className="space-y-3">
+            <div ref={scrollerRef} className="flex-1 overflow-y-auto overscroll-contain p-4 md:p-6 no-scrollbar neu-scroll-fade w-full lg:max-w-5xl lg:mx-auto">
+                <div ref={contentRef} className="space-y-3.5">
                     {messages.length === 0 && (
                         <div className="text-center text-gray-600 dark:text-gray-300 mt-10 font-light text-sm">
                             No messages yet for this inquiry.
@@ -521,58 +463,34 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                     )}
                     {withDayDividers(displayedMessages, (msg) => {
                         const isMe = msg.senderId === currentUserId;
-                        const bubble = (
-                            <div className={`max-w-[80%] rounded-[12px] px-3.5 py-2.5 shadow-sm ${isMe
-                                ? 'bg-[#FEFFF7] dark:bg-[#2a2a2a] text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-700 rounded-br-[4px]'
-                                : 'neu-raised text-gray-900 dark:text-gray-100 border border-[#d2d2d2] dark:border-gray-800 rounded-bl-[4px]'
-                                }`}>
-                                {!isMe && (
-                                    <p className="text-[11px] font-bold uppercase tracking-widest mb-1 text-gold-700 dark:text-gold-300">{resolveName(msg.senderId, msg.senderName)}</p>
-                                )}
-                                {msg.replyTo && (
-                                    <div className={`mb-1.5 pl-2 py-1 border-l-2 rounded-[4px] ${isMe ? 'border-gold-500/50 bg-gold-500/10 dark:border-gray-500/50 dark:bg-gray-700/50' : 'border-gold-400 neu-inset'}`}>
-                                        <p className={`text-[11px] font-bold ${isMe ? 'text-gold-700 dark:text-gold-400' : 'text-gold-700 dark:text-gold-300'}`}>{replySenderName(msg.replyTo)}</p>
-                                        <p className={`text-[11px] line-clamp-1 ${isMe ? 'text-gray-600 dark:text-gray-400' : 'text-gray-700 dark:text-gray-300'}`}>{msg.replyTo.text}</p>
-                                    </div>
-                                )}
-                                {msg.attachment && (
-                                    msg.attachment.type === 'image' ? (
-                                        <img loading="lazy" decoding="async" src={getThumbUrl(msg.attachment.url)} alt={msg.attachment.name} className="rounded-[8px] max-w-full max-h-48 object-cover mb-1.5" />
-                                    ) : (
-                                        <div className={`flex items-center gap-2 mb-1.5 p-2 rounded-lg ${isMe ? 'bg-gold-500/10 dark:bg-gray-700/50' : 'neu-inset'}`}>
-                                            <Paperclip size={14} className="text-gold-700 dark:text-gold-300" />
-                                            <span className="text-[11px] truncate">{msg.attachment.name}</span>
-                                        </div>
-                                    )
-                                )}
-                                {msg.text && <p className="text-[13px] leading-relaxed">{msg.text}</p>}
-                                <div className="flex items-center justify-between mt-1.5 gap-2">
-                                    {msg.tags.length > 0 && (
-                                        <div className="flex gap-1 flex-wrap">
-                                            {msg.tags.map(tag => (
-                                                <span key={tag} className={`text-[7px] px-1.5 py-0.5 rounded-[3px] font-bold uppercase tracking-wider ${TAG_COLORS[tag]}`}>{tag}</span>
-                                            ))}
-                                        </div>
-                                    )}
-                                    <span className={`flex items-center gap-1 text-[11px] shrink-0 ml-auto ${isMe ? 'text-gray-500 dark:text-gray-500' : 'text-gray-600 dark:text-gray-300'}`}>
-                                        {formatMessageTime(msg.timestamp)}
-                                        {isMe && renderMessageStatusIcon(msg.status)}
-                                    </span>
-                                </div>
-                            </div>
-                        );
+                        const senderName = resolveName(msg.senderId, msg.senderName);
                         const replyButton = (
                             <button
-                                onClick={() => setReplyingTo({ id: msg.id, senderName: resolveName(msg.senderId, msg.senderName), text: msg.text || (msg.attachment ? msg.attachment.name : '') })}
-                                className="p-1 mb-1 text-gray-600 dark:text-gray-300 hover:text-gold-500 dark:hover:text-gold-400 transition-colors shrink-0 active-scale"
+                                onClick={() => setReplyingTo({ id: msg.id, senderName, text: msg.text || (msg.attachment ? msg.attachment.name : '') })}
+                                aria-label="Reply"
+                                className="p-1.5 mb-1 text-[var(--neu-text-dim)] hover:text-gold-600 dark:hover:text-gold-400 transition-colors shrink-0 active-scale"
                             >
                                 <Reply size={14} />
                             </button>
                         );
                         return (
-                            <div key={msg.id} className={`flex items-end gap-1 ${isMe ? 'justify-end' : 'justify-start'}`}>
+                            <div key={msg.id} className={`flex items-end gap-1.5 ${isMe ? 'justify-end' : 'justify-start'}`}>
                                 {!isMe && replyButton}
-                                {bubble}
+                                <div className="max-w-[80%] min-w-0">
+                                    <MessageBubble
+                                        msg={msg}
+                                        isMe={isMe}
+                                        senderName={senderName}
+                                        replySenderName={msg.replyTo ? replySenderName(msg.replyTo) : ''}
+                                        onOpenImage={() => msg.attachment && setViewing({ url: msg.attachment.url, name: msg.attachment.name, caption: `${isMe ? 'You' : senderName} · ${chatDayLabel(msg.timestamp)}, ${messageTime(msg.timestamp)}` })}
+                                        meta={(
+                                            <span className="flex items-center gap-1 text-[11px] shrink-0 ml-auto text-[var(--neu-text-dim)]">
+                                                {messageTime(msg.timestamp)}
+                                                {isMe && statusIcon(msg.status)}
+                                            </span>
+                                        )}
+                                    />
+                                </div>
                                 {isMe && replyButton}
                             </div>
                         );
@@ -580,137 +498,9 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                 </div>
             </div>
 
-            {/* Tag Picker */}
-            {showTagPicker && (
-                <div className="px-3 py-2 animate-fade-in">
-                    <div className="flex gap-1.5 flex-wrap">
-                        {ALL_TAGS.map(tag => (
-                            <button
-                                key={tag}
-                                onClick={() => toggleTag(tag)}
-                                className={`text-[11px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wider transition-all active-scale ${selectedTags.has(tag)
-                                    ? 'neu-raised-sm neu-btn text-gold-700 dark:text-gold-300'
-                                    : TAG_COLORS[tag] + ''
-                                    }`}
-                            >
-                                {tag}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-            )}
+            <ChatComposer key={inquiry.id} multiple replyingTo={replyingTo} onCancelReply={() => setReplyingTo(null)} onSend={handleSend} />
 
-            {/* Message Input — bottom padding follows the iPhone home indicator */}
-            <div
-                className="px-3 pt-[9px] transition-colors"
-                style={{ paddingBottom: 'calc(9px + var(--safe-bottom-tucked))' }}
-            >
-                {selectedTags.size > 0 && (
-                    <div className="flex gap-1 mb-2 flex-wrap">
-                        {Array.from(selectedTags).map(tag => (
-                            <span key={tag} className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider flex items-center gap-1 ${TAG_COLORS[tag]}`}>
-                                {tag}
-                                <button onClick={() => toggleTag(tag)} className="hover:opacity-70"><X size={8} /></button>
-                            </span>
-                        ))}
-                    </div>
-                )}
-                {replyingTo && (
-                    <div className="flex items-center justify-between gap-2 mb-2 pl-3 pr-2 py-1.5 neu-raised-sm neu-btn rounded-lg border-l-2 border-gold-500 animate-fade-in">
-                        <div className="min-w-0">
-                            <p className="text-[11px] font-bold text-gold-700 dark:text-gold-300">Replying to {replyingTo.senderName}</p>
-                            <p className="text-[11px] text-gray-700 dark:text-gray-300 truncate">{replyingTo.text}</p>
-                        </div>
-                        <button onClick={() => setReplyingTo(null)} className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 shrink-0 active-scale">
-                            <X size={14} />
-                        </button>
-                    </div>
-                )}
-                {(pendingAttachments.length > 0 || isUploading) && (
-                    <div className="flex items-center gap-2 mb-2 p-2 neu-raised-sm neu-btn rounded-lg animate-fade-in overflow-x-auto no-scrollbar">
-                        {pendingAttachments.map((attachment) => (
-                            <div key={attachment.url} className="relative shrink-0">
-                                {attachment.type === 'image' ? (
-                                    <img loading="lazy" decoding="async" src={getThumbUrl(attachment.url)} alt={attachment.name} className="w-12 h-12 rounded-[4px] object-cover" />
-                                ) : (
-                                    <div className="w-12 h-12 rounded-[4px] neu-inset flex flex-col items-center justify-center text-gray-700 dark:text-gray-300 px-1">
-                                        <Paperclip size={14} />
-                                        <span className="text-[7px] truncate w-full text-center mt-0.5">{attachment.name}</span>
-                                    </div>
-                                )}
-                                <button
-                                    type="button"
-                                    onClick={() => removePendingAttachment(attachment.url)}
-                                    aria-label={`Remove ${attachment.name}`}
-                                    className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-black/70 text-white flex items-center justify-center active-scale"
-                                >
-                                    <X size={9} />
-                                </button>
-                            </div>
-                        ))}
-                        {Array.from({ length: uploadingCount }, (_, i) => (
-                            <div key={`uploading-${i}`} className="w-12 h-12 rounded-[4px] neu-inset flex items-center justify-center text-gray-400 shrink-0">
-                                <Loader2 size={14} className="animate-spin" />
-                            </div>
-                        ))}
-                    </div>
-                )}
-                <div className="flex items-center gap-2">
-                    <button
-                        onClick={() => setShowTagPicker(!showTagPicker)}
-                        className={`p-2.5 rounded-full transition-colors active-scale shrink-0 ${showTagPicker ? 'neu-raised-sm neu-btn text-gold-700 dark:text-gold-300' : 'text-gray-600 dark:text-gray-300'
-                            }`}
-                    >
-                        <Tag size={18} />
-                    </button>
-                    <button
-                        type="button"
-                        onClick={camera.openCamera}
-                        disabled={isUploading}
-                        aria-label="Take photo"
-                        className="neu-icon-btn-lg text-gray-600 dark:text-gray-300 active-scale disabled:opacity-60"
-                    >
-                        <Camera size={18} />
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={isUploading}
-                        aria-label="Attach file"
-                        className="neu-icon-btn-lg text-gray-600 dark:text-gray-300 active-scale disabled:opacity-60"
-                    >
-                        {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
-                    </button>
-                    <input type="file" multiple accept="image/*,.pdf,.doc,.docx,.txt" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
-                    {camera.inputs}
-                    {/* A one-line textarea, not an input: Chrome on Android never puts
-                        its autofill bar (passwords, cards, addresses) over a textarea. */}
-                    <textarea
-                        rows={1}
-                        value={text}
-                        onChange={(e) => setText(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                        placeholder="Type a message..."
-                        enterKeyHint="send"
-                        autoComplete="off"
-                        autoCorrect="off"
-                        spellCheck={false}
-                        data-form-type="other"
-                        data-1p-ignore
-                        className="neu-field flex-1 min-w-0 text-xs [field-sizing:content] max-h-28 overflow-y-auto no-scrollbar"
-                    />
-                    <button
-                        onClick={handleSend}
-                        disabled={!text.trim() && pendingAttachments.length === 0}
-                        className={`p-2.5 rounded-full transition-all active-scale shrink-0 ${text.trim() || pendingAttachments.length > 0
-                            ? 'neu-accent'
-                            : 'bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-300'
-                            }`}
-                    >
-                        <Send size={18} />
-                    </button>
-                </div>
-            </div>
+            {viewing && <ImageViewer image={viewing} onClose={() => setViewing(null)} />}
         </div>
     );
 };
