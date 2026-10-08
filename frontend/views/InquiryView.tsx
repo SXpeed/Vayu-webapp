@@ -8,6 +8,7 @@ import { PageRoot, PageHeader, PageBody, PrimaryIconButton } from '../components
 import { Inquiry, Artwork, InquiryMessage, MessageReplyTo, MessageAttachment, MessageTag, UserProfile, Invoice, Contact } from '../types';
 import { contactWithKey, emailKey, phoneKey } from '../contactKeys';
 import { inquiryService } from '../services/inquiryService';
+import { currentWorkspace } from '../services/workspace';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { useStickToBottom } from '../hooks/useStickToBottom';
@@ -965,7 +966,10 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
     const [isUploadingPhotos, setIsUploadingPhotos] = useState(false);
     // Typed a number or email already saved: offer that contact's name.
     const saved = useMemo(
-        () => contactWithKey(contacts, phoneKey(customerPhone)) ?? contactWithKey(contacts, emailKey(customerEmail)),
+        () => {
+            const country = currentWorkspace()?.country ?? undefined;
+            return contactWithKey(contacts, phoneKey(customerPhone, country), country) ?? contactWithKey(contacts, emailKey(customerEmail), country);
+        },
         [contacts, customerPhone, customerEmail],
     );
     const useSaved = () => {

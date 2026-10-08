@@ -21,6 +21,8 @@ export interface Workspace {
     /** Its own logo (set in the control centre), or null for the platform's.
      *  Kept with the workspace so the loading screen can show it at once. */
     logoUrl?: string | null;
+    /** Two-letter code: where its phone numbers are from when typed without a +. */
+    country?: string | null;
 }
 
 const WORKSPACE_KEY = 'as_workspace';
@@ -70,8 +72,8 @@ export async function myWorkspaces(): Promise<Workspace[]> {
     const res = await fetch('/api/v2/me/orgs', { credentials: 'same-origin', signal: AbortSignal.timeout(20_000) });
     if (res.status === 401) return [];
     if (!res.ok) throw new Error('Could not load your workspaces. Please try again.');
-    const body = await res.json() as { organizations: { id: string; name: string; role: string; status: string; logoUrl?: string | null }[] };
-    return body.organizations.filter(o => o.status === 'active').map(o => ({ id: o.id, name: o.name, role: o.role, logoUrl: o.logoUrl ?? null }));
+    const body = await res.json() as { organizations: { id: string; name: string; role: string; status: string; logoUrl?: string | null; country?: string | null }[] };
+    return body.organizations.filter(o => o.status === 'active').map(o => ({ id: o.id, name: o.name, role: o.role, logoUrl: o.logoUrl ?? null, country: o.country ?? null }));
 }
 
 /**

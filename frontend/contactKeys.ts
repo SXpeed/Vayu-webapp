@@ -3,20 +3,19 @@
 // duplicates) and the app (suggesting a saved contact while typing).
 // Names are never matched: two people can share one.
 
+import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js/min';
+
+/** Where a number typed without a country code is from, when the organisation hasn't said. */
+export const DEFAULT_COUNTRY = 'IN';
+
 /**
- * "+91 98765 43210", "098765 43210" and "9876543210" are one number: p:919876543210.
- * shortcut: a number without a country code is taken as Indian; switch to
- * libphonenumber-js if studios start taking numbers from abroad without the +.
+ * "+91 98765 43210", "098765 43210" and "9876543210" (in India) are one
+ * number: p:919876543210. A number without a country code is read as one
+ * from `country`, the organisation's own (a two-letter code).
  */
-export function phoneKey(raw: string | undefined | null): string | null {
-  const text = (raw ?? '').trim();
-  let digits = text.replaceAll(/\D/g, '');
-  if (!text.startsWith('+')) {
-    if (digits.startsWith('00')) digits = digits.slice(2);
-    else if (digits.length === 11 && digits.startsWith('0')) digits = `91${digits.slice(1)}`;
-    else if (digits.length === 10) digits = `91${digits}`;
-  }
-  return digits.length >= 8 && digits.length <= 15 ? `p:${digits}` : null;
+export function phoneKey(raw: string | undefined | null, country: string = DEFAULT_COUNTRY): string | null {
+  const parsed = parsePhoneNumberFromString((raw ?? '').trim(), (/^[A-Z]{2}$/.test(country) ? country : DEFAULT_COUNTRY) as CountryCode);
+  return parsed?.isPossible() ? `p:${parsed.number.slice(1)}` : null;
 }
 
 export function emailKey(raw: string | undefined | null): string | null {
@@ -25,8 +24,8 @@ export function emailKey(raw: string | undefined | null): string | null {
 }
 
 /** Every key of these phones and emails, each once. */
-export function contactKeys(phones: readonly string[], emails: readonly string[]): string[] {
-  const keys = [...phones.map(phoneKey), ...emails.map(emailKey)];
+export function contactKeys(phones: readonly string[], emails: readonly string[], country?: string): string[] {
+  const keys = [...phones.map(p => phoneKey(p, country)), ...emails.map(emailKey)];
   return [...new Set(keys.filter((k): k is string => k !== null))];
 }
 
@@ -51,8 +50,8 @@ export const tagNameKey = (name: string): string => name.trim().replaceAll(/\s+/
 
 /** The contact in this list holding this phone or email key. */
 export function contactWithKey<T extends { phone?: string; email?: string; phones?: string[]; emails?: string[] }>(
-  list: readonly T[], key: string | null,
+  list: readonly T[], key: string | null, country?: string,
 ): T | undefined {
   if (!key) return undefined;
-  return list.find(c => contactKeys(c.phones ?? [c.phone ?? ''], c.emails ?? [c.email ?? '']).includes(key));
+  return list.find(c => contactKeys(c.phones ?? [c.phone ?? ''], c.emails ?? [c.email ?? ''], country).includes(key));
 }

@@ -49,6 +49,8 @@
     "orgAppDb.ts",
     "orgStorage.ts",
     "orgTeam.ts",
+    "inbox.ts",
+    "contactStore.ts",
     "dist",
     "node_modules",
     ".wrangler"

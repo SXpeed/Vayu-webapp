@@ -55,13 +55,13 @@ before(async () => {
         const res = await post(admin, '/admin/users', { email, name, temporaryPassword: USER_PASSWORD });
         assert.equal(res.status, 201, JSON.stringify(res.body));
     }
-    const mkOrg = async (name, ownerEmail) => {
-        const res = await post(admin, '/admin/orgs', { name, businessType: 'studio', ownerEmail });
+    const mkOrg = async (name, ownerEmail, country) => {
+        const res = await post(admin, '/admin/orgs', { name, businessType: 'studio', ownerEmail, country });
         assert.equal(res.status, 201, JSON.stringify(res.body));
         return res.body;
     };
     orgA = await mkOrg('Studio A', 'owner-a@example.com');
-    orgB = await mkOrg('Gallery B', 'owner-b@example.com');
+    orgB = await mkOrg('Gallery B', 'owner-b@example.com', 'GB');
     // No plan means the free defaults (3 people); this team needs a few more.
     const roomier = await post(admin, `/admin/orgs/${orgA.id}/entitlements`, { key: 'maxMembers', value: 10, reason: 'Test team' });
     assert.equal(roomier.status, 200, JSON.stringify(roomier.body));
@@ -130,6 +130,11 @@ test('notifications, unread inquiries, contacts and tags stay in their organizat
     assert.deepEqual((await ownerB.call(app(orgB.id, '/contacts'))).body, []);
     assert.deepEqual((await ownerB.call(app(orgB.id, '/contact-tags'))).body, []);
     assert.equal((await post(ownerB, app(orgB.id, '/contact-tags'), { name: 'VIP' })).status, 201, 'tag names are unique per organization only');
+
+    // B is in the UK: a London number typed without +44 is the same number as with it.
+    assert.equal((await post(ownerB, app(orgB.id, '/contacts'), { id: 'ct-b-1', name: 'Ada', phones: ['020 7946 0958'] })).status, 201);
+    const dup = await post(ownerB, app(orgB.id, '/contacts'), { id: 'ct-b-2', name: 'Copy', phones: ['+44 20 7946 0958'] });
+    assert.equal(dup.status, 409, dup.text);
 
     // Pointing at A's address with B's sign-in reaches nothing of A's.
     for (const path of ['/inbox', '/contacts', '/contact-tags']) {

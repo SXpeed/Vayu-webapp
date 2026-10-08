@@ -10,6 +10,8 @@ import { IfCan, useAppChrome } from '../components/Layout';
 import { contactService } from '../services/contactService';
 import { contactWithKey, emailKey, phoneKey } from '../contactKeys';
 import { useInbox } from '../hooks/useInbox';
+import { realtimeService } from '../services/realtimeService';
+import { currentWorkspace } from '../services/workspace';
 
 interface ContactsViewProps {
     contacts: Contact[];
@@ -143,6 +145,9 @@ const copy = (text: string, what: string) => {
 
 const PAGE = 60;
 
+/** Where numbers typed without a country code are from (the server uses the same). */
+const country = () => currentWorkspace()?.country ?? undefined;
+
 export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries, onAddContact, onUpdateContact, onImportContacts, onDeleteContact }) => {
     const { can } = useAppChrome();
     const canEdit = can('contacts', 'edit');
@@ -164,7 +169,13 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
     const loadTags = useCallback(() => {
         contactService.getTags().then(setTags).catch(() => { /* offline: tags show again once back */ });
     }, []);
-    useEffect(loadTags, [loadTags]);
+    useEffect(() => {
+        loadTags();
+        // Someone else changed the tags, or the socket reconnected after missing some.
+        return realtimeService.subscribe(event => {
+            if (event.type === 'invalidate' && (event.events.length === 0 || event.events.some(e => e.entity === 'contact_tag'))) loadTags();
+        });
+    }, [loadTags]);
     const tagById = useMemo(() => new Map(tags.map(t => [t.id, t])), [tags]);
     const tagCounts = useMemo(() => {
         const counts = new Map<string, number>();
@@ -174,13 +185,13 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
 
     const filtered = useMemo(() => {
         const q = query.trim().toLowerCase();
-        const qKey = phoneKey(q);
+        const qKey = phoneKey(q, country());
         const list = contacts.filter(c => {
             if (source !== 'all' && c.source !== source) return false;
             for (const t of tagFilter) if (!c.tags?.includes(t)) return false;
             if (!q) return true;
             return c.name.toLowerCase().includes(q)
-                || phonesOf(c).some(p => p.toLowerCase().includes(q) || (qKey !== null && phoneKey(p) === qKey))
+                || phonesOf(c).some(p => p.toLowerCase().includes(q) || (qKey !== null && phoneKey(p, country()) === qKey))
                 || emailsOf(c).some(e => e.toLowerCase().includes(q))
                 || (c.notes ?? '').toLowerCase().includes(q)
                 || SOURCE_LABELS[c.source].toLowerCase().includes(q)
@@ -472,13 +483,13 @@ const ContactSheet: React.FC<{
         if (!draft.name.trim()) out.push({ text: 'Add a name.' });
         if (clean(draft.phones).length === 0 && clean(draft.emails).length === 0) out.push({ text: 'Add a phone number or an email.' });
         for (const p of clean(draft.phones)) {
-            if (!phoneKey(p)) { out.push({ text: `"${p}" doesn't look like a phone number.` }); continue; }
-            const other = contactWithKey(contacts.filter(c => c.id !== contact?.id), phoneKey(p));
+            if (!phoneKey(p, country())) { out.push({ text: `"${p}" doesn't look like a phone number.` }); continue; }
+            const other = contactWithKey(contacts.filter(c => c.id !== contact?.id), phoneKey(p, country()), country());
             if (other) out.push({ text: `${displayName(other)} already has ${p}.`, other });
         }
         for (const e of clean(draft.emails)) {
             if (!emailKey(e)) { out.push({ text: `"${e}" doesn't look like an email address.` }); continue; }
-            const other = contactWithKey(contacts.filter(c => c.id !== contact?.id), emailKey(e));
+            const other = contactWithKey(contacts.filter(c => c.id !== contact?.id), emailKey(e), country());
             if (other) out.push({ text: `${displayName(other)} already has ${e}.`, other });
         }
         return out;

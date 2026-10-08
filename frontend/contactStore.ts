@@ -8,7 +8,7 @@
 // second insert fails or is ignored inside its batch, and the batch is one
 // transaction.
 
-import { contactKeys, emailKey, phoneKey } from './contactKeys';
+import { contactKeys, DEFAULT_COUNTRY, emailKey, phoneKey } from './contactKeys';
 import { changeLogStmt, ensureChangeLogTable, notifyHub } from './deltaSync';
 import { contactLists, runSetupOnce } from './rows';
 import type { Env } from './workerEnv';
@@ -33,8 +33,28 @@ const NEW_COLUMNS: Record<string, Record<string, string>> = {
  * for contacts saved before keys existed are filled in here; duplicates among
  * those keep the first contact's claim (INSERT OR IGNORE).
  */
-export function ensureContactSchema(db: D1Database): Promise<void> {
+const countries = new Map<string, string>();
+
+/**
+ * The organisation's country (given when it applied), for numbers typed
+ * without a country code. Remembered per isolate: a changed country takes
+ * effect as isolates recycle.
+ */
+export async function orgCountry(env: Env): Promise<string> {
+  if (!env.ORG_ID || !env.PLATFORM_DB) return DEFAULT_COUNTRY;
+  let country = countries.get(env.ORG_ID);
+  if (country === undefined) {
+    const row = await env.PLATFORM_DB.prepare('SELECT country FROM organizations WHERE id = ?').bind(env.ORG_ID).first<{ country: string | null }>();
+    country = row?.country || DEFAULT_COUNTRY;
+    countries.set(env.ORG_ID, country);
+  }
+  return country;
+}
+
+export function ensureContactSchema(env: Env): Promise<void> {
+  const db = env.VAYU_DB;
   return runSetupOnce(db, 'contactSchema', async () => {
+    const country = await orgCountry(env);
     await db.prepare(`CREATE TABLE IF NOT EXISTS contacts (
       id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '',
       email TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT 'manual',
@@ -65,7 +85,7 @@ export function ensureContactSchema(db: D1Database): Promise<void> {
       return [
         db.prepare("UPDATE contacts SET phones = ?, emails = ? WHERE id = ? AND phones = '[]' AND emails = '[]'")
           .bind(JSON.stringify(phones), JSON.stringify(emails), row.id),
-        ...contactKeys(phones, emails).map(key =>
+        ...contactKeys(phones, emails, country).map(key =>
           db.prepare('INSERT OR IGNORE INTO contact_keys (key, contact_id) VALUES (?, ?)').bind(key, row.id)),
       ];
     });
@@ -110,15 +130,16 @@ export const isUniqueViolation = (e: unknown): boolean => /UNIQUE constraint fai
  */
 export async function linkInquiryContact(env: Env, inquiryId: string): Promise<void> {
   const db = env.VAYU_DB;
-  await ensureContactSchema(db);
+  await ensureContactSchema(env);
   await ensureChangeLogTable(db);
+  const country = await orgCountry(env);
   const inq = await db.prepare('SELECT * FROM inquiries WHERE id = ?').bind(inquiryId).first<Record<string, unknown>>();
   if (!inq) return;
   const phone = String(inq.customer_phone ?? '').trim();
   const email = String(inq.customer_email ?? '').trim();
   const name = String(inq.customer_name ?? '').trim();
   const at = Number(inq.date) || Date.now();
-  const keys = contactKeys([phone], [email]);
+  const keys = contactKeys([phone], [email], country);
   const setInquiry = (contactId: string, matches: string[] = []) => [
     db.prepare('UPDATE inquiries SET contact_id = ?, contact_matches = ? WHERE id = ?').bind(contactId, JSON.stringify(matches), inquiryId),
     changeLogStmt(db, env, 'inquiry', inquiryId, 'put', { actorId: 'contacts' }),
@@ -145,8 +166,8 @@ export async function linkInquiryContact(env: Env, inquiryId: string): Promise<v
       db.prepare(`INSERT OR IGNORE INTO contacts (id, name, phone, email, phones, emails, notes, source,
         created_at, created_by, created_by_name, updated_at, last_interaction_at)
         VALUES (?, ?, ?, ?, ?, ?, '', 'inquiry', ?, ?, ?, ?, ?)`).bind(
-        contactId, name, phoneKey(phone) ? phone : '', emailKey(email) ? email : '',
-        JSON.stringify(phoneKey(phone) ? [phone] : []), JSON.stringify(emailKey(email) ? [email] : []),
+        contactId, name, phoneKey(phone, country) ? phone : '', emailKey(email) ? email : '',
+        JSON.stringify(phoneKey(phone, country) ? [phone] : []), JSON.stringify(emailKey(email) ? [email] : []),
         Date.now(), String(inq.created_by ?? ''), String(inq.created_by_name ?? ''), Date.now(), at),
       ...keys.map(key => db.prepare('INSERT OR IGNORE INTO contact_keys (key, contact_id) VALUES (?, ?)').bind(key, contactId)),
     ]);
@@ -157,7 +178,8 @@ export async function linkInquiryContact(env: Env, inquiryId: string): Promise<v
   const row = await db.prepare('SELECT * FROM contacts WHERE id = ?').bind(contactId).first<Record<string, unknown>>();
   if (!row) return; // deleted meanwhile: the next pass links it again
   const lists = contactLists(row);
-  const phones = phoneKey(phone) && !lists.phones.some(p => phoneKey(p) === phoneKey(phone)) ? [...lists.phones, phone] : lists.phones;
+  const ownKey = phoneKey(phone, country);
+  const phones = ownKey && !lists.phones.some(p => phoneKey(p, country) === ownKey) ? [...lists.phones, phone] : lists.phones;
   const emails = emailKey(email) && !lists.emails.some(e => emailKey(e) === emailKey(email)) ? [...lists.emails, email] : lists.emails;
   await db.batch([
     db.prepare(`UPDATE contacts SET phones = ?, emails = ?, phone = ?, email = ?,
@@ -182,7 +204,7 @@ export async function linkPendingInquiries(env: Env): Promise<void> {
   const scope = env.ORG_ID ?? 'default';
   if (Date.now() - (lastPass.get(scope) ?? 0) < 60_000) return;
   lastPass.set(scope, Date.now());
-  await ensureContactSchema(env.VAYU_DB);
+  await ensureContactSchema(env);
   const { results } = await env.VAYU_DB.prepare('SELECT id FROM inquiries WHERE contact_id IS NULL ORDER BY date LIMIT 100').all<{ id: string }>();
   for (const { id } of results) {
     await linkInquiryContact(env, id).catch(e => console.error('Linking an inquiry to its contact failed:', e));

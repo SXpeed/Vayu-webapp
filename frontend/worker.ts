@@ -31,7 +31,7 @@ import {
 } from './deltaSync';
 import { handleInbox, handleInboxNotifications, handleInboxRead, recordNotifications } from './inbox';
 import { cleanList, contactKeys, emailKey, phoneKey, tagNameKey } from './contactKeys';
-import { ensureContactSchema, isUniqueViolation, keyOwners, linkInquiryContact, replaceKeyStmts } from './contactStore';
+import { ensureContactSchema, isUniqueViolation, keyOwners, linkInquiryContact, orgCountry, replaceKeyStmts } from './contactStore';
 import { signTicket, TICKET_TTL_MS } from './realtimeTickets';
 import {
   fileAccessAllowed, fileAuthEnabled, fileCacheHeaders, fileCookieClearHeaders,
@@ -3712,7 +3712,7 @@ async function handleInquiriesCreate(ctx: Ctx): Promise<Response> {
   await ensureColumns(ctx.env.VAYU_DB, 'inquiries');
   // Detect re-syncs/migrations of existing inquiries so they don't re-notify
   // and keep their original creator.
-  await ensureContactSchema(ctx.env.VAYU_DB);
+  await ensureContactSchema(ctx.env);
   const existing = await ctx.env.VAYU_DB.prepare(
     'SELECT created_by, created_by_name, contact_id, contact_matches FROM inquiries WHERE id = ?'
   ).bind(inq.id).first<{ created_by: string | null; created_by_name: string | null; contact_id: string | null; contact_matches: string }>();
@@ -3766,7 +3766,7 @@ async function handleInquiriesUpdate(ctx: Ctx): Promise<Response> {
   const inq = body as any;
   const inqId = ctx.path.slice('/inquiries/'.length);
   await ensureColumns(ctx.env.VAYU_DB, 'inquiries');
-  await ensureContactSchema(ctx.env.VAYU_DB);
+  await ensureContactSchema(ctx.env);
   const before = await ctx.env.VAYU_DB.prepare('SELECT customer_phone, customer_email, contact_id FROM inquiries WHERE id = ?')
     .bind(inqId).first<{ customer_phone: string; customer_email: string; contact_id: string | null }>();
   // Someone picked the contact (the inquiry matched two): it must exist here.
@@ -4106,10 +4106,10 @@ async function handleEventsDelete(ctx: Ctx): Promise<Response> {
 // phone or email belongs to one contact only (contact_keys).
 
 /** A contact as the app sends it; older apps send one phone and email. */
-function contactInput(body: any): { name: string; phones: string[]; emails: string[]; tags: string[]; notes: string } {
+function contactInput(body: any, country: string): { name: string; phones: string[]; emails: string[]; tags: string[]; notes: string } {
   return {
     name: String(body?.name ?? '').trim().slice(0, 200),
-    phones: cleanList(Array.isArray(body?.phones) ? body.phones : [body?.phone], phoneKey),
+    phones: cleanList(Array.isArray(body?.phones) ? body.phones : [body?.phone], p => phoneKey(p, country)),
     emails: cleanList(Array.isArray(body?.emails) ? body.emails : [body?.email], emailKey),
     tags: cleanList(body?.tags, () => null, 50),
     notes: String(body?.notes ?? '').slice(0, 5000),
@@ -4117,9 +4117,9 @@ function contactInput(body: any): { name: string; phones: string[]; emails: stri
 }
 
 /** What's wrong with a contact typed in by hand, or null. */
-function contactProblem(c: ReturnType<typeof contactInput>): string | null {
+function contactProblem(c: ReturnType<typeof contactInput>, country: string): string | null {
   if (!c.name) return 'name is required';
-  if (c.phones.some(p => !phoneKey(p))) return 'That phone number does not look right';
+  if (c.phones.some(p => !phoneKey(p, country))) return 'That phone number does not look right';
   if (c.emails.some(e => !emailKey(e))) return 'That email address does not look right';
   return null;
 }
@@ -4146,7 +4146,7 @@ async function existingTagIds(db: D1Database, ids: string[]): Promise<string[]> 
 async function handleContactsList(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
-  await ensureContactSchema(ctx.env.VAYU_DB);
+  await ensureContactSchema(ctx.env);
   const results = await ctx.env.VAYU_DB.prepare(
     'SELECT * FROM contacts ORDER BY created_at DESC'
   ).all();
@@ -4160,13 +4160,14 @@ async function handleContactsCreate(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json() as any;
   const id = typeof body?.id === 'string' ? body.id.slice(0, 128) : '';
   if (!id) return err('id is required');
-  const c = contactInput(body);
-  const problem = contactProblem(c);
+  const country = await orgCountry(ctx.env);
+  const c = contactInput(body, country);
+  const problem = contactProblem(c, country);
   if (problem) return err(problem);
   const db = ctx.env.VAYU_DB;
-  await ensureContactSchema(db);
+  await ensureContactSchema(ctx.env);
   await ensureChangeLogTable(db);
-  const keys = contactKeys(c.phones, c.emails);
+  const keys = contactKeys(c.phones, c.emails, country);
   const duplicate = await duplicateContact(db, keys, id);
   if (duplicate) return duplicate;
   const tags = await existingTagIds(db, c.tags);
@@ -4202,13 +4203,14 @@ async function handleContactsImport(ctx: Ctx): Promise<Response> {
   if (list.length === 0) return err('contacts array is required');
   if (list.length > 500) return err('Too many contacts (max 500 per import)');
   const db = ctx.env.VAYU_DB;
-  await ensureContactSchema(db);
+  await ensureContactSchema(ctx.env);
   await ensureChangeLogTable(db);
   const now = Date.now();
+  const country = await orgCountry(ctx.env);
   // A number already saved stays with the contact that has it; the imported
   // row is still added (CSV files are often messy), without that key.
   const stmts = list.flatMap((raw: any) => {
-    const c = contactInput(raw);
+    const c = contactInput(raw, country);
     return [
       db.prepare(
         `INSERT OR REPLACE INTO contacts
@@ -4216,7 +4218,7 @@ async function handleContactsImport(ctx: Ctx): Promise<Response> {
          VALUES (?, ?, ?, ?, ?, ?, '[]', ?, 'import', ?, ?, ?, ?, 0)`
       ).bind(String(raw.id), c.name, c.phones[0] ?? '', c.emails[0] ?? '', JSON.stringify(c.phones), JSON.stringify(c.emails),
         c.notes, raw.createdAt || now, session.userId, session.name, now),
-      ...contactKeys(c.phones, c.emails).map(key =>
+      ...contactKeys(c.phones, c.emails, country).map(key =>
         db.prepare('INSERT OR IGNORE INTO contact_keys (key, contact_id) VALUES (?, ?)').bind(key, String(raw.id))),
     ];
   });
@@ -4236,7 +4238,7 @@ async function handleContactsDelete(ctx: Ctx): Promise<Response> {
   const contactId = ctx.path.slice('/contacts/'.length);
   if (!contactId) return err('Contact not found', 404);
   const db = ctx.env.VAYU_DB;
-  await ensureContactSchema(db);
+  await ensureContactSchema(ctx.env);
   const result = await db.prepare('SELECT * FROM contacts WHERE id = ?').bind(contactId).first();
   await ensureChangeLogTable(db);
   await db.batch([
@@ -4261,11 +4263,12 @@ async function handleContactsUpdate(ctx: Ctx): Promise<Response> {
   const contactId = ctx.path.slice('/contacts/'.length);
   if (!contactId) return err('Contact not found', 404);
   const body = await ctx.request.json() as any;
-  const c = contactInput(body);
-  const problem = contactProblem(c);
+  const country = await orgCountry(ctx.env);
+  const c = contactInput(body, country);
+  const problem = contactProblem(c, country);
   if (problem) return err(problem);
   const db = ctx.env.VAYU_DB;
-  await ensureContactSchema(db);
+  await ensureContactSchema(ctx.env);
   await ensureChangeLogTable(db);
   const current = await db.prepare('SELECT updated_at FROM contacts WHERE id = ?').bind(contactId).first<{ updated_at: number }>();
   if (!current) return err('Contact not found', 404);
@@ -4273,7 +4276,7 @@ async function handleContactsUpdate(ctx: Ctx): Promise<Response> {
   if (typeof body.updatedAt === 'number' && current.updated_at && body.updatedAt !== current.updated_at) {
     return json({ error: 'Someone else changed this contact just now. Open it again to see their changes.', code: 'stale' }, 409);
   }
-  const keys = contactKeys(c.phones, c.emails);
+  const keys = contactKeys(c.phones, c.emails, country);
   const duplicate = await duplicateContact(db, keys, contactId);
   if (duplicate) return duplicate;
   const tags = await existingTagIds(db, c.tags);
@@ -4304,7 +4307,7 @@ async function handleContactsBulkTags(ctx: Ctx): Promise<Response> {
   const ids = cleanList(body?.contactIds, () => null, 500);
   if (ids.length === 0) return err('contactIds are required');
   const db = ctx.env.VAYU_DB;
-  await ensureContactSchema(db);
+  await ensureContactSchema(ctx.env);
   await ensureChangeLogTable(db);
   const add = await existingTagIds(db, cleanList(body?.add, () => null, 50));
   const remove = new Set(cleanList(body?.remove, () => null, 50));
@@ -4347,7 +4350,7 @@ const rowToTag = (r: Record<string, unknown>) => ({ id: r.id, name: r.name, colo
 async function handleContactTagsList(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
-  await ensureContactSchema(ctx.env.VAYU_DB);
+  await ensureContactSchema(ctx.env);
   const { results } = await ctx.env.VAYU_DB.prepare('SELECT * FROM contact_tags ORDER BY name_key').all<Record<string, unknown>>();
   return json(results.map(rowToTag));
 }
@@ -4358,7 +4361,7 @@ async function handleContactTagsSave(ctx: Ctx): Promise<Response> {
   const input = tagInput(await ctx.request.json().catch(() => null));
   if (typeof input === 'string') return err(input);
   const db = ctx.env.VAYU_DB;
-  await ensureContactSchema(db);
+  await ensureContactSchema(ctx.env);
   const id = ctx.method === 'PUT' ? ctx.path.slice('/contact-tags/'.length) : `tag_${crypto.randomUUID()}`;
   try {
     const res = ctx.method === 'PUT'
@@ -4369,6 +4372,7 @@ async function handleContactTagsSave(ctx: Ctx): Promise<Response> {
     if (isUniqueViolation(e)) return err(`There is already a tag called "${input.name}"`, 409);
     throw e;
   }
+  queueHubNotify(ctx, [{ entity: 'contact_tag', id, op: 'put' }]);
   logEntityChange(ctx, session, ctx.method === 'PUT' ? 'updated' : 'created', 'contact_tag', id, `Tag "${input.name}"`);
   const saved = await db.prepare('SELECT * FROM contact_tags WHERE id = ?').bind(id).first<Record<string, unknown>>();
   return json(saved ? rowToTag(saved) : { id }, ctx.method === 'PUT' ? 200 : 201);
@@ -4380,7 +4384,7 @@ async function handleContactTagsDelete(ctx: Ctx): Promise<Response> {
   if (!session) return err('Unauthorized', 401);
   const id = ctx.path.slice('/contact-tags/'.length);
   const db = ctx.env.VAYU_DB;
-  await ensureContactSchema(db);
+  await ensureContactSchema(ctx.env);
   await ensureChangeLogTable(db);
   const tag = await db.prepare('SELECT name FROM contact_tags WHERE id = ?').bind(id).first<{ name: string }>();
   if (!tag) return err('Tag not found', 404);
@@ -4392,7 +4396,7 @@ async function handleContactTagsDelete(ctx: Ctx): Promise<Response> {
       WHERE EXISTS (SELECT 1 FROM json_each(contacts.tags) WHERE value = ?)`).bind(id, id),
     ...changeLogStmts(db, ctx.env, 'contact', tagged, 'put', { actorId: session.userId }),
   ]);
-  queueHubNotify(ctx, tagged.map(cid => ({ entity: 'contact', id: cid, op: 'put' as const })));
+  queueHubNotify(ctx, [{ entity: 'contact_tag', id, op: 'delete' }, ...tagged.map(cid => ({ entity: 'contact', id: cid, op: 'put' as const }))]);
   logEntityChange(ctx, session, 'deleted', 'contact_tag', id, `Deleted tag "${tag.name}"`);
   return json({ success: true });
 }
