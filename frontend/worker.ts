@@ -8,7 +8,7 @@ import { salesRoutes } from './sales';
 import {
   CORS, json, err, normalizeRoute, rowToConversation, rowToMessage, rowToArtwork,
   rowToCollection, rowToCatalog, rowToInquiry, rowToInquiryMessage, rowToEvent,
-  rowToContact, rowToStore, rowToAttendance, runSetupOnce, useSetupStore,
+  rowToContact, rowToStore, rowToAttendance, runSetupOnce, useSetupStore, contactLists,
 } from './rows';
 import {
   fileKeyFromUrl, fileUrl, rawRealtimeSecret, realtimeEnabled, requestMetrics, resolveRealtimeSecret,
@@ -30,6 +30,8 @@ import {
   statusUpgradeStmts,
 } from './deltaSync';
 import { handleInbox, handleInboxNotifications, handleInboxRead, recordNotifications } from './inbox';
+import { cleanList, contactKeys, emailKey, phoneKey, tagNameKey } from './contactKeys';
+import { ensureContactSchema, isUniqueViolation, keyOwners, linkInquiryContact, replaceKeyStmts } from './contactStore';
 import { signTicket, TICKET_TTL_MS } from './realtimeTickets';
 import {
   fileAccessAllowed, fileAuthEnabled, fileCacheHeaders, fileCookieClearHeaders,
@@ -320,7 +322,7 @@ const ACCESS_TABLE: AccessEntry[] = [
   // Private viewing rooms are shared catalogs. (/viewing/:token is the
   // client's side: no account, checked by its own handlers.)
   { prefixes: ['/viewing-rooms'], section: 'catalogs' },
-  { prefixes: ['/contacts'], section: 'contacts', readableBy: ['inquiries', 'invoices', 'payments'] },
+  { prefixes: ['/contacts', '/contact-tags'], section: 'contacts', readableBy: ['inquiries', 'invoices', 'payments'] },
   { prefixes: ['/inquiries', '/inquiry-messages'], section: 'inquiries' },
   { prefixes: ['/invoices'], section: 'invoices' },
   { prefixes: ['/payments/webhook'], rule: () => null }, // Razorpay calls this, no session
@@ -3710,9 +3712,10 @@ async function handleInquiriesCreate(ctx: Ctx): Promise<Response> {
   await ensureColumns(ctx.env.VAYU_DB, 'inquiries');
   // Detect re-syncs/migrations of existing inquiries so they don't re-notify
   // and keep their original creator.
+  await ensureContactSchema(ctx.env.VAYU_DB);
   const existing = await ctx.env.VAYU_DB.prepare(
-    'SELECT created_by, created_by_name FROM inquiries WHERE id = ?'
-  ).bind(inq.id).first<{ created_by: string | null; created_by_name: string | null }>();
+    'SELECT created_by, created_by_name, contact_id, contact_matches FROM inquiries WHERE id = ?'
+  ).bind(inq.id).first<{ created_by: string | null; created_by_name: string | null; contact_id: string | null; contact_matches: string }>();
   // The creator comes from the session, never from the request body.
   const createdBy = existing ? existing.created_by || '' : session.userId;
   const createdByName = existing ? existing.created_by_name || '' : session.name;
@@ -3722,8 +3725,8 @@ async function handleInquiriesCreate(ctx: Ctx): Promise<Response> {
       `INSERT OR REPLACE INTO inquiries
        (id, inquiry_number, customer_name, customer_phone, customer_email, customer_address,
         artwork_ids, notes, source, status, catalog_shared, date,
-        created_by, created_by_name, image_urls)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        created_by, created_by_name, image_urls, contact_id, contact_matches)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       inq.id,
       inq.inquiryNumber || '',
@@ -3739,11 +3742,14 @@ async function handleInquiriesCreate(ctx: Ctx): Promise<Response> {
       inq.date || Date.now(),
       createdBy,
       createdByName,
-      JSON.stringify(inq.imageUrls || [])
+      JSON.stringify(inq.imageUrls || []),
+      existing?.contact_id ?? null,
+      existing?.contact_matches ?? '[]'
     ),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'inquiry', inq.id, 'put', { actorId: session.userId }),
   ]);
   queueHubNotify(ctx, [{ entity: 'inquiry', id: inq.id, op: 'put' }]);
+  if (existing?.contact_id == null) ctx.execCtx.waitUntil(linkInquiryContact(ctx.env, inq.id).catch(e => console.error('Linking inquiry contact failed:', e)));
 
   if (!existing) {
     ctx.execCtx.waitUntil(notifyNewInquiry(ctx.env, inq, session));
@@ -3760,9 +3766,17 @@ async function handleInquiriesUpdate(ctx: Ctx): Promise<Response> {
   const inq = body as any;
   const inqId = ctx.path.slice('/inquiries/'.length);
   await ensureColumns(ctx.env.VAYU_DB, 'inquiries');
+  await ensureContactSchema(ctx.env.VAYU_DB);
+  const before = await ctx.env.VAYU_DB.prepare('SELECT customer_phone, customer_email, contact_id FROM inquiries WHERE id = ?')
+    .bind(inqId).first<{ customer_phone: string; customer_email: string; contact_id: string | null }>();
+  // Someone picked the contact (the inquiry matched two): it must exist here.
+  const chosen = typeof inq.chooseContactId === 'string' && inq.chooseContactId ? inq.chooseContactId : null;
+  if (chosen && !await ctx.env.VAYU_DB.prepare('SELECT 1 FROM contacts WHERE id = ?').bind(chosen).first()) return err('Contact not found', 404);
+  const relink = !chosen && !!before && (before.customer_phone !== (inq.customerPhone || '') || before.customer_email !== (inq.customerEmail || ''));
   // created_by is deliberately not updatable.
   await ensureChangeLogTable(ctx.env.VAYU_DB);
   await ctx.env.VAYU_DB.batch([
+    ...(chosen || relink ? [ctx.env.VAYU_DB.prepare("UPDATE inquiries SET contact_id = ?, contact_matches = '[]' WHERE id = ?").bind(chosen, inqId)] : []),
     ctx.env.VAYU_DB.prepare(
       `UPDATE inquiries SET
          inquiry_number = ?, customer_name = ?, customer_phone = ?,
@@ -3786,6 +3800,7 @@ async function handleInquiriesUpdate(ctx: Ctx): Promise<Response> {
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'inquiry', inqId, 'put', { actorId: session.userId }),
   ]);
   queueHubNotify(ctx, [{ entity: 'inquiry', id: inqId, op: 'put' }]);
+  if (relink) ctx.execCtx.waitUntil(linkInquiryContact(ctx.env, inqId).catch(e => console.error('Linking inquiry contact failed:', e)));
   logEntityChange(ctx, session, 'updated', 'inquiry', inqId, `Updated inquiry ${inquiryLabel({ ...inq, id: inqId })}`);
   return json(inq);
 }
@@ -4086,32 +4101,52 @@ async function handleEventsDelete(ctx: Ctx): Promise<Response> {
 }
 
 // ── Contact route handlers ──────────────────────────────────────────────────
-// Manual + imported contacts. Contacts derived from inquiries are computed
-// client-side and never stored here.
+// Saved contacts, each with any number of phones and emails, and tags.
+// Inquiries find or create their contact themselves (contactStore.ts). One
+// phone or email belongs to one contact only (contact_keys).
 
+/** A contact as the app sends it; older apps send one phone and email. */
+function contactInput(body: any): { name: string; phones: string[]; emails: string[]; tags: string[]; notes: string } {
+  return {
+    name: String(body?.name ?? '').trim().slice(0, 200),
+    phones: cleanList(Array.isArray(body?.phones) ? body.phones : [body?.phone], phoneKey),
+    emails: cleanList(Array.isArray(body?.emails) ? body.emails : [body?.email], emailKey),
+    tags: cleanList(body?.tags, () => null, 50),
+    notes: String(body?.notes ?? '').slice(0, 5000),
+  };
+}
 
-// The contacts table is created lazily (once per isolate) so no manual D1
-// migration is required before first use.
-function ensureContactsTable(db: D1Database): Promise<void> {
-  return runSetupOnce(db, 'contactsTable', () => db.prepare(`
-      CREATE TABLE IF NOT EXISTS contacts (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL DEFAULT '',
-        phone TEXT NOT NULL DEFAULT '',
-        email TEXT NOT NULL DEFAULT '',
-        notes TEXT NOT NULL DEFAULT '',
-        source TEXT NOT NULL DEFAULT 'manual',
-        created_at INTEGER NOT NULL DEFAULT 0,
-        created_by TEXT,
-        created_by_name TEXT
-      )
-    `).run().then(() => undefined));
+/** What's wrong with a contact typed in by hand, or null. */
+function contactProblem(c: ReturnType<typeof contactInput>): string | null {
+  if (!c.name) return 'name is required';
+  if (c.phones.some(p => !phoneKey(p))) return 'That phone number does not look right';
+  if (c.emails.some(e => !emailKey(e))) return 'That email address does not look right';
+  return null;
+}
+
+/** 409 naming the contact that already has one of these phones or emails, or null. */
+async function duplicateContact(db: D1Database, keys: string[], selfId: string): Promise<Response | null> {
+  for (const [key, ownerId] of await keyOwners(db, keys)) {
+    if (ownerId === selfId) continue;
+    const owner = await db.prepare('SELECT name FROM contacts WHERE id = ?').bind(ownerId).first<{ name: string }>();
+    const what = key.startsWith('p:') ? 'this phone number' : 'this email address';
+    return json({ error: `${owner?.name || 'Another contact'} already has ${what}`, contactId: ownerId }, 409);
+  }
+  return null;
+}
+
+/** Only tags that exist in this organisation. */
+async function existingTagIds(db: D1Database, ids: string[]): Promise<string[]> {
+  if (ids.length === 0) return [];
+  const { results } = await db.prepare(`SELECT id FROM contact_tags WHERE id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all<{ id: string }>();
+  const found = new Set(results.map(r => r.id));
+  return ids.filter(id => found.has(id));
 }
 
 async function handleContactsList(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
-  await ensureContactsTable(ctx.env.VAYU_DB);
+  await ensureContactSchema(ctx.env.VAYU_DB);
   const results = await ctx.env.VAYU_DB.prepare(
     'SELECT * FROM contacts ORDER BY created_at DESC'
   ).all();
@@ -4122,33 +4157,41 @@ async function handleContactsList(ctx: Ctx): Promise<Response> {
 async function handleContactsCreate(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
-  const body = await ctx.request.json();
-  const c = body as any;
-  if (!c.id) return err('id is required');
-  if (!c.name || !String(c.name).trim()) return err('name is required');
-  await ensureContactsTable(ctx.env.VAYU_DB);
-  await ensureChangeLogTable(ctx.env.VAYU_DB);
-  await ctx.env.VAYU_DB.batch([
-    ctx.env.VAYU_DB.prepare(
-      `INSERT OR REPLACE INTO contacts
-       (id, name, phone, email, notes, source, created_at, created_by, created_by_name)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      c.id,
-      String(c.name).trim(),
-      c.phone || '',
-      c.email || '',
-      c.notes || '',
-      c.source || 'manual',
-      c.createdAt || Date.now(),
-      session.userId,
-      session.name
-    ),
-    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'contact', c.id, 'put', { actorId: session.userId }),
-  ]);
-  queueHubNotify(ctx, [{ entity: 'contact', id: c.id, op: 'put' }]);
-  logEntityChange(ctx, session, 'created', 'contact', c.id, `Added contact "${String(c.name).trim()}"`);
-  return json({ ...c, createdBy: session.userId, createdByName: session.name }, 201);
+  const body = await ctx.request.json() as any;
+  const id = typeof body?.id === 'string' ? body.id.slice(0, 128) : '';
+  if (!id) return err('id is required');
+  const c = contactInput(body);
+  const problem = contactProblem(c);
+  if (problem) return err(problem);
+  const db = ctx.env.VAYU_DB;
+  await ensureContactSchema(db);
+  await ensureChangeLogTable(db);
+  const keys = contactKeys(c.phones, c.emails);
+  const duplicate = await duplicateContact(db, keys, id);
+  if (duplicate) return duplicate;
+  const tags = await existingTagIds(db, c.tags);
+  const now = Date.now();
+  try {
+    await db.batch([
+      db.prepare(
+        `INSERT OR REPLACE INTO contacts
+         (id, name, phone, email, phones, emails, tags, notes, source, created_at, created_by, created_by_name, updated_at, last_interaction_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+      ).bind(id, c.name, c.phones[0] ?? '', c.emails[0] ?? '', JSON.stringify(c.phones), JSON.stringify(c.emails),
+        JSON.stringify(tags), c.notes, body.source === 'import' ? 'import' : 'manual', body.createdAt || now,
+        session.userId, session.name, now),
+      ...replaceKeyStmts(db, id, keys),
+      changeLogStmt(db, ctx.env, 'contact', id, 'put', { actorId: session.userId }),
+    ]);
+  } catch (e) {
+    // Someone saved the same number in the moment between the check and the write.
+    if (isUniqueViolation(e)) return (await duplicateContact(db, keys, id)) ?? err('That phone or email is already saved', 409);
+    throw e;
+  }
+  queueHubNotify(ctx, [{ entity: 'contact', id, op: 'put' }]);
+  logEntityChange(ctx, session, 'created', 'contact', id, `Added contact "${c.name}"`);
+  const saved = await db.prepare('SELECT * FROM contacts WHERE id = ?').bind(id).first();
+  return json(saved ? rowToContact(saved) : { id }, 201);
 }
 
 async function handleContactsImport(ctx: Ctx): Promise<Response> {
@@ -4158,32 +4201,33 @@ async function handleContactsImport(ctx: Ctx): Promise<Response> {
   const list = Array.isArray(body?.contacts) ? body.contacts : [];
   if (list.length === 0) return err('contacts array is required');
   if (list.length > 500) return err('Too many contacts (max 500 per import)');
-  await ensureContactsTable(ctx.env.VAYU_DB);
-  await ensureChangeLogTable(ctx.env.VAYU_DB);
-  const stmts = list.map((c: any) => ctx.env.VAYU_DB.prepare(
-    `INSERT OR REPLACE INTO contacts
-     (id, name, phone, email, notes, source, created_at, created_by, created_by_name)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
-    c.id,
-    String(c.name || '').trim(),
-    c.phone || '',
-    c.email || '',
-    c.notes || '',
-    c.source || 'import',
-    c.createdAt || Date.now(),
-    session.userId,
-    session.name
-  ));
+  const db = ctx.env.VAYU_DB;
+  await ensureContactSchema(db);
+  await ensureChangeLogTable(db);
+  const now = Date.now();
+  // A number already saved stays with the contact that has it; the imported
+  // row is still added (CSV files are often messy), without that key.
+  const stmts = list.flatMap((raw: any) => {
+    const c = contactInput(raw);
+    return [
+      db.prepare(
+        `INSERT OR REPLACE INTO contacts
+         (id, name, phone, email, phones, emails, tags, notes, source, created_at, created_by, created_by_name, updated_at, last_interaction_at)
+         VALUES (?, ?, ?, ?, ?, ?, '[]', ?, 'import', ?, ?, ?, ?, 0)`
+      ).bind(String(raw.id), c.name, c.phones[0] ?? '', c.emails[0] ?? '', JSON.stringify(c.phones), JSON.stringify(c.emails),
+        c.notes, raw.createdAt || now, session.userId, session.name, now),
+      ...contactKeys(c.phones, c.emails).map(key =>
+        db.prepare('INSERT OR IGNORE INTO contact_keys (key, contact_id) VALUES (?, ?)').bind(key, String(raw.id))),
+    ];
+  });
   // Import rows and their change-log entries commit in one atomic batch.
-  await ctx.env.VAYU_DB.batch([
+  await db.batch([
     ...stmts,
-    ...changeLogStmts(ctx.env.VAYU_DB, ctx.env, 'contact', list.map((c: any) => String(c.id)), 'put',
-      { actorId: session.userId }),
+    ...changeLogStmts(db, ctx.env, 'contact', list.map((c: any) => String(c.id)), 'put', { actorId: session.userId }),
   ]);
   queueHubNotify(ctx, list.map((c: any) => ({ entity: 'contact', id: String(c.id), op: 'put' as const })));
-  logEntityChange(ctx, session, 'created', 'contact', 'import', `Imported ${stmts.length} contact(s)`);
-  return json({ imported: stmts.length }, 201);
+  logEntityChange(ctx, session, 'created', 'contact', 'import', `Imported ${list.length} contact(s)`);
+  return json({ imported: list.length }, 201);
 }
 
 async function handleContactsDelete(ctx: Ctx): Promise<Response> {
@@ -4191,14 +4235,16 @@ async function handleContactsDelete(ctx: Ctx): Promise<Response> {
   if (!session) return err('Unauthorized', 401);
   const contactId = ctx.path.slice('/contacts/'.length);
   if (!contactId) return err('Contact not found', 404);
-  await ensureContactsTable(ctx.env.VAYU_DB);
-  const result = await ctx.env.VAYU_DB.prepare(
-    'SELECT * FROM contacts WHERE id = ?'
-  ).bind(contactId).first();
-  await ensureChangeLogTable(ctx.env.VAYU_DB);
-  await ctx.env.VAYU_DB.batch([
-    ctx.env.VAYU_DB.prepare('DELETE FROM contacts WHERE id = ?').bind(contactId),
-    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'contact', contactId, 'delete', { actorId: session.userId }),
+  const db = ctx.env.VAYU_DB;
+  await ensureContactSchema(db);
+  const result = await db.prepare('SELECT * FROM contacts WHERE id = ?').bind(contactId).first();
+  await ensureChangeLogTable(db);
+  await db.batch([
+    db.prepare('DELETE FROM contacts WHERE id = ?').bind(contactId),
+    db.prepare('DELETE FROM contact_keys WHERE contact_id = ?').bind(contactId),
+    // '' (not NULL): its inquiries don't bring the contact straight back.
+    db.prepare("UPDATE inquiries SET contact_id = '' WHERE contact_id = ?").bind(contactId),
+    changeLogStmt(db, ctx.env, 'contact', contactId, 'delete', { actorId: session.userId }),
   ]);
   queueHubNotify(ctx, [{ entity: 'contact', id: contactId, op: 'delete' }]);
   if (result) {
@@ -4215,25 +4261,140 @@ async function handleContactsUpdate(ctx: Ctx): Promise<Response> {
   const contactId = ctx.path.slice('/contacts/'.length);
   if (!contactId) return err('Contact not found', 404);
   const body = await ctx.request.json() as any;
-  if (!body.name || !String(body.name).trim()) return err('name is required');
-  await ensureContactsTable(ctx.env.VAYU_DB);
-  await ensureChangeLogTable(ctx.env.VAYU_DB);
-  await ctx.env.VAYU_DB.batch([
-    ctx.env.VAYU_DB.prepare(
-      'UPDATE contacts SET name = ?, phone = ?, email = ?, notes = ? WHERE id = ?'
-    ).bind(
-      String(body.name).trim(),
-      body.phone || '',
-      body.email || '',
-      body.notes || '',
-      contactId
-    ),
-    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'contact', contactId, 'put', { actorId: session.userId }),
-  ]);
+  const c = contactInput(body);
+  const problem = contactProblem(c);
+  if (problem) return err(problem);
+  const db = ctx.env.VAYU_DB;
+  await ensureContactSchema(db);
+  await ensureChangeLogTable(db);
+  const current = await db.prepare('SELECT updated_at FROM contacts WHERE id = ?').bind(contactId).first<{ updated_at: number }>();
+  if (!current) return err('Contact not found', 404);
+  // Saved from an older copy: someone else's change would be lost.
+  if (typeof body.updatedAt === 'number' && current.updated_at && body.updatedAt !== current.updated_at) {
+    return json({ error: 'Someone else changed this contact just now. Open it again to see their changes.', code: 'stale' }, 409);
+  }
+  const keys = contactKeys(c.phones, c.emails);
+  const duplicate = await duplicateContact(db, keys, contactId);
+  if (duplicate) return duplicate;
+  const tags = await existingTagIds(db, c.tags);
+  try {
+    await db.batch([
+      db.prepare(
+        'UPDATE contacts SET name = ?, phone = ?, email = ?, phones = ?, emails = ?, tags = ?, notes = ?, updated_at = ? WHERE id = ?'
+      ).bind(c.name, c.phones[0] ?? '', c.emails[0] ?? '', JSON.stringify(c.phones), JSON.stringify(c.emails),
+        JSON.stringify(tags), c.notes, Math.max(Date.now(), (current.updated_at || 0) + 1), contactId),
+      ...replaceKeyStmts(db, contactId, keys),
+      changeLogStmt(db, ctx.env, 'contact', contactId, 'put', { actorId: session.userId }),
+    ]);
+  } catch (e) {
+    if (isUniqueViolation(e)) return (await duplicateContact(db, keys, contactId)) ?? err('That phone or email is already saved', 409);
+    throw e;
+  }
   queueHubNotify(ctx, [{ entity: 'contact', id: contactId, op: 'put' }]);
-  const updated = await ctx.env.VAYU_DB.prepare('SELECT * FROM contacts WHERE id = ?').bind(contactId).first();
-  logEntityChange(ctx, session, 'updated', 'contact', contactId, `Updated contact "${String(body.name).trim()}"`);
+  const updated = await db.prepare('SELECT * FROM contacts WHERE id = ?').bind(contactId).first();
+  logEntityChange(ctx, session, 'updated', 'contact', contactId, `Updated contact "${c.name}"`);
   return json(updated ? rowToContact(updated) : { id: contactId });
+}
+
+/** POST /contacts/bulk-tags { contactIds, add, remove } — tags for many contacts at once. */
+async function handleContactsBulkTags(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const body = await ctx.request.json().catch(() => null) as any;
+  const ids = cleanList(body?.contactIds, () => null, 500);
+  if (ids.length === 0) return err('contactIds are required');
+  const db = ctx.env.VAYU_DB;
+  await ensureContactSchema(db);
+  await ensureChangeLogTable(db);
+  const add = await existingTagIds(db, cleanList(body?.add, () => null, 50));
+  const remove = new Set(cleanList(body?.remove, () => null, 50));
+  const rows: Record<string, unknown>[] = [];
+  for (let i = 0; i < ids.length; i += 90) {
+    const chunk = ids.slice(i, i + 90);
+    rows.push(...(await db.prepare(`SELECT id, tags FROM contacts WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).all<Record<string, unknown>>()).results);
+  }
+  const now = Date.now();
+  const changed = rows.flatMap(row => {
+    const before = contactLists(row).tags;
+    const after = [...new Set([...before.filter(t => !remove.has(t)), ...add])];
+    return after.join() === before.join() ? [] : [{ id: String(row.id), tags: after }];
+  });
+  if (changed.length > 0) {
+    await db.batch(changed.flatMap(({ id, tags }) => [
+      db.prepare('UPDATE contacts SET tags = ?, updated_at = ? WHERE id = ?').bind(JSON.stringify(tags), now, id),
+      changeLogStmt(db, ctx.env, 'contact', id, 'put', { actorId: session.userId }),
+    ]));
+    queueHubNotify(ctx, changed.map(({ id }) => ({ entity: 'contact', id, op: 'put' as const })));
+    logEntityChange(ctx, session, 'updated', 'contact', 'bulk-tags', `Changed tags on ${changed.length} contact(s)`);
+  }
+  return json({ updated: changed.length });
+}
+
+// ── Contact tags ────────────────────────────────────────────────────────────
+// The organisation's own labels (VIP, Architect…), each with a colour.
+
+const TAG_COLORS = new Set(['gray', 'gold', 'red', 'orange', 'green', 'teal', 'blue', 'purple', 'pink']);
+
+function tagInput(body: any): { name: string; color: string } | string {
+  const name = String(body?.name ?? '').trim().replaceAll(/\s+/g, ' ').slice(0, 40);
+  if (!name) return 'Give the tag a name';
+  const color = TAG_COLORS.has(body?.color) ? body.color : 'gray';
+  return { name, color };
+}
+
+const rowToTag = (r: Record<string, unknown>) => ({ id: r.id, name: r.name, color: r.color, createdAt: r.created_at });
+
+async function handleContactTagsList(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  await ensureContactSchema(ctx.env.VAYU_DB);
+  const { results } = await ctx.env.VAYU_DB.prepare('SELECT * FROM contact_tags ORDER BY name_key').all<Record<string, unknown>>();
+  return json(results.map(rowToTag));
+}
+
+async function handleContactTagsSave(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const input = tagInput(await ctx.request.json().catch(() => null));
+  if (typeof input === 'string') return err(input);
+  const db = ctx.env.VAYU_DB;
+  await ensureContactSchema(db);
+  const id = ctx.method === 'PUT' ? ctx.path.slice('/contact-tags/'.length) : `tag_${crypto.randomUUID()}`;
+  try {
+    const res = ctx.method === 'PUT'
+      ? await db.prepare('UPDATE contact_tags SET name = ?, name_key = ?, color = ? WHERE id = ?').bind(input.name, tagNameKey(input.name), input.color, id).run()
+      : await db.prepare('INSERT INTO contact_tags (id, name, name_key, color, created_at) VALUES (?, ?, ?, ?, ?)').bind(id, input.name, tagNameKey(input.name), input.color, Date.now()).run();
+    if (ctx.method === 'PUT' && !res.meta?.changes) return err('Tag not found', 404);
+  } catch (e) {
+    if (isUniqueViolation(e)) return err(`There is already a tag called "${input.name}"`, 409);
+    throw e;
+  }
+  logEntityChange(ctx, session, ctx.method === 'PUT' ? 'updated' : 'created', 'contact_tag', id, `Tag "${input.name}"`);
+  const saved = await db.prepare('SELECT * FROM contact_tags WHERE id = ?').bind(id).first<Record<string, unknown>>();
+  return json(saved ? rowToTag(saved) : { id }, ctx.method === 'PUT' ? 200 : 201);
+}
+
+/** Deleting a tag takes it off every contact; the contacts stay. */
+async function handleContactTagsDelete(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const id = ctx.path.slice('/contact-tags/'.length);
+  const db = ctx.env.VAYU_DB;
+  await ensureContactSchema(db);
+  await ensureChangeLogTable(db);
+  const tag = await db.prepare('SELECT name FROM contact_tags WHERE id = ?').bind(id).first<{ name: string }>();
+  if (!tag) return err('Tag not found', 404);
+  const { results } = await db.prepare('SELECT contacts.id FROM contacts, json_each(contacts.tags) t WHERE t.value = ?').bind(id).all<{ id: string }>();
+  const tagged = results.map(r => r.id);
+  await db.batch([
+    db.prepare('DELETE FROM contact_tags WHERE id = ?').bind(id),
+    db.prepare(`UPDATE contacts SET tags = (SELECT json_group_array(value) FROM json_each(contacts.tags) WHERE value != ?)
+      WHERE EXISTS (SELECT 1 FROM json_each(contacts.tags) WHERE value = ?)`).bind(id, id),
+    ...changeLogStmts(db, ctx.env, 'contact', tagged, 'put', { actorId: session.userId }),
+  ]);
+  queueHubNotify(ctx, tagged.map(cid => ({ entity: 'contact', id: cid, op: 'put' as const })));
+  logEntityChange(ctx, session, 'deleted', 'contact_tag', id, `Deleted tag "${tag.name}"`);
+  return json({ success: true });
 }
 
 // ── Attendance: stores & check-in/out ───────────────────────────────────────
@@ -5024,6 +5185,7 @@ async function handleViewingInterest(ctx: Ctx): Promise<Response> {
     db.prepare('UPDATE viewing_rooms SET inquiry_count = inquiry_count + 1 WHERE id = ?').bind(row.id),
   ]);
   queueHubNotify(ctx, [{ entity: 'inquiry', id: inquiry.id, op: 'put' }]);
+  ctx.execCtx.waitUntil(linkInquiryContact(ctx.env, inquiry.id).catch(e => console.error('Linking inquiry contact failed:', e)));
   ctx.execCtx.waitUntil(sendPushToSection(ctx.env, 'inquiries', '', {
     title: `New inquiry — ${name}`,
     body: `From private room "${String(row.name)}": ${artworkIds.length} artwork${artworkIds.length === 1 ? '' : 's'}`,
@@ -5262,6 +5424,11 @@ const routes: Route[] = [
   { method: 'GET', match: isExact('/contacts'), handler: handleContactsList },
   { method: 'POST', match: isExact('/contacts'), handler: handleContactsCreate },
   { method: 'POST', match: isExact('/contacts/import'), handler: handleContactsImport },
+  { method: 'POST', match: isExact('/contacts/bulk-tags'), handler: handleContactsBulkTags },
+  { method: 'GET', match: isExact('/contact-tags'), handler: handleContactTagsList },
+  { method: 'POST', match: isExact('/contact-tags'), handler: handleContactTagsSave },
+  { method: 'PUT', match: isPrefix('/contact-tags/'), handler: handleContactTagsSave },
+  { method: 'DELETE', match: isPrefix('/contact-tags/'), handler: handleContactTagsDelete },
   { method: 'PUT', match: isPrefix('/contacts/'), handler: handleContactsUpdate },
   { method: 'DELETE', match: isPrefix('/contacts/'), handler: handleContactsDelete },
 

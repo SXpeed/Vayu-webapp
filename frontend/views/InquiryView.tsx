@@ -5,7 +5,9 @@ import { Plus, X, MessageCircle, Search, ArrowLeft, Edit2, Trash2, Phone, Mail, 
 import { SearchBar } from '../components/SearchBar';
 import { ArtworkPicker } from '../components/ArtworkPicker';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton } from '../components/ui';
-import { Inquiry, Artwork, InquiryMessage, MessageReplyTo, MessageAttachment, MessageTag, UserProfile, Invoice } from '../types';
+import { Inquiry, Artwork, InquiryMessage, MessageReplyTo, MessageAttachment, MessageTag, UserProfile, Invoice, Contact } from '../types';
+import { contactWithKey, emailKey, phoneKey } from '../contactKeys';
+import { inquiryService } from '../services/inquiryService';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { useStickToBottom } from '../hooks/useStickToBottom';
@@ -55,6 +57,8 @@ interface InquiryViewProps {
     /** An inquiry to open (a notification was tapped): its chat, or its details. */
     openInquiry?: { id: string; chat: boolean };
     onOpenedInquiry?: () => void;
+    /** Saved contacts: the form suggests one as a phone or email is typed. */
+    contacts: Contact[];
 }
 
 const STATUS_COLORS: Record<Inquiry['status'], string> = {
@@ -81,7 +85,7 @@ const ARTWORK_STATUS_BADGE: Record<Artwork['status'], string> = {
     'Reserved': 'neu-status text-yellow-700 dark:text-yellow-400',
 };
 
-export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, onAddInquiry, onUpdateInquiry, onDeleteInquiry, onArtworkClick, inquiryMessages, invoices, onAddInvoice, teamMembers, currentUserId, onSendInquiryMessage, openInquiry, onOpenedInquiry }) => {
+export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, onAddInquiry, onUpdateInquiry, onDeleteInquiry, onArtworkClick, inquiryMessages, invoices, onAddInvoice, teamMembers, currentUserId, onSendInquiryMessage, openInquiry, onOpenedInquiry, contacts }) => {
     const resolveName = useMemberNames(teamMembers);
     // Inquiries added before creator tracking have no creator recorded.
     const addedBy = (inquiry: Inquiry) =>
@@ -330,6 +334,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                 <FullScreenPortal>
                     <InquiryFormModal
                         artworks={artworks}
+                        contacts={contacts}
                         onClose={() => setIsAdding(false)}
                         onSave={(newInq) => {
                             onAddInquiry(newInq);
@@ -344,6 +349,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                 <FullScreenPortal>
                     <InquiryDetailModal
                         inquiry={selectedInquiry}
+                        contacts={contacts}
                         addedBy={addedBy(selectedInquiry)}
                         artworks={artworks}
                         proformas={invoices.filter(inv => inv.inquiryId === selectedInquiry.id)}
@@ -535,6 +541,7 @@ interface InquiryDetailModalProps {
     /** Proforma invoices generated from this inquiry. */
     proformas: Invoice[];
     onAddInvoice: (invoice: NewInvoice) => Promise<Invoice>;
+    contacts: Contact[];
     onClose: () => void;
     onMarkUnread: () => void;
     onUpdateInquiry: (inquiry: Inquiry) => void;
@@ -542,7 +549,7 @@ interface InquiryDetailModalProps {
     onArtworkClick: (artwork: Artwork) => void;
 }
 
-const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedBy, artworks, proformas, onAddInvoice, onClose, onMarkUnread, onUpdateInquiry, onDeleteInquiry, onArtworkClick }) => {
+const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, contacts, addedBy, artworks, proformas, onAddInvoice, onClose, onMarkUnread, onUpdateInquiry, onDeleteInquiry, onArtworkClick }) => {
     const [isEditing, setIsEditing] = useState(false);
     const [isCreatingProforma, setIsCreatingProforma] = useState(false);
     const [selectedArtworkForPopup, setSelectedArtworkForPopup] = useState<Artwork | null>(null);
@@ -672,6 +679,7 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
                     </div>
 
                     <div className="space-y-3 mb-6">
+                        <ContactLink inquiry={inquiry} contacts={contacts} />
                         {inquiry.customerPhone && (
                             <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-400">
                                 <a
@@ -826,6 +834,7 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
                     <InquiryFormModal
                         initialData={inquiry}
                         artworks={artworks}
+                        contacts={contacts}
                         onClose={() => setIsEditing(false)}
                         onSave={handleSaveEdit}
                         onArtworkClick={onArtworkClick}
@@ -892,11 +901,48 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, addedB
     );
 };
 
+/**
+ * Which saved contact this inquiry belongs to. When its phone and email are
+ * two different contacts' the server didn't guess: someone picks one here.
+ */
+const ContactLink: React.FC<{ inquiry: Inquiry; contacts: Contact[] }> = ({ inquiry, contacts }) => {
+    const linked = contacts.find(c => c.id === inquiry.contactId);
+    if (linked) {
+        return (
+            <p className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-400">
+                <User size={14} className="text-gold-500" /> Saved contact: <span className="font-medium text-gray-800 dark:text-gray-200">{linked.name || linked.phone || linked.email}</span>
+            </p>
+        );
+    }
+    const matches = (inquiry.contactMatches ?? []).map(id => contacts.find(c => c.id === id)).filter((c): c is Contact => !!c);
+    if (matches.length < 2) return null;
+    const choose = (contact: Contact) => {
+        inquiryService.updateInquiry({ ...inquiry, chooseContactId: contact.id } as Inquiry)
+            .then(() => toast.success(`Linked to ${contact.name || 'that contact'}`))
+            .catch(e => toast.error(`Not linked: ${(e as Error).message}`));
+    };
+    return (
+        <div className="rounded-xl neu-inset p-3 text-[12px] text-gray-700 dark:text-gray-300">
+            <p>This phone and email belong to two different saved contacts. Which one is it?</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+                {matches.map(c => (
+                    <IfCan key={c.id} section="inquiries">
+                        <button type="button" onClick={() => choose(c)} className="neu-raised-sm neu-btn rounded-full px-3 py-1.5 text-[12px] active-scale">
+                            {c.name || c.phone || c.email}
+                        </button>
+                    </IfCan>
+                ))}
+            </div>
+        </div>
+    );
+};
+
 // ─── Form Modal ────────────────────────────────────────
 
 interface InquiryFormModalProps {
     initialData?: Inquiry;
     artworks: Artwork[];
+    contacts: Contact[];
     onClose: () => void;
     onSave: (inquiry: any) => void;
     onArtworkClick: (artwork: Artwork) => void;
@@ -904,7 +950,7 @@ interface InquiryFormModalProps {
     onDelete?: () => void;
 }
 
-const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artworks, onClose, onSave, onArtworkClick, onDelete }) => {
+const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artworks, contacts, onClose, onSave, onArtworkClick, onDelete }) => {
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [customerName, setCustomerName] = useState(initialData?.customerName || '');
     const [customerPhone, setCustomerPhone] = useState(initialData?.customerPhone || '');
@@ -917,6 +963,17 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
     const [selectedArtworkIds, setSelectedArtworkIds] = useState<Set<string>>(new Set(initialData?.artworkIds ?? []));
     const [imageUrls, setImageUrls] = useState<string[]>(initialData?.imageUrls ?? []);
     const [isUploadingPhotos, setIsUploadingPhotos] = useState(false);
+    // Typed a number or email already saved: offer that contact's name.
+    const saved = useMemo(
+        () => contactWithKey(contacts, phoneKey(customerPhone)) ?? contactWithKey(contacts, emailKey(customerEmail)),
+        [contacts, customerPhone, customerEmail],
+    );
+    const useSaved = () => {
+        if (!saved) return;
+        setCustomerName(saved.name);
+        if (!customerPhone.trim() && saved.phone) setCustomerPhone(saved.phone);
+        if (!customerEmail.trim() && saved.email) setCustomerEmail(saved.email);
+    };
 
     const toggleArtwork = (id: string) => {
         const newSet = new Set(selectedArtworkIds);
@@ -980,6 +1037,17 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                             className="neu-field"
                             placeholder="+91 98765 43210"
                         />
+                        {saved?.name && saved.name !== customerName.trim() && (
+                            <button
+                                type="button"
+                                onClick={useSaved}
+                                className="mt-2 w-full flex items-center gap-2 rounded-xl neu-raised-sm neu-btn px-3 py-2 text-left text-[12px] text-gray-700 dark:text-gray-200 active-scale"
+                            >
+                                <User size={13} className="shrink-0 text-gold-600 dark:text-gold-400" />
+                                <span className="flex-1 min-w-0 truncate">Saved contact: <span className="font-medium">{saved.name}</span></span>
+                                <span className="shrink-0 text-[11px] uppercase tracking-wider text-gold-700 dark:text-gold-300">Use</span>
+                            </button>
+                        )}
                     </div>
                     <div>
                         <label htmlFor="customerEmail" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Email</label>

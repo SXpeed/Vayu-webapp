@@ -107,6 +107,40 @@ test('one organization never sees another\'s data', async () => {
     assert.equal(again.body[0].title, 'Monsoon Study');
 });
 
+test('notifications, unread inquiries, contacts and tags stay in their organization', async () => {
+    const inq = { id: 'inq-a-1', inquiryNumber: 'INQ-A-1', customerName: 'Rahul', customerPhone: '+91 98765 43210', customerEmail: '', artworkIds: [], notes: '', source: 'Walk-in', status: 'New', catalogShared: false, date: Date.now() };
+    assert.equal((await post(staffA, app(orgA.id, '/inquiries'), inq)).status, 201);
+    assert.equal((await post(ownerA, app(orgA.id, '/contact-tags'), { name: 'VIP', color: 'gold' })).status, 201);
+
+    // Notifications and the contact are written after the response.
+    let boxA;
+    for (let i = 0; i < 50; i++) {
+        boxA = (await ownerA.call(app(orgA.id, '/inbox'))).body;
+        if (boxA.notifications.length > 0) break;
+        await new Promise(r => setTimeout(r, 100));
+    }
+    assert.equal(boxA.notifications.length, 1, 'org A members (from the platform) get the bell');
+    assert.deepEqual(boxA.unreadInquiryIds, ['inq-a-1']);
+    for (let i = 0; i < 50 && (await ownerA.call(app(orgA.id, '/contacts'))).body.length === 0; i++) await new Promise(r => setTimeout(r, 100));
+    assert.equal((await ownerA.call(app(orgA.id, '/contacts'))).body.length, 1);
+
+    const boxB = await ownerB.call(app(orgB.id, '/inbox'));
+    assert.equal(boxB.status, 200, boxB.text);
+    assert.deepEqual(boxB.body, { notifications: [], unreadInquiryIds: [] });
+    assert.deepEqual((await ownerB.call(app(orgB.id, '/contacts'))).body, []);
+    assert.deepEqual((await ownerB.call(app(orgB.id, '/contact-tags'))).body, []);
+    assert.equal((await post(ownerB, app(orgB.id, '/contact-tags'), { name: 'VIP' })).status, 201, 'tag names are unique per organization only');
+
+    // Pointing at A's address with B's sign-in reaches nothing of A's.
+    for (const path of ['/inbox', '/contacts', '/contact-tags']) {
+        const res = await ownerB.call(app(orgA.id, path));
+        assert.ok(res.status === 403 || res.status === 404, `${path}: ${res.status}`);
+    }
+    const sneaky = await post(ownerB, app(orgA.id, '/inbox/notifications'), { ids: boxA.notifications.map(n => n.id), state: 'dismissed' });
+    assert.ok(sneaky.status === 403 || sneaky.status === 404, `dismiss: ${sneaky.status}`);
+    assert.equal((await ownerA.call(app(orgA.id, '/inbox'))).body.notifications.length, 1);
+});
+
 test('admins see their plan and what they use of it; staff cannot', async () => {
     const res = await ownerA.call(app(orgA.id, '/plan'));
     assert.equal(res.status, 200, res.text);

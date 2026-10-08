@@ -7,6 +7,7 @@
 // Notifications are written where pushes are sent (worker.ts), so every event
 // that pushes also lands in the bell, for people without push turned on too.
 
+import { linkPendingInquiries } from './contactStore';
 import { notifyHub } from './deltaSync';
 import { ADMIN_ROLE_ID, atLeast, withoutSections } from './permissions';
 import { err, json, runSetupOnce } from './rows';
@@ -74,6 +75,8 @@ export async function handleInbox(ctx: Ctx): Promise<Response> {
   if (!session) return err('Unauthorized', 401);
   const db = ctx.env.VAYU_DB;
   await ensureInboxTables(db);
+  // Every app asks here on start: a good moment to link older inquiries to contacts.
+  ctx.execCtx.waitUntil(linkPendingInquiries(ctx.env).catch(e => console.error('Linking inquiries failed:', e)));
   const [, notes, unread] = await db.batch([
     db.prepare('DELETE FROM notifications WHERE user_id = ? AND created_at < ?').bind(session.userId, Date.now() - KEEP_MS),
     db.prepare(`SELECT id, group_key, title, body, link, created_at FROM notifications

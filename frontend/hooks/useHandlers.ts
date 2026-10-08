@@ -299,13 +299,13 @@ export function useHandlers(args: HandlerArgs) {
             createdByName: userProfile?.name || authUser?.name,
         };
         await stores.contacts.put(contact);
-        sendInBackground('Contact not saved', () => contactService.saveContact(contact), () => stores.contacts.drop(contact.id));
+        sendInBackground('Contact not saved', () => contactService.saveContact(contact).then(saved => stores.contacts.put(saved)), () => stores.contacts.drop(contact.id));
     }, [userProfile, authUser, stores]);
 
     const handleUpdateContact = useCallback(async (updated: Contact) => {
         const before = await stores.contacts.find(updated.id);
         await stores.contacts.put(updated);
-        sendInBackground('Contact changes not saved', () => contactService.updateContact(updated), () => before && stores.contacts.put(before));
+        sendInBackground('Contact changes not saved', () => contactService.updateContact(updated).then(saved => stores.contacts.put(saved)), () => before && stores.contacts.put(before));
     }, [stores]);
 
     // A bulk import waits for the server: it says how many it took.

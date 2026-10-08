@@ -137,6 +137,8 @@ export function rowToInquiry(row: Record<string, unknown>): any {
     createdBy: (row.created_by as string) || undefined,
     createdByName: (row.created_by_name as string) || undefined,
     imageUrls: row.image_urls ? JSON.parse(row.image_urls as string) : [],
+    contactId: (row.contact_id as string) || undefined,
+    contactMatches: parseList(row.contact_matches),
   };
 }
 
@@ -177,17 +179,43 @@ export function rowToEvent(row: Record<string, unknown>): any {
   };
 }
 
+const parseList = (raw: unknown): string[] => {
+  try {
+    const list = JSON.parse(String(raw ?? '[]'));
+    return Array.isArray(list) ? list.filter((v): v is string => typeof v === 'string') : [];
+  } catch {
+    return [];
+  }
+};
+
+/** A contact row's phones/emails; rows from before the lists hold one of each. */
+export function contactLists(row: Record<string, unknown>): { phones: string[]; emails: string[]; tags: string[] } {
+  const phones = parseList(row.phones);
+  const emails = parseList(row.emails);
+  return {
+    phones: phones.length > 0 ? phones : [String(row.phone ?? '')].filter(Boolean),
+    emails: emails.length > 0 ? emails : [String(row.email ?? '')].filter(Boolean),
+    tags: parseList(row.tags),
+  };
+}
+
 export function rowToContact(row: Record<string, unknown>): any {
+  const { phones, emails, tags } = contactLists(row);
   return {
     id: row.id as string,
     name: (row.name as string) || '',
-    phone: (row.phone as string) || '',
-    email: row.email || undefined,
+    phone: phones[0] ?? '',
+    email: emails[0] || undefined,
+    phones,
+    emails,
+    tags,
     notes: row.notes || undefined,
     source: (row.source as string) || 'manual',
     createdAt: row.created_at as number,
     createdBy: row.created_by || undefined,
     createdByName: row.created_by_name || undefined,
+    updatedAt: (row.updated_at as number) || 0,
+    lastInteractionAt: (row.last_interaction_at as number) || undefined,
   };
 }
 

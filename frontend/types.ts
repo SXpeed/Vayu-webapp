@@ -124,6 +124,10 @@ export interface Inquiry {
     createdByName?: string;
     /** Photos taken or picked for this inquiry (R2 URLs). */
     imageUrls?: string[];
+    /** The saved contact it was linked to by phone or email (server-set). */
+    contactId?: string;
+    /** Its phone and email belong to these different contacts: a person picks one. */
+    contactMatches?: string[];
 }
 
 export type TaskPriority = 'high' | 'medium' | 'low';
@@ -260,14 +264,30 @@ export interface InquiryMessage {
 export interface Contact {
     id: string;
     name: string;
+    /** The first of `phones` / `emails`, for screens that show one. */
     phone: string;
     email?: string;
+    phones?: string[];
+    emails?: string[];
+    /** ContactTag ids. */
+    tags?: string[];
     notes?: string;
-    /** 'inquiry' entries are derived client-side from inquiries and not stored in D1. */
+    /** 'inquiry': created by the server from an inquiry's phone or email. */
     source: 'manual' | 'import' | 'inquiry';
     createdAt: number;
     createdBy?: string;
     createdByName?: string;
+    /** Server time of the last edit; sent back so an edit from an older copy is refused. */
+    updatedAt?: number;
+    /** The latest inquiry from this contact. */
+    lastInteractionAt?: number;
+}
+
+/** An organisation's own contact label. */
+export interface ContactTag {
+    id: string;
+    name: string;
+    color: string;
 }
 
 /** A store geofence configuration for employee attendance. */
