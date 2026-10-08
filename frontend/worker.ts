@@ -38,7 +38,7 @@ import {
   fileCookieToken, fileCookieValid, forgetFileToken, issueFileCookie,
 } from './fileAuth';
 import { SyncHub } from './realtime';
-import { ensureMessageColumns, reactionStmts, readReceiptStmts } from './messageReceipts';
+import { ensureMessageColumns, reactionStmts, readReceiptStmts, userPath } from './messageReceipts';
 import { isReactionEmoji } from './chatReactions';
 import { SNIFF_BYTES, delivery, downloadName, isRasterImage, safeExtension, storedContentType } from './fileTypes';
 import { APP_ORIGIN } from './brand';
@@ -3120,6 +3120,38 @@ async function handleMessageReaction(ctx: Ctx): Promise<Response> {
   return json(updated ? rowToMessage(updated) : null);
 }
 
+/**
+ * PUT /inquiry-messages/:id/reaction { emoji | null } — one reaction per
+ * person, as on chat messages (messageReceipts.ts). A repeat writes nothing.
+ */
+async function handleInquiryMessageReaction(ctx: Ctx): Promise<Response> {
+  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+  if (!session) return err('Unauthorized', 401);
+  const msgId = ctx.path.slice('/inquiry-messages/'.length, -'/reaction'.length);
+  const body = await ctx.request.json().catch(() => null) as { emoji?: unknown } | null;
+  const emoji = body?.emoji ?? null;
+  if (emoji !== null && !isReactionEmoji(emoji)) return err('That reaction is not available');
+  const path = userPath(session.userId);
+  if (!path) return err('Your account cannot react here', 400);
+  const db = ctx.env.VAYU_DB;
+  await ensureColumns(db, 'inquiry_messages');
+  await ensureChangeLogTable(db);
+  if (!await db.prepare('SELECT 1 FROM inquiry_messages WHERE id = ?').bind(msgId).first()) return err('This message no longer exists', 404);
+  const update = emoji === null
+    ? db.prepare("UPDATE inquiry_messages SET reactions = json_remove(IFNULL(reactions, '{}'), ?) WHERE id = ? AND json_extract(IFNULL(reactions, '{}'), ?) IS NOT NULL")
+      .bind(path, msgId, path)
+    : db.prepare("UPDATE inquiry_messages SET reactions = json_set(IFNULL(reactions, '{}'), ?, ?) WHERE id = ? AND json_extract(IFNULL(reactions, '{}'), ?) IS NOT ?")
+      .bind(path, emoji, msgId, path, emoji);
+  const [changed] = await db.batch([
+    update,
+    db.prepare("INSERT INTO change_log (workspace_id, entity, entity_id, op, changed_at, actor_id, scope) SELECT ?, 'inquiry_message', ?, 'put', ?, ?, NULL WHERE changes() > 0")
+      .bind(workspaceId(ctx.env), msgId, Date.now(), session.userId),
+  ]);
+  if (changed.meta?.changes) queueHubNotify(ctx, [{ entity: 'inquiry_message', id: msgId, op: 'put' }]);
+  const updated = await db.prepare('SELECT * FROM inquiry_messages WHERE id = ?').bind(msgId).first<Record<string, unknown>>();
+  return json(updated ? rowToInquiryMessage(updated) : null);
+}
+
 /** Receipt batches are bounded so one request's D1 batch stays small. */
 const MAX_STATUS_IDS = 100;
 
@@ -3143,6 +3175,9 @@ const COLUMN_MIGRATIONS = {
   },
   collections: {
     cover_image_url: "TEXT DEFAULT ''",
+  },
+  inquiry_messages: {
+    reactions: 'TEXT',
   },
   inquiries: {
     customer_address: "TEXT DEFAULT ''",
@@ -5413,6 +5448,7 @@ const routes: Route[] = [
   { method: 'GET', match: isExact('/inquiry-messages'), handler: handleInquiryMessagesList },
   { method: 'POST', match: isExact('/inquiry-messages'), handler: handleInquiryMessagesCreate },
   { method: 'PUT', match: (p) => p.startsWith('/inquiry-messages/') && p.endsWith('/status'), handler: handleInquiryMessageStatusUpdate },
+  { method: 'PUT', match: (p) => p.startsWith('/inquiry-messages/') && p.endsWith('/reaction'), handler: handleInquiryMessageReaction },
   { method: 'PUT', match: isExact('/inquiry-messages/status-batch'), handler: handleInquiryMessageStatusBatch },
 
   // Calendar events

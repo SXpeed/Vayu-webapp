@@ -125,7 +125,9 @@
         /* Prevent double-tap-to-zoom completely on the app
            (merged into the primary `body` rule at line 73 to avoid duplicate selector) */
 
-        /* Prevent iOS zoom on input focus (font-size must be >= 16px) */
+        /* Prevent iOS zoom on input focus: the text must be >= 16px as drawn,
+           after the UI-size zoom on body. A plain 16px drew at 15.2px on the
+           default size (95%), so every field zoomed the app in. */
         input[type="text"],
         input[type="email"],
         input[type="tel"],
@@ -137,7 +139,7 @@
         input[type="datetime-local"],
         textarea,
         select {
-            font-size: 16px !important;
+            font-size: calc(16.5px / var(--ui-zoom, 1)) !important;
         }
 
         /* 

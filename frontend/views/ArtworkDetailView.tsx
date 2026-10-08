@@ -116,6 +116,8 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
         { label: 'Dimensions', value: artwork.dimensions },
         { label: 'Location', value: artwork.location },
     ].filter(x => x.value?.trim());
+    // The wall label's lines: what the piece is, then where it is kept.
+    const labelLines = [artwork.medium, artwork.dimensions].filter(v => v?.trim());
 
     const priceText = `₹${artwork.price.toLocaleString('en-IN')}${artwork.plusGst ? ' + GST' : ''}`;
 
@@ -159,11 +161,6 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                     <button onClick={onClose} aria-label="Back" className="neu-icon-btn neu-btn active-scale pointer-events-auto">
                         <ArrowLeft size={18} />
                     </button>
-                    <IfCan section="inventory">
-                        <button onClick={() => setIsEditing(true)} aria-label="Edit artwork" className="neu-icon-btn neu-btn active-scale pointer-events-auto">
-                            <Edit2 size={16} />
-                        </button>
-                    </IfCan>
                 </div>
             </div>
 
@@ -247,41 +244,50 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                             </div>
                         )}
 
-                        <div className="flex items-center justify-between gap-3">
-                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full neu-inset text-[11px] font-semibold uppercase tracking-[0.14em] ${statusClass}`}>
-                                <span className="w-1.5 h-1.5 rounded-full bg-current" aria-hidden="true" />
-                                {artwork.status}
-                            </span>
-                            {artwork.customId && <span className="text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--neu-text-dim)] truncate">{artwork.customId}</span>}
-                        </div>
-
-                        <h1 className="mt-4 text-[1.85rem] lg:text-[2.25rem] font-serif leading-tight text-[var(--neu-text)] break-words">{artwork.title}</h1>
-                        {artistLine && <p className="mt-1.5 text-sm text-[var(--neu-text-dim)]">{artistLine}</p>}
-
-                        <div className="mt-6 flex items-center justify-between gap-4">
-                            <p className="text-2xl font-light tabular-nums text-[var(--neu-text)]">
+                        {/* A gallery wall label: artist, title and year, what it is made
+                            of and its size, the price, then the studio's own notes. */}
+                        <div className="lg:pt-6">
+                            {artwork.artist && (
+                                <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-[var(--neu-text-dim)]">{artwork.artist}</p>
+                            )}
+                            <h1 className="mt-2 font-serif text-[1.85rem] lg:text-[2.4rem] leading-tight text-[var(--neu-text)] break-words">
+                                <span className="italic">{artwork.title}</span>
+                                {artwork.artworkYear && <span className="text-[var(--neu-text-dim)]">, {artwork.artworkYear}</span>}
+                            </h1>
+                            {labelLines.length > 0 && (
+                                <div className="mt-4 space-y-1 text-[15px] leading-snug text-[var(--neu-text)]">
+                                    {labelLines.map(line => <p key={line} className="break-words">{line}</p>)}
+                                </div>
+                            )}
+                            <p className="mt-5 text-xl font-light tabular-nums text-[var(--neu-text)]">
                                 ₹{artwork.price.toLocaleString('en-IN')}
                                 {artwork.plusGst && <span className="ml-1.5 text-xs text-[var(--neu-text-dim)]">+ GST</span>}
                             </p>
-                            <button type="button" onClick={handleShare} className="neu-button inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-[var(--neu-text)] active-scale shrink-0">
+                            <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-[var(--neu-text-dim)]">
+                                <span className={`inline-flex items-center gap-1.5 font-medium ${statusClass}`}>
+                                    <span className="w-1.5 h-1.5 rounded-full bg-current" aria-hidden="true" />
+                                    {artwork.status}
+                                </span>
+                                {artwork.customId && <><span aria-hidden="true">·</span><span className="uppercase tracking-[0.14em]">{artwork.customId}</span></>}
+                                {artwork.location && <><span aria-hidden="true">·</span><span>{artwork.location}</span></>}
+                            </p>
+                        </div>
+
+                        <div className="mt-6 flex gap-2.5">
+                            <button type="button" onClick={handleShare} className="neu-button flex-1 lg:flex-none inline-flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-medium text-[var(--neu-text)] active-scale">
                                 <Share2 size={16} className="text-[var(--neu-gold)]" />
                                 Share
                             </button>
+                            <IfCan section="inventory">
+                                <button type="button" onClick={() => setIsEditing(true)} className="neu-button flex-1 lg:flex-none inline-flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-medium text-[var(--neu-text)] active-scale">
+                                    <Edit2 size={15} className="text-[var(--neu-gold)]" />
+                                    Edit
+                                </button>
+                            </IfCan>
                         </div>
 
-                        {specs.length > 0 && (
-                            <dl className={`mt-7 grid gap-2.5 ${specs.length === 1 ? 'grid-cols-1' : 'grid-cols-2'} ${specs.length === 3 ? '[&>*:last-child]:col-span-2' : ''}`}>
-                                {specs.map(({ label, value }) => (
-                                    <div key={label} className="neu-inset rounded-2xl px-4 py-3 min-w-0">
-                                        <dt className="text-[10px] uppercase tracking-[0.16em] text-[var(--neu-text-dim)]">{label}</dt>
-                                        <dd className="mt-1 text-sm text-[var(--neu-text)] break-words">{value}</dd>
-                                    </div>
-                                ))}
-                            </dl>
-                        )}
-
                         {artwork.description && (
-                            <div className="mt-7">
+                            <div className="mt-7 pt-6 border-t border-[var(--neu-line)]">
                                 <h2 className="text-[11px] uppercase tracking-[0.14em] text-[var(--neu-text-dim)]">{artwork.descriptionTitle || 'About this piece'}</h2>
                                 <p className="mt-2.5 text-sm leading-relaxed text-[var(--neu-text)] opacity-85 whitespace-pre-wrap">
                                     {artwork.description}

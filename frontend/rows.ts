@@ -154,6 +154,7 @@ export function rowToInquiryMessage(row: Record<string, unknown>): any {
     status: row.status as string,
     replyTo: row.reply_to ? JSON.parse(row.reply_to as string) : undefined,
     attachment: row.attachment ? JSON.parse(row.attachment as string) : undefined,
+    reactions: userMap(row.reactions, (v): v is string => typeof v === 'string'),
   };
 }
 

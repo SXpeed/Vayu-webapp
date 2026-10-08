@@ -348,7 +348,9 @@ html {
     input,
     textarea,
     select {
-        font-size: calc(16px / var(--ui-zoom, 1)) !important;
+        /* 16.5, not 16: 16px / 0.95 * 0.95 rounds to 15.999…px, under the
+         * line, and Safari zoomed in on every field at the default UI size. */
+        font-size: calc(16.5px / var(--ui-zoom, 1)) !important;
     }
 }
 

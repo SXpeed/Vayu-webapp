@@ -259,6 +259,8 @@ export interface InquiryMessage {
     status?: MessageStatus;
     replyTo?: MessageReplyTo;
     attachment?: MessageAttachment;
+    /** One emoji per person who reacted, keyed by user id. */
+    reactions?: Record<string, string>;
 }
 
 export interface Contact {

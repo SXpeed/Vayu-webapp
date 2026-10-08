@@ -422,6 +422,32 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
     );
 };
 
+/**
+ * A centred popup card over the page (as the Calendar's month), on phones
+ * too; a tap outside it closes it like the ✕.
+ */
+const Popup = React.forwardRef<HTMLDivElement, { label: string; width: string; onClose: () => void; children: React.ReactNode }>(
+    ({ label, width, onClose, children }, ref) => (
+        <div
+            className="absolute inset-0 flex items-center justify-center p-4 pt-[calc(1rem+var(--safe-top))] pb-[calc(1rem+var(--safe-bottom-ui,0px))]"
+            style={{ backgroundColor: 'rgba(15, 17, 22, 0.45)', backdropFilter: 'blur(5px)', WebkitBackdropFilter: 'blur(5px)' }}
+            onClick={onClose}
+        >
+            <div
+                ref={ref}
+                role="dialog"
+                aria-modal="true"
+                aria-label={label}
+                onClick={e => e.stopPropagation()}
+                className="neu-raised rounded-3xl bg-[var(--neu-bg)] w-full max-h-full flex flex-col overflow-hidden animate-fade-in-up"
+                style={{ maxWidth: width }}
+            >
+                {children}
+            </div>
+        </div>
+    ),
+);
+
 /** Closes on Escape; focuses the sheet's first control. */
 function useSheetKeys(onClose: () => void) {
     const ref = useRef<HTMLDivElement>(null);
@@ -546,8 +572,8 @@ const ContactSheet: React.FC<{
 
     return (
         <FullScreenPortal>
-            <div ref={ref} role="dialog" aria-modal="true" aria-label={title} className="neu-sheet lg:w-[min(560px,94%)]! z-50 animate-fade-in-up">
-                <div className="flex justify-between items-center gap-2 p-3 pt-[calc(1.75rem+var(--safe-top))] lg:pt-4">
+            <Popup ref={ref} label={title} width="560px" onClose={requestClose}>
+                <div className="flex justify-between items-center gap-2 p-3">
                     <button onClick={editing && contact ? () => { setDraft(draftOf(contact)); setEditing(false); } : requestClose}
                         className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale shrink-0" aria-label={editing && contact ? 'Cancel editing' : 'Close'}>
                         <X size={20} />
@@ -563,7 +589,7 @@ const ContactSheet: React.FC<{
                     )}
                 </div>
 
-                <div className="flex-1 overflow-y-auto no-scrollbar p-4 pb-[calc(1.5rem+var(--safe-bottom-ui,0px))] space-y-5">
+                <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar p-4 pt-1 space-y-5">
                     {editing ? (
                         <>
                             <div>
@@ -644,7 +670,7 @@ const ContactSheet: React.FC<{
                         </>
                     )}
                 </div>
-            </div>
+            </Popup>
             <TypeDeleteDialog
                 isOpen={confirmDelete}
                 title="Delete contact"
@@ -691,13 +717,13 @@ const TagManager: React.FC<{
 
     return (
         <FullScreenPortal>
-            <div ref={ref} role="dialog" aria-modal="true" aria-label="Tags" className="neu-sheet lg:w-[min(480px,94%)]! z-50 animate-fade-in-up">
-                <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+var(--safe-top))] lg:pt-4">
+            <Popup ref={ref} label="Tags" width="480px" onClose={onClose}>
+                <div className="flex justify-between items-center p-3">
                     <button onClick={onClose} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale" aria-label="Close"><X size={20} /></button>
                     <h2 className="text-base font-serif text-gray-900 dark:text-white">Tags</h2>
                     <div className="w-9" />
                 </div>
-                <div className="flex-1 overflow-y-auto no-scrollbar p-4 space-y-4">
+                <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar p-4 pt-1 space-y-4">
                     {canEdit && (
                         <form className="neu-card p-3 space-y-3" onSubmit={e => {
                             e.preventDefault();
@@ -719,7 +745,7 @@ const TagManager: React.FC<{
                         {tags.length === 0 && <li className="py-10 text-center text-sm text-[var(--neu-text-dim)]">No tags yet. Tags like "VIP Client" or "Architect" help you find people later.</li>}
                     </ul>
                 </div>
-            </div>
+            </Popup>
             <TypeDeleteDialog
                 isOpen={!!deleting}
                 title="Delete tag"

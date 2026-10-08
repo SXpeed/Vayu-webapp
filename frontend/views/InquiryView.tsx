@@ -22,6 +22,7 @@ import { useInbox } from '../hooks/useInbox';
 import { chatDayLabel, withDayDividers } from './chat/DayDivider';
 import { ImageViewer, type ViewedImage } from './chat/ImageViewer';
 import { ChatComposer, MessageBubble, messageTime } from './chat/MessageParts';
+import { Holdable, MessageActionMenu, ReactionChips, ReactionsSheet } from './chat/MessageReactions';
 
 const renderArtworkStatusColor = (status: string) => {
     if (status === 'Available') return 'bg-green-500';
@@ -60,6 +61,7 @@ interface InquiryViewProps {
     onOpenedInquiry?: () => void;
     /** Saved contacts: the form suggests one as a phone or email is typed. */
     contacts: Contact[];
+    onReactToInquiryMessage?: (messageId: string, emoji: string | null) => void;
 }
 
 const STATUS_COLORS: Record<Inquiry['status'], string> = {
@@ -86,7 +88,7 @@ const ARTWORK_STATUS_BADGE: Record<Artwork['status'], string> = {
     'Reserved': 'neu-status text-yellow-700 dark:text-yellow-400',
 };
 
-export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, onAddInquiry, onUpdateInquiry, onDeleteInquiry, onArtworkClick, inquiryMessages, invoices, onAddInvoice, teamMembers, currentUserId, onSendInquiryMessage, openInquiry, onOpenedInquiry, contacts }) => {
+export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, onAddInquiry, onUpdateInquiry, onDeleteInquiry, onArtworkClick, inquiryMessages, invoices, onAddInvoice, teamMembers, currentUserId, onSendInquiryMessage, openInquiry, onOpenedInquiry, contacts, onReactToInquiryMessage }) => {
     const resolveName = useMemberNames(teamMembers);
     // Inquiries added before creator tracking have no creator recorded.
     const addedBy = (inquiry: Inquiry) =>
@@ -386,6 +388,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
 
                         onClose={() => setChatInquiry(null)}
                         onSendMessage={(text, tags, replyTo, attachment) => onSendInquiryMessage(chatInquiry.id, text, tags, replyTo, attachment)}
+                        onReact={onReactToInquiryMessage}
                     />
                 </FullScreenPortal>
             )}
@@ -404,9 +407,19 @@ interface InquiryChatModalProps {
 
     onClose: () => void;
     onSendMessage: (text: string, tags: MessageTag[], replyTo?: MessageReplyTo, attachment?: MessageAttachment) => void | Promise<void>;
+    onReact?: (messageId: string, emoji: string | null) => void;
 }
 
-const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, resolveName, currentUserId, onClose, onSendMessage }) => {
+const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, resolveName, currentUserId, onClose, onSendMessage, onReact }) => {
+    // Hold a message, as in Messages: react, reply or copy.
+    const [menu, setMenu] = useState<{ msg: InquiryMessage; anchor: DOMRect } | null>(null);
+    const [reactionsOf, setReactionsOf] = useState<string | null>(null);
+    const reactionsMsg = reactionsOf ? messages.find(m => m.id === reactionsOf) : undefined;
+    const copyText = (text: string) => {
+        navigator.clipboard?.writeText(text)
+            .then(() => toast.success('Copied'))
+            .catch(() => toast.error('Could not copy'));
+    };
     // Quoted replies store the sender's name at reply time; resolve it through
     // the original message so placeholders and renames show correctly.
     const replySenderName = (replyTo: MessageReplyTo) => {
@@ -504,7 +517,8 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                         return (
                             <div key={msg.id} className={`flex items-end gap-1.5 ${isMe ? 'justify-end' : 'justify-start'}`}>
                                 {!isMe && replyButton}
-                                <div className="max-w-[80%] min-w-0">
+                                <div className={`max-w-[80%] min-w-0 flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                                    <Holdable onHold={target => setMenu({ msg, anchor: target.getBoundingClientRect() })} className="max-w-full">
                                     <MessageBubble
                                         msg={msg}
                                         isMe={isMe}
@@ -518,6 +532,8 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                                             </span>
                                         )}
                                     />
+                                    </Holdable>
+                                    <ReactionChips reactions={msg.reactions} currentUserId={currentUserId} isMe={isMe} onOpen={() => setReactionsOf(msg.id)} />
                                 </div>
                                 {isMe && replyButton}
                             </div>
@@ -528,6 +544,29 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
 
             <ChatComposer key={inquiry.id} multiple replyingTo={replyingTo} onCancelReply={() => setReplyingTo(null)} onSend={handleSend} />
 
+            {menu && (
+                <MessageActionMenu
+                    anchor={menu.anchor}
+                    isMe={menu.msg.senderId === currentUserId}
+                    myReaction={messages.find(m => m.id === menu.msg.id)?.reactions?.[currentUserId]}
+                    canReact={!!onReact}
+                    hasText={!!menu.msg.text}
+                    preview={menu.msg.text || (menu.msg.attachment ? (menu.msg.attachment.type === 'image' ? '📷 Photo' : `📎 ${menu.msg.attachment.name}`) : '')}
+                    onReact={emoji => onReact?.(menu.msg.id, emoji)}
+                    onReply={() => setReplyingTo({ id: menu.msg.id, senderName: resolveName(menu.msg.senderId, menu.msg.senderName), text: menu.msg.text || (menu.msg.attachment ? menu.msg.attachment.name : '') })}
+                    onCopy={() => copyText(menu.msg.text)}
+                    onClose={() => setMenu(null)}
+                />
+            )}
+            {reactionsMsg?.reactions && (
+                <ReactionsSheet
+                    reactions={reactionsMsg.reactions}
+                    currentUserId={currentUserId}
+                    resolveName={resolveName}
+                    onRemoveMine={() => onReact?.(reactionsMsg.id, null)}
+                    onClose={() => setReactionsOf(null)}
+                />
+            )}
             {viewing && <ImageViewer image={viewing} onClose={() => setViewing(null)} />}
         </div>
     );

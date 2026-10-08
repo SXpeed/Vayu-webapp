@@ -540,6 +540,7 @@ const App: React.FC = () => {
                         teamMembers={teamMembers}
                         currentUserId={userProfile?.id || authUser?.id || ''}
                         onSendInquiryMessage={handlers.handleSendInquiryMessage}
+                        onReactToInquiryMessage={handlers.handleReactToInquiryMessage}
                         contacts={contacts}
                     />
                 );

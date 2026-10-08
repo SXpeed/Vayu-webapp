@@ -503,6 +503,30 @@ export function useHandlers(args: HandlerArgs) {
         }
     }, [userProfile, authUser, setAllMessages]);
 
+    /** The same on an inquiry's chat. */
+    const handleReactToInquiryMessage = useCallback(async (messageId: string, emoji: string | null) => {
+        const me = userProfile?.id || authUser?.id || '';
+        if (!me) return;
+        let before: InquiryMessage | undefined;
+        setInquiryMessages((prev: InquiryMessage[]) => prev.map(m => {
+            if (m.id !== messageId) return m;
+            before = m;
+            const reactions = { ...m.reactions };
+            if (emoji === null) delete reactions[me]; else reactions[me] = emoji;
+            return { ...m, reactions: Object.keys(reactions).length ? reactions : undefined };
+        }));
+        try {
+            const updated = await inquiryService.react(messageId, emoji);
+            if (updated) {
+                setInquiryMessages((prev: InquiryMessage[]) => prev.map(m => (m.id === messageId ? { ...m, ...updated } : m)));
+                await db.saveInquiryMessage(updated);
+            }
+        } catch (err) {
+            if (before) { const original = before; setInquiryMessages((prev: InquiryMessage[]) => prev.map(m => (m.id === messageId ? original : m))); }
+            toast.error(`Reaction not saved: ${(err as Error).message || 'check your connection'}`);
+        }
+    }, [userProfile, authUser, setInquiryMessages]);
+
     /**
      * Tells the server you have seen these messages (the chat is open on
      * screen), so their senders can see who read them. Best effort: a
@@ -583,7 +607,7 @@ export function useHandlers(args: HandlerArgs) {
         // Inquiry messages
         handleSendInquiryMessage,
         // Messaging
-        handleSendMessage, handleRetryMessage, handleReactToMessage, handleMarkMessagesRead, handleTogglePinConversation, handleToggleArchiveConversation, handleDeleteConversation,
+        handleSendMessage, handleRetryMessage, handleReactToMessage, handleReactToInquiryMessage, handleMarkMessagesRead, handleTogglePinConversation, handleToggleArchiveConversation, handleDeleteConversation,
         handleCreateConversation, handleCreateGroup, handleUpdateConversationDetails,
         handleUpdateGroup,
     };

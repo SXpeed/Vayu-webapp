@@ -114,3 +114,19 @@ test('bad requests are refused', async () => {
     assert.equal((await api(owner, '/inbox/notifications', { method: 'POST', body: { ids: ['x'], state: 'deleted' } })).status, 400);
     assert.equal((await api(owner, '/inbox/read', { method: 'POST', body: {} })).status, 400);
 });
+
+test('people react to inquiry messages, one reaction each, as in chat', async () => {
+    const inq = await newInquiry(staff);
+    const msg = { id: `inqmsg_${Date.now()}`, inquiryId: inq.id, senderId: 'x', senderName: 'x', text: 'Sent the catalog', tags: [], timestamp: Date.now() };
+    assert.equal((await api(staff, '/inquiry-messages', { method: 'POST', body: msg })).status, 201);
+    const react = (token, emoji) => api(token, `/inquiry-messages/${msg.id}/reaction`, { method: 'PUT', body: { emoji } });
+    assert.equal((await react(owner, '👍')).status, 200);
+    const both = await react(staff, '❤️');
+    assert.equal(Object.keys(both.body.reactions).length, 2);
+    const changed = await react(owner, '🙏');
+    assert.equal(Object.values(changed.body.reactions).filter(e => e === '🙏').length, 1, 'a second reaction replaces the first');
+    const removed = await react(owner, null);
+    assert.equal(Object.keys(removed.body.reactions).length, 1);
+    assert.equal((await react(owner, 'not-an-emoji')).status, 400);
+    assert.equal((await api(owner, '/inquiry-messages/nope/reaction', { method: 'PUT', body: { emoji: '👍' } })).status, 404);
+});

@@ -161,7 +161,8 @@ CREATE TABLE IF NOT EXISTS inquiry_messages (
   status TEXT DEFAULT 'sent',
   reply_to TEXT,                        -- JSON object or null
   attachment TEXT,                      -- JSON object or null
-  created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
+  created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+  reactions TEXT                        -- JSON { userId: emoji }, as on chat messages
 );
 
 CREATE INDEX IF NOT EXISTS idx_inquiry_messages_inquiry ON inquiry_messages(inquiry_id, timestamp);

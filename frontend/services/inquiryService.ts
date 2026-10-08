@@ -34,6 +34,13 @@ export const inquiryService = {
         return call<InquiryMessage[]>(`/inquiry-messages${query}`);
     },
 
+    react(messageId: string, emoji: string | null): Promise<InquiryMessage> {
+        return call<InquiryMessage>(`/inquiry-messages/${encodeURIComponent(messageId)}/reaction`, {
+            method: 'PUT',
+            body: JSON.stringify({ emoji }),
+        });
+    },
+
     async saveInquiryMessage(message: InquiryMessage): Promise<InquiryMessage> {
         return call<InquiryMessage>('/inquiry-messages', {
             method: 'POST',
