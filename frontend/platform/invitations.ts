@@ -114,7 +114,10 @@ export async function createInvitation(env: Env, db: D1Database, input: InviteIn
   return {
     invitation: { id, email, appRole: input.appRole, status: 'pending', createdAt: now, expiresAt },
     emailSent: sent.sent,
-    // When email isn't set up, the admin can pass the link on themselves.
+    // Why it wasn't sent: email not set up at all, or the provider refused
+    // this address (e.g. an unverified recipient on a plan that requires it).
+    emailProblem: sent.sent ? undefined : sent.reason,
+    // When the email didn't go out, the admin can pass the link on themselves.
     link: sent.sent ? undefined : link,
   };
 }

@@ -29,8 +29,8 @@ export const InvitePanel: React.FC<{ roles: RoleDef[]; RoleSelect: React.FC<{ va
     const [role, setRole] = useState('user');
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
-    /** When email isn't set up, the link to pass on by hand. */
-    const [manualLink, setManualLink] = useState<{ email: string; link: string } | null>(null);
+    /** When the email didn't go out, the link to pass on by hand. */
+    const [manualLink, setManualLink] = useState<{ email: string; link: string; refused: boolean } | null>(null);
     const [invitations, setInvitations] = useState<Invitation[]>([]);
 
     const load = useCallback(() => {
@@ -47,7 +47,7 @@ export const InvitePanel: React.FC<{ roles: RoleDef[]; RoleSelect: React.FC<{ va
         try {
             const result = await authService.invite(email.trim(), role);
             if (result.emailSent) toast.success(`Invitation sent to ${result.invitation.email}`);
-            else if (result.link) setManualLink({ email: result.invitation.email, link: result.link });
+            else if (result.link) setManualLink({ email: result.invitation.email, link: result.link, refused: result.emailProblem === 'failed' });
             setEmail('');
             setRole('user');
             load();
@@ -85,7 +85,11 @@ export const InvitePanel: React.FC<{ roles: RoleDef[]; RoleSelect: React.FC<{ va
                     {error && <p className="neu-inset rounded-xl text-[11px] text-red-600 dark:text-red-400 px-3 py-2">{error}</p>}
                     {manualLink && (
                         <div className="neu-inset rounded-xl px-3 py-2.5 space-y-2">
-                            <p className="text-[11px] text-[var(--neu-text)]">Email isn't set up yet, so send {manualLink.email} this link yourself:</p>
+                            <p className="text-[11px] text-[var(--neu-text)]">
+                                {manualLink.refused
+                                    ? `We couldn't email ${manualLink.email}: the email service refused this address. Send them this link yourself:`
+                                    : `Email isn't set up yet, so send ${manualLink.email} this link yourself:`}
+                            </p>
                             <p className="text-[11px] font-mono break-all select-all text-[var(--neu-text-dim)]">{manualLink.link}</p>
                             <Button type="button" onClick={() => copy(manualLink.link)} icon={<Copy size={13} />}>Copy link</Button>
                         </div>

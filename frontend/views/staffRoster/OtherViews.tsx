@@ -136,6 +136,7 @@ export const RequestsView: React.FC<{ data: StaffRosterData; d: Derived; onChang
 
     const card = (l: StaffLeave) => {
         const who = d.person(l.employeeId);
+        const former = who ? undefined : d.formerName(l.employeeId);
         const aff = affected(l);
         const affText = aff.map(s => `${DOW[weekdayIdx(s.date)]} ${dm(s.date)} ${d.storeName(s.storeId)}`).join('; ');
         const mine = l.employeeId === data.me;
@@ -143,8 +144,8 @@ export const RequestsView: React.FC<{ data: StaffRosterData; d: Derived; onChang
             <article key={l.id} className="neu-card p-4 space-y-2.5">
                 <div className="flex items-center gap-3">
                     <div className="min-w-0 flex-1">
-                        <p className="font-semibold text-[14px] truncate">{who?.name ?? 'Former team member'}{mine && <span className="font-normal text-[var(--neu-text-dim)]"> (you)</span>}</p>
-                        <p className="text-[12px] text-[var(--neu-text-dim)]">{who?.title}</p>
+                        <p className="font-semibold text-[14px] truncate">{who?.name ?? former ?? 'Former team member'}{mine && <span className="font-normal text-[var(--neu-text-dim)]"> (you)</span>}</p>
+                        <p className="text-[12px] text-[var(--neu-text-dim)]">{who ? who.title : 'No longer in this workspace’s member list'}</p>
                     </div>
                     <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${STATUS_PILL[l.status]}`}>{{ pending: 'Waiting', approved: 'Approved', declined: 'Declined' }[l.status]}</span>
                 </div>

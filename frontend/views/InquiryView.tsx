@@ -17,6 +17,7 @@ import { makeDocumentNumber } from '../services/documentNumber';
 import { exportProformaPdf } from '../services/proformaPdf';
 import { InvoiceFormModal, ProformaPdfActions, type NewInvoice } from './InvoiceView';
 import { IfCan } from '../components/Layout';
+import { withDayDividers } from './chat/DayDivider';
 
 const renderArtworkStatusColor = (status: string) => {
     if (status === 'Available') return 'bg-green-500';
@@ -518,7 +519,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                             No messages match "{chatSearchQuery}".
                         </div>
                     )}
-                    {displayedMessages.map((msg) => {
+                    {withDayDividers(displayedMessages, (msg) => {
                         const isMe = msg.senderId === currentUserId;
                         const bubble = (
                             <div className={`max-w-[80%] rounded-[12px] px-3.5 py-2.5 shadow-sm ${isMe

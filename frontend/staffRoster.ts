@@ -80,32 +80,32 @@ export function ensureStaffRosterTables(db: D1Database): Promise<void> {
 
 function rowToShift(r: Record<string, unknown>): StaffShift {
     return {
-        id: String(r.id),
+        id: text(r.id),
         kind: r.kind === 'off' ? 'off' : 'shift',
-        employeeId: r.employee_id ? String(r.employee_id) : null,
-        storeId: r.store_id ? String(r.store_id) : null,
-        date: String(r.date),
+        employeeId: r.employee_id ? text(r.employee_id) : null,
+        storeId: r.store_id ? text(r.store_id) : null,
+        date: text(r.date),
         startMin: Number(r.start_min) || 0,
         endMin: Number(r.end_min) || 0,
         breakMin: Number(r.break_min) || 0,
-        role: String(r.role ?? ''),
-        note: String(r.note ?? ''),
+        role: text(r.role),
+        note: text(r.note),
     };
 }
 
 function rowToLeave(r: Record<string, unknown>): StaffLeave {
-    const status = String(r.status) as LeaveStatus;
+    const status = text(r.status) as LeaveStatus;
     return {
-        id: String(r.id),
-        employeeId: String(r.employee_id),
-        from: String(r.from_date),
-        to: String(r.to_date),
-        type: String(r.type ?? ''),
-        reason: String(r.reason ?? ''),
+        id: text(r.id),
+        employeeId: text(r.employee_id),
+        from: text(r.from_date),
+        to: text(r.to_date),
+        type: text(r.type),
+        reason: text(r.reason),
         status: status === 'approved' || status === 'declined' ? status : 'pending',
         requestedAt: Number(r.requested_at) || 0,
         decidedAt: r.decided_at ? Number(r.decided_at) : null,
-        decidedByName: String(r.decided_by_name ?? ''),
+        decidedByName: text(r.decided_by_name),
     };
 }
 
@@ -133,6 +133,11 @@ const SHIFT_PATH = /^\/staff-roster\/shifts\/([A-Za-z0-9_-]{1,64})$/;
 const LEAVE_PATH = /^\/staff-roster\/leaves\/([A-Za-z0-9_-]{1,64})$/;
 const TITLE_PATH = /^\/staff-roster\/titles\/([^/]{1,128})$/;
 
+/** A stored or sent value as text: strings as they are, numbers written out, anything else empty. */
+function text(v: unknown): string {
+    if (typeof v === 'string') return v;
+    return typeof v === 'number' ? String(v) : '';
+}
 const cleanText = (v: unknown, max: number): string => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const intIn = (v: unknown, min: number, max: number): number | null =>
     (typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max ? v : null);
@@ -146,94 +151,170 @@ async function body(ctx: Ctx): Promise<Record<string, unknown> | null> {
 const fmtDay = (iso: string) => new Date(toTs(iso)).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
 const fmtRange = (from: string, to: string) => (from === to ? fmtDay(from) : `${fmtDay(from)} – ${fmtDay(to)}`);
 
+type ShiftInput = Omit<StaffShift, 'id'>;
+
+async function caller(ctx: Ctx): Promise<SessionData | Response> {
+    const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+    if (!session) return err('Unauthorized', 401);
+    await ensureStaffRosterTables(ctx.env.VAYU_DB);
+    return session;
+}
+
+/** Published weeks among these dates become "Unpublished changes". */
+async function markChanged(db: D1Database, dates: string[]): Promise<void> {
+    const weeks = [...new Set(dates.map(mondayOf))];
+    if (weeks.length) await db.prepare(`UPDATE staff_weeks SET changed = 1 WHERE week_start IN (${weeks.map(() => '?').join(',')})`).bind(...weeks).run();
+}
+
+/** A shift's start, end and break in minutes (a day off has none), or why they can't be used. */
+function shiftTimes(kind: ShiftKind, raw: Record<string, unknown>): { startMin: number; endMin: number; breakMin: number } | { problem: string } {
+    if (kind === 'off') return { startMin: 0, endMin: 0, breakMin: 0 };
+    const startMin = intIn(raw.startMin, 0, 1439);
+    const endMin = intIn(raw.endMin, 0, 1439);
+    const breakMin = intIn(raw.breakMin, 0, 180);
+    if (startMin === null || endMin === null) return { problem: 'Enter a start and an end time.' };
+    if (breakMin === null) return { problem: 'A break can be 0 to 180 minutes.' };
+    return { startMin, endMin, breakMin };
+}
+
+/** The shift a request describes, or why it can't be saved. */
+function readShift(raw: Record<string, unknown>, people: Set<string>, stores: Set<string>): { shift: ShiftInput } | { problem: string } {
+    const kind: ShiftKind = raw.kind === 'off' ? 'off' : 'shift';
+    const employeeId = typeof raw.employeeId === 'string' && raw.employeeId ? raw.employeeId : null;
+    if (employeeId && !people.has(employeeId)) return { problem: 'That person is not on this team.' };
+    if (kind === 'off' && !employeeId) return { problem: 'A day off needs a person.' };
+    const storeId = kind === 'shift' && typeof raw.storeId === 'string' && raw.storeId ? raw.storeId : null;
+    if (storeId && !stores.has(storeId)) return { problem: 'That store no longer exists.' };
+    const times = shiftTimes(kind, raw);
+    if ('problem' in times) return times;
+    const shift: ShiftInput = {
+        kind, employeeId, storeId, date: text(raw.date), ...times,
+        role: kind === 'off' ? '' : cleanText(raw.role, 60), note: cleanText(raw.note, 200),
+    };
+    const errors = shiftFieldErrors(shift);
+    return errors.length ? { problem: errors[0] } : { shift };
+}
+
+/** The weeks these dates touch: published, changed since, or draft. */
+async function loadWeeks(db: D1Database, from: string, to: string) {
+    const weekStarts: string[] = [];
+    for (let w = mondayOf(from); w <= to; w = addDays(w, 7)) weekStarts.push(w);
+    const weekRows = (await db.prepare(`SELECT * FROM staff_weeks WHERE week_start IN (${weekStarts.map(() => '?').join(',')})`)
+        .bind(...weekStarts).all()).results || [];
+    const weeks: Record<string, WeekInfo> = {};
+    for (const w of weekStarts) weeks[w] = { status: 'draft', publishedAt: null, publishedByName: '' };
+    for (const r of weekRows) {
+        weeks[text(r.week_start)] = { status: Number(r.changed) ? 'changed' : 'published', publishedAt: Number(r.published_at), publishedByName: text(r.published_by_name) };
+    }
+    return { weeks, weekRows };
+}
+
+/** The live plan, for managers. The day before too: an overnight shift can run into the range. */
+async function planShifts(db: D1Database, from: string, to: string): Promise<StaffShift[]> {
+    return ((await db.prepare('SELECT * FROM staff_shifts WHERE date >= ? AND date <= ? ORDER BY date, start_min')
+        .bind(addDays(from, -1), to).all()).results || []).map(r => rowToShift(r as Record<string, unknown>));
+}
+
+/** What everyone else sees: the published snapshots of these weeks. */
+function publishedShifts(weekRows: Record<string, unknown>[], from: string, to: string): StaffShift[] {
+    const shifts: StaffShift[] = [];
+    for (const r of weekRows) {
+        try {
+            const snap = JSON.parse(text(r.snapshot)) as StaffShift[];
+            shifts.push(...snap.filter(s => s.date >= addDays(from, -1) && s.date <= to));
+        } catch { /* an unreadable snapshot shows nothing */ }
+    }
+    return shifts;
+}
+
+/** Others' leave shows only once approved, and never with its reason. */
+function othersLeaveHidden(leaves: StaffLeave[], me: string, from: string, to: string): StaffLeave[] {
+    return leaves
+        .filter(l => l.employeeId === me || (l.status === 'approved' && l.from <= to && l.to >= from))
+        .map(l => (l.employeeId === me ? l : { ...l, reason: '', type: 'Leave' }));
+}
+
+/**
+ * Names of people these shifts and leave belong to who are no longer on
+ * the team. An organization keeps a removed member's app record
+ * (orgTeam.ts); the original workspace deletes it but keeps a copy in the
+ * undo archive (deleted_items). Without either the screen says "Former
+ * team member".
+ */
+async function formerNames(ctx: Ctx, team: Set<string>, ids: (string | null)[]): Promise<{ id: string; name: string }[]> {
+    const gone = [...new Set(ids.filter((id): id is string => !!id && !team.has(id)))].slice(0, 50);
+    const names = new Map<string, string>();
+    await Promise.all(gone.map(async id => {
+        const raw = await ctx.env.VAYU_KV.get(`auth:user:${id}`).catch(() => null);
+        if (!raw) return;
+        try {
+            const u = JSON.parse(raw) as StoredUser;
+            if (u.name || u.email) names.set(id, u.name || u.email);
+        } catch { /* an unreadable record has no name */ }
+    }));
+    const missing = gone.filter(id => !names.has(id));
+    if (missing.length) {
+        // Only the name is read: the archived record also holds the password hash.
+        const rows = await ctx.env.VAYU_DB.prepare(
+            `SELECT entity_id, json_extract(payload, '$.name') AS name FROM deleted_items
+             WHERE entity = 'user' AND entity_id IN (${missing.map(() => '?').join(',')}) ORDER BY deleted_at DESC`,
+        ).bind(...missing).all().then(r => r.results || [], () => []); // no archive yet: no names
+        for (const r of rows) {
+            const id = text(r.entity_id);
+            if (!names.has(id) && typeof r.name === 'string' && r.name) names.set(id, r.name);
+        }
+    }
+    return [...names].map(([id, name]) => ({ id, name }));
+}
+
+/**
+ * A shift replaces that person's day off; a day off replaces an earlier
+ * one, but never a shift (refused). Gives the statement clearing the old
+ * day off, if any.
+ */
+async function replacedDayOff(db: D1Database, s: ShiftInput): Promise<D1PreparedStatement | Response | null> {
+    const clear = () => db.prepare("DELETE FROM staff_shifts WHERE kind = 'off' AND employee_id = ? AND date = ?").bind(s.employeeId, s.date);
+    if (s.kind === 'shift') return s.employeeId ? clear() : null;
+    const busy = await db.prepare("SELECT 1 FROM staff_shifts WHERE kind = 'shift' AND employee_id = ? AND date = ?").bind(s.employeeId, s.date).first();
+    if (busy) return err('That person already has a shift that day. Remove it first, then mark the day off.', 409);
+    return clear();
+}
+
+/** "Added a shift on 3 Oct and 2 more" */
+function addedShiftsText(created: ShiftInput[]): string {
+    const what = created[0].kind === 'off' ? 'Marked a day off' : 'Added a shift';
+    const more = created.length > 1 ? ' and ' + (created.length - 1) + ' more' : '';
+    return `${what} on ${fmtDay(created[0].date)}${more}`;
+}
+
+/** Asked for yourself: pending. Recorded by a manager for someone else (`decidedBy`): approved at once. */
+function newLeave(fields: Pick<StaffLeave, 'employeeId' | 'from' | 'to' | 'type' | 'reason'>, decidedBy: string | null, now: number): StaffLeave {
+    return {
+        id: newId('lv'), ...fields, requestedAt: now,
+        status: decidedBy ? 'approved' : 'pending',
+        decidedAt: decidedBy ? now : null, decidedByName: decidedBy ?? '',
+    };
+}
+
+function leaveDatesProblem(from: string, to: string): string | null {
+    if (!isIsoDate(from) || !isIsoDate(to)) return 'Choose the first and last day.';
+    if (to < from) return 'The last day is before the first day.';
+    return (toTs(to) - toTs(from)) / 86_400_000 >= MAX_LEAVE_DAYS ? `Leave can be up to ${MAX_LEAVE_DAYS} days at a time.` : null;
+}
+
+/** A published week where the person has shifts in their newly approved leave needs publishing again. */
+async function markChangedForLeave(db: D1Database, leave: StaffLeave): Promise<void> {
+    const hit = (await db.prepare("SELECT DISTINCT date FROM staff_shifts WHERE kind = 'shift' AND employee_id = ? AND date >= ? AND date <= ?")
+        .bind(leave.employeeId, leave.from, leave.to).all()).results || [];
+    await markChanged(db, hit.map(r => text(r.date)));
+}
+
 export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
     const signal = (ctx: Ctx, id: string) => deps.notify(ctx, [{ entity: 'schedule', id, op: 'put' }]);
-
-    async function caller(ctx: Ctx): Promise<SessionData | Response> {
-        const session = await getSession(ctx.request, ctx.env.VAYU_KV);
-        if (!session) return err('Unauthorized', 401);
-        await ensureStaffRosterTables(ctx.env.VAYU_DB);
-        return session;
-    }
-
-    /** Published weeks among these dates become "Unpublished changes". */
-    async function markChanged(db: D1Database, dates: string[]): Promise<void> {
-        const weeks = [...new Set(dates.map(mondayOf))];
-        if (weeks.length) await db.prepare(`UPDATE staff_weeks SET changed = 1 WHERE week_start IN (${weeks.map(() => '?').join(',')})`).bind(...weeks).run();
-    }
-
-    type ShiftInput = Omit<StaffShift, 'id'>;
-    /** A shift's start, end and break in minutes (a day off has none), or why they can't be used. */
-    function shiftTimes(kind: ShiftKind, raw: Record<string, unknown>): { startMin: number; endMin: number; breakMin: number } | { problem: string } {
-        if (kind === 'off') return { startMin: 0, endMin: 0, breakMin: 0 };
-        const startMin = intIn(raw.startMin, 0, 1439);
-        const endMin = intIn(raw.endMin, 0, 1439);
-        const breakMin = intIn(raw.breakMin, 0, 180);
-        if (startMin === null || endMin === null) return { problem: 'Enter a start and an end time.' };
-        if (breakMin === null) return { problem: 'A break can be 0 to 180 minutes.' };
-        return { startMin, endMin, breakMin };
-    }
-
-    /** The shift a request describes, or why it can't be saved. */
-    function readShift(raw: Record<string, unknown>, people: Set<string>, stores: Set<string>): { shift: ShiftInput } | { problem: string } {
-        const kind: ShiftKind = raw.kind === 'off' ? 'off' : 'shift';
-        const employeeId = typeof raw.employeeId === 'string' && raw.employeeId ? raw.employeeId : null;
-        if (employeeId && !people.has(employeeId)) return { problem: 'That person is not on this team.' };
-        if (kind === 'off' && !employeeId) return { problem: 'A day off needs a person.' };
-        const storeId = kind === 'shift' && typeof raw.storeId === 'string' && raw.storeId ? raw.storeId : null;
-        if (storeId && !stores.has(storeId)) return { problem: 'That store no longer exists.' };
-        const times = shiftTimes(kind, raw);
-        if ('problem' in times) return times;
-        const shift: ShiftInput = {
-            kind, employeeId, storeId, date: String(raw.date ?? ''), ...times,
-            role: kind === 'off' ? '' : cleanText(raw.role, 60), note: cleanText(raw.note, 200),
-        };
-        const errors = shiftFieldErrors(shift);
-        return errors.length ? { problem: errors[0] } : { shift };
-    }
 
     async function lookups(ctx: Ctx) {
         const [people, stores] = await Promise.all([deps.people(ctx), deps.stores(ctx)]);
         return { people, stores, peopleIds: new Set(people.map(p => p.id)), storeIds: new Set(stores.map(s => s.id)) };
-    }
-
-    /** The weeks these dates touch: published, changed since, or draft. */
-    async function loadWeeks(db: D1Database, from: string, to: string) {
-        const weekStarts: string[] = [];
-        for (let w = mondayOf(from); w <= to; w = addDays(w, 7)) weekStarts.push(w);
-        const weekRows = (await db.prepare(`SELECT * FROM staff_weeks WHERE week_start IN (${weekStarts.map(() => '?').join(',')})`)
-            .bind(...weekStarts).all()).results || [];
-        const weeks: Record<string, WeekInfo> = {};
-        for (const w of weekStarts) weeks[w] = { status: 'draft', publishedAt: null, publishedByName: '' };
-        for (const r of weekRows) {
-            weeks[String(r.week_start)] = { status: Number(r.changed) ? 'changed' : 'published', publishedAt: Number(r.published_at), publishedByName: String(r.published_by_name ?? '') };
-        }
-        return { weeks, weekRows };
-    }
-
-    /** The live plan, for managers. The day before too: an overnight shift can run into the range. */
-    async function planShifts(db: D1Database, from: string, to: string): Promise<StaffShift[]> {
-        return ((await db.prepare('SELECT * FROM staff_shifts WHERE date >= ? AND date <= ? ORDER BY date, start_min')
-            .bind(addDays(from, -1), to).all()).results || []).map(r => rowToShift(r as Record<string, unknown>));
-    }
-
-    /** What everyone else sees: the published snapshots of these weeks. */
-    function publishedShifts(weekRows: Record<string, unknown>[], from: string, to: string): StaffShift[] {
-        const shifts: StaffShift[] = [];
-        for (const r of weekRows) {
-            try {
-                const snap = JSON.parse(String(r.snapshot)) as StaffShift[];
-                shifts.push(...snap.filter(s => s.date >= addDays(from, -1) && s.date <= to));
-            } catch { /* an unreadable snapshot shows nothing */ }
-        }
-        return shifts;
-    }
-
-    /** Others' leave shows only once approved, and never with its reason. */
-    function othersLeaveHidden(leaves: StaffLeave[], me: string, from: string, to: string): StaffLeave[] {
-        return leaves
-            .filter(l => l.employeeId === me || (l.status === 'approved' && l.from <= to && l.to >= from))
-            .map(l => (l.employeeId === me ? l : { ...l, reason: '', type: 'Leave' }));
     }
 
     /** GET /staff-roster?from=&to= — everything a screen needs for these dates. */
@@ -249,7 +330,7 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
         const manage = await deps.canManage(ctx, session);
         const { people, stores } = await lookups(ctx);
         const titles = new Map(((await db.prepare('SELECT employee_id, title FROM staff_titles').all()).results || [])
-            .map(r => [String(r.employee_id), String(r.title)]));
+            .map(r => [text(r.employee_id), text(r.title)]));
 
         const { weeks, weekRows } = await loadWeeks(db, from, to);
         const shifts = manage ? await planShifts(db, from, to) : publishedShifts(weekRows, from, to);
@@ -257,29 +338,18 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
             `SELECT * FROM staff_leaves WHERE (from_date <= ? AND to_date >= ?) OR status = 'pending' OR employee_id = ? ORDER BY requested_at DESC LIMIT 500`,
         ).bind(to, from, session.userId).all()).results || []).map(r => rowToLeave(r as Record<string, unknown>));
         const leaves = manage ? leaveRows : othersLeaveHidden(leaveRows, session.userId, from, to);
+        const formerPeople = await formerNames(ctx, new Set(people.map(p => p.id)), [...leaves.map(l => l.employeeId), ...shifts.map(s => s.employeeId)]);
 
         return json({
             canManage: manage,
             me: session.userId,
             people: people.map(p => ({ id: p.id, name: p.name || p.email, title: titles.get(p.id) || '' })),
+            formerPeople,
             stores,
             jobTitles: [...new Set([...DEFAULT_JOB_TITLES, ...titles.values()].filter(Boolean))],
             shifts, leaves, weeks,
         });
     };
-
-    /**
-     * A shift replaces that person's day off; a day off replaces an earlier
-     * one, but never a shift (refused). Gives the statement clearing the old
-     * day off, if any.
-     */
-    async function replacedDayOff(db: D1Database, s: ShiftInput): Promise<D1PreparedStatement | Response | null> {
-        const clear = () => db.prepare("DELETE FROM staff_shifts WHERE kind = 'off' AND employee_id = ? AND date = ?").bind(s.employeeId, s.date);
-        if (s.kind === 'shift') return s.employeeId ? clear() : null;
-        const busy = await db.prepare("SELECT 1 FROM staff_shifts WHERE kind = 'shift' AND employee_id = ? AND date = ?").bind(s.employeeId, s.date).first();
-        if (busy) return err('That person already has a shift that day. Remove it first, then mark the day off.', 409);
-        return clear();
-    }
 
     /** The shifts a save sends: at least one, at most MAX_SHIFTS_PER_SAVE, each valid. */
     async function readShiftList(ctx: Ctx, raw: Record<string, unknown> | null): Promise<{ shifts: ShiftInput[] } | { problem: string }> {
@@ -294,13 +364,6 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
             shifts.push(one.shift);
         }
         return { shifts };
-    }
-
-    /** "Added a shift on 3 Oct and 2 more" */
-    function addedShiftsText(created: ShiftInput[]): string {
-        const what = created[0].kind === 'off' ? 'Marked a day off' : 'Added a shift';
-        const more = created.length > 1 ? ' and ' + (created.length - 1) + ' more' : '';
-        return `${what} on ${fmtDay(created[0].date)}${more}`;
     }
 
     /** POST /staff-roster/shifts { shifts: [...] } — one shift, or the same shift on several days. */
@@ -351,7 +414,7 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
             stmts.unshift(db.prepare("DELETE FROM staff_shifts WHERE kind = 'off' AND employee_id = ? AND date = ?").bind(s.employeeId, s.date));
         }
         await db.batch(stmts);
-        await markChanged(db, [String(existing.date), s.date]);
+        await markChanged(db, [text(existing.date), s.date]);
         deps.logChange(ctx, session, 'updated', 'shift', id, `Changed a shift on ${fmtDay(s.date)}`);
         signal(ctx, id);
         return json({ ...s, id });
@@ -366,8 +429,8 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
         const existing = id ? await db.prepare('SELECT * FROM staff_shifts WHERE id = ?').bind(id).first<Record<string, unknown>>() : null;
         if (!id || !existing) return err('That shift no longer exists.', 404);
         await db.prepare('DELETE FROM staff_shifts WHERE id = ?').bind(id).run();
-        await markChanged(db, [String(existing.date)]);
-        deps.logChange(ctx, session, 'deleted', 'shift', id, `Removed ${existing.kind === 'off' ? 'a day off' : 'a shift'} on ${fmtDay(String(existing.date))}`);
+        await markChanged(db, [text(existing.date)]);
+        deps.logChange(ctx, session, 'deleted', 'shift', id, `Removed ${existing.kind === 'off' ? 'a day off' : 'a shift'} on ${fmtDay(text(existing.date))}`);
         signal(ctx, id);
         return json({ success: true });
     };
@@ -378,7 +441,7 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
         if (session instanceof Response) return session;
         const db = ctx.env.VAYU_DB;
         const raw = await body(ctx);
-        const weekStart = String(raw?.weekStart ?? '');
+        const weekStart = text(raw?.weekStart);
         if (!isIsoDate(weekStart) || mondayOf(weekStart) !== weekStart) return err('Choose a week (its Monday).');
         const end = addDays(weekStart, 6);
         const shifts = ((await db.prepare('SELECT * FROM staff_shifts WHERE date >= ? AND date <= ?')
@@ -412,21 +475,6 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
         return json({ weekStart, status: 'published', publishedAt: now, publishedByName: session.name, notified: notified.length });
     };
 
-    /** Asked for yourself: pending. Recorded by a manager for someone else (`decidedBy`): approved at once. */
-    function newLeave(fields: Pick<StaffLeave, 'employeeId' | 'from' | 'to' | 'type' | 'reason'>, decidedBy: string | null, now: number): StaffLeave {
-        return {
-            id: newId('lv'), ...fields, requestedAt: now,
-            status: decidedBy ? 'approved' : 'pending',
-            decidedAt: decidedBy ? now : null, decidedByName: decidedBy ?? '',
-        };
-    }
-
-    function leaveDatesProblem(from: string, to: string): string | null {
-        if (!isIsoDate(from) || !isIsoDate(to)) return 'Choose the first and last day.';
-        if (to < from) return 'The last day is before the first day.';
-        return (toTs(to) - toTs(from)) / 86_400_000 >= MAX_LEAVE_DAYS ? `Leave can be up to ${MAX_LEAVE_DAYS} days at a time.` : null;
-    }
-
     /** POST /staff-roster/leaves — for yourself (pending), or, as a manager, for someone else (approved). */
     const requestLeave: Handler = async (ctx) => {
         const session = await caller(ctx);
@@ -440,10 +488,11 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
             if (!(await deps.canManage(ctx, session))) return err('You can only ask for leave for yourself.', 403);
             if (!(await lookups(ctx)).peopleIds.has(employeeId)) return err('That person is not on this team.');
         }
-        const from = String(raw.from ?? ''), to = String(raw.to ?? '');
+        const from = text(raw.from), to = text(raw.to);
         const datesProblem = leaveDatesProblem(from, to);
         if (datesProblem) return err(datesProblem);
-        const type = (LEAVE_TYPES as readonly string[]).includes(String(raw.type)) ? String(raw.type) : 'Other';
+        const asked = text(raw.type);
+        const type = (LEAVE_TYPES as readonly string[]).includes(asked) ? asked : 'Other';
         const reason = cleanText(raw.reason, 300);
         const now = Date.now();
         const leave = newLeave({ employeeId, from, to, type, reason }, forSomeoneElse ? session.name : null, now);
@@ -456,13 +505,6 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
         signal(ctx, leave.id);
         return json(leave, 201);
     };
-
-    /** A published week where the person has shifts in their newly approved leave needs publishing again. */
-    async function markChangedForLeave(db: D1Database, leave: StaffLeave): Promise<void> {
-        const hit = (await db.prepare("SELECT DISTINCT date FROM staff_shifts WHERE kind = 'shift' AND employee_id = ? AND date >= ? AND date <= ?")
-            .bind(leave.employeeId, leave.from, leave.to).all()).results || [];
-        await markChanged(db, hit.map(r => String(r.date)));
-    }
 
     /** PATCH /staff-roster/leaves/:id { status: 'approved' | 'declined' } — managers. */
     const decideLeave: Handler = async (ctx) => {

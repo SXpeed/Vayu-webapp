@@ -12,6 +12,7 @@ import { usePhotoCapture } from '../hooks/usePhotoCapture';
 import { useStickToBottom } from '../hooks/useStickToBottom';
 import toast from 'react-hot-toast';
 import { IfCan } from '../components/Layout';
+import { chatDayLabel, withDayDividers } from './chat/DayDivider';
 import { ImageViewer, type ViewedImage } from './chat/ImageViewer';
 import { Holdable, MessageActionMenu, MessageInfoSheet, ReactionChips, ReactionsSheet, ReadTicks } from './chat/MessageReactions';
 
@@ -711,7 +712,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
     // Rows are memoised so typing in the message box (state on this
     // component) doesn't rebuild every bubble of a long thread per keystroke.
     const participantIds = conversation.participantIds;
-    const messageRows = useMemo(() => displayedMessages.map((msg) => {
+    const messageRows = useMemo(() => withDayDividers(displayedMessages, (msg) => {
         const isMe = msg.senderId === currentUserId;
         const openMenu = (target: HTMLElement) => {
             if (msg.status === 'failed') return;
@@ -732,7 +733,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                     msg.attachment.type === 'image' ? (
                         <button
                             type="button"
-                            onClick={() => setViewing({ url: msg.attachment!.url, name: msg.attachment!.name, caption: `${isMe ? 'You' : resolveName(msg.senderId, msg.senderName)} · ${formatMessageTime(msg.timestamp)}` })}
+                            onClick={() => setViewing({ url: msg.attachment!.url, name: msg.attachment!.name, caption: `${isMe ? 'You' : resolveName(msg.senderId, msg.senderName)} · ${chatDayLabel(msg.timestamp)}, ${formatMessageTime(msg.timestamp)}` })}
                             aria-label={`Open photo ${msg.attachment.name}`}
                             className="block mb-2 rounded-xl overflow-hidden active-scale cursor-zoom-in"
                         >

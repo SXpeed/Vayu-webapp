@@ -40,9 +40,17 @@ export function derive(data: StaffRosterData) {
     const storeName = (id: string | null) => data.stores.find(s => s.id === id)?.name ?? 'Store removed';
     const storeClass = (id: string | null) => `sr-store-${(storeIdx.get(id ?? '') ?? 0) % 6}`;
     const person = (id: string | null) => data.people.find(p => p.id === id);
-    const personName = (id: string | null) => (id ? person(id)?.name ?? 'Former team member' : 'Open shift');
+    /** The name of someone no longer on the team, when the server still knows it. */
+    const formerName = (id: string | null) => data.formerPeople?.find(p => p.id === id)?.name;
+    const personName = (id: string | null) => {
+        if (!id) return 'Open shift';
+        const name = person(id)?.name;
+        if (name) return name;
+        const former = formerName(id);
+        return former ? `${former} (left the team)` : 'Former team member';
+    };
     const conflicts: Map<string, Conflict[]> = findConflicts(data.shifts, data.leaves);
-    return { storeName, storeClass, person, personName, conflicts };
+    return { storeName, storeClass, person, formerName, personName, conflicts };
 }
 export type Derived = ReturnType<typeof derive>;
 

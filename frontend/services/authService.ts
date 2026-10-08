@@ -337,8 +337,8 @@ export const authService = {
     return call<Invitation[]>('/team/invitations');
   },
 
-  async invite(email: string, role: string): Promise<{ invitation: Invitation; emailSent: boolean; link?: string }> {
-    const result = await call<{ invitation: Invitation; emailSent: boolean; link?: string }>('/team/invitations', {
+  async invite(email: string, role: string): Promise<{ invitation: Invitation; emailSent: boolean; emailProblem?: 'not_configured' | 'failed'; link?: string }> {
+    const result = await call<{ invitation: Invitation; emailSent: boolean; emailProblem?: 'not_configured' | 'failed'; link?: string }>('/team/invitations', {
       method: 'POST', body: JSON.stringify({ email, role }),
     });
     broadcastSync();

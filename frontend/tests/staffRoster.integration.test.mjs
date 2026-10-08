@@ -174,6 +174,23 @@ test('leave: ask, keep private, decide, and see what it affects', async () => {
     assert.equal((await api(staff, `/staff-roster/leaves/${again.body.id}`, { method: 'DELETE' })).status, 200);
 });
 
+test('someone removed from the team: their leave stays, under their name', async () => {
+    const { id: raviId } = await person('Ravi Kumar', 'ravi@example.com');
+    const leave = await api(owner, '/staff-roster/leaves', { method: 'POST', body: { employeeId: raviId, from: '2026-09-29', to: '2026-09-29', type: 'Personal leave' } });
+    assert.equal(leave.status, 201, leave.text);
+    assert.equal((await api(owner, `/auth/users/${raviId}`, { method: 'DELETE' })).status, 200);
+    // The undo archive is written after the response: give it a moment.
+    let seen;
+    for (let i = 0; i < 20; i++) {
+        seen = (await week(owner)).body;
+        if (seen.formerPeople?.length) break;
+        await new Promise(r => setTimeout(r, 100));
+    }
+    assert.equal(seen.people.some(p => p.id === raviId), false, 'no longer on the team');
+    assert.ok(seen.leaves.some(l => l.id === leave.body.id), 'the leave stays');
+    assert.deepEqual(seen.formerPeople, [{ id: raviId, name: 'Ravi Kumar' }]);
+});
+
 test('job titles show on the roster for everyone', async () => {
     assert.equal((await api(staff, `/staff-roster/titles/${nehaId}`, { method: 'PUT', body: { title: 'Cashier' } })).status, 403);
     assert.equal((await api(owner, `/staff-roster/titles/${nehaId}`, { method: 'PUT', body: { title: 'Cashier' } })).status, 200);

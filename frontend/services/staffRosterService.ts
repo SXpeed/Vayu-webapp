@@ -9,6 +9,8 @@ export interface StaffRosterData {
     canManage: boolean;
     me: string;
     people: { id: string; name: string; title: string }[];
+    /** People these shifts and leave belong to who are no longer on the team (absent from an older server). */
+    formerPeople?: { id: string; name: string }[];
     stores: { id: string; name: string }[];
     jobTitles: string[];
     /** Managers: the live plan. Everyone else: the published weeks only. */

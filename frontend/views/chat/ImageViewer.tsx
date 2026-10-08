@@ -10,7 +10,7 @@ import { ZoomableImage } from '../../components/ZoomableImage';
 export interface ViewedImage {
     url: string;
     name: string;
-    /** "Asha · 10:42 AM" */
+    /** "Asha · Today, 10:42 AM" */
     caption: string;
 }
 

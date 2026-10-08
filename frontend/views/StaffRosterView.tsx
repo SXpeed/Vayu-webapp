@@ -210,8 +210,13 @@ const RosterBody: React.FC<{
 
 const coverNote = (n: number): string => (n > 1 ? `${n} shifts need coverage` : `${n} shift needs coverage`);
 
-/** First and last day to load: the week, or the whole month grid around it. */
+/**
+ * First and last day to load: the week, or the whole month grid around it.
+ * Requests: four weeks before the week to five after (the server's 62-day
+ * limit), so its decided leave doesn't depend on the tab shown before.
+ */
 function rangeFor(view: View, weekStart: string): [string, string] {
+    if (view === 'requests') return [addDays(weekStart, -28), addDays(weekStart, 34)];
     if (view !== 'month') return [weekStart, addDays(weekStart, 6)];
     const mid = new Date(Date.parse(`${monthOfWeek(weekStart)}T00:00:00Z`));
     const first = new Date(Date.UTC(mid.getUTCFullYear(), mid.getUTCMonth(), 1)).toISOString().slice(0, 10);
@@ -240,14 +245,24 @@ export const StaffRosterView: React.FC = () => {
     const setNotify = (v: boolean) => { setNotifyState(v); try { localStorage.setItem(NOTIFY_KEY, v ? '1' : '0'); } catch { /* private mode */ } };
 
     const [from, to] = rangeFor(view, weekStart);
+    const rangeKey = `${from}|${to}`;
+    // The range the shown data was loaded for, and the one asked for last:
+    // a slower answer for a range left behind is dropped.
+    const [loadedKey, setLoadedKey] = useState('');
+    const wantedKey = useRef(rangeKey);
+    wantedKey.current = rangeKey;
     const loadedAt = useRef(0);
     const load = useCallback(async () => {
+        const key = `${from}|${to}`;
         try {
             const next = await staffRosterService.load(from, to);
+            if (wantedKey.current !== key) return;
             setData(next);
+            setLoadedKey(key);
             setError(null);
             loadedAt.current = Date.now();
         } catch (e) {
+            if (wantedKey.current !== key) return;
             const err = e as Error & { code?: string };
             setError(err.code === 'module_off' ? 'The staff roster isn’t part of this workspace’s plan.' : err.message || 'Could not load the roster');
         }
@@ -339,9 +354,11 @@ export const StaffRosterView: React.FC = () => {
     } : null;
     const openDayView = (date: string) => { setWeekStart(mondayOf(date)); setDayIdx(weekdayIdx(date)); setView('week'); setLayout('day'); };
     let body: React.ReactNode = <div className="py-20 flex justify-center text-[var(--neu-text-dim)]"><Loader2 size={22} className="animate-spin" /></div>;
-    if (error && !data) {
+    // Requests waits for its own range: another tab's data holds different leave.
+    const shown = view !== 'requests' || loadedKey === rangeKey;
+    if (error && (!data || !shown)) {
         body = <EmptyState icon={<CalendarClock size={22} strokeWidth={1.5} />} title="The roster didn’t load" message={error} action={<Button onClick={() => { void load(); }}>Try again</Button>} />;
-    } else if (common) {
+    } else if (common && shown) {
         body = <RosterBody view={view} layout={layout} isPhone={isPhone} common={common} dayIdx={dayIdx} weekStart={weekStart}
             onDay={setDayIdx} onOpenDay={i => { setDayIdx(i); setLayout('day'); }} onPickDay={openDayView}
             onChanged={() => { void load(); }} onReview={() => { setView('week'); setOverlay({ kind: 'open' }); }} />;
