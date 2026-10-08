@@ -260,7 +260,11 @@ globalThis.addEventListener('push', (event) => {
   // show everything, as before.
   event.waitUntil(
     signedInIdentity().then((identity) => {
-      const hidden = identity && (identity.userId === null || (data.to && identity.userId !== data.to));
+      // The same person in another organization (ids repeat across them) is
+      // hidden too; a device or notification that names no organization
+      // (older versions, the original sign-in) is judged by the person alone.
+      const otherOrg = !!(identity && identity.org && data.org && identity.org !== data.org);
+      const hidden = identity && (identity.userId === null || (data.to && identity.userId !== data.to) || otherOrg);
       // A push means something changed server-side: open tabs catch up now
       // instead of waiting for their next scheduled refresh.
       if (hidden) return broadcastSyncRequired();

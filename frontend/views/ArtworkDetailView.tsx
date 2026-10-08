@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowLeft, Edit2, X, Image as ImageIcon } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { ArrowLeft, Edit2, X, Image as ImageIcon, Share2 } from 'lucide-react';
 import { Artwork } from '../types';
 import { ArtworkFormModal } from './ArtworksView';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
@@ -116,32 +117,71 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
         { label: 'Location', value: artwork.location },
     ].filter(x => x.value?.trim());
 
+    const priceText = `₹${artwork.price.toLocaleString('en-IN')}${artwork.plusGst ? ' + GST' : ''}`;
+
+    // The photo on screen, fetched ahead: iPhones refuse to share once an
+    // await has passed after the tap, so the file must be ready at the tap.
+    const shareFile = useRef<File | null>(null);
+    const shownUrl = artwork.imageUrls[activeImageIndex] ?? artwork.imageUrls[0];
+    useEffect(() => {
+        shareFile.current = null;
+        if (!shownUrl || !navigator.canShare) return;
+        let current = true;
+        fetch(shownUrl)
+            .then(r => (r.ok ? r.blob() : Promise.reject(new Error(String(r.status)))))
+            .then(blob => {
+                const file = new File([blob], `${artwork.title || 'artwork'}.${blob.type.split('/')[1] || 'jpg'}`, { type: blob.type || 'image/jpeg' });
+                if (current && navigator.canShare({ files: [file] })) shareFile.current = file;
+            })
+            .catch(() => { /* shares the text without the photo */ });
+        return () => { current = false; };
+    }, [shownUrl, artwork.title]);
+
+    const handleShare = async () => {
+        const text = [artwork.title, artistLine, priceText, ...specs.map(s => `${s.label}: ${s.value}`)].filter(Boolean).join('\n');
+        try {
+            if (navigator.share) {
+                await navigator.share(shareFile.current ? { files: [shareFile.current], title: artwork.title, text } : { title: artwork.title, text });
+            } else {
+                await navigator.clipboard.writeText(text);
+                toast.success('Details copied');
+            }
+        } catch (e) {
+            if ((e as Error).name !== 'AbortError') toast.error('Could not share');
+        }
+    };
+
     return (
         <div className="absolute inset-0 bg-[var(--neu-bg)] z-[60] flex flex-col animate-fade-in-up">
-            {/* Header — raised back / edit buttons */}
-            <div className="shrink-0 z-20 px-5 lg:px-10 pb-2" style={{ paddingTop: 'calc(1rem + var(--safe-top))' }}>
+            {/* Back / edit float over the picture */}
+            <div className="absolute inset-x-0 top-0 z-20 px-4 lg:px-10 pointer-events-none" style={{ paddingTop: 'calc(1rem + var(--safe-top))' }}>
                 <div className="max-w-6xl mx-auto flex justify-between items-center">
-                    <button onClick={onClose} aria-label="Back" className="neu-icon-btn neu-btn active-scale">
+                    <button onClick={onClose} aria-label="Back" className="neu-icon-btn neu-btn active-scale pointer-events-auto">
                         <ArrowLeft size={18} />
                     </button>
                     <IfCan section="inventory">
-                        <button onClick={() => setIsEditing(true)} aria-label="Edit artwork" className="neu-icon-btn neu-btn active-scale">
+                        <button onClick={() => setIsEditing(true)} aria-label="Edit artwork" className="neu-icon-btn neu-btn active-scale pointer-events-auto">
                             <Edit2 size={16} />
                         </button>
                     </IfCan>
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto no-scrollbar neu-scroll-fade px-5 lg:px-10 pt-2">
-                <div className="max-w-6xl mx-auto lg:grid lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)] lg:gap-14 lg:items-start">
+            <div className="flex-1 overflow-y-auto no-scrollbar">
+                <div className="max-w-6xl mx-auto lg:grid lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)] lg:gap-12 lg:items-start lg:px-10 lg:pt-20">
 
-                    {/* Picture: on the page itself, with room around it and a soft shadow; no frames. */}
-                    <div className="lg:sticky lg:top-0">
-                        <div className="relative h-[52dvh] min-h-[280px] lg:h-[min(calc(100dvh-9rem),760px)] flex flex-col">
+                    {/* Hero: the picture edge to edge over a wash of its own colour */}
+                    <div className="relative lg:sticky lg:top-6 lg:rounded-[2rem] lg:overflow-hidden">
+                        <div
+                            aria-hidden="true"
+                            className="absolute inset-0 transition-[background] duration-700"
+                            style={{ background: `radial-gradient(120% 90% at 50% 40%, ${withAlpha(glowColor, 0.55)} 0%, ${withAlpha(glowColor, 0.18)} 55%, transparent 100%)` }}
+                        />
+                        <div className="relative h-[60dvh] min-h-[320px] lg:h-[min(calc(100dvh-8rem),760px)] flex flex-col" style={{ paddingTop: 'calc(4.25rem + var(--safe-top))' }}>
                             {imageCount > 0 ? (
                                 <div
                                     ref={mainCarouselRef}
-                                    className="flex-1 w-full flex overflow-x-auto snap-x snap-mandatory no-scrollbar"
+                                    className="flex-1 min-h-0 w-full flex overflow-x-auto snap-x snap-mandatory no-scrollbar"
                                     onScroll={(e) => {
                                         const scrollLeft = (e.target as HTMLElement).scrollLeft;
                                         const width = (e.target as HTMLElement).clientWidth;
@@ -149,7 +189,7 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                                     }}
                                 >
                                     {artwork.imageUrls.map((url, idx) => (
-                                        <div key={url} className="w-full h-full snap-center shrink-0 px-2 pt-2 pb-8 lg:p-6 lg:pb-10">
+                                        <div key={url} className="w-full h-full snap-center shrink-0 px-6 pb-12 lg:px-10 lg:pb-14">
                                             <button
                                                 type="button"
                                                 onClick={() => setIsFullScreen(true)}
@@ -161,71 +201,80 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                                                     alt={`${artwork.title} - ${idx + 1}`}
                                                     loading="lazy"
                                                     decoding="async"
-                                                    className="max-w-full max-h-full object-contain rounded-md shadow-[0_16px_28px_-16px_rgba(0,0,0,0.35)]"
+                                                    className="max-w-full max-h-full object-contain rounded-md shadow-[0_24px_40px_-18px_rgba(0,0,0,0.45)]"
                                                 />
                                             </button>
                                         </div>
                                     ))}
                                 </div>
                             ) : (
-                                <div className="flex-1 w-full flex items-center justify-center rounded-2xl neu-inset text-[var(--neu-text-dim)]">
+                                <div className="flex-1 mx-6 mb-12 flex items-center justify-center rounded-2xl neu-inset text-[var(--neu-text-dim)]">
                                     <ImageIcon size={48} strokeWidth={1} />
                                 </div>
                             )}
+
+                            {/* Pager: small dots, the current one longer */}
+                            {imageCount > 1 && (
+                                <div className="absolute inset-x-0 bottom-6 lg:bottom-5 flex justify-center items-center gap-0.5">
+                                    {imageCount <= 8 ? artwork.imageUrls.map((url, idx) => (
+                                        <button
+                                            key={url}
+                                            type="button"
+                                            onClick={() => goToImage(idx)}
+                                            aria-label={`Image ${idx + 1} of ${imageCount}`}
+                                            aria-current={idx === activeImageIndex ? 'true' : undefined}
+                                            className="p-1.5"
+                                        >
+                                            <span className={`block h-1.5 rounded-full transition-all duration-300 ${idx === activeImageIndex ? 'w-4 bg-[var(--neu-gold)]' : 'w-1.5 bg-[var(--neu-text-dim)] opacity-40'}`} />
+                                        </button>
+                                    )) : (
+                                        <span className="neu-status px-3 py-1 text-[11px] tracking-widest tabular-nums text-[var(--neu-text-dim)]">
+                                            {activeImageIndex + 1} / {imageCount}
+                                        </span>
+                                    )}
+                                </div>
+                            )}
                         </div>
+                    </div>
+
+                    {/* Details: a sheet that rises over the picture on phones */}
+                    <div className="relative -mt-7 lg:mt-0 lg:sticky lg:top-6 rounded-t-[2rem] lg:rounded-none bg-[var(--neu-bg)] px-5 pt-3 lg:px-0 lg:pt-0 shadow-[0_-12px_30px_-18px_rgba(0,0,0,0.25)] lg:shadow-none">
+                        <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-[var(--neu-line)] lg:hidden" aria-hidden="true" />
 
                         {imageCount > 0 && (
-                            <div className="flex justify-center mt-2 empty:hidden">
-                                <PreviewOnlyNote src={artwork.imageUrls[activeImageIndex] ?? artwork.imageUrls[0]} className="!static" />
+                            <div className="mb-3 empty:hidden">
+                                <PreviewOnlyNote src={shownUrl} className="!static" />
                             </div>
                         )}
 
-                        {/* Pager: small dots, the current one longer */}
-                        {imageCount > 1 && (imageCount <= 8 ? (
-                            <div className="flex justify-center items-center gap-0.5 mt-2">
-                                {artwork.imageUrls.map((url, idx) => (
-                                    <button
-                                        key={url}
-                                        type="button"
-                                        onClick={() => goToImage(idx)}
-                                        aria-label={`Image ${idx + 1} of ${imageCount}`}
-                                        aria-current={idx === activeImageIndex ? 'true' : undefined}
-                                        className="p-1.5"
-                                    >
-                                        <span className={`block h-1.5 rounded-full transition-all duration-300 ${idx === activeImageIndex ? 'w-4 bg-[var(--neu-gold)]' : 'w-1.5 bg-[var(--neu-text-dim)] opacity-40'}`} />
-                                    </button>
-                                ))}
-                            </div>
-                        ) : (
-                            <p className="mt-2 text-center text-[11px] tracking-widest tabular-nums text-[var(--neu-text-dim)]">
-                                {activeImageIndex + 1} / {imageCount}
-                            </p>
-                        ))}
-                    </div>
-
-                    {/* Details: type and hairlines, no boxes */}
-                    <div className="mt-8 lg:mt-6 lg:sticky lg:top-6">
-                        <p className="flex items-center gap-3 text-[11px] font-medium uppercase tracking-[0.18em]">
-                            {artwork.customId && <span className="text-[var(--neu-text-dim)] truncate">{artwork.customId}</span>}
-                            <span className={`inline-flex items-center gap-1.5 shrink-0 ${statusClass}`}>
+                        <div className="flex items-center justify-between gap-3">
+                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full neu-inset text-[11px] font-semibold uppercase tracking-[0.14em] ${statusClass}`}>
                                 <span className="w-1.5 h-1.5 rounded-full bg-current" aria-hidden="true" />
                                 {artwork.status}
                             </span>
-                        </p>
-                        <h1 className="mt-3 text-[1.75rem] lg:text-[2.1rem] font-serif leading-tight text-[var(--neu-text)] break-words">{artwork.title}</h1>
+                            {artwork.customId && <span className="text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--neu-text-dim)] truncate">{artwork.customId}</span>}
+                        </div>
+
+                        <h1 className="mt-4 text-[1.85rem] lg:text-[2.25rem] font-serif leading-tight text-[var(--neu-text)] break-words">{artwork.title}</h1>
                         {artistLine && <p className="mt-1.5 text-sm text-[var(--neu-text-dim)]">{artistLine}</p>}
 
-                        <p className="mt-6 text-2xl font-light tabular-nums text-[var(--neu-text)]">
-                            ₹{artwork.price.toLocaleString('en-IN')}
-                            {artwork.plusGst && <span className="ml-1.5 text-xs text-[var(--neu-text-dim)]">+ GST</span>}
-                        </p>
+                        <div className="mt-6 flex items-center justify-between gap-4">
+                            <p className="text-2xl font-light tabular-nums text-[var(--neu-text)]">
+                                ₹{artwork.price.toLocaleString('en-IN')}
+                                {artwork.plusGst && <span className="ml-1.5 text-xs text-[var(--neu-text-dim)]">+ GST</span>}
+                            </p>
+                            <button type="button" onClick={handleShare} className="neu-button inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-[var(--neu-text)] active-scale shrink-0">
+                                <Share2 size={16} className="text-[var(--neu-gold)]" />
+                                Share
+                            </button>
+                        </div>
 
                         {specs.length > 0 && (
-                            <dl className="mt-7 border-t border-[var(--neu-line)]">
+                            <dl className={`mt-7 grid gap-2.5 ${specs.length === 1 ? 'grid-cols-1' : 'grid-cols-2'} ${specs.length === 3 ? '[&>*:last-child]:col-span-2' : ''}`}>
                                 {specs.map(({ label, value }) => (
-                                    <div key={label} className="flex items-baseline justify-between gap-6 py-3 border-b border-[var(--neu-line)]">
-                                        <dt className="text-[11px] uppercase tracking-[0.14em] text-[var(--neu-text-dim)] shrink-0">{label}</dt>
-                                        <dd className="text-sm text-[var(--neu-text)] text-right break-words min-w-0">{value}</dd>
+                                    <div key={label} className="neu-inset rounded-2xl px-4 py-3 min-w-0">
+                                        <dt className="text-[10px] uppercase tracking-[0.16em] text-[var(--neu-text-dim)]">{label}</dt>
+                                        <dd className="mt-1 text-sm text-[var(--neu-text)] break-words">{value}</dd>
                                     </div>
                                 ))}
                             </dl>
@@ -239,11 +288,11 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                                 </p>
                             </div>
                         )}
+
+                        {/* Clears the phone dock (it stays visible over this view) and the home indicator */}
+                        <div className="h-[calc(6rem+var(--safe-bottom-ui))] lg:h-10" />
                     </div>
                 </div>
-
-                {/* Clears the phone dock (it stays visible over this view) and the home indicator */}
-                <div className="h-[calc(6rem+var(--safe-bottom-ui))] lg:h-10" />
             </div>
 
             {/* Full Screen Image Viewer */}

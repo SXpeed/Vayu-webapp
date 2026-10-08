@@ -1,4 +1,5 @@
 import { apiCall } from './apiClient';
+import { currentWorkspace } from './workspace';
 
 /**
  * Client-side Web Push subscription management.
@@ -133,7 +134,8 @@ export const pushService = {
         try {
             if (!('caches' in globalThis)) return;
             const cache = await caches.open(IDENTITY_CACHE);
-            await cache.put(IDENTITY_URL, new Response(JSON.stringify({ userId, at: Date.now() }), { headers: { 'Content-Type': 'application/json' } }));
+            const org = userId ? currentWorkspace()?.id ?? null : null;
+            await cache.put(IDENTITY_URL, new Response(JSON.stringify({ userId, org, at: Date.now() }), { headers: { 'Content-Type': 'application/json' } }));
         } catch { /* storage blocked: notifications show as before */ }
     },
 };

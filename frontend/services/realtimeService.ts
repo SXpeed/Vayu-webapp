@@ -12,7 +12,7 @@
  * reconnect catch-up recover it.
  */
 import { authHeaders } from './apiClient';
-import { apiBase } from './workspace';
+import { apiBase, currentWorkspace } from './workspace';
 
 export interface ChangeEvent {
     entity: string;
@@ -34,6 +34,13 @@ export type RealtimeEvent =
     | { type: 'status'; connected: boolean };
 
 type Listener = (event: RealtimeEvent) => void;
+
+/**
+ * Tabs share one socket per person *per organization*: a person's id is the
+ * same in every organization that keeps its own storage, so without the
+ * workspace a tab in one organization would follow another's socket.
+ */
+const tabGroup = (userId: string) => `vayu_realtime:${currentWorkspace()?.id ?? 'original'}:${userId}`;
 
 /** Relay protocol between tabs of the same user. */
 type TabMessage = RealtimeEvent | { type: 'status-query' };
@@ -79,7 +86,7 @@ class RealtimeService {
         const gen = ++this.generation;
 
         if (typeof BroadcastChannel !== 'undefined') {
-            this.channel = new BroadcastChannel(`vayu_realtime:${userId}`);
+            this.channel = new BroadcastChannel(tabGroup(userId));
             this.channel.onmessage = event => this.onTabMessage(event.data as TabMessage);
             this.channel.postMessage({ type: 'status-query' } satisfies TabMessage);
         }
@@ -88,7 +95,7 @@ class RealtimeService {
         if (typeof navigator !== 'undefined' && navigator.locks) {
             const abort = new AbortController();
             this.lockAbort = abort;
-            navigator.locks.request(`vayu_realtime:${userId}`, { signal: abort.signal }, () => {
+            navigator.locks.request(tabGroup(userId), { signal: abort.signal }, () => {
                 if (gen !== this.generation) return undefined;
                 this.leader = true;
                 // Status relayed from the previous leader no longer applies;

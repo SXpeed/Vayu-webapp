@@ -9,6 +9,7 @@ import { Button, EmptyState, Field, Input, PageBody, PageHeader, PageRoot, Pill,
 import { useAppChrome } from '../components/Layout';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { realtimeService } from '../services/realtimeService';
+import { db } from '../services/db';
 import { salesService, type PendingSale, type SalesData } from '../services/salesService';
 import {
     MAX_PHOTOS, MAX_TAG_LENGTH, MAX_TAGS, PAYMENT_MODES, cleanTags, monthRange, saleFieldErrors, shiftMonth, summarize, summarizeByTag, todayIso,
@@ -439,13 +440,11 @@ const EMPTY: SaleInput = {
 };
 
 /** The tags of the last sale recorded on this device: at an event, every sale carries the event's tag. */
-const LAST_TAGS_KEY = 'vayu.sales.lastTags';
+// Per workspace (db): one organization's event tag must never pre-fill another's sale.
 const lastTags = (): string[] => {
-    try { return cleanTags(JSON.parse(localStorage.getItem(LAST_TAGS_KEY) ?? '[]')); } catch { return []; }
+    try { return cleanTags(db.getLastSaleTags()); } catch { return []; }
 };
-const rememberTags = (tags: string[]) => {
-    try { localStorage.setItem(LAST_TAGS_KEY, JSON.stringify(tags)); } catch { /* private mode */ }
-};
+const rememberTags = (tags: string[]) => db.setLastSaleTags(tags);
 
 /** Chips for the sale's tags, a field to add one, and the tags already in use to tap. */
 const TagEditor: React.FC<{ tags: string[]; allTags: string[]; onChange: (tags: string[]) => void; carried: boolean }> = ({ tags, allTags, onChange, carried }) => {

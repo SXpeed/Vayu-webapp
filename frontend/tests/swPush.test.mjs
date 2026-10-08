@@ -71,6 +71,25 @@ test('hidden on a device signed in as someone else, or signed out', async () => 
     assert.equal(out.shown.length, 0);
 });
 
+test('the same person working in another organization does not see it', async () => {
+    // A person's id is the same in every organization that keeps its own storage.
+    const elsewhere = worker({ identity: { userId: 'u1', org: 'org-b' } });
+    await elsewhere.fire('push', push({ view: 'messaging', to: 'u1', org: 'org-a' }));
+    assert.equal(elsewhere.shown.length, 0);
+    const here = worker({ identity: { userId: 'u1', org: 'org-a' } });
+    await here.fire('push', push({ view: 'messaging', to: 'u1', org: 'org-a' }));
+    assert.equal(here.shown.length, 1);
+});
+
+test('without an organization on either side, the person alone decides (older versions, original sign-in)', async () => {
+    const oldDevice = worker({ identity: { userId: 'u1' } });
+    await oldDevice.fire('push', push({ view: 'messaging', to: 'u1', org: 'org-a' }));
+    assert.equal(oldDevice.shown.length, 1);
+    const oldPush = worker({ identity: { userId: 'u1', org: 'org-b' } });
+    await oldPush.fire('push', push({ view: 'messaging', to: 'u1' }));
+    assert.equal(oldPush.shown.length, 1);
+});
+
 test('a device the app never told (an older version) shows it, as before', async () => {
     const w = worker();
     await w.fire('push', push({ view: 'messaging', to: 'u1' }));

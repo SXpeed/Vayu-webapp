@@ -415,6 +415,9 @@ const App: React.FC = () => {
 
     // ── Login Handler (orchestrates auth + data loading) ──────────────────
     const handleLogin = async (user: AuthUser) => {
+        // This workspace's own saved copy: the sign-in screen opened on the
+        // copy with no workspace, and the sync below only adds changes to it.
+        await loadData(false);
         applyAuthUser(user);
         const launch = launchTargetRef.current;
         launchTargetRef.current = null;

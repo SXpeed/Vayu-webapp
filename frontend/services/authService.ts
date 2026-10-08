@@ -115,6 +115,8 @@ const markSignedIn = () => { try { localStorage.setItem(SIGNED_IN_KEY, '1'); } c
 const forgetSignIn = () => {
   try { localStorage.removeItem(SIGNED_IN_KEY); localStorage.removeItem(LEGACY_TOKEN_KEY); } catch { /* private mode */ }
   forgetSavedUsers();
+  // Signed out here or by the server (removed, device limit, session ended): no saved data stays behind.
+  db.clearSavedCopies();
 };
 
 /** What the server said about this device's sign-in; 'unknown' when it couldn't be asked (offline, a blip). */
@@ -200,7 +202,7 @@ export const authService = {
       // Sales recorded offline go up first, while this sign-in still works.
       await flushPendingSales().catch(() => undefined);
       try { await fetch(`${apiBase()}/auth/logout`, { method: 'POST', headers: authHeaders() }); } catch { /* signing out anyway */ }
-      db.clearWorkspaceCopy();
+      db.clearSavedCopies();
       forgetSavedUsers();
       try { await authClient.signOut(); } finally { setWorkspace(null); }
       return;

@@ -418,9 +418,10 @@ async function deliverPush(env: Env, subs: Array<{ key: string; sub: StoredPushS
   const vapid = await getOrCreateVapidKeys(env.VAYU_KV);
   await Promise.allSettled(subs.map(async ({ key, sub }) => {
     try {
-      // Addressed to its person: a device now signed in as someone else (or
-      // signed out) does not show it (sw.js).
-      const body = JSON.stringify({ ...payload, data: { ...payload.data, to: sub.userId } });
+      // Addressed to its person in its organization: a device now signed in
+      // as someone else, signed out, or working in another organization (a
+      // person's id is the same in every one) does not show it (sw.js).
+      const body = JSON.stringify({ ...payload, data: { ...payload.data, to: sub.userId, org: env.ORG_ID ?? null } });
       const status = await sendWebPush(sub, body, vapid, VAPID_SUBJECT);
       // 404/410 mean the browser dropped the subscription — clean it up.
       if (status === 404 || status === 410) await env.VAYU_KV.delete(key);
@@ -5484,6 +5485,9 @@ function withServerTiming(response: Response, request: Request, totalMs: number)
   const m = requestMetrics(request);
   try {
     response.headers.set('Server-Timing', `gate;dur=${m.gateMs}, d1;dur=${m.d1Ms}, kv;dur=${m.kvMs}, total;dur=${totalMs}`);
+    // An organization's data is never kept by a browser or shared cache;
+    // responses that set their own policy (files) keep it.
+    if (!response.headers.has('Cache-Control')) response.headers.set('Cache-Control', 'no-store');
   } catch {
     // Immutable headers (a response passed through as is): skip the timing.
   }

@@ -317,3 +317,11 @@ test('each answer says where its time went (Server-Timing)', async () => {
     assert.equal(res.status, 200);
     assert.match(res.headers.get('Server-Timing') ?? '', /^gate;dur=\d+, d1;dur=\d+, kv;dur=\d+, total;dur=\d+$/);
 });
+
+test('an organization\'s data is never kept by a browser or shared cache', async () => {
+    const cookie = [...ownerA.jar].map(([k, v]) => `${k}=${v}`).join('; ');
+    for (const path of ['/artworks', '/contacts', '/sync', '/auth/me']) {
+        const res = await fetch(`${worker.origin}${app(orgA.id, path)}`, { headers: { Cookie: cookie } });
+        assert.equal(res.headers.get('Cache-Control'), 'no-store', `${path} (${res.status})`);
+    }
+});

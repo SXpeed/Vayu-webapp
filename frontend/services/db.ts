@@ -18,6 +18,7 @@ const STORAGE_KEYS = {
   salesPending: 'vayu_sales_pending',
   syncMark: 'vayu_sync_mark',
   seedVersion: 'vayu_seed_version',
+  lastSaleTags: 'vayu.sales.lastTags',
 };
 
 // Bumped to 3: mock/dummy data removed. Migration cleans old mock IDs
@@ -78,16 +79,29 @@ export type SavedList = 'artworks' | 'catalogs' | 'collections' | 'inquiries' | 
   | 'messages' | 'inquiryMessages' | 'events' | 'contacts';
 
 export const db = {
-  /** Removes this workspace's offline copy from the device (signing out). */
-  clearWorkspaceCopy(): void {
-    const workspace = currentWorkspace();
-    if (!workspace) return;
-    for (const key of Object.values(STORAGE_KEYS)) {
-      // Sales recorded offline that still couldn't be uploaded stay: they
-      // exist nowhere else, and upload at the next sign-in to this workspace.
-      if (key === STORAGE_KEYS.salesPending) continue;
-      try { localStorage.removeItem(`${key}@${workspace.id}`); } catch { /* unavailable */ }
-    }
+  /**
+   * Removes every saved copy from the device — every workspace's and the
+   * original app's — when signing out, so the next person at this device
+   * finds no organization's data. Sales recorded offline that still couldn't
+   * be uploaded stay: they exist nowhere else, and upload at the next sign-in
+   * to their workspace.
+   */
+  clearSavedCopies(): void {
+    const names = Object.values(STORAGE_KEYS).filter(k => k !== STORAGE_KEYS.salesPending && k !== STORAGE_KEYS.seedVersion);
+    try {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i);
+        if (key && names.some(name => key === name || key.startsWith(`${name}@`))) localStorage.removeItem(key);
+      }
+    } catch { /* unavailable */ }
+  },
+
+  /** The tags of the last sale recorded in this workspace (an event's sales share its tag). */
+  getLastSaleTags(): unknown {
+    try { return JSON.parse(localStorage.getItem(scoped(STORAGE_KEYS.lastSaleTags)) ?? '[]'); } catch { return []; }
+  },
+  setLastSaleTags(tags: string[]): void {
+    try { localStorage.setItem(scoped(STORAGE_KEYS.lastSaleTags), JSON.stringify(tags)); } catch { /* private mode */ }
   },
 
   /**
