@@ -24,7 +24,7 @@
 // status change does go through change_log, so every inventory list updates.
 
 import { changeLogStmt, ensureChangeLogTable } from './deltaSync';
-import { err, json, runSetupOnce } from './rows';
+import { err, json, runSetupOnce, text } from './rows';
 import {
     MAX_AMOUNT, cleanTags, isAmount, isIsoDate, isPaymentMode, saleFieldErrors, summarize,
     type PaymentMode, type Sale, type SaleInput,
@@ -70,7 +70,7 @@ export function ensureSalesTable(db: D1Database): Promise<void> {
         for (const [column, definition] of Object.entries(ADDED_COLUMNS)) {
             if (have.has(column)) continue;
             try {
-                await db.prepare(`ALTER TABLE sales ADD COLUMN ${column} ${definition}`).run();
+                await db.prepare(`ALTER TABLE sales ADD COLUMN ${column} ${definition}`).run(); // NOSONAR: schema steps run one at a time
             } catch (e) {
                 // Another isolate may have added it at the same moment.
                 if (!/duplicate column/i.test((e as Error).message)) throw e;
@@ -97,29 +97,29 @@ function stringList(raw: unknown): string[] {
 
 /** A sales row, optionally LEFT JOINed with its artwork (art_id, art_images). */
 function rowToSale(r: Record<string, unknown>): Sale {
-    const artworkId = r.artwork_id ? String(r.artwork_id) : null;
+    const artworkId = text(r.artwork_id) || null;
     const inInventory = !!artworkId && !!r.art_id;
     const photoUrls = artworkId ? [] : stringList(r.photo_urls);
     return {
-        id: String(r.id),
-        saleNumber: String(r.sale_number),
+        id: text(r.id),
+        saleNumber: text(r.sale_number),
         artworkId,
         inInventory,
         imageUrl: (inInventory ? stringList(r.art_images)[0] : photoUrls[0]) ?? null,
         photoUrls,
         tags: stringList(r.tags),
-        itemTitle: String(r.item_title ?? ''),
+        itemTitle: text(r.item_title),
         itemPrice: Number(r.item_price) || 0,
-        contactId: r.contact_id ? String(r.contact_id) : null,
-        buyerName: String(r.buyer_name ?? ''),
-        buyerPhone: String(r.buyer_phone ?? ''),
-        saleDate: String(r.sale_date),
+        contactId: text(r.contact_id) || null,
+        buyerName: text(r.buyer_name),
+        buyerPhone: text(r.buyer_phone),
+        saleDate: text(r.sale_date),
         recordedAt: Number(r.recorded_at) || 0,
         amount: Number(r.amount) || 0,
         paymentMode: (isPaymentMode(r.payment_mode) ? r.payment_mode : 'Other') as PaymentMode,
-        referenceNo: String(r.reference_no ?? ''),
-        notes: String(r.notes ?? ''),
-        createdByName: String(r.created_by_name ?? ''),
+        referenceNo: text(r.reference_no),
+        notes: text(r.notes),
+        createdByName: text(r.created_by_name),
         updatedAt: Number(r.updated_at) || 0,
     };
 }
@@ -159,7 +159,7 @@ function readInput(raw: Record<string, unknown>): SaleInput {
         contactId: typeof raw.contactId === 'string' && raw.contactId ? raw.contactId.slice(0, 128) : null,
         buyerName: cleanText(raw.buyerName, 120),
         buyerPhone: cleanText(raw.buyerPhone, 40),
-        saleDate: String(raw.saleDate ?? ''),
+        saleDate: text(raw.saleDate),
         amount: typeof raw.amount === 'number' ? raw.amount : Number.NaN,
         paymentMode: raw.paymentMode as PaymentMode,
         referenceNo: cleanText(raw.referenceNo, 80),
@@ -178,30 +178,92 @@ async function tagsInUse(db: D1Database): Promise<string[]> {
     return [...seen.values()].slice(0, 200);
 }
 
+async function caller(ctx: Ctx): Promise<SessionData | Response> {
+    const session = await getSession(ctx.request, ctx.env.VAYU_KV);
+    if (!session) return err('Unauthorized', 401);
+    await ensureSalesTable(ctx.env.VAYU_DB);
+    return session;
+}
+
+async function loadSale(db: D1Database, id: string): Promise<Sale | null> {
+    const row = await db.prepare(`${SELECT_SALE} WHERE s.id = ? AND s.deleted_at IS NULL`).bind(id).first<Record<string, unknown>>();
+    return row ? rowToSale(row) : null;
+}
+
+/** A contact id must name a contact; the buyer's name and phone are kept either way. */
+async function contactExists(db: D1Database, id: string): Promise<boolean> {
+    try {
+        return !!(await db.prepare('SELECT 1 FROM contacts WHERE id = ?').bind(id).first());
+    } catch {
+        return false; // no contacts table yet
+    }
+}
+
+/**
+ * Marks an inventory piece Sold and gives its title and price for the
+ * sale's snapshot. The check and the change are one statement, so two
+ * sales of the same piece can't both get through.
+ */
+async function sellPiece(db: D1Database, artworkId: string): Promise<{ title: string; price: number } | Response> {
+    const art = await db.prepare('SELECT title, custom_id, price, status FROM artworks WHERE id = ?').bind(artworkId)
+        .first<{ title: string; custom_id: string; price: number; status: string }>();
+    if (!art) return err('That piece is no longer in the inventory.', 404);
+    const sold = await db.prepare("UPDATE artworks SET status = 'Sold' WHERE id = ? AND status = 'Available'").bind(artworkId).run();
+    if (!sold.meta.changes) {
+        const now = await db.prepare('SELECT status FROM artworks WHERE id = ?').bind(artworkId).first<{ status: string }>();
+        return json(now?.status === 'Reserved'
+            ? { error: 'That piece is reserved. Mark it available first.', code: 'reserved' }
+            : { error: 'That piece is already sold', code: 'already_sold' }, 409);
+    }
+    return { title: String(art.title || art.custom_id || 'Untitled'), price: Number(art.price) || 0 };
+}
+
+/**
+ * Saves the sale with the next number, in a single statement so two sales
+ * recorded at once can't share one (seq is UNIQUE besides). Deleted sales
+ * keep theirs: numbers are never reused. If saving fails, a piece this
+ * sale sold goes back on sale.
+ */
+async function insertSale(ctx: Ctx, session: SessionData, id: string, input: SaleInput, item: { title: string; price: number }): Promise<void> {
+    const db = ctx.env.VAYU_DB;
+    const now = Date.now();
+    // An inventory piece shows its own photos; the sale keeps none of its own.
+    const photoUrls = input.artworkId ? [] : input.photoUrls;
+    try {
+        await ensureChangeLogTable(db);
+        const stmts: D1PreparedStatement[] = [db.prepare(
+            `INSERT INTO sales (id, seq, sale_number, artwork_id, item_title, item_price, contact_id, buyer_name, buyer_phone,
+                sale_date, recorded_at, amount, payment_mode, reference_no, notes, tags, photo_urls, created_by, created_by_name, updated_at, updated_by)
+             SELECT ?, n, printf('SAL-%03d', n), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+             FROM (SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM sales)`,
+        ).bind(id, input.artworkId, item.title, item.price, input.contactId, input.buyerName, input.buyerPhone,
+            input.saleDate, now, input.amount, input.paymentMode, input.referenceNo, input.notes,
+            JSON.stringify(input.tags), JSON.stringify(photoUrls), session.userId, session.name, now, session.userId)];
+        if (input.artworkId) stmts.push(changeLogStmt(db, ctx.env, 'artwork', input.artworkId, 'put', { actorId: session.userId }));
+        await db.batch(stmts);
+    } catch (e) {
+        if (input.artworkId) await db.prepare("UPDATE artworks SET status = 'Available' WHERE id = ? AND status = 'Sold'").bind(input.artworkId).run().catch(() => undefined);
+        throw e;
+    }
+}
+
+/**
+ * The id for a new sale. The app names new sales itself, so an upload
+ * retried after a dropped connection finds the first one (answered as
+ * it is) instead of recording it twice.
+ */
+async function newSaleId(db: D1Database, raw: Record<string, unknown>): Promise<{ id: string } | Response> {
+    if (raw.id === undefined) return { id: newId() };
+    if (typeof raw.id !== 'string' || !CLIENT_ID.test(raw.id)) return err('Invalid sale id.');
+    const existing = await db.prepare('SELECT id, deleted_at FROM sales WHERE id = ?').bind(raw.id).first<{ deleted_at: number | null }>();
+    if (!existing) return { id: raw.id };
+    if (existing.deleted_at) return err('This sale was deleted.', 410);
+    return json(await loadSale(db, raw.id), 200);
+}
+
 export function salesRoutes(deps: SalesDeps): SalesRoute[] {
     const signal = (ctx: Ctx, id: string, artworkId?: string | null) =>
         deps.notify(ctx, [{ entity: 'sales', id, op: 'put' }, ...(artworkId ? [{ entity: 'artwork', id: artworkId, op: 'put' as const }] : [])]);
-
-    async function caller(ctx: Ctx): Promise<SessionData | Response> {
-        const session = await getSession(ctx.request, ctx.env.VAYU_KV);
-        if (!session) return err('Unauthorized', 401);
-        await ensureSalesTable(ctx.env.VAYU_DB);
-        return session;
-    }
-
-    async function loadSale(db: D1Database, id: string): Promise<Sale | null> {
-        const row = await db.prepare(`${SELECT_SALE} WHERE s.id = ? AND s.deleted_at IS NULL`).bind(id).first<Record<string, unknown>>();
-        return row ? rowToSale(row) : null;
-    }
-
-    /** A contact id must name a contact; the buyer's name and phone are kept either way. */
-    async function contactExists(db: D1Database, id: string): Promise<boolean> {
-        try {
-            return !!(await db.prepare('SELECT 1 FROM contacts WHERE id = ?').bind(id).first());
-        } catch {
-            return false; // no contacts table yet
-        }
-    }
 
     /** GET /sales?from=&to= — the sales in a date range (the day of the sale), their totals, and every tag in use. */
     const list: Handler = async (ctx) => {
@@ -218,68 +280,6 @@ export function salesRoutes(deps: SalesDeps): SalesRoute[] {
         const sales = rows.map(r => rowToSale(r as Record<string, unknown>));
         return json({ from, to, sales, summary: summarize(sales), allTags: await tagsInUse(ctx.env.VAYU_DB) });
     };
-
-    /**
-     * The id for a new sale. The app names new sales itself, so an upload
-     * retried after a dropped connection finds the first one (answered as
-     * it is) instead of recording it twice.
-     */
-    async function newSaleId(db: D1Database, raw: Record<string, unknown>): Promise<{ id: string } | Response> {
-        if (raw.id === undefined) return { id: newId() };
-        if (typeof raw.id !== 'string' || !CLIENT_ID.test(raw.id)) return err('Invalid sale id.');
-        const existing = await db.prepare('SELECT id, deleted_at FROM sales WHERE id = ?').bind(raw.id).first<{ deleted_at: number | null }>();
-        if (!existing) return { id: raw.id };
-        if (existing.deleted_at) return err('This sale was deleted.', 410);
-        return json(await loadSale(db, raw.id), 200);
-    }
-
-    /**
-     * Marks an inventory piece Sold and gives its title and price for the
-     * sale's snapshot. The check and the change are one statement, so two
-     * sales of the same piece can't both get through.
-     */
-    async function sellPiece(db: D1Database, artworkId: string): Promise<{ title: string; price: number } | Response> {
-        const art = await db.prepare('SELECT title, custom_id, price, status FROM artworks WHERE id = ?').bind(artworkId)
-            .first<{ title: string; custom_id: string; price: number; status: string }>();
-        if (!art) return err('That piece is no longer in the inventory.', 404);
-        const sold = await db.prepare("UPDATE artworks SET status = 'Sold' WHERE id = ? AND status = 'Available'").bind(artworkId).run();
-        if (!sold.meta.changes) {
-            const now = await db.prepare('SELECT status FROM artworks WHERE id = ?').bind(artworkId).first<{ status: string }>();
-            return json(now?.status === 'Reserved'
-                ? { error: 'That piece is reserved. Mark it available first.', code: 'reserved' }
-                : { error: 'That piece is already sold', code: 'already_sold' }, 409);
-        }
-        return { title: String(art.title || art.custom_id || 'Untitled'), price: Number(art.price) || 0 };
-    }
-
-    /**
-     * Saves the sale with the next number, in a single statement so two sales
-     * recorded at once can't share one (seq is UNIQUE besides). Deleted sales
-     * keep theirs: numbers are never reused. If saving fails, a piece this
-     * sale sold goes back on sale.
-     */
-    async function insertSale(ctx: Ctx, session: SessionData, id: string, input: SaleInput, item: { title: string; price: number }): Promise<void> {
-        const db = ctx.env.VAYU_DB;
-        const now = Date.now();
-        // An inventory piece shows its own photos; the sale keeps none of its own.
-        const photoUrls = input.artworkId ? [] : input.photoUrls;
-        try {
-            await ensureChangeLogTable(db);
-            const stmts: D1PreparedStatement[] = [db.prepare(
-                `INSERT INTO sales (id, seq, sale_number, artwork_id, item_title, item_price, contact_id, buyer_name, buyer_phone,
-                    sale_date, recorded_at, amount, payment_mode, reference_no, notes, tags, photo_urls, created_by, created_by_name, updated_at, updated_by)
-                 SELECT ?, n, printf('SAL-%03d', n), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-                 FROM (SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM sales)`,
-            ).bind(id, input.artworkId, item.title, item.price, input.contactId, input.buyerName, input.buyerPhone,
-                input.saleDate, now, input.amount, input.paymentMode, input.referenceNo, input.notes,
-                JSON.stringify(input.tags), JSON.stringify(photoUrls), session.userId, session.name, now, session.userId)];
-            if (input.artworkId) stmts.push(changeLogStmt(db, ctx.env, 'artwork', input.artworkId, 'put', { actorId: session.userId }));
-            await db.batch(stmts);
-        } catch (e) {
-            if (input.artworkId) await db.prepare("UPDATE artworks SET status = 'Available' WHERE id = ? AND status = 'Sold'").bind(input.artworkId).run().catch(() => undefined);
-            throw e;
-        }
-    }
 
     /** POST /sales — record a sale. An inventory piece is marked Sold, only if it is still Available. */
     const create: Handler = async (ctx) => {

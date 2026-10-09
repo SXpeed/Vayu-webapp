@@ -30,23 +30,39 @@ export function addable(inputs: ShiftInput[], existing: ShiftInput[]): { add: Sh
 /** Rows of a CSV: quoted fields, doubled quotes, CRLF, a leading BOM. */
 export function parseCsv(text: string): string[][] {
     const rows: string[][] = [];
-    let row: string[] = [], field = '', quoted = false;
+    let row: string[] = [], field = '';
     const src = text.replace(/^﻿/, '');
-    for (let i = 0; i < src.length; i++) {
+    let i = 0;
+    while (i < src.length) {
         const ch = src[i];
-        if (quoted) {
-            if (ch === '"' && src[i + 1] === '"') { field += '"'; i++; }
-            else if (ch === '"') quoted = false;
-            else field += ch;
-        } else if (ch === '"') quoted = true;
-        else if (ch === ',') { row.push(field); field = ''; }
+        if (ch === '"') {
+            const quoted = readQuoted(src, i + 1);
+            field += quoted.text;
+            i = quoted.next;
+            continue;
+        }
+        if (ch === ',') { row.push(field); field = ''; }
         else if (ch === '\n' || ch === '\r') {
             if (ch === '\r' && src[i + 1] === '\n') i++;
             row.push(field); rows.push(row); row = []; field = '';
         } else field += ch;
+        i++;
     }
     if (field || row.length) { row.push(field); rows.push(row); }
     return rows.filter(r => r.some(c => c.trim()));
+}
+
+/** A quoted field's text, read from just after its opening quote; `next` is just past the closing one. */
+function readQuoted(src: string, from: number): { text: string; next: number } {
+    let text = '';
+    let i = from;
+    while (i < src.length) {
+        if (src[i] !== '"') { text += src[i++]; continue; }
+        if (src[i + 1] !== '"') return { text, next: i + 1 };
+        text += '"';
+        i += 2;
+    }
+    return { text, next: i };
 }
 
 /** 2026-10-05, 05/10/2026 or 05-10-2026 (day first, as in India). */
@@ -102,19 +118,27 @@ export function readImport(text: string, data: StaffRosterData): { rows: ImportR
             if (!person) return fail('A day off needs an employee.');
             return { line, shift: { kind: 'off', employeeId: person.id, storeId: null, date, startMin: 0, endMin: 0, breakMin: 0, role: '', note: get('note').slice(0, 200) }, problem: null };
         }
-        const startMin = readTime(get('start')), endMin = readTime(get('end'));
-        if (startMin === null || endMin === null) return fail('Start and End need times such as 09:00 and 17:00.');
-        const storeName = get('store');
-        const store = storeName ? storeByName.get(storeName.toLowerCase()) : onlyStore;
-        if (!store) return fail(storeName ? `Store "${storeName}" doesn't exist (names must match Attendance → Stores).` : 'Say which store.');
-        const breakText = get('break');
-        const breakMin = breakText ? Number(breakText) : defaultBreakMin(startMin, endMin);
-        if (!Number.isFinite(breakMin)) return fail(`Break "${breakText}" should be minutes, e.g. 30.`);
-        const role = (get('role') || person?.title || data.jobTitles[0] || '').slice(0, 60);
-        const shift: ShiftInput = { kind: 'shift', employeeId: person?.id ?? null, storeId: store.id, date, startMin, endMin, breakMin, role, note: get('note').slice(0, 200) };
-        const errors = shiftFieldErrors(shift);
-        return errors.length ? fail(errors[0]) : { line, shift, problem: null };
+        const read = readShift(get, person, date, data, store => (store ? storeByName.get(store.toLowerCase()) : onlyStore));
+        return typeof read === 'string' ? fail(read) : { line, shift: read, problem: null };
     });
     return { rows, problem: null };
+}
+
+/** One import row as a shift, or what's wrong with it. */
+function readShift(
+    get: (key: string) => string, person: { id: string; title?: string | null } | undefined, date: string,
+    data: StaffRosterData, findStore: (name: string) => { id: string } | null | undefined,
+): ShiftInput | string {
+    const startMin = readTime(get('start')), endMin = readTime(get('end'));
+    if (startMin === null || endMin === null) return 'Start and End need times such as 09:00 and 17:00.';
+    const storeName = get('store');
+    const store = findStore(storeName);
+    if (!store) return storeName ? `Store "${storeName}" doesn't exist (names must match Attendance → Stores).` : 'Say which store.';
+    const breakText = get('break');
+    const breakMin = breakText ? Number(breakText) : defaultBreakMin(startMin, endMin);
+    if (!Number.isFinite(breakMin)) return `Break "${breakText}" should be minutes, e.g. 30.`;
+    const role = (get('role') || person?.title || data.jobTitles[0] || '').slice(0, 60);
+    const shift: ShiftInput = { kind: 'shift', employeeId: person?.id ?? null, storeId: store.id, date, startMin, endMin, breakMin, role, note: get('note').slice(0, 200) };
+    return shiftFieldErrors(shift)[0] ?? shift;
 }
 

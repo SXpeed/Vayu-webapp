@@ -29,14 +29,24 @@ const upsert = (db: D1Database, key: string, value: unknown) => db.prepare(
 ).bind(key, JSON.stringify(value), Date.now());
 
 /** The error as a short line for the control centre: no stack, no secrets from URLs. */
+/** " (failing since …)" when the failures started before this run. */
+const failingSince = (since: number | undefined, now: number): string =>
+  since === undefined || since === now ? '' : ` (failing since ${new Date(since).toISOString()})`;
+
+const failingLabel = (j: { name: string; error?: string | null }): string => `${j.name} (${j.error})`;
+
 function shortError(e: unknown): string {
-  const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-  return text.replace(/([?&](?:token|key|secret|signature)=)[^&\s]+/gi, '$1…').slice(0, 300);
+  const message = e instanceof Error ? `${e.name}: ${e.message}` : String(e); // NOSONAR: anything thrown, written out as best it can be
+  return message.replace(/([?&](?:token|key|secret|signature)=)[^&\s]+/gi, '$1…').slice(0, 300);
 }
 
 /** Notes that the cron ran. */
-export function recordRun(db: D1Database): Promise<unknown> {
-  return upsert(db, RUN_KEY, { at: Date.now() }).run().catch(e => console.error('recording the scheduled run failed', e));
+export async function recordRun(db: D1Database): Promise<void> {
+  try {
+    await upsert(db, RUN_KEY, { at: Date.now() }).run();
+  } catch (e) {
+    console.error('recording the scheduled run failed', e);
+  }
 }
 
 /**
@@ -66,7 +76,7 @@ export async function runJob(db: D1Database, name: string, work: () => Promise<u
         dedupeKey: `alert:job:${name}:${Math.floor(now / HOUR)}`,
         kind: 'system_alert', recipient: providerEmail,
         subject: `Scheduled job failing: ${name}`,
-        body: `The scheduled job "${name}" failed at ${new Date(now).toISOString()}${outcome.failingSince !== now ? ` (failing since ${new Date(outcome.failingSince!).toISOString()})` : ''}: ${error}. It is tried again every 10 minutes. See System health in the control centre.`,
+        body: `The scheduled job "${name}" failed at ${new Date(now).toISOString()}${failingSince(outcome.failingSince, now)}: ${error}. It is tried again every 10 minutes. See System health in the control centre.`,
       }));
     }
     await db.batch(statements).catch(err => console.error('recording a failed job failed', err));
@@ -96,6 +106,6 @@ export async function jobsHealth(db: D1Database, now = Date.now()): Promise<Jobs
   const failing = jobs.filter(j => !j.ok);
   if (lastRunAt === null) return { ok: false, detail: 'No scheduled run recorded yet (normal on a fresh or local setup)', lastRunAt, jobs };
   if (now - lastRunAt > JOBS_STALE_MS) return { ok: false, detail: `Last ran ${Math.round((now - lastRunAt) / 60_000)} minutes ago — the cron trigger may be off`, lastRunAt, jobs };
-  if (failing.length) return { ok: false, detail: `Failing: ${failing.map(j => `${j.name} (${j.error})`).join('; ')}`, lastRunAt, jobs };
+  if (failing.length) return { ok: false, detail: `Failing: ${failing.map(failingLabel).join('; ')}`, lastRunAt, jobs };
   return { ok: true, detail: `Ran ${Math.max(0, Math.round((now - lastRunAt) / 60_000))} minutes ago; ${jobs.length} jobs fine`, lastRunAt, jobs };
 }

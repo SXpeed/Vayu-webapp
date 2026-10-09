@@ -22,8 +22,9 @@ const scope = self as unknown as {
     onmessage: ((event: MessageEvent<CatalogPdfRequest>) => void) | null;
 };
 
-scope.onmessage = async (event) => {
-    const { id, job } = event.data;
+scope.onmessage = (event) => { void build(event.data); };
+
+async function build({ id, job }: CatalogPdfRequest): Promise<void> {
     try {
         const buffer = await buildCatalogPdf(job, {
             onProgress: (progress) => scope.postMessage({ type: 'progress', id, progress }),
@@ -34,4 +35,4 @@ scope.onmessage = async (event) => {
         console.error('Catalog PDF generation failed in worker:', err);
         scope.postMessage({ type: 'error', id, message: (err as Error)?.message || String(err) });
     }
-};
+}

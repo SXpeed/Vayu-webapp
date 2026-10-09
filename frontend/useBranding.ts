@@ -91,7 +91,7 @@ export function useBranding(): PublicBranding {
     listeners.add(setBranding);
     // The remembered answer is shown at once, then checked once per page load.
     if (!fresh) {
-      refreshBranding().then(() => {
+      void refreshBranding().then(() => {
         // The lookup failed: stop holding the logo's place.
         if (!cache) setBranding(b => (b.loaded ? b : { ...b, loaded: true }));
       });

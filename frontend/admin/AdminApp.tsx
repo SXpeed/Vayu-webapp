@@ -130,7 +130,7 @@ const ControlCentre: React.FC = () => {
             if (!result) return;
             toast[result.ok ? 'success' : 'error'](result.message, { duration: 10_000 });
             go('profile');
-            refresh();
+            void refresh();
         }).catch(() => { /* offline: nothing to say */ });
     }, [go, refresh]);
 
@@ -143,10 +143,10 @@ const ControlCentre: React.FC = () => {
         } catch { /* the badges are a convenience */ }
     }, []);
 
-    useEffect(() => { refresh(); }, [refresh]);
-    useEffect(() => { if (screen.kind === 'ready') loadBadges(); }, [screen.kind, tab, loadBadges]);
+    useEffect(() => { void refresh(); }, [refresh]);
+    useEffect(() => { if (screen.kind === 'ready') void loadBadges(); }, [screen.kind, tab, loadBadges]);
     useEffect(() => {
-        const on = () => { if (document.visibilityState === 'visible' && screen.kind === 'ready') loadBadges(); };
+        const on = () => { if (document.visibilityState === 'visible' && screen.kind === 'ready') void loadBadges(); };
         document.addEventListener('visibilitychange', on);
         return () => document.removeEventListener('visibilitychange', on);
     }, [screen.kind, loadBadges]);
@@ -291,13 +291,13 @@ const ControlCentre: React.FC = () => {
             {reauthResolve && createPortal(
                 <>
                     <div className="ac-scrim ac-dialog-scrim neu-scrim" />
-                    <div className="ac-dialog neu-modal p-6" role="dialog" aria-modal="true" aria-label="Confirm it's you">
+                    <dialog open className="ac-dialog neu-modal p-6" aria-modal="true" aria-label="Confirm it's you">
                         <SignIn email={screen.email} title="Confirm it's you" compact onDone={() => { reauthResolve(true); setReauthResolve(null); }} />
                         <div className="mt-3 flex justify-center">
                             <button type="button" className="text-[11px] uppercase tracking-[0.16em] text-gray-600 dark:text-gray-400 py-2"
                                 onClick={() => { reauthResolve(false); setReauthResolve(null); }}>Cancel</button>
                         </div>
-                    </div>
+                    </dialog>
                 </>,
                 document.getElementById('ac-overlays') ?? document.body,
             )}
@@ -481,7 +481,7 @@ const LoginMethodsPanel: React.FC<{ reauth: Reauth }> = ({ reauth }) => {
         }
     }, []);
 
-    useEffect(() => { load(); }, [load]);
+    useEffect(() => { void load(); }, [load]);
 
     if (!info || !draft) return <Section title="Login methods"><SkeletonRows rows={4} /></Section>;
 

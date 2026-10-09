@@ -132,7 +132,10 @@ export function useInboxState(
 }
 
 /** 0 hides; above 99 reads 99+. */
-export const badgeText = (count: number): string | null => (count <= 0 ? null : count > 99 ? '99+' : String(count));
+export const badgeText = (count: number): string | null => {
+    if (count <= 0) return null;
+    return count > 99 ? '99+' : String(count);
+};
 
 /** A small count on a nav item; takes no room when there is nothing to count. */
 export const CountBadge: React.FC<{ count: number; className?: string }> = ({ count, className = '' }) => {

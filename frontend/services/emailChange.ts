@@ -68,7 +68,8 @@ export async function emailChangeLanding(client: AuthClient): Promise<{ ok: bool
     params.delete('account');
     params.delete('error');
     const rest = params.toString();
-    history.replaceState(null, '', `${location.pathname}${rest ? `?${rest}` : ''}${location.hash}`);
+    const query = rest ? `?${rest}` : '';
+    history.replaceState(null, '', `${location.pathname}${query}${location.hash}`);
 
     if (error) {
         return { ok: false, message: /expired/i.test(error) ? 'That email link has expired. Start the change again from your Profile.' : 'That email link did not work. Start the change again from your Profile.' };

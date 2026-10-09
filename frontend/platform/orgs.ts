@@ -5,6 +5,7 @@
 // another organization simply isn't found.
 
 import { hashPassword } from 'better-auth/crypto';
+import { text } from '../rows';
 import { auditStmt } from './audit';
 import { insertMemberWithinSeatLimit, limitOf, resolveEntitlements, seatUsage } from './plans';
 
@@ -45,11 +46,11 @@ export function slugify(name: string): string {
 }
 
 function isUniqueViolation(e: unknown): boolean {
-  return /UNIQUE constraint failed/i.test(String((e as Error)?.message ?? e));
+  return /UNIQUE constraint failed/i.test(e instanceof Error ? e.message : text(e));
 }
 
 function isOwnerGuard(e: unknown): boolean {
-  return /at least one active owner/i.test(String((e as Error)?.message ?? e));
+  return /at least one active owner/i.test(e instanceof Error ? e.message : text(e));
 }
 
 async function userIdByEmail(db: D1Database, email: string): Promise<string | null> {

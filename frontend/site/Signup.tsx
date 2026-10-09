@@ -27,9 +27,9 @@ const authClient = createAuthClient({ basePath: '/api/v2/auth' });
 interface ApiError { status: number; code?: string; message: string }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-    const res = await fetch(`/api/v2${path}`, { ...init, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) } });
+    const res = await fetch(`/api/v2${path}`, { ...init, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...init?.headers } });
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw { status: res.status, code: body.code, message: body.error || 'Something went wrong' } as ApiError;
+    if (!res.ok) throw Object.assign(new Error(body.error || 'Something went wrong'), { status: res.status, code: body.code });
     return body as T;
 }
 
@@ -177,7 +177,7 @@ export const Signup: React.FC = () => {
                         <Card padding="lg">
                             <h1 className="font-serif text-[1.75rem] leading-tight text-gray-900 dark:text-gray-100">About your business</h1>
                             <p className="text-[13px] mt-1.5 text-gray-600 dark:text-gray-400">Fields marked * are needed to apply. Everything saves, so you can finish later.</p>
-                            <form className="mt-6 space-y-7" onSubmit={e => { e.preventDefault(); save('plan'); }}>
+                            <form className="mt-6 space-y-7" onSubmit={e => { e.preventDefault(); void save('plan'); }}>
                                 <FormSection title="The business">
                                     <Field label="Business name *" htmlFor="b-name"><Input id="b-name" required value={draft.businessName ?? ''} onChange={set('businessName')} /></Field>
                                     <Field label="Type of business *" htmlFor="b-type">
@@ -663,12 +663,12 @@ const ConfirmEmailNotice: React.FC<{ email: string }> = ({ email }) => {
     };
     const label = { idle: 'Send the link again', sending: 'Sending…', sent: 'Link sent' }[state];
     return (
-        <div role="status" className="rounded-2xl px-4 py-3.5 bg-gold-500/10 text-[14px] text-gray-800 dark:text-gray-200 flex flex-wrap items-center gap-x-4 gap-y-2">
+        <output className="rounded-2xl px-4 py-3.5 bg-gold-500/10 text-[14px] text-gray-800 dark:text-gray-200 flex flex-wrap items-center gap-x-4 gap-y-2">
             <p className="flex-1 min-w-[14rem]">
                 <strong className="font-medium">Confirm your email.</strong> We sent a link to <span className="[overflow-wrap:anywhere]">{email}</span>. You can fill everything in now; sending the application needs the confirmed address.
             </p>
             <Button onClick={resend} disabled={state !== 'idle'}>{label}</Button>
-        </div>
+        </output>
     );
 };
 
@@ -749,8 +749,8 @@ const StatusStep: React.FC<{ app: Application; events: AppEvent[]; onEdit: () =>
             <Card padding="lg">
                 <p className="font-medium text-gray-900 dark:text-gray-100">{app.businessName}</p>
                 <ol className="mt-4 space-y-2.5">
-                    {events.map((e, i) => (
-                        <li key={i} className="text-[13px] grid gap-0.5 sm:grid-cols-[11rem_1fr] sm:gap-3">
+                    {events.map(e => (
+                        <li key={`${e.at}-${e.action}`} className="text-[13px] grid gap-0.5 sm:grid-cols-[11rem_1fr] sm:gap-3">
                             <span className="text-gray-600 dark:text-gray-400 tabular-nums">{new Date(e.at).toLocaleString()}</span>
                             <span className="text-gray-800 dark:text-gray-200 break-words">{e.action.replace(/[._]/g, ' ')}{e.message ? ` — ${e.message}` : ''}</span>
                         </li>

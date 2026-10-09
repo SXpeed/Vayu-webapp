@@ -16,14 +16,15 @@
 // database or membership.
 
 import type { Env } from '../workerEnv';
+import { text } from '../rows';
 import { auditStmt } from './audit';
 import { BUSINESS_TYPES, OrgError, slugify, type Actor } from './orgs';
 import { outboxStmt, getNotificationSettings } from './notify';
 import { resolveEntitlements, setSubscription } from './plans';
 import type { OrgStore } from './orgStore';
 
-const OPEN = ['draft', 'pending_review', 'needs_information'];
-const EDITABLE = ['draft', 'pending_review', 'needs_information'];
+const OPEN = new Set(['draft', 'pending_review', 'needs_information']);
+const EDITABLE = new Set(['draft', 'pending_review', 'needs_information']);
 
 /** Fields the applicant fills in, with their limits. */
 const TEXT_FIELDS: Record<string, number> = {
@@ -80,7 +81,7 @@ async function displayStatus(db: D1Database, row: Row): Promise<string> {
   const org = await db.prepare('SELECT status FROM organizations WHERE id = ?').bind(row.org_id).first<{ status: string }>();
   if (org?.status === 'suspended') return 'suspended';
   if (org?.status === 'closed') return 'closed';
-  const ent = await resolveEntitlements(db, String(row.org_id));
+  const ent = await resolveEntitlements(db, text(row.org_id));
   if (ent.subscription.status === 'payment_required') return 'payment_required';
   if (ent.subscription.status === 'trial_expired') return 'trial_expired';
   return 'active';
@@ -126,13 +127,13 @@ function checkFieldFormats(out: Record<string, FieldValue>): void {
   if (out.phone && !/^[+()\d\s-]{6,40}$/.test(String(out.phone))) throw new OrgError(400, 'invalid', 'Enter a valid phone number.');
 }
 
-async function openApplication(db: D1Database, userId: string): Promise<Row | null> {
+function openApplication(db: D1Database, userId: string): Promise<Row | null> {
   return db.prepare(
     `SELECT * FROM applications WHERE user_id = ? AND review_status IN ('draft','pending_review','needs_information')`,
   ).bind(userId).first<Row>();
 }
 
-async function latestApplication(db: D1Database, userId: string): Promise<Row | null> {
+function latestApplication(db: D1Database, userId: string): Promise<Row | null> {
   return db.prepare('SELECT * FROM applications WHERE user_id = ? ORDER BY created_at DESC LIMIT 1').bind(userId).first<Row>();
 }
 
@@ -163,7 +164,7 @@ export async function saveMyApplication(db: D1Database, userId: string, body: Re
 
   if (!row) {
     const last = await latestApplication(db, userId);
-    if (last && last.review_status === 'approved') {
+    if (last?.review_status === 'approved') {
       throw new OrgError(409, 'already_approved', 'Your business is already approved. Open your workspace instead.');
     }
     const id = crypto.randomUUID();
@@ -181,7 +182,7 @@ export async function saveMyApplication(db: D1Database, userId: string, body: Re
     if (!row) throw new OrgError(500, 'internal', 'Could not start the application.');
   }
 
-  if (!EDITABLE.includes(row.review_status)) throw new OrgError(409, 'not_editable', 'This application can no longer be changed.');
+  if (!EDITABLE.has(row.review_status)) throw new OrgError(409, 'not_editable', 'This application can no longer be changed.');
   const columns = Object.keys(fields);
   if (columns.length) {
     await db.prepare(
@@ -200,9 +201,9 @@ export async function submitMyApplication(db: D1Database, userId: string, userEm
   // Submitting twice is harmless: it stays under review, nothing is duplicated.
   if (row.review_status === 'pending_review') return getMyApplication(db, userId);
 
-  const missing = REQUIRED.filter(c => !String(row[c] ?? '').trim());
+  const missing = REQUIRED.filter(c => !text(row[c]).trim());
   if (missing.length) {
-    throw new OrgError(400, 'incomplete', `Please fill in: ${missing.map(c => c.replace(/_/g, ' ')).join(', ')}.`);
+    throw new OrgError(400, 'incomplete', `Please fill in: ${missing.map(c => c.replaceAll('_', ' ')).join(', ')}.`);
   }
   const plan = await db.prepare(
     `SELECT 1 FROM plans p JOIN plan_versions v ON v.plan_id = p.id AND v.status = 'published'
@@ -229,8 +230,8 @@ export async function submitMyApplication(db: D1Database, userId: string, userEm
       dedupeKey: `application:${row.id}:submitted:${(round?.n ?? 0) + 1}`,
       kind: 'application_submitted',
       recipient: providerEmail,
-      subject: `${resubmission ? 'Updated' : 'New'} application: ${row.business_name}`,
-      body: `${row.business_name} (${row.business_type}) applied for the ${row.requested_plan_key} plan. Review it in the control panel. Applicant: ${userEmail}.`,
+      subject: `${resubmission ? 'Updated' : 'New'} application: ${text(row.business_name)}`,
+      body: `${text(row.business_name)} (${text(row.business_type)}) applied for the ${text(row.requested_plan_key)} plan. Review it in the control panel. Applicant: ${userEmail}.`,
     }));
   }
   await db.batch(statements);
@@ -251,15 +252,15 @@ export async function withdrawMyApplication(db: D1Database, userId: string) {
 
 export async function listApplications(db: D1Database, params: URLSearchParams) {
   const status = params.get('status');
-  const valid = ['draft', 'pending_review', 'needs_information', 'approved', 'rejected', 'withdrawn'];
-  const where = status && valid.includes(status) ? 'WHERE a.review_status = ?' : "WHERE a.review_status <> 'draft'";
+  const valid = new Set(['draft', 'pending_review', 'needs_information', 'approved', 'rejected', 'withdrawn']);
+  const where = status && valid.has(status) ? 'WHERE a.review_status = ?' : "WHERE a.review_status <> 'draft'";
   const stmt = db.prepare(
     `SELECT a.id, a.review_status, a.provisioning_status, a.business_name, a.business_type, a.requested_plan_key,
             a.expected_employees, a.submitted_at, a.decided_at, a.org_id, a.updated_at, u.email, u.emailVerified AS email_verified
      FROM applications a JOIN "user" u ON u.id = a.user_id
      ${where} ORDER BY COALESCE(a.submitted_at, a.updated_at) DESC LIMIT 200`,
   );
-  const { results } = await (status && valid.includes(status) ? stmt.bind(status) : stmt).all();
+  const { results } = await (status && valid.has(status) ? stmt.bind(status) : stmt).all();
   const counts = await db.prepare('SELECT review_status, COUNT(*) AS n FROM applications GROUP BY review_status').all();
   return {
     applications: results,
@@ -338,14 +339,14 @@ export async function changeRequestedPlan(db: D1Database, id: string, body: Reco
   const planKey = typeof body.planKey === 'string' ? body.planKey.trim() : '';
   const reason = message(body.reason, 'The reason');
   const row = await requireApp(db, id);
-  if (!OPEN.includes(row.review_status)) throw new OrgError(409, 'not_pending', 'The plan can only be changed before a decision.');
+  if (!OPEN.has(row.review_status)) throw new OrgError(409, 'not_pending', 'The plan can only be changed before a decision.');
   const plan = await db.prepare(
     "SELECT 1 FROM plans p JOIN plan_versions v ON v.plan_id = p.id AND v.status = 'published' WHERE p.key = ?",
   ).bind(planKey).first();
   if (!plan) throw new OrgError(400, 'invalid_plan', 'That plan has no published version.');
   await db.batch([
     db.prepare('UPDATE applications SET requested_plan_key = ?, updated_at = ? WHERE id = ?').bind(planKey, Date.now(), id),
-    event(db, id, { actorUserId: actor.userId, actorKind: 'provider_admin', action: 'plan_changed', message: `Plan changed from ${row.requested_plan_key} to ${planKey}: ${reason}` }),
+    event(db, id, { actorUserId: actor.userId, actorKind: 'provider_admin', action: 'plan_changed', message: `Plan changed from ${text(row.requested_plan_key)} to ${planKey}: ${reason}` }),
     auditStmt(db, { actorUserId: actor.userId, actorKind: 'provider_admin', action: 'application.change_plan', targetType: 'application', targetId: id, details: { from: row.requested_plan_key, to: planKey, reason }, ip: actor.ip }),
   ]);
   return getApplication(db, id);
@@ -408,7 +409,7 @@ export async function approveApplication(env: Env, db: D1Database, id: string, b
   // Provision. The organization id is the application id, so a retry finds
   // the same organization instead of making another.
   const orgId = id;
-  const baseSlug = slugify(String(row.business_name || 'organization'));
+  const baseSlug = slugify(text(row.business_name) || 'organization');
   const taken = await db.prepare('SELECT id FROM organizations WHERE slug = ? AND id <> ?').bind(baseSlug, orgId).first();
   const slug = taken ? `${baseSlug}-${id.slice(0, 6)}` : baseSlug;
   const now = Date.now();
@@ -451,7 +452,7 @@ export async function approveApplication(env: Env, db: D1Database, id: string, b
     db.prepare("UPDATE applications SET provisioning_status = 'provisioned', org_id = ?, provisioning_error = NULL, updated_at = ? WHERE id = ?").bind(orgId, Date.now(), id),
     event(db, id, { actorUserId: null, actorKind: 'system', action: 'workspace_ready', message: 'Your workspace is ready.' }),
   ];
-  if (email) statements.push(outboxStmt(db, { dedupeKey: `application:${id}:ready`, kind: 'workspace_ready', recipient: email, subject: 'Your workspace is ready', body: `${row.business_name} is set up. Sign in to start.` }));
+  if (email) statements.push(outboxStmt(db, { dedupeKey: `application:${id}:ready`, kind: 'workspace_ready', recipient: email, subject: 'Your workspace is ready', body: `${text(row.business_name)} is set up. Sign in to start.` }));
   await db.batch(statements);
   return getApplication(db, id);
 }

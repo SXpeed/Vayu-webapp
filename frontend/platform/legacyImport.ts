@@ -65,9 +65,8 @@ export async function readLegacyUsers(env: Env): Promise<LegacyUser[]> {
   const users: LegacyUser[] = [];
   let cursor: string | undefined;
   do {
-    const page = await env.VAYU_KV.list({ prefix: 'auth:user:', cursor });
-    for (const key of page.keys) {
-      const raw = await env.VAYU_KV.get(key.name);
+    const page = await env.VAYU_KV.list({ prefix: 'auth:user:', cursor }); // NOSONAR: each page needs the previous page's cursor
+    for (const raw of await Promise.all(page.keys.map(key => env.VAYU_KV.get(key.name)))) { // NOSONAR: one page at a time
       if (!raw) continue;
       try { users.push(JSON.parse(raw) as LegacyUser); } catch { /* skip unreadable */ }
     }
@@ -170,9 +169,10 @@ async function importBusinessRows(legacy: D1Database, store: DurableObjectStub<O
     report.tables[table] = { source, inserted: 0, alreadyThere: before[table] ?? 0 };
     if (dryRun) continue;
     for (let offset = 0; offset < source; offset += PAGE) {
-      const { results } = await legacy.prepare(`SELECT * FROM ${table} LIMIT ? OFFSET ?`).bind(PAGE, offset).all();
+      // Pages go in order, one at a time, and stop at the first empty one.
+      const { results } = await legacy.prepare(`SELECT * FROM ${table} LIMIT ? OFFSET ?`).bind(PAGE, offset).all(); // NOSONAR
       if (!results?.length) break;
-      const outcome = await store.importRows(table, results as Record<string, unknown>[]);
+      const outcome = await store.importRows(table, results as Record<string, unknown>[]); // NOSONAR
       report.tables[table].inserted += outcome.inserted;
     }
   }
@@ -218,7 +218,8 @@ export async function importLegacyWorkspace(
       "SELECT 1 FROM memberships WHERE org_id = ? AND role = 'owner' AND status = 'active'",
     ).bind(orgId).first());
     const run: UserImport = { db, orgId, ownerEmail, existingOwner, dryRun, actor, report };
-    for (const user of legacyUsers) await importLegacyUser(run, user);
+    // One at a time: two people can share an email, and the report reads in order.
+    for (const user of legacyUsers) await importLegacyUser(run, user); // NOSONAR
 
     // ── Business rows ────────────────────────────────────────────────────
     await importBusinessRows(env.VAYU_DB as D1Database, store, report, dryRun);

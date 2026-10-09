@@ -460,7 +460,8 @@ export const PaymentsView: React.FC<{ invoices?: Invoice[] }> = ({ invoices = []
                             <div className="space-y-2.5 lg:grid lg:grid-cols-2 lg:gap-4 lg:space-y-0 2xl:grid-cols-3">
                                 {links.map(link => (
                                     <Card key={link.id}>
-                                        <div
+                                        {/* Clicking the header is a mouse shortcut; the Payment details button does the same for keyboards and screen readers. */}
+                                        <div // NOSONAR
                                             className={`flex justify-between items-start gap-2 ${link.status === 'paid' || link.status === 'partially_paid' ? 'cursor-pointer' : ''}`}
                                             onClick={() => { if (link.status === 'paid' || link.status === 'partially_paid') setDetailsId(id => (id === link.id ? null : link.id)); }}
                                         >

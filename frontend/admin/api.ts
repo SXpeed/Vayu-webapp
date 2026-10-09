@@ -12,7 +12,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     const res = await fetch(`/api/v2${path}`, {
         ...init,
         credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+        headers: { 'Content-Type': 'application/json', ...init?.headers },
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -37,7 +37,7 @@ export async function guarded<T>(reauth: Reauth, fn: () => Promise<T>, onError: 
     } catch (e) {
         const err = e as ApiError;
         if (err.code === 'reauth_required' && await reauth()) {
-            try { return await fn(); } catch (e2) { onError((e2 as ApiError).message); return undefined; }
+            try { return await fn(); } catch (error_) { onError((error_ as ApiError).message); return undefined; }
         }
         onError(err.message);
         return undefined;

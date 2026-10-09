@@ -29,14 +29,14 @@ const encoder = new TextEncoder();
 function bytesToB64Url(bytes: Uint8Array): string {
   let bin = '';
   for (const b of bytes) bin += String.fromCodePoint(b);
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/={1,2}$/, '');
+  return btoa(bin).replaceAll('+', '-').replaceAll('/', '_').replace(/={1,2}$/, '');
 }
 
 function b64UrlToBytes(s: string): Uint8Array<ArrayBuffer> {
-  const padded = s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (s.length % 4)) % 4);
+  const padded = s.replaceAll('-', '+').replaceAll('_', '/') + '='.repeat((4 - (s.length % 4)) % 4);
   const raw = atob(padded);
   const out = new Uint8Array(new ArrayBuffer(raw.length));
-  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.codePointAt(i) ?? 0;
   return out;
 }
 

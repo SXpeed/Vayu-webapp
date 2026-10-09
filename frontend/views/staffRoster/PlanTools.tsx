@@ -21,7 +21,7 @@ const MAX_SPAN_DAYS = 62;
 async function saveAll(list: ShiftInput[], onProgress: (n: number) => void): Promise<number> {
     let saved = 0;
     for (let i = 0; i < list.length; i += BATCH) {
-        await staffRosterService.createShifts(list.slice(i, i + BATCH));
+        await staffRosterService.createShifts(list.slice(i, i + BATCH)); // NOSONAR: batches go one at a time so progress counts up
         saved += Math.min(BATCH, list.length - i);
         onProgress(saved);
     }
@@ -29,6 +29,7 @@ async function saveAll(list: ShiftInput[], onProgress: (n: number) => void): Pro
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const entriesText = (n: number): string => (n ? plural(n, 'entry', 'entries') : '');
 const strip = ({ id: _id, ...rest }: StaffShift): ShiftInput => rest;
 
 /* ─────────────────────────── Copy last week ─────────────────────────── */
@@ -130,7 +131,7 @@ export const ImportPanel: React.FC<{ data: StaffRosterData; onClose: () => void;
     const good = useMemo(() => (read?.rows ?? []).filter(r => r.shift).map(r => r.shift as ShiftInput), [read]);
     const bad = (read?.rows ?? []).filter(r => r.problem);
     const dates = good.map(s => s.date).sort((a, b) => a.localeCompare(b));
-    const span = dates.length ? [dates[0], dates[dates.length - 1]] as const : null;
+    const span = dates.length ? [dates[0], dates.at(-1) ?? dates[0]] as const : null;
     const tooLong = !!span && (Date.parse(span[1]) - Date.parse(span[0])) / 86_400_000 > MAX_SPAN_DAYS;
 
     // What is already planned on those dates, so a file imported twice adds nothing.
@@ -186,7 +187,7 @@ export const ImportPanel: React.FC<{ data: StaffRosterData; onClose: () => void;
                 <Button onClick={onClose}>Cancel</Button>
                 <Button variant="primary" disabled={!plan?.add.length || busy} onClick={() => { void run(); }}
                     icon={busy ? <Loader2 size={14} className="animate-spin" /> : <FileUp size={14} />}>
-                    {busy ? `Importing ${progress}/${plan?.add.length ?? 0}` : `Import ${plan?.add.length ? plural(plan.add.length, 'entry', 'entries') : ''}`}
+                    {busy ? `Importing ${progress}/${plan?.add.length ?? 0}` : `Import ${entriesText(plan?.add.length ?? 0)}`}
                 </Button>
             </>
         }>
@@ -209,7 +210,7 @@ export const ImportPanel: React.FC<{ data: StaffRosterData; onClose: () => void;
             {tooLong && <Msg kind="error">The rows span more than {MAX_SPAN_DAYS} days. Import a month at a time.</Msg>}
             {read && !read.problem && !tooLong && (
                 checking || !plan ? (
-                    good.length ? <p className="flex items-center gap-2 text-[12.5px] text-[var(--neu-text-dim)]"><Loader2 size={14} className="animate-spin" />Checking the rows…</p> : null
+                    good.length > 0 && <p className="flex items-center gap-2 text-[12.5px] text-[var(--neu-text-dim)]"><Loader2 size={14} className="animate-spin" />Checking the rows…</p>
                 ) : (
                     <dl className="neu-inset rounded-2xl p-3.5 grid grid-cols-[1fr_auto] gap-y-2 text-[13.5px]">
                         <dt className="text-[var(--neu-text-dim)]">Ready to add</dt><dd className="font-semibold text-right tabular-nums">{plan.add.length}</dd>

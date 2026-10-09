@@ -66,24 +66,20 @@ export function parseMaxDevices(value: unknown): { ok: true; value: number | nul
 }
 
 /** "Chrome on Android" etc. — just enough for an admin to tell devices apart. */
+const BROWSERS: [RegExp, string][] = [
+  [/Edg\//, 'Edge'], [/SamsungBrowser/, 'Samsung Internet'], [/OPR\/|Opera/, 'Opera'],
+  [/Firefox\//, 'Firefox'], [/Chrome\/|CriOS/, 'Chrome'], [/Safari\//, 'Safari'],
+];
+const SYSTEMS: [RegExp, string][] = [
+  [/iPhone/, 'iPhone'], [/iPad/, 'iPad'], [/Android/, 'Android'], [/Windows/, 'Windows'], [/Mac OS X|Macintosh/, 'Mac'], [/Linux/, 'Linux'],
+];
+
 export function deviceLabel(userAgent: string | null): string {
-  const ua = userAgent ?? '';
-  let browser = 'Browser';
-  if (/Edg\//.test(ua)) browser = 'Edge';
-  else if (/SamsungBrowser/.test(ua)) browser = 'Samsung Internet';
-  else if (/OPR\/|Opera/.test(ua)) browser = 'Opera';
-  else if (/Firefox\//.test(ua)) browser = 'Firefox';
-  else if (/Chrome\/|CriOS/.test(ua)) browser = 'Chrome';
-  else if (/Safari\//.test(ua)) browser = 'Safari';
+  const ua = typeof userAgent === 'string' ? userAgent : '';
   // The installed iPhone/iPad app reports WebKit without a browser name.
-  else if (/iPhone|iPad/.test(ua) && /AppleWebKit/.test(ua)) browser = 'App';
-  let os = '';
-  if (/iPhone/.test(ua)) os = 'iPhone';
-  else if (/iPad/.test(ua)) os = 'iPad';
-  else if (/Android/.test(ua)) os = 'Android';
-  else if (/Windows/.test(ua)) os = 'Windows';
-  else if (/Mac OS X|Macintosh/.test(ua)) os = 'Mac';
-  else if (/Linux/.test(ua)) os = 'Linux';
+  const app = /iPhone|iPad/.test(ua) && /AppleWebKit/.test(ua);
+  const browser = BROWSERS.find(([pattern]) => pattern.test(ua))?.[1] ?? (app ? 'App' : 'Browser');
+  const os = SYSTEMS.find(([pattern]) => pattern.test(ua))?.[1];
   return os ? `${browser} on ${os}` : browser;
 }
 
@@ -112,12 +108,13 @@ async function liveSessionsByUser(kv: KVNamespace): Promise<Map<string, DeviceEn
   const byUser = new Map<string, DeviceEntry[]>();
   let cursor: string | undefined;
   do {
-    const page = await kv.list({ prefix: 'auth:session:', cursor });
-    for (const key of page.keys) {
-      const raw = await kv.get(key.name);
+    const page = await kv.list({ prefix: 'auth:session:', cursor }); // NOSONAR: each page needs the previous page's cursor
+    const raws = await Promise.all(page.keys.map(key => kv.get(key.name))); // NOSONAR: one page at a time
+    page.keys.forEach((key, i) => {
+      const raw = raws[i];
       const found = raw ? sessionEntry(key.name, raw) : null;
       if (found) byUser.set(found.userId, [...(byUser.get(found.userId) ?? []), found.entry]);
-    }
+    });
     cursor = page.list_complete ? undefined : page.cursor;
   } while (cursor);
   return byUser;
@@ -127,11 +124,11 @@ async function ensureIndexes(kv: KVNamespace): Promise<void> {
   if (indexesBuilt) return;
   if (await kv.get(INDEX_BUILT_KEY)) { indexesBuilt = true; return; }
   const byUser = await liveSessionsByUser(kv);
-  for (const [userId, found] of byUser) {
+  await Promise.all([...byUser].map(async ([userId, found]) => {
     const existing = await loadIndexRaw(kv, userId);
     const known = new Set(existing.map(e => e.token));
     await saveIndex(kv, userId, [...existing, ...found.filter(e => !known.has(e.token))]);
-  }
+  }));
   await kv.put(INDEX_BUILT_KEY, String(Date.now()));
   indexesBuilt = true;
 }
@@ -145,6 +142,12 @@ async function loadIndexRaw(kv: KVNamespace, userId: string): Promise<DeviceEntr
   } catch {
     return [];
   }
+}
+
+/** Signs a session out and remembers why, so its next request can say so. */
+async function revoke(kv: KVNamespace, token: string, reason: string): Promise<void> {
+  await kv.delete(sessionKey(token));
+  await kv.put(revokedKey(token), reason, { expirationTtl: REVOKED_TTL_SECONDS });
 }
 
 async function saveIndex(kv: KVNamespace, userId: string, entries: DeviceEntry[]): Promise<void> {
@@ -174,10 +177,7 @@ async function trimAndSave(kv: KVNamespace, user: StoredUser, entries: DeviceEnt
     removed = candidates.slice(0, entries.length - limit);
     const gone = new Set(removed.map(e => e.token));
     keep = entries.filter(e => !gone.has(e.token));
-    for (const entry of removed) {
-      await kv.delete(sessionKey(entry.token));
-      await kv.put(revokedKey(entry.token), 'device-limit', { expirationTtl: REVOKED_TTL_SECONDS });
-    }
+    await Promise.all(removed.map(entry => revoke(kv, entry.token, 'device-limit')));
   }
   await saveIndex(kv, user.id, keep);
   return removed.length;
@@ -229,7 +229,7 @@ export async function enforceDeviceLimit(kv: KVNamespace, user: StoredUser): Pro
 
 /** Sign out every device of a user (account deleted). */
 export async function forgetAllDevices(kv: KVNamespace, userId: string): Promise<void> {
-  for (const entry of await loadIndex(kv, userId)) await kv.delete(sessionKey(entry.token));
+  await Promise.all((await loadIndex(kv, userId)).map(entry => kv.delete(sessionKey(entry.token))));
   await kv.delete(indexKey(userId));
 }
 
@@ -258,20 +258,15 @@ export async function signOutDevices(
   reason: 'signed-out-remotely' | 'signed-out-by-admin' = 'signed-out-remotely',
 ): Promise<number> {
   const entries = await loadIndex(kv, userId);
-  const keep: DeviceEntry[] = [];
-  let removed = 0;
-  for (const entry of entries) {
-    const matches = entry.token !== keepToken && (only === undefined || await deviceId(entry.token) === only);
-    if (!matches) { keep.push(entry); continue; }
-    await kv.delete(sessionKey(entry.token));
-    await kv.put(revokedKey(entry.token), reason, { expirationTtl: REVOKED_TTL_SECONDS });
-    removed++;
-  }
-  if (removed > 0) await saveIndex(kv, userId, keep);
-  return removed;
+  const ids = only === undefined ? [] : await Promise.all(entries.map(e => deviceId(e.token)));
+  const gone = entries.filter((e, i) => e.token !== keepToken && (only === undefined || ids[i] === only));
+  if (gone.length === 0) return 0;
+  await Promise.all(gone.map(entry => revoke(kv, entry.token, reason)));
+  await saveIndex(kv, userId, entries.filter(e => !gone.includes(e)));
+  return gone.length;
 }
 
 /** Why a token stopped working, if it was signed out by the device limit. */
-export async function revokedReason(kv: KVNamespace, token: string): Promise<string | null> {
+export function revokedReason(kv: KVNamespace, token: string): Promise<string | null> {
   return kv.get(revokedKey(token));
 }

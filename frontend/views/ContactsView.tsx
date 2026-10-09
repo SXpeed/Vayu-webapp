@@ -72,7 +72,7 @@ function parseCsv(text: string): string[][] {
 }
 
 function csvEscape(value: string): string {
-    return /[",\n\r]/.test(value) ? `"${value.replaceAll(/"/g, '""')}"` : value;
+    return /[",\n\r]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
 }
 
 const SOURCE_LABELS: Record<Contact['source'], string> = { inquiry: 'Inquiry', manual: 'Added', import: 'Imported' };
@@ -353,12 +353,13 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
                         const isSelected = selected.has(contact.id);
                         const phone = phonesOf(contact)[0];
                         const email = emailsOf(contact)[0];
+                        const selectWord = isSelected ? 'Unselect' : 'Select';
                         return (
                             <li key={contact.id} className="neu-card relative p-3 flex items-center gap-3 min-h-[72px]">
                                 <button
                                     type="button"
                                     onClick={() => (selecting ? setSelected(prev => toggle(prev, contact.id)) : setOpen(contact))}
-                                    aria-label={selecting ? `${isSelected ? 'Unselect' : 'Select'} ${displayName(contact)}` : `Open ${displayName(contact)}`}
+                                    aria-label={`${selecting ? selectWord : 'Open'} ${displayName(contact)}`}
                                     className="absolute inset-0 rounded-[inherit]"
                                 />
                                 {selecting
@@ -367,7 +368,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
                                 <div className="flex-1 min-w-0 pointer-events-none">
                                     <div className="flex items-baseline gap-2">
                                         <h3 className="flex-1 min-w-0 font-serif text-[14.5px] leading-snug text-[var(--neu-text)] truncate">{displayName(contact)}</h3>
-                                        {contact.lastInteractionAt && <span className="shrink-0 text-[10.5px] text-[var(--neu-text-dim)] tabular-nums">{dateText(contact.lastInteractionAt)}</span>}
+                                        {!!contact.lastInteractionAt && <span className="shrink-0 text-[10.5px] text-[var(--neu-text-dim)] tabular-nums">{dateText(contact.lastInteractionAt)}</span>}
                                     </div>
                                     <p className="text-[11.5px] text-[var(--neu-text-dim)] truncate tabular-nums">
                                         {[phone, email].filter(Boolean).join(' · ') || SOURCE_LABELS[contact.source]}
@@ -428,23 +429,19 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
  */
 const Popup = React.forwardRef<HTMLDivElement, { label: string; width: string; onClose: () => void; children: React.ReactNode }>(
     ({ label, width, onClose, children }, ref) => (
-        <div
+        <dialog open aria-modal="true" aria-label={label}
             className="absolute inset-0 flex items-center justify-center p-4 pt-[calc(1rem+var(--safe-top))] pb-[calc(1rem+var(--safe-bottom-ui,0px))]"
             style={{ backgroundColor: 'rgba(15, 17, 22, 0.45)', backdropFilter: 'blur(5px)', WebkitBackdropFilter: 'blur(5px)' }}
-            onClick={onClose}
         >
+            <button type="button" tabIndex={-1} aria-label="Close" onClick={onClose} className="absolute inset-0 w-full h-full cursor-default" />
             <div
                 ref={ref}
-                role="dialog"
-                aria-modal="true"
-                aria-label={label}
-                onClick={e => e.stopPropagation()}
-                className="neu-raised rounded-3xl bg-[var(--neu-bg)] w-full max-h-full flex flex-col overflow-hidden animate-fade-in-up"
+                className="relative neu-raised rounded-3xl bg-[var(--neu-bg)] w-full max-h-full flex flex-col overflow-hidden animate-fade-in-up"
                 style={{ maxWidth: width }}
             >
                 {children}
             </div>
-        </div>
+        </dialog>
     ),
 );
 
@@ -471,6 +468,159 @@ const draftOf = (c: Contact | null): Draft => ({
 });
 
 const clean = (list: string[]) => list.map(v => v.trim()).filter(Boolean);
+
+type Problem = { text: string; other?: Contact };
+
+/** The list with one entry changed, or removed (null). */
+function withValueAt(list: string[], index: number, value: string | null): string[] {
+    if (value === null) return list.filter((_, i) => i !== index);
+    return list.map((v, i) => (i === index ? value : v));
+}
+
+/** What a draft saves: trimmed, empty entries dropped, the first phone and email as the main ones. */
+function savedFields(draft: Draft) {
+    const phones = clean(draft.phones);
+    const emails = clean(draft.emails);
+    return { name: draft.name.trim(), phones, emails, notes: draft.notes.trim() || undefined, tags: draft.tags, phone: phones[0] ?? '', email: emails[0] };
+}
+
+/** One number or address: not valid, or already someone else's. */
+function valueProblem(value: string, key: string | null, what: string, others: Contact[]): Problem | null {
+    if (!key) return { text: `"${value}" doesn't look like ${what}.` };
+    const other = contactWithKey(others, key, country());
+    return other ? { text: `${displayName(other)} already has ${value}.`, other } : null;
+}
+
+/** Problems shown before saving; the server checks the same again. */
+function draftProblems(draft: Draft, others: Contact[]): Problem[] {
+    const out: (Problem | null)[] = [];
+    if (!draft.name.trim()) out.push({ text: 'Add a name.' });
+    if (clean(draft.phones).length === 0 && clean(draft.emails).length === 0) out.push({ text: 'Add a phone number or an email.' });
+    for (const p of clean(draft.phones)) out.push(valueProblem(p, phoneKey(p, country()), 'a phone number', others));
+    for (const e of clean(draft.emails)) out.push(valueProblem(e, emailKey(e), 'an email address', others));
+    return out.filter((p): p is Problem => p !== null);
+}
+
+/** The organisation's tags, each switched on or off for this contact. */
+const TagPicker: React.FC<{ tags: ContactTag[]; selected: string[]; onChange: (next: string[]) => void }> = ({ tags, selected, onChange }) => {
+    if (tags.length === 0) return null;
+    return (
+        <fieldset>
+            <legend className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">Tags</legend>
+            <div className="flex flex-wrap gap-1.5">
+                {tags.map(t => {
+                    const on = selected.includes(t.id);
+                    const look = on ? TAG_COLORS[t.color] ?? TAG_COLORS.gray : 'neu-raised-sm neu-btn text-gray-600 dark:text-gray-300';
+                    return (
+                        <button key={t.id} type="button" aria-pressed={on}
+                            onClick={() => onChange(on ? selected.filter(x => x !== t.id) : [...selected, t.id])}
+                            className={`rounded-full px-2.5 py-1 text-[11.5px] font-medium ${look}`}>
+                            {t.name}
+                        </button>
+                    );
+                })}
+            </div>
+        </fieldset>
+    );
+};
+
+/** What stops the contact being saved, with a way to open a clashing contact. */
+const ProblemList: React.FC<{ problems: Problem[]; onOpenOther: (c: Contact) => void }> = ({ problems, onOpenOther }) => {
+    if (problems.length === 0) return null;
+    return (
+        <ul className="text-[12px] text-red-700 dark:text-red-300 space-y-1" aria-live="polite">
+            {problems.map(({ text, other }) => (
+                <li key={text}>
+                    {text} {other && <button type="button" onClick={() => onOpenOther(other)} className="underline">Open {displayName(other)}</button>}
+                </li>
+            ))}
+        </ul>
+    );
+};
+
+/** A phone number or address that opens in its app, with a copy button. */
+const ContactRow: React.FC<{ icon: React.ReactNode; value: string; href: string; what: string }> = ({ icon, value, href, what }) => (
+    <div className="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300">
+        <a href={href} className="flex-1 min-w-0 flex items-center gap-3 truncate hover:text-gold-600 dark:hover:text-gold-400">{icon}<span className="truncate tabular-nums">{value}</span></a>
+        <button type="button" onClick={() => copy(value, what)} aria-label={`Copy ${value}`} className="neu-icon-btn-sm shrink-0 text-gray-500"><Copy size={13} /></button>
+    </div>
+);
+
+/** A saved contact as read: ways to reach them, tags, notes and their inquiries. */
+const ContactDetails: React.FC<{
+    contact: Contact; tags: ContactTag[]; related: Inquiry[]; canEdit: boolean;
+    onOpenInquiry: (id: string) => void; onDelete: () => void;
+}> = ({ contact, tags, related, canEdit, onOpenInquiry, onDelete }) => {
+    const tagById = new Map(tags.map(t => [t.id, t]));
+    const shownTags = (contact.tags ?? []).map(t => tagById.get(t)).filter((t): t is ContactTag => !!t);
+    return (
+        <>
+            <section className="space-y-2.5">
+                {phonesOf(contact).map(p => <ContactRow key={p} icon={<Phone size={14} className="text-gold-500 shrink-0" />} value={p} href={`tel:${p}`} what="Phone number" />)}
+                {emailsOf(contact).map(e => <ContactRow key={e} icon={<Mail size={14} className="text-gold-500 shrink-0" />} value={e} href={`mailto:${e}`} what="Email" />)}
+            </section>
+            {shownTags.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                    {shownTags.map(t => <TagChip key={t.id} tag={t} />)}
+                </div>
+            )}
+            {contact.notes && <p className="text-[13px] whitespace-pre-wrap text-gray-700 dark:text-gray-300">{contact.notes}</p>}
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11.5px] text-[var(--neu-text-dim)]">
+                <dt>Source</dt><dd>{SOURCE_LABELS[contact.source]}</dd>
+                <dt>Added</dt><dd>{dateText(contact.createdAt)}{contact.createdByName ? ` by ${contact.createdByName}` : ''}</dd>
+                {!!contact.lastInteractionAt && <><dt>Last inquiry</dt><dd>{dateText(contact.lastInteractionAt)}</dd></>}
+            </dl>
+            <section>
+                <h3 className="text-[11px] font-bold uppercase tracking-widest text-gray-900 dark:text-gray-100 mb-2">Inquiries ({related.length})</h3>
+                {related.length === 0 && <p className="text-[12px] text-[var(--neu-text-dim)]">None yet.</p>}
+                <ul className="space-y-1.5">
+                    {related.map(i => (
+                        <li key={i.id}>
+                            <button type="button" onClick={() => onOpenInquiry(i.id)}
+                                className="w-full neu-raised-sm neu-btn rounded-xl px-3 py-2 flex items-center gap-2 text-left text-[12.5px]">
+                                <Search size={12} className="shrink-0 text-gold-600 dark:text-gold-400" />
+                                <span className="flex-1 min-w-0 truncate">{i.inquiryNumber} · {i.status}</span>
+                                <span className="shrink-0 text-[11px] text-[var(--neu-text-dim)]">{dateText(i.date)}</span>
+                            </button>
+                        </li>
+                    ))}
+                </ul>
+            </section>
+            {canEdit && (
+                <button type="button" onClick={onDelete} className="neu-button neu-button-danger w-full">
+                    <Trash2 size={14} /> Delete contact
+                </button>
+            )}
+        </>
+    );
+};
+
+const sheetTitle = (contact: Contact | null, editing: boolean): string => {
+    if (!contact) return 'New contact';
+    return editing ? 'Edit contact' : displayName(contact);
+};
+
+/** The sheet's top bar: close (or cancel editing), the title, and Save or Edit. */
+const SheetBar: React.FC<{
+    title: string; editing: boolean; canEdit: boolean; saveDisabled: boolean;
+    onBack: (() => void) | null; onClose: () => void; onSave: () => void; onEdit: () => void;
+}> = ({ title, editing, canEdit, saveDisabled, onBack, onClose, onSave, onEdit }) => (
+    <div className="flex justify-between items-center gap-2 p-3">
+        <button onClick={onBack ?? onClose}
+            className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale shrink-0" aria-label={onBack ? 'Cancel editing' : 'Close'}>
+            <X size={20} />
+        </button>
+        <h2 className="flex-1 min-w-0 text-center text-base font-serif text-gray-900 dark:text-white truncate">{title}</h2>
+        {editing ? (
+            <button type="button" onClick={onSave} disabled={saveDisabled}
+                className="shrink-0 text-gold-700 dark:text-gold-300 font-medium px-2 py-2 uppercase tracking-wider text-xs disabled:opacity-40">
+                Save
+            </button>
+        ) : (
+            canEdit && <button type="button" onClick={onEdit} aria-label="Edit contact" className="neu-icon-btn text-gray-700 dark:text-gray-300 shrink-0"><Edit2 size={17} /></button>
+        )}
+    </div>
+);
 
 /** One contact: its details and history, edited in place. `contact` null: a new one. */
 const ContactSheet: React.FC<{
@@ -501,51 +651,30 @@ const ContactSheet: React.FC<{
         () => (contact ? inquiries.filter(i => i.contactId === contact.id).sort((a, b) => b.date - a.date) : []),
         [contact, inquiries],
     );
-    const tagById = new Map(tags.map(t => [t.id, t]));
 
-    // Problems shown before saving; the server checks the same again.
-    const problems = useMemo(() => {
-        const out: { text: string; other?: Contact }[] = [];
-        if (!draft.name.trim()) out.push({ text: 'Add a name.' });
-        if (clean(draft.phones).length === 0 && clean(draft.emails).length === 0) out.push({ text: 'Add a phone number or an email.' });
-        for (const p of clean(draft.phones)) {
-            if (!phoneKey(p, country())) { out.push({ text: `"${p}" doesn't look like a phone number.` }); continue; }
-            const other = contactWithKey(contacts.filter(c => c.id !== contact?.id), phoneKey(p, country()), country());
-            if (other) out.push({ text: `${displayName(other)} already has ${p}.`, other });
-        }
-        for (const e of clean(draft.emails)) {
-            if (!emailKey(e)) { out.push({ text: `"${e}" doesn't look like an email address.` }); continue; }
-            const other = contactWithKey(contacts.filter(c => c.id !== contact?.id), emailKey(e), country());
-            if (other) out.push({ text: `${displayName(other)} already has ${e}.`, other });
-        }
-        return out;
-    }, [draft, contacts, contact]);
+    const problems = useMemo(() => draftProblems(draft, contacts.filter(c => c.id !== contact?.id)), [draft, contacts, contact]);
 
     const save = async () => {
         if (problems.length > 0) return;
-        const fields = { name: draft.name.trim(), phones: clean(draft.phones), emails: clean(draft.emails), notes: draft.notes.trim() || undefined, tags: draft.tags };
-        const firsts = { phone: fields.phones[0] ?? '', email: fields.emails[0] };
+        const fields = savedFields(draft);
         if (contact) {
-            await onUpdate({ ...contact, ...fields, ...firsts });
+            await onUpdate({ ...contact, ...fields });
             setEditing(false);
         } else {
-            await onAdd({ ...fields, ...firsts, source: 'manual' });
+            await onAdd({ ...fields, source: 'manual' });
             onClose();
         }
     };
 
-    const setList = (field: 'phones' | 'emails', index: number, value: string | null) => setDraft(d => {
-        const list = [...d[field]];
-        if (value === null) list.splice(index, 1); else list[index] = value;
-        return { ...d, [field]: list };
-    });
+    const setList = (field: 'phones' | 'emails', index: number, value: string | null) =>
+        setDraft(d => ({ ...d, [field]: withValueAt(d[field], index, value) }));
 
     const listEditor = (field: 'phones' | 'emails', label: string, type: string, placeholder: string) => (
         <fieldset>
             <legend className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">{label}</legend>
             <div className="space-y-2">
                 {draft[field].map((value, i) => (
-                    <div key={i} className="flex gap-2">
+                    <div key={i} className="flex gap-2" /* NOSONAR: rows are edited in place; a value-based key would drop focus while typing */>
                         <input type={type} value={value} onChange={e => setList(field, i, e.target.value)} placeholder={placeholder}
                             aria-label={`${label} ${i + 1}`} autoComplete="off" spellCheck={false} className="neu-field flex-1" />
                         <button type="button" onClick={() => setList(field, i, null)} aria-label={`Remove ${label.toLowerCase()} ${i + 1}`} className="neu-icon-btn shrink-0 text-gray-500">
@@ -560,34 +689,14 @@ const ContactSheet: React.FC<{
         </fieldset>
     );
 
-    const row = (icon: React.ReactNode, value: string, href: string, what: string) => (
-        <div key={value} className="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300">
-            <a href={href} className="flex-1 min-w-0 flex items-center gap-3 truncate hover:text-gold-600 dark:hover:text-gold-400">{icon}<span className="truncate tabular-nums">{value}</span></a>
-            <button type="button" onClick={() => copy(value, what)} aria-label={`Copy ${value}`} className="neu-icon-btn-sm shrink-0 text-gray-500"><Copy size={13} /></button>
-        </div>
-    );
-
-    let title = 'New contact';
-    if (contact) title = editing ? 'Edit contact' : displayName(contact);
+    const title = sheetTitle(contact, editing);
 
     return (
         <FullScreenPortal>
             <Popup ref={ref} label={title} width="560px" onClose={requestClose}>
-                <div className="flex justify-between items-center gap-2 p-3">
-                    <button onClick={editing && contact ? () => { setDraft(draftOf(contact)); setEditing(false); } : requestClose}
-                        className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale shrink-0" aria-label={editing && contact ? 'Cancel editing' : 'Close'}>
-                        <X size={20} />
-                    </button>
-                    <h2 className="flex-1 min-w-0 text-center text-base font-serif text-gray-900 dark:text-white truncate">{title}</h2>
-                    {editing ? (
-                        <button type="button" onClick={() => void save()} disabled={problems.length > 0}
-                            className="shrink-0 text-gold-700 dark:text-gold-300 font-medium px-2 py-2 uppercase tracking-wider text-xs disabled:opacity-40">
-                            Save
-                        </button>
-                    ) : (
-                        canEdit && <button type="button" onClick={() => setEditing(true)} aria-label="Edit contact" className="neu-icon-btn text-gray-700 dark:text-gray-300 shrink-0"><Edit2 size={17} /></button>
-                    )}
-                </div>
+                <SheetBar title={title} editing={editing} canEdit={canEdit} saveDisabled={problems.length > 0}
+                    onBack={editing && contact ? () => { setDraft(draftOf(contact)); setEditing(false); } : null}
+                    onClose={requestClose} onSave={() => void save()} onEdit={() => setEditing(true)} />
 
                 <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar p-4 pt-1 space-y-5">
                     {editing ? (
@@ -602,72 +711,12 @@ const ContactSheet: React.FC<{
                                 <label htmlFor="contact-notes" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">Notes</label>
                                 <textarea id="contact-notes" value={draft.notes} onChange={e => setDraft(d => ({ ...d, notes: e.target.value }))} rows={3} className="neu-field" />
                             </div>
-                            {tags.length > 0 && (
-                                <fieldset>
-                                    <legend className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">Tags</legend>
-                                    <div className="flex flex-wrap gap-1.5">
-                                        {tags.map(t => {
-                                            const on = draft.tags.includes(t.id);
-                                            return (
-                                                <button key={t.id} type="button" aria-pressed={on}
-                                                    onClick={() => setDraft(d => ({ ...d, tags: on ? d.tags.filter(x => x !== t.id) : [...d.tags, t.id] }))}
-                                                    className={`rounded-full px-2.5 py-1 text-[11.5px] font-medium ${on ? TAG_COLORS[t.color] ?? TAG_COLORS.gray : 'neu-raised-sm neu-btn text-gray-600 dark:text-gray-300'}`}>
-                                                    {t.name}
-                                                </button>
-                                            );
-                                        })}
-                                    </div>
-                                </fieldset>
-                            )}
-                            {problems.length > 0 && dirty && (
-                                <ul className="text-[12px] text-red-700 dark:text-red-300 space-y-1" aria-live="polite">
-                                    {problems.map(p => (
-                                        <li key={p.text}>
-                                            {p.text} {p.other && <button type="button" onClick={() => onOpenOther(p.other!)} className="underline">Open {displayName(p.other)}</button>}
-                                        </li>
-                                    ))}
-                                </ul>
-                            )}
+                            <TagPicker tags={tags} selected={draft.tags} onChange={next => setDraft(d => ({ ...d, tags: next }))} />
+                            {dirty && <ProblemList problems={problems} onOpenOther={onOpenOther} />}
                         </>
                     ) : contact && (
-                        <>
-                            <section className="space-y-2.5">
-                                {phonesOf(contact).map(p => row(<Phone size={14} className="text-gold-500 shrink-0" />, p, `tel:${p}`, 'Phone number'))}
-                                {emailsOf(contact).map(e => row(<Mail size={14} className="text-gold-500 shrink-0" />, e, `mailto:${e}`, 'Email'))}
-                            </section>
-                            {(contact.tags?.length ?? 0) > 0 && (
-                                <div className="flex flex-wrap gap-1.5">
-                                    {contact.tags!.map(t => tagById.get(t)).filter((t): t is ContactTag => !!t).map(t => <TagChip key={t.id} tag={t} />)}
-                                </div>
-                            )}
-                            {contact.notes && <p className="text-[13px] whitespace-pre-wrap text-gray-700 dark:text-gray-300">{contact.notes}</p>}
-                            <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11.5px] text-[var(--neu-text-dim)]">
-                                <dt>Source</dt><dd>{SOURCE_LABELS[contact.source]}</dd>
-                                <dt>Added</dt><dd>{dateText(contact.createdAt)}{contact.createdByName ? ` by ${contact.createdByName}` : ''}</dd>
-                                {contact.lastInteractionAt && <><dt>Last inquiry</dt><dd>{dateText(contact.lastInteractionAt)}</dd></>}
-                            </dl>
-                            <section>
-                                <h3 className="text-[11px] font-bold uppercase tracking-widest text-gray-900 dark:text-gray-100 mb-2">Inquiries ({related.length})</h3>
-                                {related.length === 0 && <p className="text-[12px] text-[var(--neu-text-dim)]">None yet.</p>}
-                                <ul className="space-y-1.5">
-                                    {related.map(i => (
-                                        <li key={i.id}>
-                                            <button type="button" onClick={() => { onClose(); openLink({ view: 'inquiry', inquiryId: i.id }); }}
-                                                className="w-full neu-raised-sm neu-btn rounded-xl px-3 py-2 flex items-center gap-2 text-left text-[12.5px]">
-                                                <Search size={12} className="shrink-0 text-gold-600 dark:text-gold-400" />
-                                                <span className="flex-1 min-w-0 truncate">{i.inquiryNumber} · {i.status}</span>
-                                                <span className="shrink-0 text-[11px] text-[var(--neu-text-dim)]">{dateText(i.date)}</span>
-                                            </button>
-                                        </li>
-                                    ))}
-                                </ul>
-                            </section>
-                            {canEdit && (
-                                <button type="button" onClick={() => setConfirmDelete(true)} className="neu-button neu-button-danger w-full">
-                                    <Trash2 size={14} /> Delete contact
-                                </button>
-                            )}
-                        </>
+                        <ContactDetails contact={contact} tags={tags} related={related} canEdit={canEdit}
+                            onOpenInquiry={id => { onClose(); openLink({ view: 'inquiry', inquiryId: id }); }} onDelete={() => setConfirmDelete(true)} />
                     )}
                 </div>
             </Popup>

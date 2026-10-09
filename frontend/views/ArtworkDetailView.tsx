@@ -73,7 +73,7 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
 
     useEffect(() => {
         if (artwork.imageUrls.length > 0) {
-            getDominantColor(artwork.imageUrls[activeImageIndex]).then(color => {
+            void getDominantColor(artwork.imageUrls[activeImageIndex]).then(color => {
                 setGlowColor(color);
             });
         }

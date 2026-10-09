@@ -140,13 +140,14 @@ export async function deliverOutbox(env: Env, db: D1Database, limit = 20): Promi
   ).bind(now, limit).all<OutboxRow>();
   let sent = 0;
   let failed = 0;
+  // One email at a time stays inside the mail service's rate limit.
   for (const row of results) {
-    const claim = await db.prepare(
+    const claim = await db.prepare( // NOSONAR
       "UPDATE notification_outbox SET attempts = attempts + 1, next_attempt_at = ? WHERE id = ? AND status = 'pending' AND attempts = ?",
     ).bind(now + RETRY_DELAYS_MS[0], row.id, row.attempts).run();
     if (!claim.meta.changes) continue;
-    const result = await sendEmail(env, row.recipient, row.subject, noticeContent(row.kind, row.subject, row.body));
-    await recordAttempt(db, row.id, row.attempts + 1, result);
+    const result = await sendEmail(env, row.recipient, row.subject, noticeContent(row.kind, row.subject, row.body)); // NOSONAR
+    await recordAttempt(db, row.id, row.attempts + 1, result); // NOSONAR
     if (result.sent) sent++;
     else failed++;
   }

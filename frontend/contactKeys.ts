@@ -20,7 +20,15 @@ export function phoneKey(raw: string | undefined | null, country: string = DEFAU
 
 export function emailKey(raw: string | undefined | null): string | null {
   const email = (raw ?? '').trim().toLowerCase();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? `e:${email}` : null;
+  return looksLikeEmail(email) ? `e:${email}` : null;
+}
+
+/** name@domain.tld: one @, no spaces, and a domain of dot-separated parts. */
+function looksLikeEmail(email: string): boolean {
+  const at = email.indexOf('@');
+  if (at < 1 || /\s/.test(email) || email.includes('@', at + 1)) return false;
+  const parts = email.slice(at + 1).split('.');
+  return parts.length >= 2 && parts.every(Boolean);
 }
 
 /** Every key of these phones and emails, each once. */

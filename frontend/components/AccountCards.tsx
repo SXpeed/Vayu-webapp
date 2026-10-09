@@ -122,7 +122,7 @@ export const EmailCard: React.FC = () => {
                 <div className="space-y-2">
                     <p className="text-sm text-gray-900 dark:text-gray-100 break-all">{email}</p>
                     <p className="text-xs text-gray-600 dark:text-gray-400">You sign in with this address, on the website and in the app.</p>
-                    {sent && <p role="status" className="neu-inset rounded-xl text-[11px] text-gray-700 dark:text-gray-300 px-3 py-2">{sent}</p>}
+                    {sent && <output className="block neu-inset rounded-xl text-[11px] text-gray-700 dark:text-gray-300 px-3 py-2">{sent}</output>}
                 </div>
             ) : (
                 <form onSubmit={save} className="space-y-3">

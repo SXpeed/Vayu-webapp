@@ -31,7 +31,7 @@ export async function handleApplyRoute(db: D1Database, auth: PlatformAuth, reque
   }
   try {
     const work = applyAction(db, session.user, request, path);
-    if (!work) return fail(404, 'not_found', 'Not found');
+    if (work === null) return fail(404, 'not_found', 'Not found');
     // Every answer says whether the address is confirmed, so the page can ask for it.
     return reply({ ...await work, emailVerified, emailRequired: opts.requireVerifiedEmail });
   } catch (e) {

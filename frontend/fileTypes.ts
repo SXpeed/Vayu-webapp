@@ -39,7 +39,7 @@ export function sniff(head: Uint8Array): string | null {
     if (at(0, 0x47, 0x49, 0x46, 0x38)) return 'image/gif';
     if (at(0, 0x52, 0x49, 0x46, 0x46) && at(8, 0x57, 0x45, 0x42, 0x50)) return 'image/webp';
     if (at(4, 0x66, 0x74, 0x79, 0x70)) { // ISO media "ftyp" box
-        const brand = String.fromCharCode(...head.slice(8, 12));
+        const brand = String.fromCodePoint(...head.slice(8, 12));
         if (brand === 'avif' || brand === 'avis') return 'image/avif';
         if (['heic', 'heix', 'hevc', 'hevx', 'mif1', 'msf1'].includes(brand)) return 'image/heic';
     }
@@ -65,7 +65,7 @@ export function storedContentType(claimed: string | undefined, head: Uint8Array)
 /** True when the bytes are an image a thumbnail can be. */
 export function isRasterImage(head: Uint8Array): boolean {
     const real = sniff(head);
-    return real !== null && real.startsWith('image/');
+    return real?.startsWith('image/') ?? false;
 }
 
 export interface Delivery {

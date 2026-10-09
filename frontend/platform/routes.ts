@@ -282,7 +282,7 @@ const BILLING_ROUTES: AdminRoute[] = [
       return reply(await describeBillingAccount(c.env, c.db, billingWebhookUrl(c)));
     },
   },
-  { path: '/admin/billing/razorpay', methods: ['POST', 'PATCH'], fresh: true, run: async () => fail(405, 'method_not_allowed', 'Not allowed') },
+  { path: '/admin/billing/razorpay', methods: ['POST', 'PATCH'], fresh: true, run: () => Promise.resolve(fail(405, 'method_not_allowed', 'Not allowed')) },
   { path: '/admin/billing/razorpay/verify', methods: ['POST'], run: async (c) => reply(await verifyBillingAccount(c.env, c.db, c.actor)) },
   { path: '/admin/billing/payments', methods: ['GET'], run: async (c) => reply(await listAllPayments(c.db, c.url.searchParams)) },
   {
@@ -323,7 +323,7 @@ const planPath = (rest = '') => new RegExp(`^/admin/plans/(${ID})${rest}$`);
 
 const PLAN_ROUTES: AdminRoute[] = [
   // Everything a plan can control, so the editor never drifts from the server's validation.
-  { path: '/admin/plans/schema', methods: ['GET'], run: async () => reply(PLAN_SCHEMA) },
+  { path: '/admin/plans/schema', methods: ['GET'], run: () => Promise.resolve(reply(PLAN_SCHEMA)) },
   { path: '/admin/plans', methods: ['GET'], run: async (c) => reply({ plans: await listPlans(c.db) }) },
   { path: '/admin/plans', methods: ['POST'], run: async (c) => reply(await createPlan(c.db, await objectBody(c.request), c.actor), 201) },
   { path: planPath(), methods: ['GET'], run: async (c, m) => reply(await getPlan(c.db, m![1])) },
@@ -398,7 +398,7 @@ const ORG_ROUTES: AdminRoute[] = [
     // original app's links use. New links are always attributed explicitly
     // (docs/PAYMENT_SECURITY.md). DELETE still clears an old setting.
     path: orgPath('/payments/razorpay/app'), methods: ['POST'],
-    run: async () => fail(410, 'retired', "Choosing an organization for the original app's payment links has been retired: links are made in the account of the workspace they're made from."),
+    run: () => Promise.resolve(fail(410, 'retired', "Choosing an organization for the original app's payment links has been retired: links are made in the account of the workspace they're made from.")),
   },
   {
     path: orgPath('/payments/razorpay/app'), methods: ['DELETE'], fresh: true,

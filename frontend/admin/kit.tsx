@@ -6,7 +6,7 @@
 // content will, drawers and dialogs overlay rather than push content, and
 // nothing uses fixed widths that could crop text.
 
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowLeft, X } from 'lucide-react';
 
@@ -162,7 +162,7 @@ const LABELS: Record<string, string> = {
 };
 
 export const toneFor = (status: string): Tone => TONES[status] ?? 'neutral';
-export const labelFor = (status: string): string => LABELS[status] ?? status.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
+export const labelFor = (status: string): string => LABELS[status] ?? status.replaceAll('_', ' ').replace(/^./, c => c.toUpperCase());
 
 /** The app's status chip (neu-status): pressed in, coloured small caps. */
 export const StatusPill: React.FC<{ status?: string; tone?: Tone; children?: React.ReactNode }> = ({ status, tone, children }) => (
@@ -294,13 +294,13 @@ export const Drawer: React.FC<{
 }> = ({ open, onClose, title, subtitle, meta, width = 640, footer, children }) => {
     useEscape(open, onClose);
     useScrollLock(open);
-    const panel = useRef<HTMLDivElement>(null);
+    const panel = useRef<HTMLDialogElement>(null);
     useEffect(() => { if (open) panel.current?.focus(); }, [open]);
     if (!open) return null;
     return portal(
         <>
-            <div className="ac-scrim neu-scrim" onClick={onClose} />
-            <div ref={panel} tabIndex={-1} role="dialog" aria-modal="true" className="ac-drawer neu-modal outline-none"
+            <button type="button" className="ac-scrim neu-scrim border-none p-0 cursor-default" onClick={onClose} aria-label="Close" />
+            <dialog open ref={panel} tabIndex={-1} aria-modal="true" className="ac-drawer neu-modal outline-none"
                 style={{ ['--ac-drawer-width' as string]: `${width}px` }}>
                 <header className="flex items-start gap-3 px-5 sm:px-6 py-4">
                     <div className="min-w-0 flex-1">
@@ -314,7 +314,7 @@ export const Drawer: React.FC<{
                 </header>
                 <div className="flex-1 overflow-y-auto ac-no-scrollbar px-5 sm:px-6 py-5 space-y-5">{children}</div>
                 {footer && <footer className="px-5 sm:px-6 py-3 flex flex-wrap items-center justify-end gap-2">{footer}</footer>}
-            </div>
+            </dialog>
         </>,
     );
 };
@@ -373,14 +373,15 @@ export const DialogProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }, []);
 
     useEscape(!!pending, () => close(false));
+    const dialogs = useMemo(() => ({ confirm, prompt }), [confirm, prompt]);
     const tooShort = pending?.kind === 'prompt' && value.trim().length < (pending.o.minLength ?? 1);
 
     return (
-        <DialogContext.Provider value={{ confirm, prompt }}>
+        <DialogContext.Provider value={dialogs}>
             {children}
             {pending && portal(
                 <>
-                    <div className="ac-scrim ac-dialog-scrim neu-scrim" onClick={() => close(false)} />
+                    <button type="button" className="ac-scrim ac-dialog-scrim neu-scrim border-none p-0 cursor-default" onClick={() => close(false)} aria-label="Cancel" />
                     <form role="alertdialog" aria-modal="true" className="ac-dialog neu-modal p-6"
                         onSubmit={e => { e.preventDefault(); if (!tooShort) close(true); }}>
                         <h2 className="text-lg font-serif text-gray-900 dark:text-gray-100">{pending.o.title}</h2>

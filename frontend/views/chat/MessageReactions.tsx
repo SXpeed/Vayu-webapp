@@ -134,13 +134,13 @@ const Layer: React.FC<{ onClose: () => void; children: React.ReactNode; label: s
     // here (or the keyboard) closes it.
     const pressedHere = useRef(false);
     return createPortal(
-        <div className="fixed inset-0 z-[95]" role="dialog" aria-modal="true" aria-label={label}>
+        <dialog open className="fixed inset-0 z-[95]" aria-modal="true" aria-label={label}>
             <button type="button" aria-label="Close"
                 onPointerDown={() => { pressedHere.current = true; }}
                 onClick={e => { if (pressedHere.current || e.detail === 0) onClose(); }}
                 className="absolute inset-0 w-full h-full neu-scrim border-none p-0 cursor-default" />
             {children}
-        </div>,
+        </dialog>,
         document.body,
     );
 };

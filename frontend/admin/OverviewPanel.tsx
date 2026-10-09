@@ -4,7 +4,7 @@
 // the tab — and never while hidden. A refresh keeps the current numbers on
 // screen until the new ones arrive, so nothing flickers or jumps.
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
     AlertTriangle, ArrowRight, Building2, CheckCircle2, ClipboardList, CreditCard, Hourglass, Mail, RefreshCw, Users, Wrench,
@@ -61,7 +61,7 @@ function useOverview() {
     const [data, setData] = useState<Overview | null>(null);
     const [health, setHealth] = useState<Health | null>(null);
     const [refreshing, setRefreshing] = useState(false);
-    const [, tick] = useState(0);
+    const [, tick] = useReducer((n: number) => n + 1, 0);
     const timer = useRef<number | undefined>(undefined);
 
     const load = useCallback(async (manual = false) => {
@@ -76,19 +76,19 @@ function useOverview() {
     }, []);
 
     useEffect(() => {
-        load();
+        void load();
         const schedule = () => {
             window.clearInterval(timer.current);
             if (document.visibilityState === 'visible') timer.current = window.setInterval(() => load(), REFRESH_MS);
         };
         const onVisible = () => {
-            if (document.visibilityState === 'visible') load();
+            if (document.visibilityState === 'visible') void load();
             schedule(); // always: stops the timer when hidden, restarts it when shown
         };
         schedule();
         document.addEventListener('visibilitychange', onVisible);
         // Keeps "updated … ago" current without refetching.
-        const clock = window.setInterval(() => tick(t => t + 1), 15_000);
+        const clock = window.setInterval(() => tick(), 15_000);
         return () => { window.clearInterval(timer.current); window.clearInterval(clock); document.removeEventListener('visibilitychange', onVisible); };
     }, [load]);
 
@@ -212,8 +212,8 @@ export const OverviewPanel: React.FC<{ navigate: Navigate }> = ({ navigate }) =>
 
                 <Section title="Recent activity" actions={<button type="button" className="text-[12px] text-[var(--ac-accent)] font-medium" onClick={() => navigate('audit')}>Full audit log</button>}>
                     <ul className="space-y-2.5">
-                        {data.recentAudit.map((e, i) => (
-                            <li key={i} className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-3 text-[13px]">
+                        {data.recentAudit.map(e => (
+                            <li key={`${e.at}-${e.action}`} className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-3 text-[13px]">
                                 <span className="text-[12px] ac-faint tabular-nums">{timeAgo(e.at)}</span>
                                 <span className="min-w-0">
                                     <span className="block break-words">{readable(e.action)}</span>

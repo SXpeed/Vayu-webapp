@@ -1,6 +1,6 @@
 // Formatting and lookups the staff roster screens share.
 import {
-    addDays, endsNextDay, findConflicts, minToTime, toTs, weekDates, weekdayIdx,
+    addDays, findConflicts, minToTime, toTs, weekdayIdx,
     type Conflict, type StaffLeave, type StaffShift,
 } from '../../staffRosterRules';
 import type { StaffRosterData } from '../../services/staffRosterService';
@@ -30,7 +30,7 @@ export const shortRange = (s: StaffShift) => {
     return `${t(s.startMin)}–${t(s.endMin)}`;
 };
 export const hoursText = (min: number) => { const h = min / 60; return Number.isInteger(h) ? `${h}` : h.toFixed(1); };
-export const nextDay = endsNextDay;
+export { endsNextDay as nextDay } from '../../staffRosterRules';
 
 export const initials = (name: string) => name.split(/\s+/).filter(Boolean).map(p => p[0]).join('').slice(0, 2).toUpperCase();
 
@@ -55,7 +55,7 @@ export function derive(data: StaffRosterData) {
 export type Derived = ReturnType<typeof derive>;
 
 export const inWeek = (s: { date: string }, weekStart: string) => s.date >= weekStart && s.date <= addDays(weekStart, 6);
-export const weekOf = weekDates;
+export { weekDates as weekOf } from '../../staffRosterRules';
 export const approvedLeaves = (leaves: StaffLeave[]) => leaves.filter(l => l.status === 'approved');
 
 /** Rows in the week for display: filters applied, open shifts kept apart. */

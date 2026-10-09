@@ -94,7 +94,7 @@ const AccountDrawer: React.FC<{ id?: string; reauth: Reauth; onClose: () => void
         if (!id) return;
         try { setD(await api<AccountDetail>(`/admin/accounts/${id}`)); } catch (e) { toast.error((e as ApiError).message); }
     }, [id]);
-    useEffect(() => { setD(null); setNewPassword(null); load(); }, [load]);
+    useEffect(() => { setD(null); setNewPassword(null); void load(); }, [load]);
 
     const run = async (path: string, body: Record<string, unknown>, done: string) => {
         const res = await guarded(reauth, () => api(`/admin/accounts/${id}/${path}`, postJson(body)), m => toast.error(m));
@@ -188,10 +188,10 @@ const AccountDrawer: React.FC<{ id?: string; reauth: Reauth; onClose: () => void
                     <Section title="Signed-in devices" description={`${d.sessions.length} active`}>
                         {d.sessions.length === 0 ? <p className="text-sm ac-muted">Not signed in anywhere.</p> : (
                             <ul className="space-y-3">
-                                {d.sessions.map((s, i) => {
+                                {d.sessions.map(s => {
                                     const dv = device(s.user_agent);
                                     return (
-                                        <li key={i} className="flex items-center gap-3">
+                                        <li key={`${s.created_at}-${s.user_agent}`} className="flex items-center gap-3">
                                             <span className="w-9 h-9 rounded-[12px] neu-inset flex items-center justify-center ac-muted shrink-0">{dv.phone ? <Smartphone size={16} /> : <Monitor size={16} />}</span>
                                             <span className="min-w-0 flex-1">
                                                 <span className="block text-sm truncate">{dv.label}</span>

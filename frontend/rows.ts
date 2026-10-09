@@ -22,6 +22,12 @@ export function err(message: string, status = 400): Response {
   return json({ error: message }, status);
 }
 
+/** A stored or sent value as text: strings as they are, numbers written out, anything else empty. */
+export function text(v: unknown): string {
+  if (typeof v === 'string') return v;
+  return typeof v === 'number' ? String(v) : '';
+}
+
 // ── D1 row mappers ──────────────────────────────────────────────────────────
 
 export function rowToConversation(row: Record<string, unknown>): any {
@@ -182,7 +188,7 @@ export function rowToEvent(row: Record<string, unknown>): any {
 
 const parseList = (raw: unknown): string[] => {
   try {
-    const list = JSON.parse(String(raw ?? '[]'));
+    const list = JSON.parse(text(raw) || '[]');
     return Array.isArray(list) ? list.filter((v): v is string => typeof v === 'string') : [];
   } catch {
     return [];
@@ -194,8 +200,8 @@ export function contactLists(row: Record<string, unknown>): { phones: string[]; 
   const phones = parseList(row.phones);
   const emails = parseList(row.emails);
   return {
-    phones: phones.length > 0 ? phones : [String(row.phone ?? '')].filter(Boolean),
-    emails: emails.length > 0 ? emails : [String(row.email ?? '')].filter(Boolean),
+    phones: phones.length > 0 ? phones : [text(row.phone)].filter(Boolean),
+    emails: emails.length > 0 ? emails : [text(row.email)].filter(Boolean),
     tags: parseList(row.tags),
   };
 }
@@ -274,10 +280,7 @@ const LITERAL_SEGMENTS = new Set([
 export function normalizeRoute(path: string): string {
   const clean = path.split('?')[0].replace(/^\/api/, '');
   const parts = clean.split('/').filter(Boolean);
-  const out = parts.map((part, i) => {
-    if (LITERAL_SEGMENTS.has(part)) return part;
-    return ':id';
-  });
+  const out = parts.map(part => (LITERAL_SEGMENTS.has(part) ? part : ':id'));
   const route = '/' + out.join('/');
   return route.length > 80 ? route.slice(0, 80) : route;
 }

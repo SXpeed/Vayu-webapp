@@ -153,7 +153,7 @@ export const RequestsView: React.FC<{ data: StaffRosterData; d: Derived; onChang
                     <dt className="text-[var(--neu-text-dim)]">Dates</dt><dd className="tabular-nums">{dayLabel(l.from)}{l.to !== l.from ? ` – ${dayLabel(l.to)}` : ''} · {days(l)} day{days(l) > 1 ? 's' : ''}</dd>
                     <dt className="text-[var(--neu-text-dim)]">Type</dt><dd>{l.type}</dd>
                     {l.reason && <><dt className="text-[var(--neu-text-dim)]">Reason</dt><dd>{l.reason}</dd></>}
-                    {l.decidedAt && <><dt className="text-[var(--neu-text-dim)]">Decided</dt><dd>{new Date(l.decidedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}{l.decidedByName ? ` by ${l.decidedByName}` : ''}</dd></>}
+                    {!!l.decidedAt && <><dt className="text-[var(--neu-text-dim)]">Decided</dt><dd>{new Date(l.decidedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}{l.decidedByName ? ` by ${l.decidedByName}` : ''}</dd></>}
                 </dl>
                 {data.canManage && affNote(l, aff.length, affText) && (
                     <p className="sr-warn-box rounded-xl px-3 py-2 text-[12.5px]">{affNote(l, aff.length, affText)}</p>
@@ -190,7 +190,7 @@ export const RequestsView: React.FC<{ data: StaffRosterData; d: Derived; onChang
                             </Select>
                         </Field>
                     )}
-                    <Field label="First day" htmlFor="lv-from"><Input id="lv-from" type="date" value={form.from} onChange={e => setForm(f => ({ ...f, from: e.target.value, to: f.to < e.target.value ? e.target.value : f.to }))} /></Field>
+                    <Field label="First day" htmlFor="lv-from"><Input id="lv-from" type="date" value={form.from} onChange={e => setForm(f => ({ ...f, from: e.target.value, to: f.to < e.target.value ? e.target.value : f.to }))} /* NOSONAR: dates as text, so not Math.max */ /></Field>
                     <Field label="Last day" htmlFor="lv-to"><Input id="lv-to" type="date" value={form.to} min={form.from} onChange={e => setForm(f => ({ ...f, to: e.target.value }))} /></Field>
                     <Field label="Type" htmlFor="lv-type"><Select id="lv-type" value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))}>{LEAVE_TYPES.map(t => <option key={t}>{t}</option>)}</Select></Field>
                 </div>

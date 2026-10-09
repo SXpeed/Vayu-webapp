@@ -214,7 +214,7 @@ const ShareCard: React.FC<{ room: StaffRoom; onClose: () => void }> = ({ room, o
         await copy(text, 'Message');
     };
     return (
-        <div className="fixed inset-0 z-[80] bg-black/20 backdrop-blur-[2px] flex items-end sm:items-center justify-center p-0 sm:p-4" role="dialog" aria-modal="true" aria-label="Share the private room">
+        <dialog open className="fixed inset-0 z-[80] bg-black/20 backdrop-blur-[2px] flex items-end sm:items-center justify-center p-0 sm:p-4" aria-modal="true" aria-label="Share the private room">
             <Card padding="lg" className="w-full sm:max-w-md rounded-b-none sm:rounded-b-[inherit] space-y-4">
                 <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -249,7 +249,7 @@ const ShareCard: React.FC<{ room: StaffRoom; onClose: () => void }> = ({ room, o
                     <p className="text-[12px] text-gray-700 dark:text-gray-300">The passcode is only shown when it is made. To send it again, make a new passcode (the old one stops working).</p>
                 )}
             </Card>
-        </div>
+        </dialog>
     );
 };
 

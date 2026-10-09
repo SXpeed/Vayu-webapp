@@ -10,7 +10,7 @@
 
 import { contactKeys, DEFAULT_COUNTRY, emailKey, phoneKey } from './contactKeys';
 import { changeLogStmt, ensureChangeLogTable, notifyHub } from './deltaSync';
-import { contactLists, runSetupOnce } from './rows';
+import { contactLists, runSetupOnce, text } from './rows';
 import type { Env } from './workerEnv';
 
 /** IN lists stay under D1's 100 bound parameters. */
@@ -60,12 +60,12 @@ export function ensureContactSchema(env: Env): Promise<void> {
       email TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT 'manual',
       created_at INTEGER NOT NULL DEFAULT 0, created_by TEXT, created_by_name TEXT)`).run();
     for (const [table, columns] of Object.entries(NEW_COLUMNS)) {
-      const { results } = await db.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
+      const { results } = await db.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>(); // NOSONAR: schema steps run one at a time
       const existing = new Set(results.map(c => c.name));
       for (const [column, definition] of Object.entries(columns)) {
         if (existing.has(column)) continue;
         try {
-          await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
+          await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run(); // NOSONAR: schema steps run one at a time
         } catch (e) {
           if (!/duplicate column/i.test((e as Error).message)) throw e; // another isolate added it
         }
@@ -89,20 +89,17 @@ export function ensureContactSchema(env: Env): Promise<void> {
           db.prepare('INSERT OR IGNORE INTO contact_keys (key, contact_id) VALUES (?, ?)').bind(key, row.id)),
       ];
     });
-    for (let i = 0; i < stmts.length; i += 200) await db.batch(stmts.slice(i, i + 200));
+    for (let i = 0; i < stmts.length; i += 200) await db.batch(stmts.slice(i, i + 200)); // NOSONAR: one write batch at a time keeps the load bounded
   });
 }
 
 /** Which contact holds each of these keys. */
 export async function keyOwners(db: D1Database, keys: string[]): Promise<Map<string, string>> {
-  const owners = new Map<string, string>();
-  for (let i = 0; i < keys.length; i += MAX_IDS) {
-    const chunk = keys.slice(i, i + MAX_IDS);
-    const { results } = await db.prepare(`SELECT key, contact_id FROM contact_keys WHERE key IN (${chunk.map(() => '?').join(',')})`)
-      .bind(...chunk).all<{ key: string; contact_id: string }>();
-    for (const r of results) owners.set(r.key, r.contact_id);
-  }
-  return owners;
+  const chunks = Array.from({ length: Math.ceil(keys.length / MAX_IDS) }, (_, i) => keys.slice(i * MAX_IDS, (i + 1) * MAX_IDS));
+  const pages = await Promise.all(chunks.map(chunk =>
+    db.prepare(`SELECT key, contact_id FROM contact_keys WHERE key IN (${chunk.map(() => '?').join(',')})`)
+      .bind(...chunk).all<{ key: string; contact_id: string }>()));
+  return new Map(pages.flatMap(p => p.results.map(r => [r.key, r.contact_id] as const)));
 }
 
 /**
@@ -135,9 +132,9 @@ export async function linkInquiryContact(env: Env, inquiryId: string): Promise<v
   const country = await orgCountry(env);
   const inq = await db.prepare('SELECT * FROM inquiries WHERE id = ?').bind(inquiryId).first<Record<string, unknown>>();
   if (!inq) return;
-  const phone = String(inq.customer_phone ?? '').trim();
-  const email = String(inq.customer_email ?? '').trim();
-  const name = String(inq.customer_name ?? '').trim();
+  const phone = text(inq.customer_phone).trim();
+  const email = text(inq.customer_email).trim();
+  const name = text(inq.customer_name).trim();
   const at = Number(inq.date) || Date.now();
   const keys = contactKeys([phone], [email], country);
   const setInquiry = (contactId: string, matches: string[] = []) => [
@@ -156,31 +153,14 @@ export async function linkInquiryContact(env: Env, inquiryId: string): Promise<v
     return;
   }
 
-  let contactId = owners[0];
-  if (contactId === undefined) {
-    // One id per number, so two inquiries racing in create the same row.
-    const wanted = `ct_${keys[0].replaceAll(/[^a-z0-9]/gi, '_')}`;
-    const taken = await db.prepare('SELECT 1 FROM contacts WHERE id = ?').bind(wanted).first();
-    contactId = taken ? `ct_${crypto.randomUUID()}` : wanted;
-    await db.batch([
-      db.prepare(`INSERT OR IGNORE INTO contacts (id, name, phone, email, phones, emails, notes, source,
-        created_at, created_by, created_by_name, updated_at, last_interaction_at)
-        VALUES (?, ?, ?, ?, ?, ?, '', 'inquiry', ?, ?, ?, ?, ?)`).bind(
-        contactId, name, phoneKey(phone, country) ? phone : '', emailKey(email) ? email : '',
-        JSON.stringify(phoneKey(phone, country) ? [phone] : []), JSON.stringify(emailKey(email) ? [email] : []),
-        Date.now(), String(inq.created_by ?? ''), String(inq.created_by_name ?? ''), Date.now(), at),
-      ...keys.map(key => db.prepare('INSERT OR IGNORE INTO contact_keys (key, contact_id) VALUES (?, ?)').bind(key, contactId)),
-    ]);
-    // Whoever holds the first key now is the contact (a racing request may have won).
-    contactId = (await keyOwners(db, [keys[0]])).get(keys[0]) ?? contactId;
-  }
+  const contactId = owners[0] ?? await createInquiryContact(db, inq, keys, { phone, email, name, at, country });
 
   const row = await db.prepare('SELECT * FROM contacts WHERE id = ?').bind(contactId).first<Record<string, unknown>>();
   if (!row) return; // deleted meanwhile: the next pass links it again
   const lists = contactLists(row);
   const ownKey = phoneKey(phone, country);
-  const phones = ownKey && !lists.phones.some(p => phoneKey(p, country) === ownKey) ? [...lists.phones, phone] : lists.phones;
-  const emails = emailKey(email) && !lists.emails.some(e => emailKey(e) === emailKey(email)) ? [...lists.emails, email] : lists.emails;
+  const phones = withNew(lists.phones, phone, ownKey, p => phoneKey(p, country));
+  const emails = withNew(lists.emails, email, emailKey(email), emailKey);
   await db.batch([
     db.prepare(`UPDATE contacts SET phones = ?, emails = ?, phone = ?, email = ?,
       name = CASE WHEN name = '' THEN ? ELSE name END,
@@ -191,6 +171,34 @@ export async function linkInquiryContact(env: Env, inquiryId: string): Promise<v
     ...setInquiry(contactId),
   ]);
   await notifyHub(env, [{ entity: 'contact', id: contactId, op: 'put' }, { entity: 'inquiry', id: inquiryId, op: 'put' }]);
+}
+
+/** The list with this value added, unless it's not valid (no key) or already there. */
+function withNew(list: string[], value: string, key: string | null, keyOf: (v: string) => string | null): string[] {
+  return key && !list.some(v => keyOf(v) === key) ? [...list, value] : list;
+}
+
+/** A new contact from an inquiry; gives back the id that holds its first key (a racing request may have won). */
+async function createInquiryContact(
+  db: D1Database, inq: Record<string, unknown>, keys: string[],
+  { phone, email, name, at, country }: { phone: string; email: string; name: string; at: number; country: string },
+): Promise<string> {
+  // One id per number, so two inquiries racing in create the same row.
+  const wanted = `ct_${keys[0].replaceAll(/[^a-z0-9]/gi, '_')}`;
+  const taken = await db.prepare('SELECT 1 FROM contacts WHERE id = ?').bind(wanted).first();
+  const contactId = taken ? `ct_${crypto.randomUUID()}` : wanted;
+  const hasPhone = !!phoneKey(phone, country);
+  const hasEmail = !!emailKey(email);
+  await db.batch([
+    db.prepare(`INSERT OR IGNORE INTO contacts (id, name, phone, email, phones, emails, notes, source,
+      created_at, created_by, created_by_name, updated_at, last_interaction_at)
+      VALUES (?, ?, ?, ?, ?, ?, '', 'inquiry', ?, ?, ?, ?, ?)`).bind(
+      contactId, name, hasPhone ? phone : '', hasEmail ? email : '',
+      JSON.stringify(hasPhone ? [phone] : []), JSON.stringify(hasEmail ? [email] : []),
+      Date.now(), text(inq.created_by), text(inq.created_by_name), Date.now(), at),
+    ...keys.map(key => db.prepare('INSERT OR IGNORE INTO contact_keys (key, contact_id) VALUES (?, ?)').bind(key, contactId)),
+  ]);
+  return (await keyOwners(db, [keys[0]])).get(keys[0]) ?? contactId;
 }
 
 const lastPass = new Map<string, number>();
@@ -207,6 +215,7 @@ export async function linkPendingInquiries(env: Env): Promise<void> {
   await ensureContactSchema(env);
   const { results } = await env.VAYU_DB.prepare('SELECT id FROM inquiries WHERE contact_id IS NULL ORDER BY date LIMIT 100').all<{ id: string }>();
   for (const { id } of results) {
-    await linkInquiryContact(env, id).catch(e => console.error('Linking an inquiry to its contact failed:', e));
+    // One at a time, so two inquiries from one person can't both create a contact.
+    await linkInquiryContact(env, id).catch(e => console.error('Linking an inquiry to its contact failed:', e)); // NOSONAR
   }
 }

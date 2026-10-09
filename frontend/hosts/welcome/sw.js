@@ -7,7 +7,7 @@
 globalThis.addEventListener('install', () => globalThis.skipWaiting());
 globalThis.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
-    for (const key of await caches.keys()) await caches.delete(key);
+    await Promise.all((await caches.keys()).map(key => caches.delete(key)));
     await globalThis.registration.unregister();
   })());
 });

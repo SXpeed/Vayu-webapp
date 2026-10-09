@@ -10,6 +10,7 @@
 // refused rather than sanitized.
 
 import type { Env } from '../workerEnv';
+import { text } from '../rows';
 import { auditStmt } from './audit';
 import { OrgError, type Actor } from './orgs';
 
@@ -82,11 +83,11 @@ function save(db: D1Database, value: Branding, actorId: string): D1PreparedState
 
 export async function updateBranding(db: D1Database, body: Record<string, unknown>, actor: Actor): Promise<Branding> {
   const current = await getBranding(db);
-  const appName = body.appName === undefined ? current.appName : String(body.appName).trim();
+  const appName = body.appName === undefined ? current.appName : text(body.appName).trim();
   if (appName.length < 2 || appName.length > 40) throw new OrgError(400, 'invalid', 'The name must be 2–40 characters.');
-  const tagline = body.tagline === undefined ? current.tagline : String(body.tagline).trim().slice(0, 80);
+  const tagline = body.tagline === undefined ? current.tagline : text(body.tagline).trim().slice(0, 80);
   const clearsAccent = body.accentColor === null || body.accentColor === '';
-  const sentAccent = clearsAccent ? null : String(body.accentColor).trim();
+  const sentAccent = clearsAccent ? null : text(body.accentColor).trim();
   const accentColor = body.accentColor === undefined ? current.accentColor : sentAccent;
   if (accentColor !== null && !/^#[0-9a-fA-F]{6}$/.test(accentColor)) {
     throw new OrgError(400, 'invalid', 'The accent colour must be a hex value like #b8860b.');

@@ -181,9 +181,9 @@ export const StoresPanel: React.FC<StoresPanelProps> = ({ stores, team, onChange
                     </div>
 
                     <div className="neu-inset rounded-2xl p-3 space-y-2">
-                        <label className="flex items-center justify-between gap-3 cursor-pointer text-xs font-medium text-[var(--neu-text)]">
-                            Require store Wi-Fi
-                            <button type="button" role="switch" aria-checked={form.wifiRequired} onClick={() => setForm(f => ({ ...f, wifiRequired: !f.wifiRequired }))} className="neu-toggle" data-on={form.wifiRequired}>
+                        <label htmlFor="store-wifi-required" className="flex items-center justify-between gap-3 cursor-pointer text-xs font-medium text-[var(--neu-text)]">
+                            <span>Require store Wi-Fi</span>
+                            <button id="store-wifi-required" type="button" role="switch" aria-checked={form.wifiRequired} onClick={() => setForm(f => ({ ...f, wifiRequired: !f.wifiRequired }))} className="neu-toggle" data-on={form.wifiRequired}>
                                 <span className="neu-toggle-knob" />
                             </button>
                         </label>

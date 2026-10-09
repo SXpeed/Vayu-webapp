@@ -266,7 +266,7 @@ const Viewer: React.FC<{ art: RoomArtwork; showPrices: boolean; selected: boolea
     }, [onClose]);
     const image = art.images[index];
     return (
-        <div className="fixed inset-0 z-40 bg-[var(--neu-bg)] overflow-y-auto" role="dialog" aria-modal="true" aria-label={art.title}>
+        <dialog open className="fixed inset-0 z-40 w-full h-full max-w-none max-h-none text-[inherit] bg-[var(--neu-bg)] overflow-y-auto" aria-modal="true" aria-label={art.title}>
             <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex justify-end">
                 <button type="button" onClick={onClose} className="neu-icon-btn" aria-label="Close"><X size={18} /></button>
             </div>
@@ -300,7 +300,7 @@ const Viewer: React.FC<{ art: RoomArtwork; showPrices: boolean; selected: boolea
                     )}
                 </div>
             </div>
-        </div>
+        </dialog>
     );
 };
 
@@ -322,7 +322,7 @@ const InterestForm: React.FC<{ token: string; pass: string; artworks: RoomArtwor
         else setError(res.status === 401 ? 'This page has been open a long time. Reload it, enter the passcode again, then send.' : res.message);
     };
     return (
-        <div className="fixed inset-0 z-40 bg-black/20 backdrop-blur-[2px] flex items-end sm:items-center justify-center p-0 sm:p-4" role="dialog" aria-modal="true" aria-label="Send an inquiry">
+        <dialog open className="fixed inset-0 z-40 w-full h-full max-w-none max-h-none text-[inherit] bg-black/20 backdrop-blur-[2px] flex items-end sm:items-center justify-center p-0 sm:p-4" aria-modal="true" aria-label="Send an inquiry">
             <Card padding="lg" className="w-full sm:max-w-md rounded-b-none sm:rounded-b-[inherit] max-h-[92dvh] overflow-y-auto">
                 <form onSubmit={submit} className="space-y-4">
                     <div className="flex items-start justify-between gap-3">
@@ -342,6 +342,6 @@ const InterestForm: React.FC<{ token: string; pass: string; artworks: RoomArtwor
                     </Button>
                 </form>
             </Card>
-        </div>
+        </dialog>
     );
 };

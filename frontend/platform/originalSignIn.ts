@@ -64,11 +64,8 @@ export async function originalSignInStatus(env: Env, db: D1Database): Promise<Or
     .filter(u => !!legacyPasswordHash(u)) // records the app made for platform members have no password of their own
     .map(u => u.email?.trim().toLowerCase())
     .filter((e): e is string => !!e))];
-  const without: string[] = [];
-  for (const email of emails) {
-    const found = await db.prepare('SELECT 1 FROM "user" WHERE email = ?').bind(email).first();
-    if (!found) without.push(email);
-  }
+  const found = await Promise.all(emails.map(email => db.prepare('SELECT 1 FROM "user" WHERE email = ?').bind(email).first()));
+  const without = emails.filter((_, i) => !found[i]);
   return {
     open: await originalSignInOpen(db),
     connectedOrg: connectedOrg ?? null,

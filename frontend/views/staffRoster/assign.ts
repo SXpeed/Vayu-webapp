@@ -41,7 +41,7 @@ export function candidatesFor(data: StaffRosterData, d: Derived, shift: Pick<Sta
         if (conflicts.some(c => c.type === 'leave')) {
             status = 'on-leave';
             note = `on ${leaveOn(data.leaves, p.id, shift.date)?.type.toLowerCase() ?? 'leave'}`;
-        } else if (overlap && overlap.type === 'overlap') {
+        } else if (overlap?.type === 'overlap') {
             const o = others.find(x => x.id === overlap.otherId);
             status = 'busy';
             note = o ? `busy ${timeRange(o)} at ${d.storeName(o.storeId)}` : 'busy then';
@@ -63,9 +63,12 @@ export function candidatesFor(data: StaffRosterData, d: Derived, shift: Pick<Sta
         || a.name.localeCompare(b.name));
 }
 
+/** "Priya Shah · Manager", or just the name when there is no title. */
+export const withTitle = (p: { name: string; title?: string | null }): string => (p.title ? `${p.name} · ${p.title}` : p.name);
+
 /** The label in a picker: "Priya Shah · free · 28 h this week". */
 export function candidateLabel(c: Candidate): string {
     const status = { free: 'free', 'day-off': 'day off', 'pending-leave': 'asked for leave', busy: 'busy', 'on-leave': 'on leave' }[c.status];
     const hours = `${Math.round(c.weekMin / 6) / 10} h this week`;
-    return `${c.name}${c.title ? ` · ${c.title}` : ''} — ${c.note || status} · ${hours}`;
+    return `${withTitle(c)} — ${c.note || status} · ${hours}`;
 }

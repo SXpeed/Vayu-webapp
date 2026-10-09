@@ -84,17 +84,17 @@ function mayReceive(
 }
 
 export class SyncHub {
-  private state: DurableObjectState;
-  private env: Env;
+  private readonly state: DurableObjectState;
+  private readonly env: Env;
   private hydrated = false;
   /** userId -> live (or hibernating) sockets, rebuilt from attachments. */
-  private sockets = new Map<string, Set<WebSocket>>();
-  private meta = new WeakMap<WebSocket, SocketMeta>();
-  private rate = new WeakMap<WebSocket, number[]>();
-  private typingAt = new Map<string, number>();
-  private membership = new Map<string, { at: number; room: RoomAccess }>();
+  private readonly sockets = new Map<string, Set<WebSocket>>();
+  private readonly meta = new WeakMap<WebSocket, SocketMeta>();
+  private readonly rate = new WeakMap<WebSocket, number[]>();
+  private readonly typingAt = new Map<string, number>();
+  private readonly membership = new Map<string, { at: number; room: RoomAccess }>();
   private rolesCache: { at: number; roles: RoleDef[] } | null = null;
-  private readableCache = new Map<string, { at: number; entities: Set<SyncEntity>; payments: boolean; schedule: boolean; sales: boolean }>();
+  private readonly readableCache = new Map<string, { at: number; entities: Set<SyncEntity>; payments: boolean; schedule: boolean; sales: boolean }>();
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -191,9 +191,9 @@ export class SyncHub {
     const recent = await storage.list({ limit: 100 });
     if (recent.size > 90) {
       const cutoff = Date.now() - TICKET_TTL_MS;
-      for (const [k, exp] of await storage.list<number>({ prefix: 'ticket:' })) {
-        if ((exp ?? 0) < cutoff) await storage.delete(k);
-      }
+      const expired = [...await storage.list<number>({ prefix: 'ticket:' })].filter(([, exp]) => (exp ?? 0) < cutoff).map(([k]) => k);
+      // delete() takes at most 128 keys per call.
+      await Promise.all(Array.from({ length: Math.ceil(expired.length / 128) }, (_, i) => storage.delete(expired.slice(i * 128, (i + 1) * 128))));
     }
     return true;
   }
@@ -234,22 +234,22 @@ export class SyncHub {
         await this.reauth(ws, meta, msg);
         return;
       case 'typing':
-        await this.relayTyping(ws, meta, msg);
+        await this.relayTyping(meta, msg);
         return;
       case 'ack':
-        await this.applyAcks(ws, meta, msg);
+        await this.applyAcks(meta, msg);
         return;
       default:
         return; // unknown types are ignored, never fatal
     }
   }
 
-  async webSocketClose(ws: WebSocket): Promise<void> {
+  webSocketClose(ws: WebSocket): void {
     this.hydrate();
     this.dropSocket(ws);
   }
 
-  async webSocketError(ws: WebSocket): Promise<void> {
+  webSocketError(ws: WebSocket): void {
     this.hydrate();
     this.dropSocket(ws);
     try { ws.close(1011, 'error'); } catch { /* already closed */ }
@@ -289,7 +289,7 @@ export class SyncHub {
   }
 
   /** Typing: membership-checked, rate-limited, never persisted. */
-  private async relayTyping(ws: WebSocket, meta: SocketMeta, msg: HubMessage): Promise<void> {
+  private async relayTyping(meta: SocketMeta, msg: HubMessage): Promise<void> {
     if (typeof msg.conversationId !== 'string') return;
     const conversationId = msg.conversationId;
     const rateKey = `${meta.userId}:${conversationId}`;
@@ -320,7 +320,7 @@ export class SyncHub {
    * a no-op because the WHERE clause only allows forward transitions
    * (sent -> delivered -> read), which also prevents feedback loops.
    */
-  private async applyAcks(ws: WebSocket, meta: SocketMeta, msg: HubMessage): Promise<void> {
+  private async applyAcks(meta: SocketMeta, msg: HubMessage): Promise<void> {
     if (typeof msg.conversationId !== 'string') return;
     const status = ackStatus(msg.status);
     if (!status) return;
@@ -366,8 +366,7 @@ export class SyncHub {
     // resolve each mentioned conversation's members once, up front.
     const conversationIds = [...new Set(events.filter(chatEvent).map(e => e.conversationId as string))];
     for (const id of conversationIds) this.membership.delete(id);
-    const convRooms = new Map<string, RoomAccess>();
-    for (const id of conversationIds) convRooms.set(id, await this.room(id));
+    const convRooms = new Map<string, RoomAccess>(await Promise.all(conversationIds.map(async id => [id, await this.room(id)] as const)));
 
     const roles = await this.getRoles();
     for (const [userId, set] of this.sockets) {
@@ -430,7 +429,7 @@ export class SyncHub {
   private readAttachment(socket: WebSocket): SocketMeta | null {
     try {
       const meta = socket.deserializeAttachment() as SocketMeta | null;
-      if (meta && meta.userId) return meta;
+      if (meta?.userId) return meta;
     } catch { /* no attachment yet */ }
     return null;
   }

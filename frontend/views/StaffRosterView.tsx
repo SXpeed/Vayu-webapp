@@ -15,7 +15,7 @@ import { DayAgenda, PhoneWeek, WeekGrid } from './staffRoster/WeekViews';
 import { CopyWeekPanel, ImportPanel } from './staffRoster/PlanTools';
 import { ByStoreView, MonthView, RequestsView } from './staffRoster/OtherViews';
 import { ExportPanel, OpenShiftsPanel, PublishDialog, ShiftEditor, rosterCsv, type EditorState } from './staffRoster/Panels';
-import { derive, hoursText, inWeek, matchesPerson, matchesStore, rangeLabel, todayIso, type Filters } from './staffRoster/shared';
+import { derive, hoursText, inWeek, matchesPerson, matchesStore, rangeLabel, todayIso, type Derived, type Filters } from './staffRoster/shared';
 
 type View = 'week' | 'month' | 'store' | 'requests';
 type Overlay =
@@ -142,14 +142,14 @@ const RosterFilters: React.FC<{
         <div className="basis-full h-0 sm:hidden" aria-hidden="true" />
         <SearchBar value={filters.q} onChange={q => onFilters({ q })} placeholder="Search people" className="flex-[1_1_12rem] sm:max-w-xs" />
         {view === 'week' && (
-            <div className="flex gap-0.5 p-1 rounded-full neu-inset ml-auto shrink-0" role="group" aria-label="Week layout">
+            <fieldset className="flex gap-0.5 p-1 rounded-full neu-inset ml-auto shrink-0" aria-label="Week layout">
                 {(['grid', 'day'] as const).map(k => (
                     <button key={k} type="button" aria-pressed={layout === k} onClick={() => onLayout(k)}
                         className={`rounded-full px-3 py-1.5 text-[12px] font-semibold ${layout === k ? 'neu-raised-sm text-gold-700 dark:text-gold-300' : 'text-[var(--neu-text-dim)]'}`}>
                         {k === 'grid' ? 'Week' : 'Day'}
                     </button>
                 ))}
-            </div>
+            </fieldset>
         )}
     </div>
 );
@@ -187,10 +187,10 @@ const RosterLegend: React.FC<{
 
 /** Managers: fill a week fast from last week's plan (import and export are in the header). */
 const PlanToolbar: React.FC<{ onCopy: () => void }> = ({ onCopy }) => (
-    <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Plan faster">
+    <fieldset className="flex flex-wrap items-center gap-2" aria-label="Plan faster">
         <Button onClick={onCopy} icon={<CopyPlus size={15} />}>Copy last week</Button>
         <p className="hidden lg:block ml-auto text-[11.5px] text-[var(--neu-text-dim)]">Tip: drag a shift to another person or day to move it; hold Ctrl to copy.</p>
-    </div>
+    </fieldset>
 );
 
 type Common = Parameters<typeof WeekGrid>[0];
@@ -230,27 +230,43 @@ function rangeFor(view: View, weekStart: string): [string, string] {
  * shifts and days off, decide on leave and publish each week; everyone else
  * sees the published weeks and can ask for leave.
  */
-export const StaffRosterView: React.FC = () => {
-    const { can, navigate } = useAppChrome();
-    const isPhone = useMediaQuery('(max-width: 767px)');
-    const [weekStart, setWeekStart] = useState(() => mondayOf(todayIso()));
-    const [view, setView] = useState<View>('week');
-    const [layout, setLayout] = useState<'grid' | 'day'>('grid');
-    const [dayIdx, setDayIdx] = useState(() => weekdayIdx(todayIso()));
-    const [filters, setFilters] = useState<Filters>({ storeId: 'all', title: 'all', q: '' });
+const rosterTabs = (pending: number): [View, string][] => [
+    ['week', 'Week'], ['month', 'Month'], ['store', 'By store'], ['requests', pending ? `Requests (${pending})` : 'Requests'],
+];
+
+/** What the week views get: managers edit and add, and on a desktop also drag shifts about. */
+function weekViewProps(
+    base: Pick<Common, 'data' | 'd' | 'dates' | 'filters'>, manage: boolean, isPhone: boolean,
+    actions: { edit: (s: StaffShift) => void; newShift: (employeeId: string | null, date: string) => void; moveShift: (s: StaffShift, e: string | null, date: string, copy: boolean) => Promise<void> },
+): Common {
+    if (!manage) return base;
+    const onMove = isPhone ? undefined : (s: StaffShift, e: string | null, date: string, copy: boolean) => { void actions.moveShift(s, e, date, copy); };
+    return { ...base, onEdit: actions.edit, onNew: actions.newShift, onMove };
+}
+
+/** Where "Add shift" puts a new one: the day shown, else today if it's in the week, else the week's Monday. */
+function addDate(shownDay: string | null, weekStart: string): string {
+    if (shownDay) return shownDay;
+    const today = todayIso();
+    return inWeek({ date: today }, weekStart) ? today : weekStart;
+}
+
+/** The week's shifts as CSV, with the filters applied. */
+function weekCsv(data: StaffRosterData, d: Derived, week: StaffShift[], filters: Filters): string {
+    const people = new Set(data.people.filter(p => matchesPerson(p, filters)).map(p => p.id));
+    const shown = (s: StaffShift) => (s.employeeId ? people.has(s.employeeId) : filters.title === 'all' || s.role === filters.title);
+    return rosterCsv(d, week.filter(s => matchesStore(s, filters) && shown(s)));
+}
+
+/** The roster for a date range, kept fresh: on a schedule change, and on coming back to the tab after 30 s. */
+function useRosterData(from: string, to: string) {
     const [data, setData] = useState<StaffRosterData | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [overlay, setOverlay] = useState<Overlay>(null);
-    const [notify, setNotifyState] = useState(() => { try { return localStorage.getItem(NOTIFY_KEY) !== '0'; } catch { return true; } });
-    const setNotify = (v: boolean) => { setNotifyState(v); try { localStorage.setItem(NOTIFY_KEY, v ? '1' : '0'); } catch { /* private mode */ } };
-
-    const [from, to] = rangeFor(view, weekStart);
-    const rangeKey = `${from}|${to}`;
     // The range the shown data was loaded for, and the one asked for last:
     // a slower answer for a range left behind is dropped.
     const [loadedKey, setLoadedKey] = useState('');
-    const wantedKey = useRef(rangeKey);
-    wantedKey.current = rangeKey;
+    const wantedKey = useRef(`${from}|${to}`);
+    wantedKey.current = `${from}|${to}`;
     const loadedAt = useRef(0);
     const load = useCallback(async () => {
         const key = `${from}|${to}`;
@@ -277,6 +293,77 @@ export const StaffRosterView: React.FC = () => {
         document.addEventListener('visibilitychange', onVisible);
         return () => { unsubscribe(); document.removeEventListener('visibilitychange', onVisible); };
     }, [load]);
+    return { data, error, loadedKey, load };
+}
+
+/** A shift dragged to someone else or another day (null: unassigned); `copy` keeps the original. */
+async function moveShiftTo(data: StaffRosterData | null, s: StaffShift, employeeId: string | null, date: string, copy: boolean): Promise<void> {
+    if (s.kind === 'off' && !employeeId) { toast.error('A day off needs a person.'); return; }
+    const who = employeeId ? (data?.people.find(p => p.id === employeeId)?.name.split(' ')[0] ?? 'them') : 'open shifts';
+    const { id: _id, ...fields } = s;
+    try {
+        if (copy) await staffRosterService.createShifts([{ ...fields, employeeId, date }]);
+        else await staffRosterService.updateShift(s.id, { ...fields, employeeId, date });
+        const day = new Date(`${date}T00:00:00Z`).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+        toast.success(`${copy ? 'Copied' : 'Moved'} to ${who}, ${day}`);
+    } catch (e) {
+        toast.error((e as Error).message || 'Could not move it');
+    }
+}
+
+/** The week's shifts that count, and what needs a manager: open shifts, people on leave, requests. */
+function coverCounts(data: StaffRosterData | null, d: Derived | null, week: StaffShift[], manage: boolean) {
+    // Shifts of someone no longer on the team stay stored but don't count as staff.
+    const team = new Set((data?.people ?? []).map(p => p.id));
+    const work = week.filter(s => s.kind === 'shift' && (!s.employeeId || team.has(s.employeeId)));
+    const openCount = work.filter(s => !s.employeeId).length;
+    const leaveHits = d ? week.filter(s => (d.conflicts.get(s.id) ?? []).some(c => c.type === 'leave')).length : 0;
+    const pendingCount = data ? data.leaves.filter(l => l.status === 'pending' && (manage || l.employeeId === data.me)).length : 0;
+    return { work, openCount, needCover: openCount + leaveHits, pendingCount };
+}
+
+/** A new shift's starting values: 9 to 5, in the filtered store and title when there is one. */
+function newShiftDraft(data: StaffRosterData, filters: Filters, employeeId: string | null, date: string, storeId?: string): Omit<StaffShift, 'id'> {
+    const person = data.people.find(p => p.id === employeeId);
+    const filteredStore = filters.storeId === 'all' ? null : filters.storeId;
+    const filteredTitle = filters.title === 'all' ? null : filters.title;
+    return {
+        kind: 'shift', employeeId, storeId: storeId ?? filteredStore ?? data.stores[0]?.id ?? null, date,
+        startMin: 540, endMin: 1020, breakMin: defaultBreakMin(540, 1020),
+        role: person?.title || filteredTitle || data.jobTitles[0] || '', note: '',
+    };
+}
+
+/** Whichever panel is open over the roster. */
+const RosterOverlay: React.FC<{
+    overlay: NonNullable<Overlay>; data: StaffRosterData; d: Derived; weekStart: string; notify: boolean; onNotify: (v: boolean) => void;
+    onEdit: (s: StaffShift) => void; csv: () => string; onClose: () => void; onDone: () => void; onChanged: () => void;
+}> = ({ overlay, data, d, weekStart, notify, onNotify, onEdit, csv, onClose, onDone, onChanged }) => {
+    switch (overlay.kind) {
+        case 'edit': return <ShiftEditor key={overlay.state.id ?? 'new'} data={data} d={d} start={overlay.state} onClose={onClose} onSaved={onDone} />;
+        case 'open': return <OpenShiftsPanel data={data} d={d} weekStart={weekStart} onEdit={onEdit} onClose={onClose} onChanged={onChanged} />;
+        case 'publish': return <PublishDialog data={data} d={d} weekStart={weekStart} notify={notify} onNotify={onNotify} onFix={onEdit} onClose={onClose} onPublished={onDone} />;
+        case 'export': return <ExportPanel csv={csv()} weekStart={weekStart} onClose={onClose} />;
+        case 'copy': return <CopyWeekPanel data={data} weekStart={weekStart} onClose={onClose} onDone={onDone} />;
+        case 'import': return <ImportPanel data={data} onClose={onClose} onDone={onDone} />;
+    }
+};
+
+export const StaffRosterView: React.FC = () => {
+    const { can, navigate } = useAppChrome();
+    const isPhone = useMediaQuery('(max-width: 767px)');
+    const [weekStart, setWeekStart] = useState(() => mondayOf(todayIso()));
+    const [view, setView] = useState<View>('week');
+    const [layout, setLayout] = useState<'grid' | 'day'>('grid');
+    const [dayIdx, setDayIdx] = useState(() => weekdayIdx(todayIso()));
+    const [filters, setFilters] = useState<Filters>({ storeId: 'all', title: 'all', q: '' });
+    const [overlay, setOverlay] = useState<Overlay>(null);
+    const [notify, setNotify] = useState(() => { try { return localStorage.getItem(NOTIFY_KEY) !== '0'; } catch { return true; } });
+    const chooseNotify = (v: boolean) => { setNotify(v); try { localStorage.setItem(NOTIFY_KEY, v ? '1' : '0'); } catch { /* private mode */ } };
+
+    const [from, to] = rangeFor(view, weekStart);
+    const rangeKey = `${from}|${to}`;
+    const { data, error, loadedKey, load } = useRosterData(from, to);
 
     const d = useMemo(() => (data ? derive(data) : null), [data]);
     const dates = weekDates(weekStart);
@@ -289,69 +376,30 @@ export const StaffRosterView: React.FC = () => {
     const done = () => { setOverlay(null); void load(); };
     const edit = (s: StaffShift) => setOverlay({ kind: 'edit', state: { id: s.id, draft: { ...s } } });
     const newShift = (employeeId: string | null, date: string, storeId?: string) => {
-        if (!data) return;
-        const person = data.people.find(p => p.id === employeeId);
-        const store = storeId ?? (filters.storeId !== 'all' ? filters.storeId : data.stores[0]?.id ?? null);
-        setOverlay({
-            kind: 'edit', state: {
-                id: null,
-                draft: {
-                    kind: 'shift', employeeId, storeId: store, date, startMin: 540, endMin: 1020, breakMin: defaultBreakMin(540, 1020),
-                    role: person?.title || (filters.title !== 'all' ? filters.title : data.jobTitles[0] ?? ''), note: '',
-                },
-            },
-        });
+        if (data) setOverlay({ kind: 'edit', state: { id: null, draft: newShiftDraft(data, filters, employeeId, date, storeId) } });
     };
-    const addAnywhere = () => {
-        const today = todayIso();
-        let date = weekStart;
-        if (layout === 'day' && view === 'week') date = dates[dayIdx];
-        else if (inWeek({ date: today }, weekStart)) date = today;
-        newShift(null, date);
-    };
+    const addAnywhere = () => newShift(null, addDate(layout === 'day' && view === 'week' ? dates[dayIdx] : null, weekStart));
     /** A shift dragged to someone else or another day (null: unassigned). Ctrl/Alt copies it. */
     const moveShift = async (s: StaffShift, employeeId: string | null, date: string, copy: boolean) => {
-        if (s.kind === 'off' && !employeeId) { toast.error('A day off needs a person.'); return; }
-        const who = employeeId ? (data?.people.find(p => p.id === employeeId)?.name.split(' ')[0] ?? 'them') : 'open shifts';
-        const { id: _id, ...fields } = s;
-        try {
-            if (copy) await staffRosterService.createShifts([{ ...fields, employeeId, date }]);
-            else await staffRosterService.updateShift(s.id, { ...fields, employeeId, date });
-            toast.success(`${copy ? 'Copied' : 'Moved'} to ${who}, ${new Date(`${date}T00:00:00Z`).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })}`);
-        } catch (e) {
-            toast.error((e as Error).message || 'Could not move it');
-        }
+        await moveShiftTo(data, s, employeeId, date, copy);
         void load();
     };
     const moveWeek = (by: number) => setWeekStart(w => (view === 'month' ? shiftMonthOfWeek(w, by) : addDays(w, by * 7)));
     const goToday = () => { setWeekStart(mondayOf(todayIso())); setDayIdx(weekdayIdx(todayIso())); };
 
     // ── Summary ──────────────────────────────────────────────────────────
-    // Shifts of someone no longer on the team stay stored but don't count as staff.
-    const team = useMemo(() => new Set((data?.people ?? []).map(p => p.id)), [data]);
-    const work = week.filter(s => s.kind === 'shift' && (!s.employeeId || team.has(s.employeeId)));
-    const openCount = work.filter(s => !s.employeeId).length;
-    const leaveHits = data && d ? week.filter(s => (d.conflicts.get(s.id) ?? []).some(c => c.type === 'leave')).length : 0;
-    const needCover = openCount + leaveHits;
-    const pendingCount = data ? data.leaves.filter(l => l.status === 'pending' && (manage || l.employeeId === data.me)).length : 0;
+    const { work, openCount, needCover, pendingCount } = useMemo(() => coverCounts(data, d, week, manage), [data, d, week, manage]);
 
     const stats = summaryStats(manage, data, work, openCount, pendingCount, data?.me ?? '');
 
-    const csv = () => {
-        if (!data || !d) return '';
-        const people = new Set(data.people.filter(p => matchesPerson(p, filters)).map(p => p.id));
-        return rosterCsv(data, d, week.filter(s => matchesStore(s, filters) && (s.employeeId ? people.has(s.employeeId) : filters.title === 'all' || s.role === filters.title)));
-    };
+    const csv = () => (data && d ? weekCsv(data, d, week, filters) : '');
 
     // ── Layout ───────────────────────────────────────────────────────────
-    const TABS: [View, string][] = [['week', 'Week'], ['month', 'Month'], ['store', 'By store'], ['requests', pendingCount ? `Requests (${pendingCount})` : 'Requests']];
+    const TABS = rosterTabs(pendingCount);
     // Nothing until the roster arrives: before then it isn't known whether the week is published.
     const subtitle = data ? rosterSubtitle(manage, isPhone, status, needCover, data.weeks[weekStart]) : '';
 
-    const common = data && d ? {
-        data, d, dates, filters, onEdit: manage ? edit : undefined, onNew: manage ? newShift : undefined,
-        onMove: manage && !isPhone ? (s: StaffShift, e: string | null, date: string, copy: boolean) => { void moveShift(s, e, date, copy); } : undefined,
-    } : null;
+    const common = data && d ? weekViewProps({ data, d, dates, filters }, manage, isPhone, { edit, newShift, moveShift }) : null;
     const openDayView = (date: string) => { setWeekStart(mondayOf(date)); setDayIdx(weekdayIdx(date)); setView('week'); setLayout('day'); };
     let body: React.ReactNode = <div className="py-20 flex justify-center text-[var(--neu-text-dim)]"><Loader2 size={22} className="animate-spin" /></div>;
     // Requests waits for its own range: another tab's data holds different leave.
@@ -371,9 +419,9 @@ export const StaffRosterView: React.FC = () => {
                 subtitle={subtitle}
                 actions={manage ? (
                     <>
-                        <span className={`hidden sm:inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-semibold ${STATUS_CLS[status]}`} role="status">
+                        <output className={`hidden sm:inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-semibold ${STATUS_CLS[status]}`}>
                             <span className="w-1.5 h-1.5 rounded-full bg-current" aria-hidden="true" />{STATUS_TEXT[status]}
-                        </span>
+                        </output>
                         <HeaderAction phone={isPhone} label="Import roster" short="Import" onClick={() => setOverlay({ kind: 'import' })} icon={<FileUp size={15} className="text-brand-900 dark:text-gold-400" />} />
                         <HeaderAction phone={isPhone} label="Export this week" short="Export" onClick={() => setOverlay({ kind: 'export' })} icon={<Download size={15} className="text-brand-900 dark:text-gold-400" />} />
                         <GhostIconButton onClick={() => setOverlay({ kind: 'publish' })} label="Publish roster" icon={<Send size={15} className="text-brand-900 dark:text-gold-400" />} />
@@ -385,7 +433,7 @@ export const StaffRosterView: React.FC = () => {
             </PageHeader>
 
             <PageBody space="md" className="text-[var(--neu-text)]">
-                {manage && data && data.stores.length === 0 && (
+                {manage && data?.stores.length === 0 && (
                     <div className="neu-card p-4 flex flex-wrap items-center gap-3">
                         <StoreIcon size={18} className="text-[var(--neu-gold)]" />
                         <p className="flex-1 min-w-[12rem] text-[13px]">Add your stores first: shifts are planned per store. Stores are set up under Attendance → Stores.</p>
@@ -408,22 +456,14 @@ export const StaffRosterView: React.FC = () => {
 
                 {data && d && view !== 'requests' && (
                     <RosterLegend stores={data.stores} storeClass={d.storeClass} needCover={needCover} manage={manage} status={status}
-                        notify={notify} onNotify={setNotify} onReviewOpen={() => setOverlay({ kind: 'open' })} />
+                        notify={notify} onNotify={chooseNotify} onReviewOpen={() => setOverlay({ kind: 'open' })} />
                 )}
             </PageBody>
 
-            {data && d && overlay?.kind === 'edit' && (
-                <ShiftEditor key={overlay.state.id ?? 'new'} data={data} d={d} start={overlay.state} onClose={() => setOverlay(null)} onSaved={done} />
+            {data && d && overlay && (
+                <RosterOverlay overlay={overlay} data={data} d={d} weekStart={weekStart} notify={notify} onNotify={chooseNotify}
+                    onEdit={edit} csv={csv} onClose={() => setOverlay(null)} onDone={done} onChanged={() => { void load(); }} />
             )}
-            {data && d && overlay?.kind === 'open' && (
-                <OpenShiftsPanel data={data} d={d} weekStart={weekStart} onEdit={edit} onClose={() => setOverlay(null)} onChanged={() => { void load(); }} />
-            )}
-            {data && d && overlay?.kind === 'publish' && (
-                <PublishDialog data={data} d={d} weekStart={weekStart} notify={notify} onNotify={setNotify} onFix={edit} onClose={() => setOverlay(null)} onPublished={done} />
-            )}
-            {data && d && overlay?.kind === 'export' && <ExportPanel csv={csv()} weekStart={weekStart} onClose={() => setOverlay(null)} />}
-            {data && overlay?.kind === 'copy' && <CopyWeekPanel data={data} weekStart={weekStart} onClose={() => setOverlay(null)} onDone={done} />}
-            {data && overlay?.kind === 'import' && <ImportPanel data={data} onClose={() => setOverlay(null)} onDone={done} />}
         </PageRoot>
     );
 };

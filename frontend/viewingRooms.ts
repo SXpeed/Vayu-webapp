@@ -20,6 +20,7 @@
 //
 // Pure helpers here; the route handlers live in worker.ts.
 import { fileKeyFromUrl } from './workerEnv';
+import { text } from './rows';
 
 export const PASS_TTL_MS = 6 * 60 * 60 * 1000;
 export const MAX_ROOM_ARTWORKS = 60;
@@ -30,7 +31,7 @@ const PBKDF2_ITERATIONS = 50_000;
 
 function base64url(bytes: Uint8Array): string {
   let s = '';
-  for (const b of bytes) s += String.fromCharCode(b);
+  for (const b of bytes) s += String.fromCodePoint(b);
   // '=' only ever appears as padding, so dropping every one is safe.
   return btoa(s).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
 }
@@ -48,7 +49,7 @@ export const ROOM_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 
 /** Six random digits, without modulo bias. */
 export function newPasscode(): string {
-  const limit = Math.floor(0x1_0000_0000 / 1_000_000) * 1_000_000;
+  const limit = Math.floor(2 ** 32 / 1_000_000) * 1_000_000;
   for (;;) {
     const [n] = crypto.getRandomValues(new Uint32Array(1));
     if (n < limit) return String(n % 1_000_000).padStart(6, '0');
@@ -72,7 +73,7 @@ export async function hashPasscode(passcode: string, saltHex: string): Promise<s
 export function sameHex(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  for (let i = 0; i < a.length; i++) diff |= (a.codePointAt(i) ?? 0) ^ (b.codePointAt(i) ?? 0);
   return diff === 0;
 }
 
@@ -228,15 +229,15 @@ export const VIEWING_ROOMS_TABLE_SQL = `
 /** What staff see for a room (never the passcode hash, salt or grant key). */
 export function staffRoom(row: Record<string, unknown>, now = Date.now()) {
   let artworkIds: string[] = [];
-  try { artworkIds = JSON.parse(String(row.artwork_ids ?? '[]')); } catch { /* malformed */ }
+  try { artworkIds = JSON.parse(text(row.artwork_ids) || '[]'); } catch { /* malformed */ }
   return {
-    id: String(row.id),
-    token: String(row.token),
-    name: String(row.name ?? ''),
-    clientName: String(row.client_name ?? ''),
-    clientPhone: String(row.client_phone ?? ''),
-    clientEmail: String(row.client_email ?? ''),
-    message: String(row.message ?? ''),
+    id: text(row.id),
+    token: text(row.token),
+    name: text(row.name),
+    clientName: text(row.client_name),
+    clientPhone: text(row.client_phone),
+    clientEmail: text(row.client_email),
+    message: text(row.message),
     artworkIds,
     showPrices: Number(row.show_prices) === 1,
     expiresAt: Number(row.expires_at),
@@ -244,8 +245,8 @@ export function staffRoom(row: Record<string, unknown>, now = Date.now()) {
     viewCount: Number(row.view_count ?? 0),
     lastViewedAt: row.last_viewed_at ? Number(row.last_viewed_at) : null,
     inquiryCount: Number(row.inquiry_count ?? 0),
-    createdBy: String(row.created_by ?? ''),
-    createdByName: String(row.created_by_name ?? ''),
+    createdBy: text(row.created_by),
+    createdByName: text(row.created_by_name),
     createdAt: Number(row.created_at),
   };
 }

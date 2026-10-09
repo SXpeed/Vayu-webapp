@@ -194,7 +194,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
     }
   }, []);
 
-  useEffect(() => { loadUsers(); }, [loadUsers]);
+  useEffect(() => { void loadUsers(); }, [loadUsers]);
 
   // Stores for the attendance assignment dropdown (best effort — absent if none exist).
   useEffect(() => {
@@ -494,7 +494,7 @@ const UserManagementPanel: React.FC<Props> = ({ currentUserId }) => {
         message={platform ? 'they lose access to this workspace; their own account stays theirs' : 'their account and login access are archived for admin review'}
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => {
-          if (deleteTarget) handleRemove(deleteTarget.id);
+          if (deleteTarget) void handleRemove(deleteTarget.id);
           setDeleteTarget(null);
         }}
       />

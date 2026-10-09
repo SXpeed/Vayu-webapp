@@ -192,7 +192,7 @@ export function useHandlers(args: HandlerArgs) {
         for (const art of toMark) {
             const updatedArt = { ...art, status: 'Sold' as const };
             artworkService.updateArtwork(updatedArt).catch(e => console.error('D1 sync failed (proforma artwork status):', e));
-            db.saveArtwork(updatedArt);
+            db.saveArtwork(updatedArt).catch(e => console.error('Local save failed (proforma artwork status):', e));
         }
         setArtworks(prev => prev.map(art => (soldIds.has(art.id) ? { ...art, status: 'Sold' as const } : art)));
     }, [artworks, setArtworks]);

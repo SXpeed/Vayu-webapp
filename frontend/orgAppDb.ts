@@ -17,7 +17,7 @@ function bindable(value: unknown): Bindable { // NOSONAR: a SQL value is a numbe
   if (value instanceof ArrayBuffer) return value;
   if (ArrayBuffer.isView(value)) return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer;
   if (typeof value === 'number' || typeof value === 'string') return value;
-  return String(value);
+  return String(value); // NOSONAR: last resort for an unexpected value; SQLite keeps its text form
 }
 
 /** One organization's app database. Holds the same tables as the original app (schema.sql). */

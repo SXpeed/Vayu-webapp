@@ -81,7 +81,7 @@ const fetchImage = async (url: string, attempts = 3): Promise<Blob> => {
         } catch (e) {
             lastError = e; // network error — worth retrying
         }
-        if (attempt < attempts) await new Promise(r => setTimeout(r, 400 * attempt));
+        if (attempt < attempts) await new Promise(r => setTimeout(r, 400 * attempt)); // NOSONAR: retries wait their turn
     }
     throw lastError;
 };
@@ -684,13 +684,13 @@ export const buildCatalogPdf = async (job: CatalogPdfJob, callbacks: CatalogPdfC
     for (let k = 0; k < pages.length; k++) {
         for (let ahead = k; ahead < Math.min(pages.length, k + depth); ahead++) prepare(ahead);
         callbacks.onProgress({ stage: 'pages', done: k, total: pages.length, title: pages[k].art.title });
-        const photo = await photos[k];
+        const photo = await photos[k]; // NOSONAR: pages draw in order; the next photos are already loading
         photos[k] = null; // drawn: let its bytes go
         drawPlannedPage(ctx, pages[k], photo);
     }
 
     callbacks.onProgress({ stage: 'pages', done: pages.length, total: pages.length });
-    if (lastPage) drawLastPage(doc, await lastPage, background, palette, ctx.pageCount);
+    if (lastPage !== null) drawLastPage(doc, await lastPage, background, palette, ctx.pageCount);
 
     backdrop?.close();
     callbacks.onProgress({ stage: 'assembling' });

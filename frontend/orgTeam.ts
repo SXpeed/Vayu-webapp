@@ -82,7 +82,7 @@ async function syncPlatformRole(ctx: Ctx, member: MemberRow, appRole: string): P
 }
 
 export function orgAccountRoutes(deps: TeamDeps): OrgRoute[] {
-  const notHere: Handler = async () => err('Not available here: your account is managed at sign-in.', 404);
+  const notHere: Handler = () => Promise.resolve(err('Not available here: your account is managed at sign-in.', 404));
 
   const invitationsList: Handler = async (ctx) => {
     const session = await appAdmin(ctx);
@@ -117,8 +117,8 @@ export function orgAccountRoutes(deps: TeamDeps): OrgRoute[] {
     } catch (e) { return orgError(e); }
   };
 
-  const usersCreate: Handler = async () =>
-    json({ error: 'Invite people by email instead: they choose their own password or sign in with Google.', code: 'use_invitations' }, 400);
+  const usersCreate: Handler = () => Promise.resolve(
+    json({ error: 'Invite people by email instead: they choose their own password or sign in with Google.', code: 'use_invitations' }, 400));
 
   const usersUpdate: Handler = async (ctx) => {
     const session = await appAdmin(ctx);
@@ -180,11 +180,11 @@ export function orgAccountRoutes(deps: TeamDeps): OrgRoute[] {
   };
 
   return [
-    { method: 'GET', match: exact('/auth/status'), handler: async () => json({ needsSetup: false }) },
+    { method: 'GET', match: exact('/auth/status'), handler: () => Promise.resolve(json({ needsSetup: false })) },
     { method: 'POST', match: exact('/auth/setup'), handler: notHere },
     { method: 'POST', match: exact('/auth/login'), handler: notHere },
     { method: 'PUT', match: exact('/auth/me'), handler: meUpdate },
-    { method: 'GET', match: exact('/auth/devices'), handler: async () => json({ limit: null, devices: [] }) },
+    { method: 'GET', match: exact('/auth/devices'), handler: () => Promise.resolve(json({ limit: null, devices: [] })) },
     { method: 'POST', match: exact('/auth/devices/signout'), handler: notHere },
     { method: 'POST', match: exact('/auth/devices/signout-others'), handler: notHere },
     // An admin signing out a member's devices is handled by the app route:

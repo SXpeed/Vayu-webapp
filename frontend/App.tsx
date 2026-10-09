@@ -293,7 +293,7 @@ const App: React.FC = () => {
 
         /** Notifications, the workspace's logo, then everything brought up to date. */
         const connect = (): Promise<void> => {
-            pushService.syncSubscription();
+            void pushService.syncSubscription();
             // Picks up a logo changed in the control centre, for next launch.
             void refreshCurrentWorkspace();
             const firstSync = (async () => {
@@ -366,7 +366,7 @@ const App: React.FC = () => {
                 setIsLoading(false);
             }
         };
-        initApp();
+        void initApp();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -428,7 +428,7 @@ const App: React.FC = () => {
         launchTargetRef.current = null;
         if (launch) setPushTarget(launch);
         navigateTo(launch?.view ?? 'home');
-        pushService.syncSubscription();
+        void pushService.syncSubscription();
         const migrated = await migrateLocalToD1();
         await loadTeamMembers();
         await syncAll();
@@ -503,7 +503,7 @@ const App: React.FC = () => {
             case 'collections':
                 return <CollectionsView collections={collections} artworks={artworks} onAddCollection={handlers.handleAddCollection} onUpdateCollection={handlers.handleUpdateCollection} onDeleteCollection={handlers.handleDeleteCollection} onArtworkClick={handleArtworkClick} onAddArtwork={handlers.handleAddArtwork} />;
             case 'catalogs':
-                return <CatalogsView catalogs={catalogs} artworks={artworks} onAddCatalog={handlers.handleAddCatalog} onUpdateCatalog={handlers.handleUpdateCatalog} onDeleteCatalog={handlers.handleDeleteCatalog} onArtworkClick={handleArtworkClick} onAddArtwork={handlers.handleAddArtwork} />;
+                return <CatalogsView catalogs={catalogs} artworks={artworks} onAddCatalog={handlers.handleAddCatalog} onUpdateCatalog={handlers.handleUpdateCatalog} onDeleteCatalog={handlers.handleDeleteCatalog} />;
             case 'schedule':
                 return <StaffRosterView />;
             case 'contacts':
@@ -551,7 +551,6 @@ const App: React.FC = () => {
                         messages={allMessages}
                         teamMembers={teamMembers}
                         currentUserId={userProfile?.id || authUser?.id || ''}
-                        currentUserName={userProfile?.name || authUser?.name || 'You'}
                         isAdmin={authUser?.role === 'admin'}
                         onSendMessage={handlers.handleSendMessage}
                         onRetryMessage={handlers.handleRetryMessage}

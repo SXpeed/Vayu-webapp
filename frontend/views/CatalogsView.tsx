@@ -19,8 +19,6 @@ interface CatalogsViewProps {
     onAddCatalog: (catalog: Omit<Catalog, 'id' | 'createdAt'> & { id?: string }) => Promise<Catalog | void> | void;
     onUpdateCatalog: (catalog: Catalog) => void;
     onDeleteCatalog: (id: string) => void;
-    onArtworkClick: (artwork: Artwork) => void;
-    onAddArtwork: (artwork: Omit<Artwork, 'id' | 'createdAt'>) => Promise<Artwork>;
 }
 
 import { CatalogStudioView } from './CatalogStudio/CatalogStudioView';
@@ -168,7 +166,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
         try {
             const result = await storageService.upload(file);
             const name = file.name.replace(/\.pdf$/i, '').trim() || 'Uploaded catalog';
-            onAddCatalog({
+            void onAddCatalog({
                 id: `cat_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
                 name,
                 description: '',
@@ -554,7 +552,6 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
 export interface CatalogDetailModalProps {
     catalog: Catalog;
     artworks: Artwork[];
-    onClose: () => void;
     onDownloadClick: () => void;
     onArtworkClick: (artwork: Artwork) => void;
     onUpdateCatalog: (catalog: Catalog) => void;

@@ -12,6 +12,7 @@
 import type { Env } from '../workerEnv';
 import type { PlatformAuth } from './auth';
 import type { Actor } from './orgStore';
+import { text } from '../rows';
 import { limitOf, resolveEntitlements } from './plans';
 
 export interface OrgContext {
@@ -44,7 +45,7 @@ export async function resolveOrgContext(env: Env, db: D1Database, auth: Platform
 
   // Not a member and "no such organization" answer the same way, so the API
   // never reveals which organizations exist.
-  if (!row || row.membership_status !== 'active') {
+  if (row?.membership_status !== 'active') {
     throw new OrgAccessError(403, 'no_access', 'You do not have access to this organization.');
   }
   if (row.org_status === 'suspended') throw new OrgAccessError(403, 'org_suspended', 'This organization is suspended. Contact support.');
@@ -107,7 +108,7 @@ async function oneArtwork(ctx: OrgContext, method: string, id: string, status: b
     if (method !== 'POST') return NOT_HANDLED;
     requireRole(ctx, WRITE_ROLES);
     const b = await body();
-    return ctx.store.setArtworkStatus(id, String(b.expected ?? ''), String(b.status ?? ''), ctx.actor);
+    return ctx.store.setArtworkStatus(id, text(b.expected), text(b.status), ctx.actor);
   }
   if (method === 'GET') return ctx.store.getArtwork(id);
   if (method === 'PUT') {
@@ -126,7 +127,7 @@ async function oneArtwork(ctx: OrgContext, method: string, id: string, status: b
  * preserved in the message by the RPC boundary, and becomes a status here.
  */
 function fromStoreError(e: unknown): unknown {
-  const message = String((e as Error)?.message ?? e);
+  const message = e instanceof Error ? e.message : text(e);
   const codes: Record<string, number> = { not_found: 404, conflict: 409, invalid: 400 };
   for (const [code, status] of Object.entries(codes)) {
     if (message.startsWith(`${code}: `)) return new OrgAccessError(status, code, message.slice(code.length + 2));

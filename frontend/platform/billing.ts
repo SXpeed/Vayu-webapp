@@ -34,7 +34,7 @@ const secretContext = (field: string) => `platform|razorpay-billing|${field}`;
 const WEBHOOK_OWNER = '_platform_billing';
 
 export type Period = 'monthly' | 'annual';
-const PERIODS: Period[] = ['monthly', 'annual'];
+const PERIODS = new Set<string>(['monthly', 'annual'] satisfies Period[]);
 
 /** An unpaid checkout started this recently is offered again instead of a new order. */
 const REUSE_ORDER_MS = 30 * 60_000;
@@ -354,7 +354,7 @@ export async function startCheckout(
   payer: { userId: string; name: string; email: string; ip: string | null },
 ) {
   const planKey = typeof body.planKey === 'string' ? body.planKey : '';
-  const period = PERIODS.includes(body.period as Period) ? body.period as Period : null;
+  const period = PERIODS.has(body.period as Period) ? body.period as Period : null;
   if (!period) throw new OrgError(400, 'invalid', 'Choose monthly or annual.');
   const option = (await planOptions(db, orgId)).find(o => o.key === planKey);
   if (!option) throw new OrgError(404, 'plan_unavailable', 'That plan is not available to buy. Refresh and choose again.');

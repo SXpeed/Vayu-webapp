@@ -73,7 +73,7 @@ export const CatalogCover: React.FC<{ catalog: Catalog; artworks: Artwork[]; cla
         };
     }, [wantsPdfPage, catalog.pdfUrl]);
 
-    const drawn = pdfPage && pdfPage.pdfUrl === catalog.pdfUrl ? pdfPage : null;
+    const drawn = pdfPage?.pdfUrl === catalog.pdfUrl ? pdfPage : null;
     let src: string | undefined;
     // The PDF page is shown from its top, where the photo is, not its middle.
     let position = 'center';

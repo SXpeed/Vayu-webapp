@@ -62,8 +62,8 @@ async function storageBytes(env: Env): Promise<number | null> {
 
 /** First moment of this calendar month, India time (the app's customers are there). */
 function monthStartIst(now = Date.now()): number {
-  const ist = new Date(now + 5.5 * 3600_000);
-  return Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), 1) - 5.5 * 3600_000;
+  const ist = new Date(now + 5.5 * 3_600_000);
+  return Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), 1) - 5.5 * 3_600_000;
 }
 
 export async function planAndUsage(env: Env) {

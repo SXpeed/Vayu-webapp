@@ -18,17 +18,16 @@ export interface WeekProps {
     /** Managers edit; everyone else reads. */
     onEdit?: (shift: StaffShift) => void;
     onNew?: (employeeId: string | null, date: string) => void;
-    /** Phone grid: a day with more than one entry opens in the day agenda. */
-    onOpenDay?: (dayIdx: number) => void;
-    /** Desktop grid: a shift dropped on another person or day (null: unassigned). Ctrl or Alt copies instead. */
-    onMove?: (shift: StaffShift, employeeId: string | null, date: string, copy: boolean) => void;
 }
+
+/** Desktop grid: a shift dropped on another person or day (null: unassigned). Ctrl or Alt copies instead. */
+type OnMove = (shift: StaffShift, employeeId: string | null, date: string, copy: boolean) => void;
 
 /** The shift being dragged, between dragstart and drop (the data transfer can't be read during dragover). */
 let dragging: StaffShift | null = null;
 
 /** A day cell that takes a dropped shift. */
-function useDrop(employeeId: string | null, date: string, onMove: WeekProps['onMove']) {
+function useDrop(employeeId: string | null, date: string, onMove: OnMove | undefined) {
     const [over, setOver] = useState(false);
     if (!onMove) return { over: false, props: {} };
     const same = () => !!dragging && dragging.employeeId === employeeId && dragging.date === date;
@@ -54,7 +53,7 @@ function useDrop(employeeId: string | null, date: string, onMove: WeekProps['onM
 }
 
 /** A table cell that takes dropped shifts, outlined while one hovers over it. */
-const DropCell: React.FC<{ employeeId: string | null; date: string; onMove: WeekProps['onMove']; className: string; children: React.ReactNode }> = ({ employeeId, date, onMove, className, children }) => {
+const DropCell: React.FC<{ employeeId: string | null; date: string; onMove: OnMove | undefined; className: string; children: React.ReactNode }> = ({ employeeId, date, onMove, className, children }) => {
     const drop = useDrop(employeeId, date, onMove);
     return <td className={`${className} ${drop.over ? 'sr-drop-target' : ''}`} {...drop.props}>{children}</td>;
 };
@@ -110,13 +109,13 @@ const Avatar: React.FC<{ name: string; open?: boolean; small?: boolean }> = ({ n
 );
 
 /** Desktop and tablet: a table with the people down the side and the days across. */
-export const WeekGrid: React.FC<WeekProps> = ({ data, d, dates, filters, onEdit, onNew, onMove }) => {
+export const WeekGrid: React.FC<WeekProps & { onMove?: OnMove }> = ({ data, d, dates, filters, onEdit, onNew, onMove }) => {
     const today = todayIso();
     const people = peopleFor(data, filters);
     const opens = data.shifts.filter(s => !s.employeeId && dates.includes(s.date) && matchesStore(s, filters) && (filters.title === 'all' || s.role === filters.title));
     return (
         <div className="neu-card p-2.5">
-            <div className="overflow-x-auto overflow-y-hidden overscroll-x-contain rounded-xl no-scrollbar" tabIndex={0} aria-label="Weekly roster; scrolls sideways">
+            <div className="overflow-x-auto overflow-y-hidden overscroll-x-contain rounded-xl no-scrollbar" tabIndex={0} aria-label="Weekly roster; scrolls sideways" /* NOSONAR: a scrolling region must be reachable by keyboard */>
                 <table className="w-full min-w-[980px] table-fixed border-separate border-spacing-0 text-[13px] text-[var(--neu-text)]">
                     <colgroup>
                         <col className="w-52" />
@@ -276,7 +275,8 @@ function describeDay(a: DayArgs): TileLook {
  * so a week reads like a timetable. A tile opens the shift; a day with more
  * than one entry opens that day's agenda.
  */
-export const PhoneWeek: React.FC<WeekProps> = ({ data, d, dates, filters, onEdit, onNew, onOpenDay }) => {
+/** Phone grid: a day with more than one entry opens in the day agenda. */
+export const PhoneWeek: React.FC<WeekProps & { onOpenDay?: (dayIdx: number) => void }> = ({ data, d, dates, filters, onEdit, onNew, onOpenDay }) => {
     const chrome = usePageChrome();
     const today = todayIso();
     const people = peopleFor(data, filters);
@@ -339,7 +339,7 @@ export const DayAgenda: React.FC<WeekProps & { dayIdx: number; onDay: (i: number
     const people = peopleFor(data, filters);
     return (
         <div className="space-y-4">
-            <div className="neu-card p-2 grid grid-cols-7 gap-1" role="group" aria-label="Choose a day">
+            <fieldset className="neu-card p-2 grid grid-cols-7 gap-1" aria-label="Choose a day">
                 {dates.map((dt, i) => {
                     const staff = new Set(data.shifts.filter(s => s.kind === 'shift' && s.employeeId && s.date === dt && matchesStore(s, filters)).map(s => s.employeeId)).size;
                     const open = data.shifts.filter(s => !s.employeeId && s.date === dt && matchesStore(s, filters)).length;
@@ -353,7 +353,7 @@ export const DayAgenda: React.FC<WeekProps & { dayIdx: number; onDay: (i: number
                         </button>
                     );
                 })}
-            </div>
+            </fieldset>
 
             <h3 className="px-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--neu-text-dim)]">{dayLabel(date)}{date === today ? ' · today' : ''}</h3>
 

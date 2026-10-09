@@ -66,7 +66,7 @@ export const ApplicationsPanel: React.FC<{ reauth: Reauth; routeId?: string; go:
         } catch (e) { toast.error((e as ApiError).message); }
     }, [filter]);
     // Switching filters keeps the old rows until the new ones arrive: no flash.
-    useEffect(() => { load(); }, [load]);
+    useEffect(() => { void load(); }, [load]);
 
     const term = q.trim().toLowerCase();
     const rows = useMemo(() => (data?.applications ?? []).filter(a => !term
@@ -116,7 +116,7 @@ export const ApplicationsPanel: React.FC<{ reauth: Reauth; routeId?: string; go:
             </Section>
 
             <ApplicationDrawer id={routeId} reauth={reauth} onClose={() => go('applications')}
-                onChanged={() => { load(); onCountsChange?.(); }} />
+                onChanged={() => { void load(); onCountsChange?.(); }} />
         </div>
     );
 };
@@ -245,8 +245,8 @@ const ApplicationDrawer: React.FC<{ id?: string; reauth: Reauth; onClose: () => 
 
                     <Section title="History">
                         <ol className="relative space-y-4 pl-5 before:absolute before:left-[0.35rem] before:top-1 before:bottom-1 before:w-px before:bg-[var(--ac-line)]">
-                            {d.events.map((e, i) => (
-                                <li key={i} className="relative">
+                            {d.events.map(e => (
+                                <li key={`${e.at}-${e.action}`} className="relative">
                                     <span className="absolute -left-[1.1rem] top-1.5 w-2.5 h-2.5 rounded-full bg-[var(--ac-accent)] shadow-[0_0_0_3px_var(--ac-bg)]" />
                                     <p className="text-sm">
                                         <span className="font-medium">{e.action.replace(/[._]/g, ' ').replace(/^./, c => c.toUpperCase())}</span>

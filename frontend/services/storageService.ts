@@ -109,19 +109,20 @@ const storageService = {
         const { missing } = await parseApiResponse<{ missing: string[] }>(listRes);
 
         let generated = 0;
+        // One image at a time keeps memory low on phones.
         for (const key of missing) {
             try {
-                const fileRes = await fetch(`${apiBase()}/files/${key}`);
+                const fileRes = await fetch(`${apiBase()}/files/${key}`); // NOSONAR
                 if (!fileRes.ok) continue;
-                const blob = await fileRes.blob();
+                const blob = await fileRes.blob(); // NOSONAR
                 const name = key.split('/').pop() || 'file';
-                const thumb = await makeThumbnail(new File([blob], name, { type: blob.type }));
+                const thumb = await makeThumbnail(new File([blob], name, { type: blob.type })); // NOSONAR
                 if (!thumb) continue; // not a raster image (PDFs, etc.)
 
                 const formData = new FormData();
                 formData.append('key', key);
                 formData.append('thumb', thumb);
-                const uploadRes = await fetch(`${apiBase()}/files-thumbs`, {
+                const uploadRes = await fetch(`${apiBase()}/files-thumbs`, { // NOSONAR
                     method: 'POST',
                     headers: authHeaders,
                     body: formData,

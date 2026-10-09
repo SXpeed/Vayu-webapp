@@ -6,14 +6,14 @@ import { AttendanceRecord, StoreConfig } from '../../types';
 import { attendanceService } from '../../services/attendanceService';
 import {
     ALL_STORES, DAY_MS, HOUR_MS, LONG_SHIFT_MS, dayRange, downloadCsv, fmtDay, fmtHours, fmtTime, inStore, peopleFrom, startOfDay,
-    storeName, toDateInput, workedMs, type StoreScope,
+    storeName, toDateInput, workedMs,
 } from './attendanceUtils';
 
 interface DayViewProps {
     team: AuthUser[];
     stores: StoreConfig[];
     /** All stores, or one store's people and check-ins. */
-    scope: StoreScope;
+    scope: string;
     refreshKey: number;
     /** Start of the day being shown (controlled, so the month grid can open a day). */
     day: number;
@@ -42,8 +42,8 @@ const toLocalInput = (ms: number) => `${toDateInput(ms)}T${new Date(ms).toTimeSt
 
 /** Admin: one day, everyone on it — who came, when, for how long. */
 export const DayView: React.FC<DayViewProps> = ({ team: everyone, stores, scope, refreshKey, day, onDayChange }) => {
-    const [allRecords, setRecords] = useState<AttendanceRecord[]>([]);
-    const [allOpenElsewhere, setOpenElsewhere] = useState<AttendanceRecord[]>([]);
+    const [allRecords, setAllRecords] = useState<AttendanceRecord[]>([]);
+    const [allOpenElsewhere, setAllOpenElsewhere] = useState<AttendanceRecord[]>([]);
     const { team, records } = useMemo(() => inStore(everyone, allRecords, scope), [everyone, allRecords, scope]);
     const openElsewhere = scope === ALL_STORES ? allOpenElsewhere : allOpenElsewhere.filter(r => r.storeId === scope);
     const [loading, setLoading] = useState(true);
@@ -64,8 +64,8 @@ export const DayView: React.FC<DayViewProps> = ({ team: everyone, stores, scope,
                 day === startOfDay(Date.now()) ? attendanceService.getRecords() : Promise.resolve([] as AttendanceRecord[]),
             ]);
             // Filter again: older servers ignore the range.
-            setRecords(dayRecs.filter(r => r.checkInAt && r.checkInAt >= from && r.checkInAt < to));
-            setOpenElsewhere(latest.filter(r => r.status === 'checked-in' && r.checkInAt && r.checkInAt < from));
+            setAllRecords(dayRecs.filter(r => r.checkInAt && r.checkInAt >= from && r.checkInAt < to));
+            setAllOpenElsewhere(latest.filter(r => r.status === 'checked-in' && r.checkInAt && r.checkInAt < from));
         } catch (e) {
             toast.error((e as Error).message || 'Failed to load attendance');
         } finally {

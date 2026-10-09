@@ -9,7 +9,7 @@ import {
 } from '../../staffRosterRules';
 import { staffRosterService, type ShiftInput, type StaffRosterData } from '../../services/staffRosterService';
 import { DOW, dayLabel, dayOfMonth, hoursText, inWeek, rangeLabel, timeRange, type Derived } from './shared';
-import { assignable, candidateLabel, candidatesFor, type Candidate } from './assign';
+import { assignable, candidateLabel, candidatesFor, withTitle, type Candidate } from './assign';
 
 /** A panel on the right on desktop, the whole screen on a phone. Focus stays inside; Escape closes. */
 
@@ -19,9 +19,14 @@ function editorHeading(dayOff: boolean, isNew: boolean, duplicate: boolean): str
     return duplicate ? 'Duplicate shift' : 'New shift';
 }
 
+/** The assign button's word: Close while its list is open. */
+const pickLabel = (open: boolean, leave: boolean): string => {
+    if (open) return 'Close';
+    return leave ? 'Reassign' : 'Assign';
+};
 const publishedNote = (n: number): string => `Published. ${n} ${n === 1 ? 'person was' : 'people were'} notified.`;
 export const Drawer: React.FC<{ title: string; onClose: () => void; footer?: React.ReactNode; children: React.ReactNode }> = ({ title, onClose, footer, children }) => {
-    const box = useRef<HTMLDivElement>(null);
+    const box = useRef<HTMLDialogElement>(null);
     useEffect(() => {
         const back = document.activeElement as HTMLElement | null;
         const first = box.current?.querySelector<HTMLElement>('[data-autofocus], select, input, textarea, button');
@@ -31,8 +36,8 @@ export const Drawer: React.FC<{ title: string; onClose: () => void; footer?: Rea
             if (e.key !== 'Tab' || !box.current) return;
             const f = [...box.current.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea')];
             if (!f.length) return;
-            if (e.shiftKey && document.activeElement === f[0]) { f[f.length - 1].focus(); e.preventDefault(); }
-            else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { f[0].focus(); e.preventDefault(); }
+            if (e.shiftKey && document.activeElement === f[0]) { f.at(-1)?.focus(); e.preventDefault(); }
+            else if (!e.shiftKey && document.activeElement === f.at(-1)) { f[0].focus(); e.preventDefault(); }
         };
         document.addEventListener('keydown', onKey);
         return () => { document.removeEventListener('keydown', onKey); back?.focus?.(); };
@@ -41,7 +46,7 @@ export const Drawer: React.FC<{ title: string; onClose: () => void; footer?: Rea
     return (
         <FullScreenPortal>
             <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-0 w-full h-full cursor-default neu-scrim hidden lg:block" tabIndex={-1} />
-            <div ref={box} role="dialog" aria-modal="true" aria-label={title}
+            <dialog open ref={box} aria-modal="true" aria-label={title}
                 className="absolute inset-0 lg:left-auto lg:w-[440px] bg-[var(--neu-bg)] flex flex-col lg:shadow-[-18px_0_40px_var(--neu-shadow-dark)] animate-fade-in-up lg:animate-fade-in">
                 <div className="flex items-center justify-between gap-3 px-4 pb-2" style={{ paddingTop: 'calc(0.9rem + var(--safe-top))' }}>
                     <h2 className="font-serif text-xl text-gray-900 dark:text-white truncate">{title}</h2>
@@ -49,7 +54,7 @@ export const Drawer: React.FC<{ title: string; onClose: () => void; footer?: Rea
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar px-4 pb-4 space-y-4">{children}</div>
                 {footer && <div className="flex flex-wrap items-center gap-2 px-4 pt-3 border-t border-[var(--neu-line)]" style={{ paddingBottom: 'calc(0.9rem + var(--safe-bottom-ui))' }}>{footer}</div>}
-            </div>
+            </dialog>
         </FullScreenPortal>
     );
 };
@@ -208,7 +213,7 @@ export const ShiftEditor: React.FC<{ data: StaffRosterData; d: Derived; start: E
     const candidates = useMemo(() => new Map(candidatesFor(data, d, { ...s, id: state.id ?? '__new' }).map(c => [c.id, c])), [data, d, s, state.id]);
     const personOption = (p: Person) => {
         const c = candidates.get(p.id);
-        return s.kind === 'shift' && c ? candidateLabel(c) : `${p.name}${p.title ? ` · ${p.title}` : ''}`;
+        return s.kind === 'shift' && c ? candidateLabel(c) : withTitle(p);
     };
 
     return (
@@ -262,7 +267,7 @@ export const ShiftEditor: React.FC<{ data: StaffRosterData; d: Derived; start: E
             </div>
             {s.kind === 'shift' && (
                 <>
-                    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Common times">
+                    <fieldset className="flex flex-wrap gap-1.5" aria-label="Common times">
                         {presets.map(([a, b]) => {
                             const on = s.startMin === a && s.endMin === b;
                             return (
@@ -272,7 +277,7 @@ export const ShiftEditor: React.FC<{ data: StaffRosterData; d: Derived; start: E
                                 </button>
                             );
                         })}
-                    </div>
+                    </fieldset>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                         <Field label="Start" htmlFor="sh-start"><Input id="sh-start" type="time" step={900} value={startText} onChange={e => setTimes(e.target.value, endText)} className="tabular-nums" /></Field>
                         <Field label="End" htmlFor="sh-end"><Input id="sh-end" type="time" step={900} value={endText} onChange={e => setTimes(startText, e.target.value)} className="tabular-nums" /></Field>
@@ -301,7 +306,7 @@ export const ShiftEditor: React.FC<{ data: StaffRosterData; d: Derived; start: E
             {isNew && (
                 <div>
                     <p className="neu-label" id="sh-rep">Also on</p>
-                    <div className="flex flex-wrap gap-1.5" role="group" aria-labelledby="sh-rep">
+                    <fieldset className="flex flex-wrap gap-1.5" aria-labelledby="sh-rep">
                         {weekOfDate.filter(x => x !== s.date).map(x => {
                             const on = repeat.includes(x);
                             return (
@@ -311,7 +316,7 @@ export const ShiftEditor: React.FC<{ data: StaffRosterData; d: Derived; start: E
                                 </button>
                             );
                         })}
-                    </div>
+                    </fieldset>
                 </div>
             )}
             <div id="shift-msgs" className="space-y-2" aria-live="polite">
@@ -342,7 +347,7 @@ const AssignList: React.FC<{ data: StaffRosterData; d: Derived; shift: StaffShif
     const free = list.filter(assignable);
     const shown = all ? list : free.slice(0, 5);
     return (
-        <div className="space-y-1.5" role="group" aria-label={`Assign ${dayLabel(shift.date)} ${timeRange(shift)}`}>
+        <fieldset className="space-y-1.5" aria-label={`Assign ${dayLabel(shift.date)} ${timeRange(shift)}`}>
             {shown.map(c => (
                 <button key={c.id} type="button" disabled={busy || !assignable(c)} onClick={() => onAssign(c)}
                     className="w-full neu-raised-sm rounded-xl px-3 py-2 flex items-center gap-3 text-left active-scale disabled:opacity-50">
@@ -357,7 +362,7 @@ const AssignList: React.FC<{ data: StaffRosterData; d: Derived; shift: StaffShif
             {list.length > shown.length && (
                 <button type="button" onClick={() => setAll(true)} className="text-[11.5px] font-semibold uppercase tracking-wider text-gold-700 dark:text-gold-300">Show everyone ({list.length})</button>
             )}
-        </div>
+        </fieldset>
     );
 };
 
@@ -391,7 +396,7 @@ export const OpenShiftsPanel: React.FC<{ data: StaffRosterData; d: Derived; week
                 <div className="flex flex-wrap gap-2 justify-end shrink-0">
                     {leave && <Button disabled={busy === s.id} onClick={() => { void makeOpen(s); }}>Make open</Button>}
                     <Button variant={picking === s.id ? 'default' : 'primary'} aria-expanded={picking === s.id} onClick={() => setPicking(p => (p === s.id ? null : s.id))}
-                        icon={picking === s.id ? <Check size={14} /> : <UserPlus size={14} />}>{picking === s.id ? 'Close' : (leave ? 'Reassign' : 'Assign')}</Button>
+                        icon={picking === s.id ? <Check size={14} /> : <UserPlus size={14} />}>{pickLabel(picking === s.id, leave)}</Button>
                 </div>
             </div>
             {picking === s.id && (
@@ -521,7 +526,7 @@ export const ExportPanel: React.FC<{ csv: string; weekStart: string; onClose: ()
 };
 
 /** CSV of the week's shifts and days off. */
-export function rosterCsv(data: StaffRosterData, d: Derived, shifts: StaffShift[]): string {
+export function rosterCsv(d: Derived, shifts: StaffShift[]): string {
     const q = (v: string) => (/[",\n]/.test(v) ? `"${v.replaceAll('"', '""')}"` : v);
     const out = [['Date', 'Day', 'Employee', 'Job title', 'Store', 'Start', 'End', 'Ends next day', 'Break (min)', 'Paid hours', 'Status', 'Note']];
     for (const s of [...shifts].sort((a, b) => a.date.localeCompare(b.date) || a.startMin - b.startMin)) out.push(csvRow(s, d));

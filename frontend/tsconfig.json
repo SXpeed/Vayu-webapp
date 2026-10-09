@@ -1,13 +1,6 @@
+// Which settings each file is checked with (the editor reads this file):
+// the pages with tsconfig.web.json, the Worker with tsconfig.worker.json.
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "lib": ["ES2022"],
-    "types": ["@cloudflare/workers-types"],
-    "strict": true,
-    "skipLibCheck": true,
-    "noEmit": true
-  },
-  "include": ["worker.ts", "hosts/**/*.ts", "types/**/*.d.ts"]
+  "files": [],
+  "references": [{ "path": "./tsconfig.web.json" }, { "path": "./tsconfig.worker.json" }]
 }

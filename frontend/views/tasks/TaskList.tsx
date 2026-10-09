@@ -19,7 +19,8 @@ import {
 
 /** Saves one task's change (or removal, with null) as its event's update. */
 function saveTask(onUpdateEvent: (ev: CalendarEvent) => void, event: CalendarEvent, todoId: string, next: EventTodo | null) {
-    const todos = (event.todos || []).flatMap(t => (t.id !== todoId ? [t] : next ? [next] : []));
+    const replacement = next ? [next] : [];
+    const todos = (event.todos || []).flatMap(t => (t.id === todoId ? replacement : [t]));
     onUpdateEvent({ ...event, todos });
 }
 
@@ -31,7 +32,7 @@ const TaskRow: React.FC<{
 }> = ({ item, today, canEdit, showEvent = true, onToggle, onOpen }) => {
     const { todo, event } = item;
     const overdue = !todo.done && item.dueDay < today;
-    const meta: React.ReactNode[] = [];
+    const meta: React.ReactElement[] = [];
     if (overdue) meta.push(<span key="o" className="task-overdue shrink-0 whitespace-nowrap">Overdue · {shortDay(item.dueDay, today)}</span>);
     // Priority as a quiet word, not another coloured dot beside the event's.
     // Low is not worth the space in a row (the editor shows it).
@@ -50,7 +51,8 @@ const TaskRow: React.FC<{
 
     return (
         <li className="task-row group flex items-start gap-3 py-2.5" data-done={todo.done || undefined}>
-            <button
+            {/* A styled tick: a native checkbox can't hold the icon. */}
+            <button // NOSONAR
                 type="button"
                 role="checkbox"
                 aria-checked={todo.done}
@@ -66,7 +68,7 @@ const TaskRow: React.FC<{
                 {(meta.length > 0 || todo.notes) && (
                     <span className="mt-0.5 flex items-center gap-1.5 text-[11.5px] leading-snug text-[var(--neu-text-dim)] min-w-0">
                         {meta.map((m, i) => (
-                            <React.Fragment key={i}>
+                            <React.Fragment key={m.key}>
                                 {i > 0 && <span aria-hidden className="opacity-60 shrink-0">·</span>}
                                 {m}
                             </React.Fragment>
@@ -97,6 +99,8 @@ const QuickAdd: React.FC<{
     const [priority, setPriority] = useState<TaskPriority | ''>('');
     const input = useRef<HTMLInputElement>(null);
     const wrap = useRef<HTMLDivElement>(null);
+
+    useEffect(() => { if (open) input.current?.focus(); }, [open]);
 
     // The chosen event may have gone (deleted, or the day changed).
     useEffect(() => {
@@ -136,7 +140,6 @@ const QuickAdd: React.FC<{
                 <span className="task-check opacity-50" aria-hidden />
                 <input
                     ref={input}
-                    autoFocus
                     value={text}
                     onChange={e => setText(e.target.value)}
                     onKeyDown={e => {
@@ -224,7 +227,7 @@ const TaskEditor: React.FC<{
     const eventDay = dayKeyOf(new Date(item.event.date));
     const label = 'block text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--neu-text-dim)] mb-1.5';
     return createPortal(
-        <div className="fixed inset-0 z-[90]" role="dialog" aria-modal="true" aria-label="Task">
+        <dialog open className="fixed inset-0 z-[90]" aria-modal="true" aria-label="Task">
             <button
                 type="button" aria-label="Close" tabIndex={-1}
                 onPointerDown={() => { pressedScrim.current = true; }}
@@ -242,7 +245,7 @@ const TaskEditor: React.FC<{
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 pb-5 space-y-5">
                     <div className="flex items-start gap-3 pt-1">
-                        <button
+                        <button // NOSONAR: a styled tick, as in the list
                             type="button" role="checkbox" aria-checked={draft.done} disabled={!canEdit}
                             aria-label={draft.done ? 'Mark as not done' : 'Mark as done'}
                             onClick={() => set({ done: !draft.done })}
@@ -327,7 +330,7 @@ const TaskEditor: React.FC<{
                     )}
                 </div>
             </div>
-        </div>,
+        </dialog>,
         document.body,
     );
 };

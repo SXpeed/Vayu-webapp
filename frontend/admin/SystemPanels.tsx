@@ -30,7 +30,7 @@ export const AdminsPanel: React.FC<{ reauth: Reauth; myRole: string; myEmail: st
     const load = useCallback(async () => {
         try { setRows((await api<{ admins: AdminRow[] }>('/admin/admins')).admins); } catch (e) { toast.error((e as ApiError).message); }
     }, []);
-    useEffect(() => { load(); }, [load]);
+    useEffect(() => { void load(); }, [load]);
 
     const change = async (key: string, init: RequestInit, path: string, done: string) => {
         setBusy(key);
@@ -45,7 +45,7 @@ export const AdminsPanel: React.FC<{ reauth: Reauth; myRole: string; myEmail: st
             title: `Remove ${r.name}'s access?`, body: 'They are signed out and can no longer use the control centre. Their account itself stays.',
             confirmLabel: 'Remove access', danger: true,
         }))) return;
-        change(r.user_id, { method: 'PATCH', body: JSON.stringify({ status: r.status === 'active' ? 'disabled' : 'active' }) },
+        void change(r.user_id, { method: 'PATCH', body: JSON.stringify({ status: r.status === 'active' ? 'disabled' : 'active' }) },
             `/admin/admins/${r.user_id}`, r.status === 'active' ? 'Access removed' : 'Access restored');
     };
 
@@ -138,7 +138,7 @@ export const NotificationsPanel: React.FC<{ onChange?: () => void }> = ({ onChan
             setSending(!!s.emailConfigured);
         } catch (e) { toast.error((e as ApiError).message); }
     }, []);
-    useEffect(() => { load(); }, [load]);
+    useEffect(() => { void load(); }, [load]);
 
     const save = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
@@ -209,7 +209,7 @@ export const NotificationsPanel: React.FC<{ onChange?: () => void }> = ({ onChan
                                 <div className="min-w-0">
                                     <p className="text-sm font-medium break-words">{n.subject}</p>
                                     <p className="text-[12px] font-light ac-faint break-words">
-                                        to {n.recipient} · {n.kind.replace(/_/g, ' ')} · {timeAgo(n.created_at)}
+                                        to {n.recipient} · {n.kind.replaceAll('_', ' ')} · {timeAgo(n.created_at)}
                                         {n.attempts > 1 ? ` · ${n.attempts} tries` : ''}
                                     </p>
                                     {n.last_error && <p className="text-[12px] text-[var(--ac-bad)] break-words">{n.last_error}</p>}
@@ -266,7 +266,7 @@ export const PaymentKeysPanel: React.FC<{ reauth: Reauth }> = ({ reauth }) => {
         try { setUsage(await api<KeyUsage>(`/admin/secrets${verify ? '?verify=1' : ''}`)); }
         catch (e) { toast.error((e as ApiError).message); }
     }, []);
-    useEffect(() => { load(); }, [load]);
+    useEffect(() => { void load(); }, [load]);
 
     const verify = async () => { setBusy('verify'); await load(true); setBusy(null); };
     const rotate = async () => {
@@ -337,7 +337,7 @@ export const HealthPanel: React.FC<{ navigate: Navigate }> = ({ navigate }) => {
         try { setH(await api<Health>('/admin/health')); setAt(Date.now()); }
         catch (e) { toast.error((e as ApiError).message); } finally { setLoading(false); }
     }, []);
-    useEffect(() => { load(); }, [load]);
+    useEffect(() => { void load(); }, [load]);
 
     if (!h) {
         return (
@@ -361,7 +361,7 @@ export const HealthPanel: React.FC<{ navigate: Navigate }> = ({ navigate }) => {
                 <HealthTile label="Environment" value={h.environment} />
                 <HealthTile label="Checks" value={<span className="tabular-nums">{h.checks.length - problems.length}<span className="ac-faint text-base"> / {h.checks.length}</span></span>}
                     foot={problems.length === 0 ? 'All configured' : `${problems.length} need attention`} tone={problems.length ? 'warn' : 'ok'} />
-                <HealthTile label="Migrations" value={<span className="tabular-nums">{h.migrations.length}</span>} foot={h.migrations[h.migrations.length - 1] ?? 'Not recorded'} />
+                <HealthTile label="Migrations" value={<span className="tabular-nums">{h.migrations.length}</span>} foot={h.migrations.at(-1) ?? 'Not recorded'} />
                 <HealthTile label="Sign-in" value={signIn} foot={h.loginMethods.emailPassword.signUp ? 'Public sign-up open' : 'Public sign-up closed'} />
             </div>
 

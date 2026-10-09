@@ -40,7 +40,7 @@ export const NotificationSheet: React.FC<{ onClose: () => void }> = ({ onClose }
 
     return (
         <FullScreenPortal>
-            <div role="dialog" aria-modal="true" aria-label="Notifications" className="neu-sheet lg:w-[min(440px,94%)]! z-50 animate-fade-in-up">
+            <dialog open aria-modal="true" aria-label="Notifications" className="neu-sheet lg:w-[min(440px,94%)]! z-50 animate-fade-in-up">
                 <div className="flex justify-between items-center p-3 pt-[calc(1.75rem+var(--safe-top))] lg:pt-4">
                     <button ref={closeRef} onClick={onClose} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale" aria-label="Close">
                         <X size={20} />
@@ -90,7 +90,7 @@ export const NotificationSheet: React.FC<{ onClose: () => void }> = ({ onClose }
                         <li className="py-16 text-center text-sm text-[var(--neu-text-dim)]">You're all caught up.</li>
                     )}
                 </ul>
-            </div>
+            </dialog>
         </FullScreenPortal>
     );
 };

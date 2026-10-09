@@ -12,7 +12,7 @@ const PREVIEW_CACHE = 'photos-previews';
 const FULL_CACHE = 'photos-full';
 const OFFLINE_CACHE = 'photos-offline';
 const PHOTO_CACHES = [PREVIEW_CACHE, FULL_CACHE, OFFLINE_CACHE];
-const KEEP_CACHES = [IDENTITY_CACHE, NAV_CACHE, ...PHOTO_CACHES];
+const KEEP_CACHES = new Set([IDENTITY_CACHE, NAV_CACHE, ...PHOTO_CACHES]);
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -54,43 +54,36 @@ globalThis.addEventListener('fetch', (event) => {
   // whenever the content does, so a cached copy can never be stale. This makes
   // repeat launches load instantly instead of re-downloading over the network.
   if (url.origin === globalThis.location.origin && url.pathname.startsWith('/assets/')) {
-    event.respondWith(
-      caches.match(event.request).then((cached) => {
-        if (cached) return cached;
-        return fetch(event.request).then((response) => {
-          if (response?.ok) {
-            const responseClone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(event.request, responseClone);
-            });
-          }
-          return response;
-        });
-      })
-    );
+    event.respondWith((async () => {
+      const cached = await caches.match(event.request);
+      if (cached) return cached;
+      const response = await fetch(event.request);
+      if (response?.ok) void keepCopy(event.request, response.clone());
+      return response;
+    })());
     return;
   }
 
   // Network-first strategy for everything else (index.html, sw.js, manifest)
-  event.respondWith(
-    fetch(event.request)
-      .then((response) => {
-        if (!response?.ok) { return response; }
-        // Clone the response and cache it
-        const responseClone = response.clone();
-        if (event.request.url.startsWith('http') && responseClone.ok) {
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseClone);
-          });
-        }
-        return response;
-      })
-      .catch(() => {
-        // Network failed, try cache
-        return caches.match(event.request);
-      })
-  );
+  event.respondWith((async () => {
+    try {
+      const response = await fetch(event.request);
+      if (response?.ok && event.request.url.startsWith('http')) void keepCopy(event.request, response.clone());
+      return response;
+    } catch {
+      // Network failed, try cache
+      return caches.match(event.request);
+    }
+  })());
 });
+
+/** Saves a copy of a response for offline use; a failed save just means no copy. */
+async function keepCopy(request, response) {
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    await cache.put(request, response);
+  } catch { /* storage full or unavailable */ }
+}
 
 // ── Saved photos ───────────────────────────────────────────────────────────
 // Photos and files the app shows stay on the device, so they appear at once
@@ -128,19 +121,22 @@ async function trimFullStore() {
   const cache = await caches.open(FULL_CACHE);
   const entries = [];
   let total = 0;
-  for (const key of await cache.keys()) {
-    const res = await cache.match(key);
-    const size = Number(res?.headers.get('X-Saved-Size')) || 0;
-    entries.push({ key, size, at: Number(res?.headers.get('X-Saved-At')) || 0 });
+  const keys = await cache.keys();
+  const saved = await Promise.all(keys.map(key => cache.match(key)));
+  keys.forEach((key, i) => {
+    const size = Number(saved[i]?.headers.get('X-Saved-Size')) || 0;
+    entries.push({ key, size, at: Number(saved[i]?.headers.get('X-Saved-At')) || 0 });
     total += size;
-  }
+  });
   if (total <= FULL_LIMIT_BYTES) return;
   entries.sort((a, b) => a.at - b.at);
+  const drop = [];
   for (const entry of entries) {
     if (total <= FULL_LIMIT_BYTES * 0.9) break;
-    await cache.delete(entry.key);
+    drop.push(entry.key);
     total -= entry.size;
   }
+  await Promise.all(drop.map(key => cache.delete(key)));
 }
 
 /**
@@ -232,11 +228,13 @@ globalThis.addEventListener('periodicsync', (event) => {
 // ── Web Push notifications ─────────────────────────────────────────────────
 
 /** Who the app says is signed in here: { userId } (null while signed out), or null if it never said. */
-function signedInIdentity() {
-  return caches.open(IDENTITY_CACHE)
-    .then(cache => cache.match(IDENTITY_URL))
-    .then(res => (res ? res.json() : null))
-    .catch(() => null);
+async function signedInIdentity() {
+  try {
+    const res = await (await caches.open(IDENTITY_CACHE)).match(IDENTITY_URL);
+    return res ? await res.json() : null;
+  } catch {
+    return null;
+  }
 }
 
 globalThis.addEventListener('push', (event) => {
@@ -258,19 +256,18 @@ globalThis.addEventListener('push', (event) => {
   // changed hands) or arriving while signed out stays hidden: its words
   // belong to that person. Devices the app never told (older versions)
   // show everything, as before.
-  event.waitUntil(
-    signedInIdentity().then((identity) => {
-      // The same person in another organization (ids repeat across them) is
-      // hidden too; a device or notification that names no organization
-      // (older versions, the original sign-in) is judged by the person alone.
-      const otherOrg = !!(identity && identity.org && data.org && identity.org !== data.org);
-      const hidden = identity && (identity.userId === null || (data.to && identity.userId !== data.to) || otherOrg);
-      // A push means something changed server-side: open tabs catch up now
-      // instead of waiting for their next scheduled refresh.
-      if (hidden) return broadcastSyncRequired();
-      return globalThis.registration.showNotification(title, options).then(() => broadcastSyncRequired());
-    })
-  );
+  event.waitUntil((async () => {
+    const identity = await signedInIdentity();
+    // The same person in another organization (ids repeat across them) is
+    // hidden too; a device or notification that names no organization
+    // (older versions, the original sign-in) is judged by the person alone.
+    const otherOrg = !!(identity?.org && data.org && identity.org !== data.org);
+    const hidden = identity && (identity.userId === null || (data.to && identity.userId !== data.to) || otherOrg);
+    if (!hidden) await globalThis.registration.showNotification(title, options);
+    // A push means something changed server-side: open tabs catch up now
+    // instead of waiting for their next scheduled refresh.
+    broadcastSyncRequired();
+  })());
 });
 
 globalThis.addEventListener('notificationclick', (event) => {
@@ -282,7 +279,7 @@ globalThis.addEventListener('notificationclick', (event) => {
     conversationId: data.conversationId,
     inquiryId: data.inquiryId,
     chat: data.chat === true,
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, // NOSONAR: only tells two taps apart, not a secret
   };
   const params = new URLSearchParams();
   if (target.view) params.set('view', target.view);
@@ -318,7 +315,7 @@ globalThis.addEventListener('activate', (event) => {
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames
-          .filter((cacheName) => cacheName !== CACHE_NAME && !KEEP_CACHES.includes(cacheName))
+          .filter((cacheName) => cacheName !== CACHE_NAME && !KEEP_CACHES.has(cacheName))
           .map((cacheName) => caches.delete(cacheName))
       );
     }).then(() => {

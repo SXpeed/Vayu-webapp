@@ -21,7 +21,7 @@ import { IfCan } from '../components/Layout';
 import { useInbox } from '../hooks/useInbox';
 import { chatDayLabel, withDayDividers } from './chat/DayDivider';
 import { ImageViewer, type ViewedImage } from './chat/ImageViewer';
-import { ChatComposer, MessageBubble, messageTime } from './chat/MessageParts';
+import { ChatComposer, MessageBubble, messagePreview, messageTime } from './chat/MessageParts';
 import { Holdable, MessageActionMenu, ReactionChips, ReactionsSheet } from './chat/MessageReactions';
 
 const renderArtworkStatusColor = (status: string) => {
@@ -445,7 +445,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
         void (async () => {
             await onSendMessage(text, tags, replyTo, first);
             for (const attachment of rest) {
-                await onSendMessage('', tags, undefined, attachment);
+                await onSendMessage('', tags, undefined, attachment); // NOSONAR: photos arrive in the order they were picked
             }
         })();
     };
@@ -551,7 +551,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                     myReaction={messages.find(m => m.id === menu.msg.id)?.reactions?.[currentUserId]}
                     canReact={!!onReact}
                     hasText={!!menu.msg.text}
-                    preview={menu.msg.text || (menu.msg.attachment ? (menu.msg.attachment.type === 'image' ? '📷 Photo' : `📎 ${menu.msg.attachment.name}`) : '')}
+                    preview={messagePreview(menu.msg)}
                     onReact={emoji => onReact?.(menu.msg.id, emoji)}
                     onReply={() => setReplyingTo({ id: menu.msg.id, senderName: resolveName(menu.msg.senderId, menu.msg.senderName), text: menu.msg.text || (menu.msg.attachment ? menu.msg.attachment.name : '') })}
                     onCopy={() => copyText(menu.msg.text)}

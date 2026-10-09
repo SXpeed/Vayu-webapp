@@ -61,7 +61,7 @@ const WebhookHealthRow: React.FC<{ info: Razorpay }> = ({ info }) => {
                 <span className="flex flex-col gap-1">
                     <span><StatusPill tone={HEALTH_TONE[h.state] ?? 'neutral'}>{HEALTH_LABEL[h.state] ?? h.state}</StatusPill></span>
                     <span className="text-[12px] ac-muted">{h.detail}{facts ? ` (${facts})` : ''}</span>
-                    {info.previousWebhookSecretUntil && <span className="text-[12px] ac-muted">The previous secret still verifies Razorpay’s retries until {new Date(info.previousWebhookSecretUntil).toLocaleString()}.</span>}
+                    {!!info.previousWebhookSecretUntil && <span className="text-[12px] ac-muted">The previous secret still verifies Razorpay’s retries until {new Date(info.previousWebhookSecretUntil).toLocaleString()}.</span>}
                 </span>
             </Detail>
         </div>
@@ -123,7 +123,7 @@ const OrgList: React.FC<{ onOpen: (id: string) => void }> = ({ onOpen }) => {
                 <Button icon={<UserPlus size={16} />} onClick={() => setCreating(creating === 'user' ? null : 'user')}>New account</Button>
             </div>
             {creating === 'user' && <NewAccountForm onDone={() => setCreating(null)} />}
-            {creating === 'org' && <NewOrgForm onDone={(id) => { setCreating(null); if (id) onOpen(id); else load(); }} />}
+            {creating === 'org' && <NewOrgForm onDone={(id) => { setCreating(null); if (id) onOpen(id); else void load(); }} />}
             {!orgs && <SkeletonRows rows={6} />}
             {orgs?.length === 0 && (
                 <EmptyState icon={<Building2 size={20} />} title={q ? 'No matches' : 'No organizations yet'} body={q ? undefined : 'Approve an application, or create one here.'} />
@@ -263,7 +263,7 @@ function useOrgDetail(orgId: string) {
         if (s.status === 'fulfilled') setSub(s.value); else toast.error((s.reason as ApiError).message);
         if (r.status === 'fulfilled') setRz(r.value); else toast.error((r.reason as ApiError).message);
     }, [orgId, subPath, rzPath]);
-    useEffect(() => { loadAll(); }, [loadAll]);
+    useEffect(() => { void loadAll(); }, [loadAll]);
 
     const reloadSub = useCallback(async () => {
         try { setSub(await api<Entitlements>(subPath)); } catch (e) { toast.error((e as ApiError).message); }
@@ -379,7 +379,7 @@ const OrgDetailView: React.FC<{ orgId: string; reauth: Reauth; onBack: () => voi
                 <div className="space-y-6 min-w-0">
                     {sub ? <PlanCard orgId={orgId} info={sub} reauth={reauth} onChanged={reloadSub} />
                         : <Section title="Plan and limits"><EmptyState title="Could not load the plan" action={<Button onClick={reloadSub}>Try again</Button>} /></Section>}
-                    <MembersCard org={org} onChange={next => { setOrg(next); reloadSub(); }} />
+                    <MembersCard org={org} onChange={next => { setOrg(next); void reloadSub(); }} />
                     <AppDataCard org={org} reauth={reauth} onChanged={loadAll} />
                 </div>
                 <div className="space-y-6 min-w-0">
@@ -429,7 +429,7 @@ const MembersCard: React.FC<{ org: OrgDetail; onChange: (o: OrgDetail) => void }
             title: `Disable ${m.name}?`, body: 'They lose access to this organization straight away. Their account and everything they made stay.',
             confirmLabel: 'Disable', danger: true,
         }))) return;
-        patch(m, { status: m.status === 'active' ? 'disabled' : 'active' });
+        void patch(m, { status: m.status === 'active' ? 'disabled' : 'active' });
     };
 
     const add = async (e: React.SubmitEvent<HTMLFormElement>) => {
@@ -501,7 +501,7 @@ const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; on
     // The version list is only needed for changing plan, so it loads after the page shows.
     useEffect(() => {
         let live = true;
-        (async () => {
+        void (async () => {
             try {
                 const { plans } = await api<{ plans: { id: string; name: string }[] }>('/admin/plans');
                 const details = await Promise.all(plans.map(p =>
@@ -547,7 +547,7 @@ const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; on
                 ? 'Plan changed from the control centre' : null;
         }
         if (!reason) return;
-        act('/subscription', { planVersionId: choice, waivePayment: waive, keepPeriod: keep, reason });
+        void act('/subscription', { planVersionId: choice, waivePayment: waive, keepPeriod: keep, reason });
     };
 
     /** Extra days on its trial or paid period, e.g. as an apology. */
@@ -561,7 +561,7 @@ const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; on
         if (!days) return;
         const reason = await dialogs.prompt({ title: 'Why extend it?', label: 'Reason (kept in the audit log)', placeholder: 'e.g. Apology for the outage on 3 Oct', minLength: 3, confirmLabel: `Extend by ${days} days` });
         if (!reason) return;
-        act('/subscription/extend', { days: Number(days), reason });
+        void act('/subscription/extend', { days: Number(days), reason });
     };
 
     const override = async () => {
@@ -569,7 +569,7 @@ const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; on
         if (value === null) return;
         const reason = await dialogs.prompt({ title: 'Why the exception?', label: 'Reason (recorded in the audit log)', minLength: 3, confirmLabel: 'Save override' });
         if (!reason) return;
-        act('/entitlements', { key: 'maxMembers', value: value.trim() === '' ? null : Number(value), reason });
+        void act('/entitlements', { key: 'maxMembers', value: value.trim() === '' ? null : Number(value), reason });
     };
 
     const limits = info.limits.limits;

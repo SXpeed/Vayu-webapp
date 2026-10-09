@@ -77,7 +77,7 @@ interface HomeViewProps {
     userProfile: UserProfile;
     onNavigate: (view: ViewState) => void;
     onAddEvent: (event: Omit<CalendarEvent, 'id' | 'createdAt' | 'createdBy' | 'createdByName'>) => Promise<void>;
-    onUpdateEvent: (event: CalendarEvent) => void;
+    onUpdateEvent: (event: CalendarEvent) => Promise<void>;
     onDeleteEvent: (id: string) => void;
 }
 
@@ -572,7 +572,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, events, 
                                 </button>
                             )}
                             <div>
-                                <label className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">Colour</label>
+                                <p className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">Colour</p>
                                 <div className="flex items-center gap-2 flex-wrap">
                                     {EVENT_COLORS.map(c => (
                                         <button

@@ -73,7 +73,7 @@ const esc = (s: string) => s.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&l
 /** Table layout and inline styles: what email clients reliably render. */
 export function renderHtml(subject: string, c: EmailContent): string {
   const paragraphs = c.paragraphs
-    .map(p => `<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:#33373d;">${esc(p).replace(/\n/g, '<br>')}</p>`)
+    .map(p => `<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:#33373d;">${esc(p).replaceAll('\n', '<br>')}</p>`)
     .join('');
   const button = c.action
     ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:22px 0 8px;"><tr><td style="border-radius:10px;background:#c5a028;">

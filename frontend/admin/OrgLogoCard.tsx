@@ -117,7 +117,7 @@ export const OrgLogoCard: React.FC<{ orgId: string; logoUrl: string | null; onCh
                 className="hidden"
                 onChange={e => {
                     const f = e.target.files?.[0];
-                    if (f) choose(f);
+                    if (f) void choose(f);
                     e.target.value = '';
                 }}
             />
@@ -128,7 +128,7 @@ export const OrgLogoCard: React.FC<{ orgId: string; logoUrl: string | null; onCh
                         <input type="checkbox" checked={draft.removeBg} disabled={working}
                             onChange={e => setDraft(d => (d ? { ...d, removeBg: e.target.checked } : d))}
                             className="w-4 h-4 accent-[var(--ac-accent,#b8860b)]" />
-                        Remove the background
+                        <span>Remove the background</span>
                     </label>
                     {hint && <p className="text-[12px] ac-faint">{hint}</p>}
                     {draft.result && (

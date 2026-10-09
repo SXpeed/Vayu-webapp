@@ -69,13 +69,13 @@ export const syncService = {
         if (initialized || !('serviceWorker' in navigator)) return;
         initialized = true;
 
-        this.registerPeriodicSync();
+        void this.registerPeriodicSync();
 
         // Started offline? Queue the sync now so recovery is instant.
-        if (!navigator.onLine) this.registerBackgroundSync();
+        if (!navigator.onLine) void this.registerBackgroundSync();
 
         globalThis.addEventListener('offline', () => {
-            this.registerBackgroundSync();
+            void this.registerBackgroundSync();
         });
 
         globalThis.addEventListener('online', () => {

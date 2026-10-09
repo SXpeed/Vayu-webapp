@@ -15,7 +15,7 @@
 
 const HOUR = 3_600_000;
 
-const isMissingSchema = (e: unknown) => /no such (table|column)/i.test(String((e as Error)?.message ?? e));
+const isMissingSchema = (e: unknown) => /no such (table|column)/i.test(e instanceof Error ? e.message : String(e)); // NOSONAR: anything thrown, as text
 
 async function quietly(run: () => Promise<unknown>, what: string): Promise<void> {
   try {
@@ -27,8 +27,8 @@ async function quietly(run: () => Promise<unknown>, what: string): Promise<void>
 
 /** A short, safe error text: a class and status, never a payload. */
 export function safeError(e: unknown): string {
-  const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-  return text.replace(/[^\w .:()/-]/g, '').slice(0, 160);
+  const message = e instanceof Error ? `${e.name}: ${e.message}` : String(e); // NOSONAR: anything thrown, as text
+  return message.replace(/[^\w .:()/-]/g, '').slice(0, 160);
 }
 
 const upsert = `INSERT INTO payment_webhook_health (org_id, provider) VALUES (?, ?) ON CONFLICT(org_id, provider) DO NOTHING`;

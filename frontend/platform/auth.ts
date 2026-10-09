@@ -233,7 +233,7 @@ function buildAuth(env: Env, db: D1Database, origin: string, methods: LoginMetho
           // tell both addresses (accountEmail.ts).
           after: async (user, context) => {
             const change = emailChangeFromLink(context);
-            if (!change || change.to !== user.email.toLowerCase()) return;
+            if (change?.to !== user.email.toLowerCase()) return;
             await recordOwnEmailChange(db, user.id, change, context?.request?.headers.get('cf-connecting-ip') ?? null);
           },
         },

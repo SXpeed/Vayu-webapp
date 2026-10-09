@@ -7,6 +7,7 @@
 // valid session. Tokens never leave the server: devices are named by session id.
 
 import type { PlatformAuth } from './auth';
+import { text } from '../rows';
 import { auditStmt } from './audit';
 import { OrgAccessError } from './orgApi';
 
@@ -27,7 +28,7 @@ async function currentSession(auth: PlatformAuth, request: Request) {
 /** D1 keeps Better Auth's dates as ISO text; tolerate epoch numbers too. */
 function toMs(value: unknown): number {
   if (typeof value === 'number') return value;
-  const ms = Date.parse(String(value ?? ''));
+  const ms = Date.parse(text(value));
   return Number.isFinite(ms) ? ms : 0;
 }
 

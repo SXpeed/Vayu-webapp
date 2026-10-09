@@ -242,11 +242,11 @@ const UiSizeRow: React.FC = () => {
                     <p className="text-[11px] text-gray-600 dark:text-gray-400 font-light">On this device</p>
                 </div>
             </div>
-            <div role="group" aria-label="UI size" className="flex gap-2 shrink-0">
+            <fieldset aria-label="UI size" className="flex gap-2 shrink-0">
                 {UI_SIZES.map(o => (
                     <Pill key={o.value} active={size === o.value} onClick={() => choose(o.value)}>{o.label}</Pill>
                 ))}
-            </div>
+            </fieldset>
         </div>
     );
 };

@@ -261,7 +261,7 @@ export const SalesFigures: React.FC<{ summary: SalesSummary; all: SalesSummary; 
 
 /** One button per tag among the sales shown, with its count and takings, to see only that tag's. */
 export const TagFilterBar: React.FC<{ byTag: TagTotal[]; allCount: number; activeTag: string | null; onAll: () => void; onPick: (tag: string) => void }> = ({ byTag, allCount, activeTag, onAll, onPick }) => (
-    <div className="flex items-center gap-2 overflow-x-auto no-scrollbar -mx-1 px-1 py-1 md:flex-wrap md:overflow-visible" role="group" aria-label="Filter by tag">
+    <fieldset className="flex items-center gap-2 overflow-x-auto no-scrollbar -mx-1 px-1 py-1 md:flex-wrap md:overflow-visible" aria-label="Filter by tag">
         <Pill active={activeTag === null} onClick={onAll} className="shrink-0">All sales <span className="opacity-70 tabular-nums">{allCount}</span></Pill>
         {byTag.map(r => (
             <Pill key={r.tag || '(untagged)'} active={activeTag !== null && sameTag(activeTag, r.tag)} onClick={() => onPick(r.tag)} className="shrink-0">
@@ -272,5 +272,5 @@ export const TagFilterBar: React.FC<{ byTag: TagTotal[]; allCount: number; activ
         {activeTag !== null && !byTag.some(r => sameTag(r.tag, activeTag)) && (
             <Pill active onClick={onAll} className="shrink-0">{activeTag || 'Untagged'} <span className="opacity-70">0</span></Pill>
         )}
-    </div>
+    </fieldset>
 );

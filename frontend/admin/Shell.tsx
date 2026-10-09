@@ -253,8 +253,8 @@ export const MoreSheet: React.FC<{
     }, [onClose]);
     return createPortal(
         <>
-            <div className="ac-scrim neu-scrim" onClick={onClose} />
-            <div className="ac-drawer ac-drawer-fit neu-modal" role="dialog" aria-modal="true" aria-label="More" style={{ ['--ac-drawer-width' as string]: '380px' }}>
+            <button type="button" className="ac-scrim neu-scrim border-none p-0 cursor-default" onClick={onClose} aria-label="Close" />
+            <dialog open className="ac-drawer ac-drawer-fit neu-modal" aria-modal="true" aria-label="More" style={{ ['--ac-drawer-width' as string]: '380px' }}>
                 <header className="flex items-center justify-between px-5 py-4">
                     <p className="font-serif text-lg text-gold-700 dark:text-gold-300">More</p>
                     <IconButton label="Close" onClick={onClose}><X size={16} /></IconButton>
@@ -291,7 +291,7 @@ export const MoreSheet: React.FC<{
                         <LogOut size={16} /> Sign out
                     </button>
                 </footer>
-            </div>
+            </dialog>
         </>,
         overlayHost(),
     );
@@ -344,16 +344,21 @@ export const CommandPalette: React.FC<{ items: NavItem[]; onClose: () => void; n
         onClose();
     };
 
+    useEffect(() => {
+        const on = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') onClose();
+            else if (e.key === 'ArrowDown') { e.preventDefault(); setActive(a => Math.min(a + 1, hits.length - 1)); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(a => Math.max(a - 1, 0)); }
+            else if (e.key === 'Enter' && hits[active]) { e.preventDefault(); hits[active].go(); onClose(); }
+        };
+        window.addEventListener('keydown', on);
+        return () => window.removeEventListener('keydown', on);
+    }, [hits, active, onClose]);
+
     return createPortal(
         <>
-            <div className="ac-scrim ac-dialog-scrim neu-scrim" onClick={onClose} />
-            <div className="ac-dialog neu-modal !top-[12vh] overflow-hidden" role="dialog" aria-modal="true" aria-label="Search" style={{ ['--ac-dialog-width' as string]: '560px' }}
-                onKeyDown={e => {
-                    if (e.key === 'Escape') onClose();
-                    else if (e.key === 'ArrowDown') { e.preventDefault(); setActive(a => Math.min(a + 1, hits.length - 1)); }
-                    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(a => Math.max(a - 1, 0)); }
-                    else if (e.key === 'Enter') { e.preventDefault(); pick(hits[active]); }
-                }}>
+            <button type="button" className="ac-scrim ac-dialog-scrim neu-scrim border-none p-0 cursor-default" onClick={onClose} aria-label="Close search" />
+            <dialog open className="ac-dialog neu-modal !top-[12vh] overflow-hidden" aria-modal="true" aria-label="Search" style={{ ['--ac-dialog-width' as string]: '560px' }}>
                 <div className="p-4">
                     <label className="neu-field !py-0 flex items-center gap-2.5 cursor-text">
                         <Search size={16} className="text-gold-600 dark:text-gold-400 shrink-0" />
@@ -379,7 +384,7 @@ export const CommandPalette: React.FC<{ items: NavItem[]; onClose: () => void; n
                 <div className="px-4 py-2.5 flex flex-wrap gap-3 text-[11px] ac-faint" style={{ boxShadow: '0 -1px 0 var(--neu-line)' }}>
                     <span><Kbd>↑</Kbd> <Kbd>↓</Kbd> move</span><span><Kbd>Enter</Kbd> open</span><span><Kbd>Esc</Kbd> close</span>
                 </div>
-            </div>
+            </dialog>
         </>,
         overlayHost(),
     );

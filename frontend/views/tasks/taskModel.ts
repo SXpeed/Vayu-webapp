@@ -81,7 +81,7 @@ export function buildBoard(items: TaskItem[], today: string): TaskBoard {
     board.today.sort(compareTasks);
     board.upcoming = [...ahead.entries()]
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([day, tasks]) => ({ day, tasks: tasks.sort(compareTasks) }));
+        .map(([day, tasks]) => ({ day, tasks: [...tasks].sort(compareTasks) }));
     board.completed.sort((a, b) => b.dueDay.localeCompare(a.dueDay) || b.todo.createdAt - a.todo.createdAt);
     return board;
 }

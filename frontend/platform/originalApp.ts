@@ -130,11 +130,12 @@ export async function importOriginalPeople(env: Env, db: D1Database, orgId: stri
   for (const person of people) {
     const email = person.email?.trim().toLowerCase();
     if (!email || !person.id) { report.warnings.push('Skipped a record without an id or email.'); continue; }
-    const plan = await planPerson(db, orgId, person, email);
+    // In turn: two records can share an email, and the report reads in order.
+    const plan = await planPerson(db, orgId, person, email); // NOSONAR
     count(report, plan, person.id);
     if (dryRun) continue;
     const statements = personStatements(db, orgId, plan, actor);
-    if (statements.length) await db.batch(statements);
+    if (statements.length) await db.batch(statements); // NOSONAR
   }
 
   if (!dryRun) {

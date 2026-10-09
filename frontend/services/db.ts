@@ -52,6 +52,15 @@ function setArray<T>(key: string, data: T[]): void {
   localStorage.setItem(scoped(key), JSON.stringify(data));
 }
 
+/** Runs a storage step as a promise, so a full or blocked store rejects instead of throwing at the caller. */
+function settle<T>(step: () => T): Promise<T> {
+  try {
+    return Promise.resolve(step());
+  } catch (e) {
+    return Promise.reject(e instanceof Error ? e : new Error(String(e)));
+  }
+}
+
 /** One date range of the sales ledger, as last loaded (shown when offline). */
 export interface SavedSalesPage { from: string; to: string; sales: Sale[]; summary: SalesSummary; allTags?: string[]; savedAt: number }
 
@@ -109,14 +118,16 @@ export const db = {
    * mirrored, so e.g. the saved inquiries could be months old — and a
    * fallback to them looked like inquiries had vanished.
    */
-  async replaceSaved(list: SavedList, items: unknown[]): Promise<boolean> {
-    try {
-      setArray(STORAGE_KEYS[list], items);
-      return true;
-    } catch {
-      /* storage full or unavailable — the offline copy just stays older */
-      return false;
-    }
+  replaceSaved(list: SavedList, items: unknown[]): Promise<boolean> {
+    return settle(() => {
+      try {
+        setArray(STORAGE_KEYS[list], items);
+        return true;
+      } catch {
+        /* storage full or unavailable — the offline copy just stays older */
+        return false;
+      }
+    });
   },
 
   /** Brings a saved list up to date in place; false when the device couldn't store it. */
@@ -148,70 +159,74 @@ export const db = {
     } catch { /* unavailable: the next start takes a full copy */ }
   },
 
-  async init() {
-    const storedVersion = Number(localStorage.getItem(STORAGE_KEYS.seedVersion) ?? 0);
+  init() {
+    return settle(() => {
+      const storedVersion = Number(localStorage.getItem(STORAGE_KEYS.seedVersion) ?? 0);
 
-    if (storedVersion < SEED_VERSION) {
-      // Migration: remove old mock seed data while preserving real user-created data.
-      setArray(STORAGE_KEYS.artworks, getArray<Artwork>(STORAGE_KEYS.artworks).filter(a => !MOCK_IDS_TO_CLEAR.artworks.includes(a.id)));
-      setArray(STORAGE_KEYS.catalogs, getArray<Catalog>(STORAGE_KEYS.catalogs).filter(c => !MOCK_IDS_TO_CLEAR.catalogs.includes(c.id)));
-      setArray(STORAGE_KEYS.collections, getArray<Collection>(STORAGE_KEYS.collections).filter(c => !MOCK_IDS_TO_CLEAR.collections.includes(c.id)));
-      setArray(STORAGE_KEYS.invoices, getArray<Invoice>(STORAGE_KEYS.invoices).filter(i => !MOCK_IDS_TO_CLEAR.invoices.includes(i.id)));
-      setArray(STORAGE_KEYS.inquiries, getArray<Inquiry>(STORAGE_KEYS.inquiries).filter(i => !MOCK_IDS_TO_CLEAR.inquiries.includes(i.id)));
-      setArray(STORAGE_KEYS.conversations, getArray<Conversation>(STORAGE_KEYS.conversations).filter(c => !MOCK_IDS_TO_CLEAR.conversations.includes(c.id)));
-      setArray(STORAGE_KEYS.messages, getArray<Message>(STORAGE_KEYS.messages).filter(m => !MOCK_IDS_TO_CLEAR.messages.includes(m.id)));
-      // Team members now come from the auth service (Worker/KV), clear old local cache.
-      localStorage.removeItem('vayu_team');
-      localStorage.setItem(STORAGE_KEYS.seedVersion, String(SEED_VERSION));
-    }
+      if (storedVersion < SEED_VERSION) {
+        // Migration: remove old mock seed data while preserving real user-created data.
+        setArray(STORAGE_KEYS.artworks, getArray<Artwork>(STORAGE_KEYS.artworks).filter(a => !MOCK_IDS_TO_CLEAR.artworks.includes(a.id)));
+        setArray(STORAGE_KEYS.catalogs, getArray<Catalog>(STORAGE_KEYS.catalogs).filter(c => !MOCK_IDS_TO_CLEAR.catalogs.includes(c.id)));
+        setArray(STORAGE_KEYS.collections, getArray<Collection>(STORAGE_KEYS.collections).filter(c => !MOCK_IDS_TO_CLEAR.collections.includes(c.id)));
+        setArray(STORAGE_KEYS.invoices, getArray<Invoice>(STORAGE_KEYS.invoices).filter(i => !MOCK_IDS_TO_CLEAR.invoices.includes(i.id)));
+        setArray(STORAGE_KEYS.inquiries, getArray<Inquiry>(STORAGE_KEYS.inquiries).filter(i => !MOCK_IDS_TO_CLEAR.inquiries.includes(i.id)));
+        setArray(STORAGE_KEYS.conversations, getArray<Conversation>(STORAGE_KEYS.conversations).filter(c => !MOCK_IDS_TO_CLEAR.conversations.includes(c.id)));
+        setArray(STORAGE_KEYS.messages, getArray<Message>(STORAGE_KEYS.messages).filter(m => !MOCK_IDS_TO_CLEAR.messages.includes(m.id)));
+        // Team members now come from the auth service (Worker/KV), clear old local cache.
+        localStorage.removeItem('vayu_team');
+        localStorage.setItem(STORAGE_KEYS.seedVersion, String(SEED_VERSION));
+      }
+    });
   },
 
   // Users (local cache — auth truth lives in KV via worker)
-  async saveUser(user: UserProfile): Promise<void> {
-    const users = getArray<UserProfile>(STORAGE_KEYS.users);
-    const idx = users.findIndex(u => u.email === user.email);
-    if (idx >= 0) users[idx] = user;
-    else users.push(user);
-    setArray(STORAGE_KEYS.users, users);
+  saveUser(user: UserProfile): Promise<void> {
+    return settle(() => {
+      const users = getArray<UserProfile>(STORAGE_KEYS.users);
+      const idx = users.findIndex(u => u.email === user.email);
+      if (idx >= 0) users[idx] = user;
+      else users.push(user);
+      setArray(STORAGE_KEYS.users, users);
+    });
   },
-  async getUser(phone: string): Promise<UserProfile | null> {
-    return getArray<UserProfile>(STORAGE_KEYS.users).find(u => u.phone === phone) ?? null;
+  getUser(phone: string): Promise<UserProfile | null> {
+    return settle(() => getArray<UserProfile>(STORAGE_KEYS.users).find(u => u.phone === phone) ?? null);
   },
-  async getUserByEmail(email: string): Promise<UserProfile | null> {
-    return getArray<UserProfile>(STORAGE_KEYS.users).find(u => u.email?.toLowerCase() === email.toLowerCase()) ?? null;
+  getUserByEmail(email: string): Promise<UserProfile | null> {
+    return settle(() => getArray<UserProfile>(STORAGE_KEYS.users).find(u => u.email?.toLowerCase() === email.toLowerCase()) ?? null);
   },
 
   // Artworks
-  async getArtworks(): Promise<Artwork[]> {
-    return getArray<Artwork>(STORAGE_KEYS.artworks).sort((a, b) => b.createdAt - a.createdAt);
+  getArtworks(): Promise<Artwork[]> {
+    return settle(() => getArray<Artwork>(STORAGE_KEYS.artworks).sort((a, b) => b.createdAt - a.createdAt));
   },
-  async saveArtwork(artwork: Artwork): Promise<void> {
-    setArray(STORAGE_KEYS.artworks, upsertById(getArray<Artwork>(STORAGE_KEYS.artworks), artwork));
+  saveArtwork(artwork: Artwork): Promise<void> {
+    return settle(() => setArray(STORAGE_KEYS.artworks, upsertById(getArray<Artwork>(STORAGE_KEYS.artworks), artwork)));
   },
-  async deleteArtwork(id: string): Promise<void> {
-    setArray(STORAGE_KEYS.artworks, getArray<Artwork>(STORAGE_KEYS.artworks).filter(a => a.id !== id));
+  deleteArtwork(id: string): Promise<void> {
+    return settle(() => setArray(STORAGE_KEYS.artworks, getArray<Artwork>(STORAGE_KEYS.artworks).filter(a => a.id !== id)));
   },
 
   // Catalogs
-  async getCatalogs(): Promise<Catalog[]> {
-    return getArray<Catalog>(STORAGE_KEYS.catalogs).sort((a, b) => b.createdAt - a.createdAt);
+  getCatalogs(): Promise<Catalog[]> {
+    return settle(() => getArray<Catalog>(STORAGE_KEYS.catalogs).sort((a, b) => b.createdAt - a.createdAt));
   },
-  async saveCatalog(catalog: Catalog): Promise<void> {
-    setArray(STORAGE_KEYS.catalogs, upsertById(getArray<Catalog>(STORAGE_KEYS.catalogs), catalog));
+  saveCatalog(catalog: Catalog): Promise<void> {
+    return settle(() => setArray(STORAGE_KEYS.catalogs, upsertById(getArray<Catalog>(STORAGE_KEYS.catalogs), catalog)));
   },
-  async deleteCatalog(id: string): Promise<void> {
-    setArray(STORAGE_KEYS.catalogs, getArray<Catalog>(STORAGE_KEYS.catalogs).filter(c => c.id !== id));
+  deleteCatalog(id: string): Promise<void> {
+    return settle(() => setArray(STORAGE_KEYS.catalogs, getArray<Catalog>(STORAGE_KEYS.catalogs).filter(c => c.id !== id)));
   },
 
   // Collections
-  async getCollections(): Promise<Collection[]> {
-    return getArray<Collection>(STORAGE_KEYS.collections);
+  getCollections(): Promise<Collection[]> {
+    return settle(() => getArray<Collection>(STORAGE_KEYS.collections));
   },
-  async saveCollection(collection: Collection): Promise<void> {
-    setArray(STORAGE_KEYS.collections, upsertById(getArray<Collection>(STORAGE_KEYS.collections), collection));
+  saveCollection(collection: Collection): Promise<void> {
+    return settle(() => setArray(STORAGE_KEYS.collections, upsertById(getArray<Collection>(STORAGE_KEYS.collections), collection)));
   },
-  async deleteCollection(id: string): Promise<void> {
-    setArray(STORAGE_KEYS.collections, getArray<Collection>(STORAGE_KEYS.collections).filter(c => c.id !== id));
+  deleteCollection(id: string): Promise<void> {
+    return settle(() => setArray(STORAGE_KEYS.collections, getArray<Collection>(STORAGE_KEYS.collections).filter(c => c.id !== id)));
   },
 
   // Sales ledger: the last few ranges loaded, and sales waiting to upload.
@@ -233,79 +248,79 @@ export const db = {
   },
 
   // Invoices
-  async getInvoices(): Promise<Invoice[]> {
-    return getArray<Invoice>(STORAGE_KEYS.invoices).sort((a, b) => b.date - a.date);
+  getInvoices(): Promise<Invoice[]> {
+    return settle(() => getArray<Invoice>(STORAGE_KEYS.invoices).sort((a, b) => b.date - a.date));
   },
-  async saveInvoice(invoice: Invoice): Promise<void> {
-    setArray(STORAGE_KEYS.invoices, upsertById(getArray<Invoice>(STORAGE_KEYS.invoices), invoice));
+  saveInvoice(invoice: Invoice): Promise<void> {
+    return settle(() => setArray(STORAGE_KEYS.invoices, upsertById(getArray<Invoice>(STORAGE_KEYS.invoices), invoice)));
   },
-  async deleteInvoice(id: string): Promise<void> {
-    setArray(STORAGE_KEYS.invoices, getArray<Invoice>(STORAGE_KEYS.invoices).filter(i => i.id !== id));
+  deleteInvoice(id: string): Promise<void> {
+    return settle(() => setArray(STORAGE_KEYS.invoices, getArray<Invoice>(STORAGE_KEYS.invoices).filter(i => i.id !== id)));
   },
 
   // Inquiries
-  async getInquiries(): Promise<Inquiry[]> {
-    return getArray<Inquiry>(STORAGE_KEYS.inquiries).sort((a, b) => b.date - a.date);
+  getInquiries(): Promise<Inquiry[]> {
+    return settle(() => getArray<Inquiry>(STORAGE_KEYS.inquiries).sort((a, b) => b.date - a.date));
   },
-  async saveInquiry(inquiry: Inquiry): Promise<void> {
-    setArray(STORAGE_KEYS.inquiries, upsertById(getArray<Inquiry>(STORAGE_KEYS.inquiries), inquiry));
+  saveInquiry(inquiry: Inquiry): Promise<void> {
+    return settle(() => setArray(STORAGE_KEYS.inquiries, upsertById(getArray<Inquiry>(STORAGE_KEYS.inquiries), inquiry)));
   },
-  async deleteInquiry(id: string): Promise<void> {
-    setArray(STORAGE_KEYS.inquiries, getArray<Inquiry>(STORAGE_KEYS.inquiries).filter(i => i.id !== id));
+  deleteInquiry(id: string): Promise<void> {
+    return settle(() => setArray(STORAGE_KEYS.inquiries, getArray<Inquiry>(STORAGE_KEYS.inquiries).filter(i => i.id !== id)));
   },
 
   // Conversations
-  async getConversations(): Promise<Conversation[]> {
-    return getArray<Conversation>(STORAGE_KEYS.conversations).sort((a, b) => b.lastMessageTime - a.lastMessageTime);
+  getConversations(): Promise<Conversation[]> {
+    return settle(() => getArray<Conversation>(STORAGE_KEYS.conversations).sort((a, b) => b.lastMessageTime - a.lastMessageTime));
   },
-  async saveConversation(conv: Conversation): Promise<void> {
-    setArray(STORAGE_KEYS.conversations, upsertById(getArray<Conversation>(STORAGE_KEYS.conversations), conv));
+  saveConversation(conv: Conversation): Promise<void> {
+    return settle(() => setArray(STORAGE_KEYS.conversations, upsertById(getArray<Conversation>(STORAGE_KEYS.conversations), conv)));
   },
-  async deleteConversation(id: string): Promise<void> {
-    setArray(STORAGE_KEYS.conversations, getArray<Conversation>(STORAGE_KEYS.conversations).filter(c => c.id !== id));
+  deleteConversation(id: string): Promise<void> {
+    return settle(() => setArray(STORAGE_KEYS.conversations, getArray<Conversation>(STORAGE_KEYS.conversations).filter(c => c.id !== id)));
   },
 
   // Messages
-  async getMessages(): Promise<Message[]> {
-    return getArray<Message>(STORAGE_KEYS.messages).sort((a, b) => a.timestamp - b.timestamp);
+  getMessages(): Promise<Message[]> {
+    return settle(() => getArray<Message>(STORAGE_KEYS.messages).sort((a, b) => a.timestamp - b.timestamp));
   },
-  async getMessagesByConversation(conversationId: string): Promise<Message[]> {
-    return getArray<Message>(STORAGE_KEYS.messages)
-      .filter(m => m.conversationId === conversationId)
-      .sort((a, b) => a.timestamp - b.timestamp);
+  getMessagesByConversation(conversationId: string): Promise<Message[]> {
+    return settle(() => getArray<Message>(STORAGE_KEYS.messages)
+        .filter(m => m.conversationId === conversationId)
+        .sort((a, b) => a.timestamp - b.timestamp));
   },
-  async saveMessage(msg: Message): Promise<void> {
-    setArray(STORAGE_KEYS.messages, upsertById(getArray<Message>(STORAGE_KEYS.messages), msg));
+  saveMessage(msg: Message): Promise<void> {
+    return settle(() => setArray(STORAGE_KEYS.messages, upsertById(getArray<Message>(STORAGE_KEYS.messages), msg)));
   },
 
   // Inquiry Messages
-  async getInquiryMessages(): Promise<InquiryMessage[]> {
-    return getArray<InquiryMessage>(STORAGE_KEYS.inquiryMessages).sort((a, b) => a.timestamp - b.timestamp);
+  getInquiryMessages(): Promise<InquiryMessage[]> {
+    return settle(() => getArray<InquiryMessage>(STORAGE_KEYS.inquiryMessages).sort((a, b) => a.timestamp - b.timestamp));
   },
-  async saveInquiryMessage(msg: InquiryMessage): Promise<void> {
-    setArray(STORAGE_KEYS.inquiryMessages, upsertById(getArray<InquiryMessage>(STORAGE_KEYS.inquiryMessages), msg));
+  saveInquiryMessage(msg: InquiryMessage): Promise<void> {
+    return settle(() => setArray(STORAGE_KEYS.inquiryMessages, upsertById(getArray<InquiryMessage>(STORAGE_KEYS.inquiryMessages), msg)));
   },
 
   // Calendar Events
-  async getEvents(): Promise<CalendarEvent[]> {
-    return getArray<CalendarEvent>(STORAGE_KEYS.events).sort((a, b) => a.date - b.date);
+  getEvents(): Promise<CalendarEvent[]> {
+    return settle(() => getArray<CalendarEvent>(STORAGE_KEYS.events).sort((a, b) => a.date - b.date));
   },
-  async saveEvent(event: CalendarEvent): Promise<void> {
-    setArray(STORAGE_KEYS.events, upsertById(getArray<CalendarEvent>(STORAGE_KEYS.events), event));
+  saveEvent(event: CalendarEvent): Promise<void> {
+    return settle(() => setArray(STORAGE_KEYS.events, upsertById(getArray<CalendarEvent>(STORAGE_KEYS.events), event)));
   },
-  async deleteEvent(id: string): Promise<void> {
-    setArray(STORAGE_KEYS.events, getArray<CalendarEvent>(STORAGE_KEYS.events).filter(e => e.id !== id));
+  deleteEvent(id: string): Promise<void> {
+    return settle(() => setArray(STORAGE_KEYS.events, getArray<CalendarEvent>(STORAGE_KEYS.events).filter(e => e.id !== id)));
   },
 
   // Contacts
-  async getContacts(): Promise<Contact[]> {
-    return getArray<Contact>(STORAGE_KEYS.contacts).sort((a, b) => b.createdAt - a.createdAt);
+  getContacts(): Promise<Contact[]> {
+    return settle(() => getArray<Contact>(STORAGE_KEYS.contacts).sort((a, b) => b.createdAt - a.createdAt));
   },
-  async saveContact(contact: Contact): Promise<void> {
-    setArray(STORAGE_KEYS.contacts, upsertById(getArray<Contact>(STORAGE_KEYS.contacts), contact));
+  saveContact(contact: Contact): Promise<void> {
+    return settle(() => setArray(STORAGE_KEYS.contacts, upsertById(getArray<Contact>(STORAGE_KEYS.contacts), contact)));
   },
-  async deleteContact(id: string): Promise<void> {
-    setArray(STORAGE_KEYS.contacts, getArray<Contact>(STORAGE_KEYS.contacts).filter(c => c.id !== id));
+  deleteContact(id: string): Promise<void> {
+    return settle(() => setArray(STORAGE_KEYS.contacts, getArray<Contact>(STORAGE_KEYS.contacts).filter(c => c.id !== id)));
   },
 
 };

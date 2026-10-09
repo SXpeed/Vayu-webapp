@@ -14,7 +14,7 @@
 // Shared by the Worker (worker.ts, deltaSync.ts) and the SyncHub Durable
 // Object (realtime.ts), so it imports nothing from either (rows.ts is shared by both).
 
-import { runSetupOnce } from './rows';
+import { runSetupOnce, text } from './rows';
 
 /**
  * Marker appended to a private room's change-log scope. A scope containing it
@@ -45,13 +45,13 @@ export interface RoomAccess {
 export function roomAccessOf(row: Record<string, unknown>): RoomAccess {
   let members: string[] = [];
   try {
-    const ids: unknown = JSON.parse(String(row.participant_ids ?? '[]'));
+    const ids: unknown = JSON.parse(text(row.participant_ids) || '[]');
     if (Array.isArray(ids)) members = ids.map(String);
   } catch { /* malformed row: no members */ }
   return {
     members,
     isPrivate: Number(row.is_private ?? 0) === 1,
-    createdBy: row.created_by ? String(row.created_by) : null,
+    createdBy: row.created_by ? text(row.created_by) : null,
   };
 }
 
@@ -77,7 +77,7 @@ export function ensurePrivateRoomColumns(db: D1Database): Promise<void> {
   for (const [column, definition] of [['is_private', 'INTEGER DEFAULT 0'], ['created_by', 'TEXT']] as const) {
     if (existing.has(column)) continue;
     try {
-      await db.prepare(`ALTER TABLE conversations ADD COLUMN ${column} ${definition}`).run();
+      await db.prepare(`ALTER TABLE conversations ADD COLUMN ${column} ${definition}`).run(); // NOSONAR: schema steps run one at a time
     } catch (e) {
       // Another isolate may have added it at the same moment.
       if (!/duplicate column/i.test((e as Error).message)) throw e;

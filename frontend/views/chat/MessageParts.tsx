@@ -19,6 +19,13 @@ export const TAG_COLORS: Record<MessageTag, string> = {
 
 export const ALL_TAGS: MessageTag[] = ['General', 'Urgent', 'Follow-up', 'Artwork', 'Inquiry', 'Invoice'];
 
+/** A message in one line: its text, else what it carries. */
+export const messagePreview = (msg: { text?: string; attachment?: MessageAttachment }): string => {
+    if (msg.text) return msg.text;
+    if (!msg.attachment) return '';
+    return msg.attachment.type === 'image' ? '📷 Photo' : `📎 ${msg.attachment.name}`;
+};
+
 export const messageTime = (timestamp: number) => new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
 type ChatMessage = Pick<Message, 'senderId' | 'text' | 'tags' | 'replyTo' | 'attachment'>;

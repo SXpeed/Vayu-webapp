@@ -480,9 +480,9 @@ const TagEditor: React.FC<{ tags: string[]; allTags: string[]; onChange: (tags: 
             </div>
             {allTags.length > 0 && <datalist id="sale-tag-list">{allTags.map(t => <option key={t} value={t} />)}</datalist>}
             {suggestions.length > 0 && !full && (
-                <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label="Tags in use">
+                <fieldset className="mt-2 flex flex-wrap gap-1.5" aria-label="Tags in use">
                     {suggestions.map(t => <Pill key={t} onClick={() => onChange(cleanTags([...tags, t]))} className="!py-1 !text-[11.5px]">+ {t}</Pill>)}
-                </div>
+                </fieldset>
             )}
             <p className="mt-1.5 text-[11px] text-[var(--neu-text-dim)]">
                 {carried ? 'Kept from your last sale, for the next sale at the same event. Remove it if this one is different.' : 'Group sales by event or anything else, then see each tag’s takings.'}
@@ -571,9 +571,9 @@ const PaymentFields: React.FC<{ s: SaleInput; amountText: string; onAmount: (v: 
         </div>
         <div>
             <span className="neu-label" id="sale-mode-label">Paid by</span>
-            <div className="flex flex-wrap gap-2" role="group" aria-labelledby="sale-mode-label">
+            <fieldset className="flex flex-wrap gap-2" aria-labelledby="sale-mode-label">
                 {PAYMENT_MODES.map(m => <Pill key={m} active={s.paymentMode === m} onClick={() => set({ paymentMode: m })}>{m}</Pill>)}
-            </div>
+            </fieldset>
         </div>
         <Field label="Reference" htmlFor="sale-ref">
             <Input id="sale-ref" value={s.referenceNo} onChange={e => set({ referenceNo: e.target.value })} placeholder={REFERENCE_HINT[s.paymentMode]} maxLength={80} />

@@ -210,16 +210,13 @@ export const PlanPanel: React.FC<{ onActive?: () => void }> = ({ onActive }) => 
                                     <span className={`text-[12px] tabular-nums shrink-0 ${p !== null && p >= 1 ? 'text-red-600 dark:text-red-400 font-semibold' : 'text-[var(--neu-text-dim)]'}`}>{figure}</span>
                                 </div>
                                 {p !== null && (
-                                    <div
-                                        className="mt-1.5 h-2 rounded-full bg-gray-300/50 dark:bg-white/10 overflow-hidden"
-                                        role="progressbar"
-                                        aria-label={row.label}
-                                        aria-valuemin={0}
-                                        aria-valuemax={row.limit ?? 0}
-                                        aria-valuenow={row.used ?? 0}
-                                    >
-                                        <div className={`h-full rounded-full ${barColour(p)}`} style={{ width: `${Math.min(100, Math.max(p * 100, p > 0 ? 3 : 0))}%` }} />
-                                    </div>
+                                    <>
+                                        {/* Native <progress> for screen readers; the styled bar is the visual. */}
+                                        <progress className="sr-only" aria-label={row.label} max={row.limit ?? 0} value={row.used ?? 0} />
+                                        <div className="mt-1.5 h-2 rounded-full bg-gray-300/50 dark:bg-white/10 overflow-hidden" aria-hidden="true">
+                                            <div className={`h-full rounded-full ${barColour(p)}`} style={{ width: `${Math.min(100, Math.max(p * 100, p > 0 ? 3 : 0))}%` }} />
+                                        </div>
+                                    </>
                                 )}
                                 <p className="mt-1 text-[11px] text-[var(--neu-text-dim)] font-light">
                                     {row.hint}{row.enforced && row.limit !== null ? ' New ones are blocked at the limit.' : ''}
@@ -228,7 +225,7 @@ export const PlanPanel: React.FC<{ onActive?: () => void }> = ({ onActive }) => 
                         );
                     })}
                 </ul>
-                {info.monthStartedAt && (
+                {!!info.monthStartedAt && (
                     <p className="mt-4 text-[11px] text-[var(--neu-text-dim)]">
                         Monthly figures count from {fmtDate(info.monthStartedAt)}. Storage is recounted every few hours.
                     </p>
@@ -359,14 +356,14 @@ const RenewButton: React.FC<{ option: PlanOption; payable: boolean; onDone: () =
 };
 
 /** The headline limits a plan card compares. */
-const COMPARE = ['maxMembers', 'maxItems', 'maxCatalogs', 'maxContacts', 'storageMb'];
+const COMPARE = new Set(['maxMembers', 'maxItems', 'maxCatalogs', 'maxContacts', 'storageMb']);
 
 const PlanChooser: React.FC<{ billing: BillingInfo; usage: UsageRow[]; onClose: () => void; onPaid: () => void }> = ({ billing, usage, onClose, onPaid }) => {
     const hasAnnual = billing.plans.some(p => p.priceAnnual >= 100);
     const hasMonthly = billing.plans.some(p => p.priceMonthly >= 100);
     const [period, setPeriod] = useState<BillingPeriod>(hasMonthly ? 'monthly' : 'annual');
     const { pay, paying } = usePay(onPaid);
-    const rows = usage.filter(r => COMPARE.includes(r.key));
+    const rows = usage.filter(r => COMPARE.has(r.key));
 
     return (
         <section className="neu-card p-4 lg:p-5" aria-label="Choose a plan">
@@ -390,7 +387,7 @@ const PlanChooser: React.FC<{ billing: BillingInfo; usage: UsageRow[]; onClose: 
             )}
 
             {hasAnnual && hasMonthly && (
-                <div className="mt-4 inline-flex rounded-full neu-inset p-1" role="group" aria-label="Billing period">
+                <fieldset className="mt-4 inline-flex rounded-full neu-inset p-1" aria-label="Billing period">
                     {(['monthly', 'annual'] as const).map(p => (
                         <button
                             key={p}
@@ -402,7 +399,7 @@ const PlanChooser: React.FC<{ billing: BillingInfo; usage: UsageRow[]; onClose: 
                             {p === 'monthly' ? 'Monthly' : 'Yearly'}
                         </button>
                     ))}
-                </div>
+                </fieldset>
             )}
 
             <ul className="mt-4 grid gap-3 sm:grid-cols-2">

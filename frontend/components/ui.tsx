@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Search } from 'lucide-react';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 
@@ -175,11 +175,12 @@ export const PageRoot: React.FC<PageRootProps> = ({ children, width = 'default',
     const isPhone = useMediaQuery(PHONE_QUERY);
     const [collapsed, setCollapsed] = useState(false);
     const expand = useCollapseOnScroll(rootRef, isPhone, setCollapsed);
+    const chrome = useMemo(() => ({ width, isPhone, collapsed: isPhone && collapsed, expand }), [width, isPhone, collapsed, expand]);
 
     // The class resets `--page-tools-h` so a page nested inside another never
     // inherits the outer page's value; a floating tools row overrides it inline.
     return (
-        <PageChromeContext.Provider value={{ width, isPhone, collapsed: isPhone && collapsed, expand }}>
+        <PageChromeContext.Provider value={chrome}>
             <div ref={rootRef} data-page-root className={`flex flex-col h-full min-h-0 w-full [--page-tools-h:0px] ${className}`}>
                 {children}
             </div>

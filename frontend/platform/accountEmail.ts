@@ -48,11 +48,11 @@ function changedStatements(db: D1Database, c: { userId: string; from: string; to
  * the account, so only its payload is read here.
  */
 export function emailChangeFromLink(context: { path?: string; query?: Record<string, unknown> } | null): { from: string; to: string } | null {
-  if (!context || !context.path?.endsWith('/verify-email')) return null;
+  if (!context?.path?.endsWith('/verify-email')) return null;
   const token = context.query?.token;
   if (typeof token !== 'string') return null;
   try {
-    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))) as { email?: unknown; updateTo?: unknown; requestType?: unknown };
+    const payload = JSON.parse(atob(token.split('.')[1].replaceAll('-', '+').replaceAll('_', '/'))) as { email?: unknown; updateTo?: unknown; requestType?: unknown };
     if (payload.requestType !== 'change-email-verification') return null;
     if (typeof payload.email !== 'string' || typeof payload.updateTo !== 'string') return null;
     return { from: payload.email.toLowerCase(), to: payload.updateTo.toLowerCase() };

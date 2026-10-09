@@ -190,7 +190,7 @@ export async function prepareLogo(file: Blob, withoutBackground: boolean): Promi
         smaller.height = Math.round(canvas.height * 0.8);
         smaller.getContext('2d')!.drawImage(canvas, 0, 0, smaller.width, smaller.height);
         canvas = smaller;
-        blob = await toPng(canvas);
+        blob = await toPng(canvas); // NOSONAR: each step shrinks the last result until it fits
     }
     return { blob, url: URL.createObjectURL(blob), width: canvas.width, height: canvas.height };
 }

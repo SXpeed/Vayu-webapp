@@ -95,7 +95,7 @@ duration are billed separately from Worker invocations; check both.
 
 ```
 cd frontend
-npx tsc -p tsconfig.json --noEmit && npx tsc -p tsconfig.web.json --noEmit
+npx tsc -p tsconfig.worker.json --noEmit && npx tsc -p tsconfig.web.json --noEmit
 npm run build
 npm test                    # unit tests + local D1 integration test
 npm run test:smoke          # wrangler dev (local) + real hub: tickets, origin, invalidate, sync, revoke

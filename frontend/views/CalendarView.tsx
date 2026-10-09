@@ -29,6 +29,10 @@ const startOfDayMs = (d: Date): number => {
 };
 
 const startOfTodayMs = (): number => startOfDayMs(new Date());
+const eventCount = (n: number): string => {
+    if (n === 0) return '';
+    return n === 1 ? '1 event' : `${n} events`;
+};
 
 interface CalendarCell {
     date: Date;
@@ -70,7 +74,7 @@ const DayCell: React.FC<{
         cell.date.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' }),
         today ? 'today' : '',
         holiday ?? '',
-        dayEvents.length ? `${dayEvents.length} event${dayEvents.length === 1 ? '' : 's'}` : '',
+        eventCount(dayEvents.length),
     ].filter(Boolean).join(', ');
     return (
         <button
@@ -277,8 +281,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack, onUp
                         ))}
                     </div>
                     <div key={`${viewYear}-${viewMonth}`} className="cal-swap" style={{ '--cal-dir': direction } as React.CSSProperties}>
-                        {weeks.map((week, w) => (
-                            <div key={w} className="cal-week grid grid-cols-7 gap-1 py-1">
+                        {weeks.map(week => (
+                            <div key={dayKey(week[0].date)} className="cal-week grid grid-cols-7 gap-1 py-1">
                                 {week.map(cell => <DayCell key={dayKey(cell.date)} size="phone" {...cellProps(cell)} />)}
                             </div>
                         ))}
@@ -332,8 +336,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack, onUp
                                             <div key={i} className="text-center text-[8px] font-semibold text-[var(--neu-text-dim)] py-0.5">{d.charAt(0)}</div>
                                         ))}
                                     </div>
-                                    {miniCells.map((week, w) => (
-                                        <div key={w} className="cal-week grid grid-cols-7 gap-x-[2px] py-[2px]">
+                                    {miniCells.map(week => (
+                                        <div key={dayKey(week[0].date)} className="cal-week grid grid-cols-7 gap-x-[2px] py-[2px]">
                                             {week.map(cell => <DayCell key={dayKey(cell.date)} size="mini" hideOutside {...cellProps(cell)} />)}
                                         </div>
                                     ))}
@@ -398,17 +402,15 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack, onUp
                 smooth; Esc, backdrop click or ✕ zoom it back out. Day clicks
                 select the date (the right-hand day panel updates behind it). */}
             {openMonth !== null && (
-                <div
+                <dialog open
                     className={`fixed inset-0 z-[70] flex items-center justify-center p-4 lg:p-8 ${floatClosing ? 'cal-scrim-out' : 'cal-scrim-in'}`}
                     style={{ backgroundColor: 'rgba(15, 17, 22, 0.45)', backdropFilter: 'blur(5px)', WebkitBackdropFilter: 'blur(5px)' }}
-                    onClick={closeFloat}
-                    role="dialog"
                     aria-modal="true"
                     aria-label={`${MONTHS[openMonth]} ${viewYear}`}
                 >
+                    <button type="button" tabIndex={-1} aria-label="Close calendar" onClick={closeFloat} className="absolute inset-0 w-full h-full cursor-default" />
                     <div
-                        onClick={(e) => e.stopPropagation()}
-                        className={`neu-raised rounded-3xl w-[min(92vw,700px)] max-h-[86dvh] overflow-y-auto no-scrollbar p-5 ${floatClosing ? 'cal-float-out' : 'cal-float-in'}`}
+                        className={`relative neu-raised rounded-3xl w-[min(92vw,700px)] max-h-[86dvh] overflow-y-auto no-scrollbar p-5 ${floatClosing ? 'cal-float-out' : 'cal-float-in'}`}
                     >
                         <div className="flex items-center justify-between mb-3 px-1">
                             <p className="font-serif text-lg text-[var(--neu-text)]">
@@ -425,17 +427,17 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack, onUp
                         </div>
 
                         <div className="grid grid-cols-7 gap-1">
-                            {WEEKDAYS.map((d, i) => (
-                                <div key={i} className="text-center text-[10px] font-semibold text-[var(--neu-text-dim)] uppercase tracking-[0.12em] py-1">{d}</div>
+                            {WEEKDAYS.map(d => (
+                                <div key={d} className="text-center text-[10px] font-semibold text-[var(--neu-text-dim)] uppercase tracking-[0.12em] py-1">{d}</div>
                             ))}
                         </div>
-                        {buildMonthGrid(viewYear, openMonth).map((week, w) => (
-                            <div key={w} className="cal-week grid grid-cols-7 gap-1 py-1">
+                        {buildMonthGrid(viewYear, openMonth).map(week => (
+                            <div key={dayKey(week[0].date)} className="cal-week grid grid-cols-7 gap-1 py-1">
                                 {week.map(cell => <DayCell key={dayKey(cell.date)} size="large" hideOutside {...cellProps(cell)} />)}
                             </div>
                         ))}
                     </div>
-                </div>
+                </dialog>
             )}
         </PageRoot>
     );

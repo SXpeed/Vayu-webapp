@@ -76,7 +76,7 @@ export async function createInvitation(env: Env, db: D1Database, input: InviteIn
   if (!EMAIL_RE.test(email) || email.length > 254) throw new OrgError(400, 'invalid', 'Enter a valid email address.');
 
   const org = await db.prepare('SELECT name, status FROM organizations WHERE id = ?').bind(input.orgId).first<{ name: string; status: string }>();
-  if (!org || org.status !== 'active') throw new OrgError(409, 'org_not_active', 'This workspace is not active.');
+  if (org?.status !== 'active') throw new OrgError(409, 'org_not_active', 'This workspace is not active.');
   const member = await db.prepare(
     `SELECT 1 FROM memberships m JOIN "user" u ON u.id = m.user_id WHERE m.org_id = ? AND u.email = ? AND m.status = 'active'`,
   ).bind(input.orgId, email).first();

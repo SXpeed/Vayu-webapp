@@ -102,7 +102,8 @@ async function uploadDeviceOnlyInvoices(remote: Invoice[]): Promise<Invoice[]> {
     const uploaded: Invoice[] = [];
     for (const inv of await db.getInvoices()) {
         if (onServer.has(inv.id)) continue;
-        try { uploaded.push(await invoiceService.saveInvoice(inv)); } catch (err) { console.warn('Could not upload invoice', inv.invoiceNumber, err); }
+        // One at a time stays under the API's write rate limit.
+        try { uploaded.push(await invoiceService.saveInvoice(inv)); } catch (err) { console.warn('Could not upload invoice', inv.invoiceNumber, err); } // NOSONAR
     }
     return uploaded;
 }
@@ -161,8 +162,8 @@ export function useEntityData(
         }
         // Mirror the server list on the device for offline use.
         const onServer = new Set(remote.map(i => i.id));
-        for (const inv of await db.getInvoices()) if (!onServer.has(inv.id)) await db.deleteInvoice(inv.id);
-        for (const inv of remote) await db.saveInvoice(inv);
+        const stale = (await db.getInvoices()).filter(inv => !onServer.has(inv.id));
+        await Promise.all([...stale.map(inv => db.deleteInvoice(inv.id)), ...remote.map(inv => db.saveInvoice(inv))]);
         return remote.sort((a, b) => b.date - a.date);
     }, [authUserRef]);
 
@@ -242,7 +243,7 @@ export function useEntityData(
 
     /** Single-flight: a call while a load is running is a no-op. */
     const loadData = useCallback((isAuthenticated: boolean, selected?: readonly string[]): Promise<void> => {
-        if (inflight.current) return Promise.resolve();
+        if (inflight.current !== null) return Promise.resolve();
         const run = loadAll(isAuthenticated, selected).finally(() => { inflight.current = null; });
         inflight.current = run;
         return run;
@@ -251,7 +252,7 @@ export function useEntityData(
     /** A complete, failure-reporting reload. Waits out any load in flight so
      *  the copy it takes is newer than the sync boundary fetched before it. */
     const fullLoad = useCallback(async () => {
-        while (inflight.current) await inflight.current.catch(() => undefined);
+        while (inflight.current !== null) await inflight.current.catch(() => undefined); // NOSONAR: waits out each load in turn
         await loadData(true, ALL_DATASETS);
     }, [loadData]);
 
@@ -290,10 +291,10 @@ export function useEntityData(
         merge<Message>('message', 'messages', setAllMessages, byAsc<Message>('timestamp'), 'messages');
         merge<Invoice>('invoice', 'invoices', setInvoices, byDesc<Invoice>('date'));
         // Invoices keep their own device store (see syncInvoices).
-        for (const change of groups.get('invoice') ?? []) {
-            if (change.op === 'delete') await db.deleteInvoice(change.id);
-            else if (change.record) await db.saveInvoice(change.record as Invoice);
-        }
+        await Promise.all((groups.get('invoice') ?? []).map(change => {
+            if (change.op === 'delete') return db.deleteInvoice(change.id);
+            return change.record ? db.saveInvoice(change.record as Invoice) : Promise.resolve();
+        }));
     }, []);
 
     /** When everything was last brought up to date (delta pass or full load). */

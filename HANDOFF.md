@@ -14,7 +14,7 @@ Verification, all run locally:
 
 | Check | Result |
 |---|---|
-| `npx tsc -p tsconfig.json --noEmit` (worker) | clean |
+| `npx tsc -p tsconfig.worker.json --noEmit` (worker) | clean |
 | `npx tsc -p tsconfig.web.json --noEmit` (web) | clean |
 | `npm run build` (from `frontend/`) | clean |
 | `npx wrangler deploy --dry-run` (repo root) | bundles; all bindings resolve |

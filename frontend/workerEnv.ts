@@ -218,20 +218,28 @@ export function addD1Usage(request: Request, rowsRead: number, rowsWritten: numb
 export function trackedEnv(request: Request, env: Env): Env {
   const metrics = requestMetrics(request);
   /** Adds the wait for a promise to one of the timers. */
-  const timed = <T>(pending: Promise<T>, timer: 'd1Ms' | 'kvMs'): Promise<T> => {
+  const timed = async <T>(pending: Promise<T>, timer: 'd1Ms' | 'kvMs'): Promise<T> => {
     const startedAt = Date.now();
-    return pending.finally(() => { metrics[timer] += Date.now() - startedAt; });
-  };
-  const track = <T>(result: T | Promise<T>): T | Promise<T> => { // NOSONAR: hands back whatever D1 gave, a result or its promise
-    if (result && typeof (result as { then?: unknown }).then === 'function') {
-      metrics.d1Queries += 1;
-      return timed(result as Promise<T>, 'd1Ms').then(value => { track(value); return value; });
+    try {
+      return await pending;
+    } finally {
+      metrics[timer] += Date.now() - startedAt;
     }
-    const meta = (result as { meta?: { rows_read?: number; rows_written?: number } })?.meta;
+  };
+  /** Adds a finished D1 result's row counts. */
+  const countRows = (result: unknown): void => {
+    const meta = (result as { meta?: { rows_read?: number; rows_written?: number } } | null)?.meta;
     if (meta) {
       metrics.d1RowsRead += meta.rows_read ?? 0;
       metrics.d1RowsWritten += meta.rows_written ?? 0;
     }
+  };
+  const track = <T>(result: T | Promise<T>): T | Promise<T> => { // NOSONAR: hands back whatever D1 gave, a result or its promise
+    if (result && typeof (result as { then?: unknown }).then === 'function') {
+      metrics.d1Queries += 1;
+      return timed(result as Promise<T>, 'd1Ms').then(value => { countRows(value); return value; });
+    }
+    countRows(result);
     return result;
   };
   // batch() must receive the binding's own statement objects — D1 can't
@@ -260,13 +268,12 @@ export function trackedEnv(request: Request, env: Env): Env {
     // Which database this is, so per-database setup is remembered per database.
     [DB_KEY]: databaseKey(env.VAYU_DB),
     prepare: (query: string) => wrapStatement(env.VAYU_DB.prepare(query)),
-    batch: <T = unknown>(statements: D1PreparedStatement[]) => {
+    batch: async <T = unknown>(statements: D1PreparedStatement[]) => {
       const unwrapped = statements.map(stmt => originals.get(stmt) ?? stmt);
       metrics.d1Queries += 1;
-      return timed(env.VAYU_DB.batch(unwrapped), 'd1Ms').then(result => {
-        for (const r of result) track(r);
-        return result as D1Result<T>[];
-      });
+      const result = await timed(env.VAYU_DB.batch(unwrapped), 'd1Ms');
+      for (const r of result) countRows(r);
+      return result as D1Result<T>[];
     },
   } as unknown as D1Database;
   return { ...env, VAYU_KV: kv, VAYU_DB: db };

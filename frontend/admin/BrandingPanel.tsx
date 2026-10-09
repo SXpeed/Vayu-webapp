@@ -69,7 +69,7 @@ export const BrandingPanel: React.FC = () => {
         try { adopt(await api<Branding>('/admin/settings/branding')); }
         catch (e) { toast.error((e as ApiError).message); }
     }, []);
-    useEffect(() => { load(); }, [load]);
+    useEffect(() => { void load(); }, [load]);
 
     if (!saved) {
         return (
@@ -101,7 +101,7 @@ export const BrandingPanel: React.FC = () => {
                 adopt(b);
             }
             toast.success('Branding saved');
-            refreshBranding();
+            void refreshBranding();
         } catch (err) { toast.error((err as ApiError).message); } finally { setBusy(false); }
     };
 
@@ -129,7 +129,7 @@ export const BrandingPanel: React.FC = () => {
         setBusy(true);
         if (await applyLogo(staged)) {
             toast.success('New logo applied');
-            refreshBranding();
+            void refreshBranding();
         }
         setBusy(false);
     };
@@ -170,7 +170,7 @@ export const BrandingPanel: React.FC = () => {
                             className="hidden"
                             onChange={e => {
                                 const f = e.target.files?.[0];
-                                if (f) stage(f);
+                                if (f) void stage(f);
                                 // Cleared either way, so choosing the same file again still fires.
                                 e.target.value = '';
                             }}

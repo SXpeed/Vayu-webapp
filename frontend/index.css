@@ -37,6 +37,24 @@
         caret-color: transparent;
     }
 
+    /* Overlays are <dialog open>: drop the browser's centring, sizing and
+     * black-on-white so their classes place them exactly as a <div>. */
+    :where(dialog) {
+        position: static;
+        inset: auto;
+        width: auto;
+        height: auto;
+        max-width: none;
+        max-height: none;
+        color: inherit;
+        background: transparent;
+    }
+
+    /* Button rows are <fieldset>s; let them shrink like any box. */
+    :where(fieldset) {
+        min-inline-size: 0;
+    }
+
     input,
     textarea,
     select,
@@ -256,7 +274,7 @@ html.dark {
  *    Fields without .neu-field get the same 1px ink outline, flush.
  *  --ink-focus is the text colour at 58%: about 3:1 against the surface in
  *  both themes, so it stays a clear indicator without colour. */
-:root {
+:root { /* NOSONAR: this section's own tokens, kept beside it */
     --ink-focus: color-mix(in srgb, var(--neu-text) 58%, transparent);
     --ink-hover: color-mix(in srgb, var(--neu-text) 16%, transparent);
     /* Motion: micro interactions, then panels / sections. */
@@ -466,7 +484,7 @@ body {
  * utility placed alongside (rounded-full, py-3, text-base …) still wins.
  * ══════════════════════════════════════════════════════════════════════════ */
 
-:root {
+:root { /* NOSONAR: this section's own tokens, kept beside it */
     --neu-text: #1f2430;
     --neu-text-dim: #5a6376;
     --neu-line: rgba(163, 177, 198, 0.35);
@@ -474,7 +492,7 @@ body {
     --neu-radius: 1rem;
 }
 
-html.dark {
+html.dark { /* NOSONAR: this section's own tokens, kept beside it */
     --neu-text: #eef1f6;
     --neu-text-dim: #a5aec1;
     --neu-line: rgba(255, 255, 255, 0.06);
@@ -1366,7 +1384,7 @@ html.kb-open .neu-dock-scrim {
  * week reads at a glance; the store's name is always printed too, so colour
  * never carries the meaning alone. Leave is warm gold, a day off neutral, an
  * open shift a dashed outline. */
-:root {
+:root { /* NOSONAR: this section's own tokens, kept beside it */
     --st-0-bg: #dde9de; --st-0-ink: #2c5638; --st-0-edge: #b5ceb9;
     --st-1-bg: #dce4ee; --st-1-ink: #2a4a6f; --st-1-edge: #b4c5da;
     --st-2-bg: #efe0d6; --st-2-ink: #6e3d22; --st-2-edge: #dcbda8;
@@ -1378,7 +1396,7 @@ html.kb-open .neu-dock-scrim {
     --sr-open: #875a00; --sr-open-bg: #f7ecd2;
     --sr-bad: #a8322a; --sr-bad-bg: #f6dfdb;
 }
-html.dark {
+html.dark { /* NOSONAR: this section's own tokens, kept beside it */
     --st-0-bg: #2b3a30; --st-0-ink: #bddcc3; --st-0-edge: #3e5646;
     --st-1-bg: #28323f; --st-1-ink: #bcd0ea; --st-1-edge: #3c4b5f;
     --st-2-bg: #3d2f27; --st-2-ink: #ecc6ad; --st-2-edge: #5a4436;

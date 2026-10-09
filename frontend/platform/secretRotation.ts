@@ -13,6 +13,7 @@
 // before it is removed from PAYMENT_SECRETS_KEYS / PAYMENT_SECRETS_KEY.
 
 import type { Env } from '../workerEnv';
+import { text } from '../rows';
 import { auditStmt } from './audit';
 import type { Actor } from './orgs';
 import { decryptSecret, encryptSecret, envelopeKid, keyRing, reportDecryptFailure } from './secrets';
@@ -58,7 +59,7 @@ const saveStateStmt = (db: D1Database, s: RotationState, by: string | null) => d
    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
 ).bind(STATE_KEY, JSON.stringify(s), s.updatedAt, by);
 
-const reasonOf = (e: unknown): string => (e instanceof Error && 'reason' in e ? String((e as { reason: unknown }).reason) : 'error');
+const reasonOf = (e: unknown): string => (e instanceof Error && 'reason' in e ? text((e as { reason: unknown }).reason) || 'error' : 'error');
 
 /**
  * One value under the target key: the new envelope, or null when it already
@@ -75,7 +76,7 @@ async function reencrypt(env: Env, context: string, envelope: string, targetKid:
 
 interface OrgRow { org_id: string; provider: string; key_secret_enc: string; webhook_secret_enc: string | null; webhook_secret_prev_enc: string | null }
 
-const isMissingColumn = (e: unknown) => /no such column/i.test(String((e as Error)?.message ?? e));
+const isMissingColumn = (e: unknown) => /no such column/i.test(e instanceof Error ? e.message : text(e));
 
 /**
  * Integration rows with every encrypted field. Before migration 0010 is
@@ -92,6 +93,8 @@ async function orgRows(db: D1Database, tail: string, binds: unknown[]): Promise<
 }
 
 /** Re-encrypts one integration row's fields, each with its own conditional update. */
+// Rotation goes one value at a time, each with its own conditional update, so a
+// failure part-way leaves every value either old or new and the cursor exact.
 async function rotateOrgRow(env: Env, db: D1Database, row: OrgRow, state: RotationState): Promise<void> {
   for (const field of ORG_FIELDS) {
     const current = row[field];
@@ -99,14 +102,14 @@ async function rotateOrgRow(env: Env, db: D1Database, row: OrgRow, state: Rotati
     const context = orgContext(row.org_id, row.provider, field);
     let next: string | null;
     try {
-      next = await reencrypt(env, context, current, state.targetKid);
+      next = await reencrypt(env, context, current, state.targetKid); // NOSONAR
     } catch (e) {
       reportDecryptFailure(context, e, 'rotation');
       state.failures.push({ target: row.org_id, field, reason: reasonOf(e) });
       continue;
     }
     if (!next) continue;
-    const res = await db.prepare(`UPDATE org_payment_integrations SET ${field} = ? WHERE org_id = ? AND provider = ? AND ${field} = ?`)
+    const res = await db.prepare(`UPDATE org_payment_integrations SET ${field} = ? WHERE org_id = ? AND provider = ? AND ${field} = ?`) // NOSONAR
       .bind(next, row.org_id, row.provider, current).run();
     if ((res.meta?.changes ?? 0) > 0) state.reencrypted++;
     else state.skippedChanged++;
@@ -124,7 +127,7 @@ async function rotateBilling(env: Env, db: D1Database, state: RotationState): Pr
     const current = account[field];
     if (typeof current !== 'string' || !current) continue;
     try {
-      const next = await reencrypt(env, billingContext(field), current, state.targetKid);
+      const next = await reencrypt(env, billingContext(field), current, state.targetKid); // NOSONAR: one value at a time, as above
       if (next) { account[field] = next; changed++; }
     } catch (e) {
       reportDecryptFailure(billingContext(field), e, 'rotation');
@@ -172,7 +175,7 @@ export async function runRotationBatch(env: Env, db: D1Database, actor: Actor | 
     }
     const results = await orgRows(db, 'WHERE org_id > ? ORDER BY org_id, provider LIMIT ?', [state.cursor, batch]);
     for (const row of results) {
-      await rotateOrgRow(env, db, row, state);
+      await rotateOrgRow(env, db, row, state); // NOSONAR: the cursor moves only past rows that are done
       state.cursor = row.org_id;
     }
     if (results.length < batch) { state.running = false; state.finishedAt = Date.now(); }
@@ -222,11 +225,11 @@ async function billingUsage(env: Env, db: D1Database, usage: KeyUsage, verify: b
   if (!billing) return;
   let account: Record<string, unknown> = {};
   try { account = JSON.parse(billing.value) as Record<string, unknown>; } catch { /* not an account */ }
-  for (const field of BILLING_FIELDS) {
+  await Promise.all(BILLING_FIELDS.map(field => {
     const value = typeof account[field] === 'string' ? account[field] as string : null;
     count(usage.byKid, value);
-    if (verify) await checkReadable(env, usage.unreadable, 'platform-billing', field, billingContext(field), value);
-  }
+    return verify ? checkReadable(env, usage.unreadable, 'platform-billing', field, billingContext(field), value) : Promise.resolve();
+  }));
 }
 
 /** Which keys the stored values use, and (verify) whether each still decrypts. Never returns a secret. */
@@ -234,12 +237,10 @@ export async function keyUsage(env: Env, db: D1Database, verify: boolean): Promi
   const { keys, active } = keyRing(env);
   const usage: KeyUsage = { active, configured: [...keys.keys()], byKid: {}, unreadable: [], missingKeys: [], rotation: await readState(db) };
   const results = await orgRows(db, '', []);
-  for (const row of results) {
-    for (const field of ORG_FIELDS) {
-      count(usage.byKid, row[field]);
-      if (verify) await checkReadable(env, usage.unreadable, row.org_id, field, orgContext(row.org_id, row.provider, field), row[field]);
-    }
-  }
+  await Promise.all(results.flatMap(row => ORG_FIELDS.map(field => {
+    count(usage.byKid, row[field]);
+    return verify ? checkReadable(env, usage.unreadable, row.org_id, field, orgContext(row.org_id, row.provider, field), row[field]) : Promise.resolve();
+  })));
   await billingUsage(env, db, usage, verify);
   usage.missingKeys = Object.keys(usage.byKid).filter(k => k !== 'unknown' && !keys.has(k));
   return usage;

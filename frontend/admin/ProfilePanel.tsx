@@ -44,7 +44,7 @@ export const ProfilePanel: React.FC<{
             setTwoFactor(!!(sess.data?.user as { twoFactorEnabled?: boolean } | undefined)?.twoFactorEnabled || !!acc.user.two_factor);
         } catch (e) { toast.error((e as ApiError).message); }
     }, [me.userId]);
-    useEffect(() => { load(); }, [load]);
+    useEffect(() => { void load(); }, [load]);
 
     if (!account) {
         return (
@@ -90,7 +90,7 @@ export const ProfilePanel: React.FC<{
                     <DevicesCard sessions={account.sessions} currentId={currentSession} reauth={reauth} onChanged={load} />
                 </div>
                 <div className="space-y-6 min-w-0">
-                    <TwoFactorCard on={twoFactor} dialogs={dialogs} onChanged={() => { load(); onSecurityChange(); }} />
+                    <TwoFactorCard on={twoFactor} dialogs={dialogs} onChanged={() => { void load(); onSecurityChange(); }} />
                     <AppearanceCard />
                     <Button variant="danger" block onClick={onSignOut} icon={<LogOut size={16} />} className="uppercase tracking-wider">
                         Sign out
@@ -146,6 +146,7 @@ const EmailCard: React.FC<{ email: string; verified: boolean; reauth: Reauth }> 
     const [next, setNext] = useState('');
     const [busy, setBusy] = useState(false);
     const [sent, setSent] = useState('');
+    const linkTo = verified ? `${email} to approve, then to the new address` : 'the new address';
 
     const send = async (e: React.SubmitEvent<HTMLFormElement>) => {
         e.preventDefault();
@@ -154,7 +155,7 @@ const EmailCard: React.FC<{ email: string; verified: boolean; reauth: Reauth }> 
         // Older than 30 minutes: the shared "Confirm it's you" sign-in, then again.
         if (result.needsPassword && await reauth()) result = await startEmailChange(authClient, { email, verified }, next, '');
         setBusy(false);
-        if (!result.ok) { if (!result.needsPassword) toast.error(result.message); return; }
+        if (!result.ok) { if (!result.needsPassword) { toast.error(result.message); } return; }
         setSent(result.message);
         setNext('');
     };
@@ -162,10 +163,10 @@ const EmailCard: React.FC<{ email: string; verified: boolean; reauth: Reauth }> 
     return (
         <Section title="Sign-in email" description={verified ? 'Confirmed.' : 'Not confirmed yet.'} actions={<AtSign size={16} className="ac-faint" />}>
             <form onSubmit={send} className="space-y-4">
-                <Field label="New email address" htmlFor="pf-email" hint={`A link goes to ${verified ? `${email} to approve, then to the new address` : 'the new address'} to confirm. Your password and two-factor stay as they are.`}>
+                <Field label="New email address" htmlFor="pf-email" hint={`A link goes to ${linkTo} to confirm. Your password and two-factor stay as they are.`}>
                     <Input id="pf-email" type="email" autoComplete="off" value={next} onChange={e => setNext(e.target.value)} />
                 </Field>
-                {sent && <p role="status" className="text-[12px] ac-muted">{sent}</p>}
+                {sent && <output className="block text-[12px] ac-muted">{sent}</output>}
                 <div className="flex justify-end">
                     <Button type="submit" variant="primary" disabled={busy || !next.trim()}>{busy ? 'Sending…' : 'Send confirmation'}</Button>
                 </div>

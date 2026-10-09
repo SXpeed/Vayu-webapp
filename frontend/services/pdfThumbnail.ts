@@ -89,7 +89,9 @@ export async function pdfFirstPage(pdfUrl: string): Promise<Blob | null> {
                 return null;
             })
             .then(async blob => {
-                if (blob) await localforage.setItem(key, blob).catch(() => undefined);
+                if (blob) {
+                    try { await localforage.setItem(key, blob); } catch { /* storage full: draw it again next time */ }
+                }
                 return blob;
             })
             .finally(() => inFlight.delete(pdfUrl));

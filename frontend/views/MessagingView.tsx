@@ -14,14 +14,13 @@ import { CountBadge, useInbox } from '../hooks/useInbox';
 import { chatDayLabel, withDayDividers } from './chat/DayDivider';
 import { ImageViewer, type ViewedImage } from './chat/ImageViewer';
 import { Holdable, MessageActionMenu, MessageInfoSheet, ReactionChips, ReactionsSheet, ReadTicks } from './chat/MessageReactions';
-import { ChatComposer, MessageBubble, messageTime } from './chat/MessageParts';
+import { ChatComposer, MessageBubble, messagePreview, messageTime } from './chat/MessageParts';
 
 interface MessagingViewProps {
     conversations: Conversation[];
     messages: Message[];
     teamMembers: UserProfile[];
     currentUserId: string;
-    currentUserName: string;
     /** Admins can create private rooms (closed groups only their members see). */
     isAdmin?: boolean;
     onSendMessage: (conversationId: string, text: string, tags: MessageTag[], replyTo?: MessageReplyTo, attachment?: MessageAttachment) => void;
@@ -43,7 +42,7 @@ interface MessagingViewProps {
     onDeleteConversation?: (conversationId: string) => void;
 }
 
-export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, messages, teamMembers, currentUserId, currentUserName, isAdmin = false, onSendMessage, onRetryMessage, onReactToMessage, onMarkMessagesRead, openConversationId, onOpenedConversation, onCreateConversation, onCreateGroup, onUpdateConversationDetails, onUpdateGroup, onTogglePinConversation, onToggleArchiveConversation, onDeleteConversation }) => {
+export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, messages, teamMembers, currentUserId, isAdmin = false, onSendMessage, onRetryMessage, onReactToMessage, onMarkMessagesRead, openConversationId, onOpenedConversation, onCreateConversation, onCreateGroup, onUpdateConversationDetails, onUpdateGroup, onTogglePinConversation, onToggleArchiveConversation, onDeleteConversation }) => {
     // Desktop shows the thread inline beside the list; phones open it as a
     // full-screen overlay. That's a choice of component, not just of styling.
     const isDesktop = useIsDesktop();
@@ -398,7 +397,6 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                             messages={messages.filter(m => m.conversationId === liveConv.id)}
                             resolveName={resolveName}
                             currentUserId={currentUserId}
-                            currentUserName={currentUserName}
                             otherParticipant={getOtherParticipant(liveConv)}
                             isOnline={getMemberOnlineStatus(getOtherParticipant(liveConv).id)}
                             onClose={handleCloseModal}
@@ -455,7 +453,6 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                             messages={messages.filter(m => m.conversationId === liveConv.id)}
                             resolveName={resolveName}
                             currentUserId={currentUserId}
-                            currentUserName={currentUserName}
                             otherParticipant={getOtherParticipant(liveConv)}
                             isOnline={getMemberOnlineStatus(getOtherParticipant(liveConv).id)}
                             onClose={handleCloseModal}
@@ -489,7 +486,6 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                 <FullScreenPortal>
                     <NewChatModal
                         teamMembers={teamMembers.filter(m => m.id !== currentUserId)}
-                        existingConvIds={conversations.flatMap(c => c.participantIds)}
                         onClose={() => setShowNewChat(false)}
                         onSelectMember={async (memberId, details) => {
                             try {
@@ -532,7 +528,6 @@ interface ChatDetailModalProps {
     messages: Message[];
     resolveName: (id: string | undefined, storedName?: string) => string;
     currentUserId: string;
-    currentUserName: string;
     otherParticipant: { name: string; id: string };
     isOnline: boolean;
     onClose: () => void;
@@ -873,7 +868,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                     myReaction={messages.find(m => m.id === menu.msg.id)?.reactions?.[currentUserId]}
                     canReact={isMember && !!onReactToMessage}
                     hasText={!!menu.msg.text}
-                    preview={menu.msg.text || (menu.msg.attachment ? (menu.msg.attachment.type === 'image' ? '📷 Photo' : `📎 ${menu.msg.attachment.name}`) : '')}
+                    preview={messagePreview(menu.msg)}
                     onReact={emoji => onReactToMessage?.(menu.msg.id, emoji)}
                     onReply={() => setReplyingTo({ id: menu.msg.id, senderName: resolveName(menu.msg.senderId, menu.msg.senderName), text: menu.msg.text || (menu.msg.attachment ? menu.msg.attachment.name : '') })}
                     onCopy={() => copyText(menu.msg.text)}
@@ -1040,7 +1035,6 @@ const EditGroupModal: React.FC<EditGroupModalProps> = ({ conversation, teamMembe
 };
 interface NewChatModalProps {
     teamMembers: UserProfile[];
-    existingConvIds: string[];
     onClose: () => void;
     onSelectMember: (memberId: string, details?: ConversationDetails) => void;
     onCreateGroup: (participantIds: string[], groupName: string, details: ConversationDetails, isPrivate: boolean) => void;

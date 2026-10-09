@@ -9,6 +9,7 @@
 // id, so retries and replays are no-ops.
 
 import type { Env } from '../workerEnv';
+import { text } from '../rows';
 import { auditStmt } from './audit';
 import { OrgError, type Actor } from './orgs';
 import { decryptSecret, encryptSecret, maskKeyId, secretsConfigured, tryDecryptSecret } from './secrets';
@@ -43,7 +44,7 @@ interface IntegrationRow {
   allow_test_links?: number;
 }
 
-async function row(db: D1Database, orgId: string): Promise<IntegrationRow | null> {
+function row(db: D1Database, orgId: string): Promise<IntegrationRow | null> {
   return db.prepare('SELECT * FROM org_payment_integrations WHERE org_id = ? AND provider = ?')
     .bind(orgId, PROVIDER).first<IntegrationRow>();
 }
@@ -262,7 +263,7 @@ function hex(bytes: ArrayBuffer): string {
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  for (let i = 0; i < a.length; i++) diff |= (a.codePointAt(i) ?? 0) ^ (b.codePointAt(i) ?? 0);
   return diff === 0;
 }
 
@@ -301,7 +302,7 @@ export async function receiveRazorpayWebhook(env: Env, db: D1Database, orgId: st
 
   let event: unknown;
   try { event = JSON.parse(raw); } catch { return { status: 400, body: { error: 'Invalid JSON' } }; }
-  const eventType = String((event as { event?: unknown })?.event ?? '') || null;
+  const eventType = text((event as { event?: unknown })?.event) || null;
 
   const result = await db.prepare(
     `INSERT INTO payment_webhook_events (org_id, provider, event_id, event_type, received_at, payload)

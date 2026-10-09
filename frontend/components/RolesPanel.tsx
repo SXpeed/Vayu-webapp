@@ -38,7 +38,7 @@ export const RolesPanel: React.FC = () => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     // The role being edited: an existing id, or 'new'.
-    const [selectedId, setSelectedId] = useState<string | 'new' | null>(null);
+    const [selectedId, setSelectedId] = useState<string | null>(null); // a role id, or 'new' while adding one
     const [draftName, setDraftName] = useState('');
     const [draft, setDraft] = useState<Permissions>(fill('none'));
     const [saving, setSaving] = useState(false);

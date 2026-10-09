@@ -72,10 +72,11 @@ async function download(cache: Cache, addresses: string[], onEach?: () => void):
     const worker = async () => {
         while (next < addresses.length) {
             const address = addresses[next++];
+            // Each worker takes one address at a time; several workers run side by side.
             try {
-                if (!(await cache.match(address))) {
-                    const res = await fetch(address, { credentials: 'same-origin' });
-                    if (res.ok && res.headers.get('X-Preview-Stand-In') !== '1') await cache.put(address, res);
+                if (!(await cache.match(address))) { // NOSONAR
+                    const res = await fetch(address, { credentials: 'same-origin' }); // NOSONAR
+                    if (res.ok && res.headers.get('X-Preview-Stand-In') !== '1') await cache.put(address, res); // NOSONAR
                     else if (!res.ok) failed++;
                 }
             } catch {
@@ -116,7 +117,7 @@ export const photoStore = {
     /** Downloads every preview not yet on the device (once per start; skipped on mobile data). */
     downloadPreviews(): Promise<void> {
         if (!hasCaches() || !navigator.onLine || !goodForBackgroundDownloads()) return Promise.resolve();
-        if (previewRun) return previewRun;
+        if (previewRun !== null) return previewRun;
         previewRun = (async () => {
             askToKeepStorage();
             const cache = await caches.open(PREVIEW_CACHE);

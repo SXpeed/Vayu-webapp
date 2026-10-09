@@ -10,7 +10,7 @@
 import { linkPendingInquiries } from './contactStore';
 import { notifyHub } from './deltaSync';
 import { ADMIN_ROLE_ID, atLeast, withoutSections } from './permissions';
-import { err, json, runSetupOnce } from './rows';
+import { err, json, runSetupOnce, text } from './rows';
 import { getRoles, getSession, permissionsFor } from './workerRoles';
 import type { Ctx, Env, SessionData } from './workerEnv';
 
@@ -87,7 +87,7 @@ export async function handleInbox(ctx: Ctx): Promise<Response> {
   ]);
   const notifications = (notes.results as Record<string, unknown>[]).map(row => {
     let link: unknown = {};
-    try { link = JSON.parse(String(row.link)); } catch { /* malformed: no link */ }
+    try { link = JSON.parse(text(row.link) || 'null'); } catch { /* malformed: no link */ }
     return { id: row.id, groupKey: row.group_key, title: row.title, body: row.body, link, createdAt: row.created_at };
   });
   const unreadInquiryIds = await mayViewInquiries(ctx, session)

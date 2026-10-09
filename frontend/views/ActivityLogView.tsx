@@ -68,7 +68,7 @@ export function ActivityLogView({ onBack, embedded = false }: ActivityLogViewPro
     }, []);
 
     useEffect(() => {
-        loadLogs();
+        void loadLogs();
     }, [loadLogs]);
 
     // Derive unique action types for the filter dropdown

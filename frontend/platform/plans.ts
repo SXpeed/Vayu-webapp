@@ -9,6 +9,7 @@
 //  - A downgrade never deletes data. An organization over its new limit keeps
 //    everything and is simply blocked from adding more until it is under.
 
+import { text } from '../rows';
 import { auditStmt } from './audit';
 import { OrgError, type Actor } from './orgs';
 import { FEATURE_FIELDS, LIMIT_FIELDS, MODULE_FIELDS } from './planFields';
@@ -249,8 +250,8 @@ export async function publicPlans(db: D1Database) {
   const offers = await runningOffers(db);
   // Only what a price card needs; internal ids and notes stay inside.
   return (results as Record<string, unknown>[]).map(r => {
-    const offer = offers.get(String(r.id));
-    const limits = JSON.parse(String(r.limits)) as PlanLimits;
+    const offer = offers.get(text(r.id));
+    const limits = JSON.parse(text(r.limits)) as PlanLimits;
     return {
       key: r.key, name: r.name, description: r.description, billingType: r.billing_type,
       currency: r.currency, priceMonthly: r.price_monthly, priceAnnual: r.price_annual, trialDays: r.trial_days,

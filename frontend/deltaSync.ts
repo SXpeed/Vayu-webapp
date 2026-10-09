@@ -22,7 +22,7 @@
 import {
   err, json, runSetupOnce, rowToArtwork, rowToAttendance, rowToCatalog,
   rowToCollection, rowToContact, rowToConversation, rowToEvent, rowToInquiry,
-  rowToInquiryMessage, rowToInvoice, rowToMessage, rowToStore,
+  rowToInquiryMessage, rowToInvoice, rowToMessage, rowToStore, text,
 } from './rows';
 import { permissionsForRoles, readableEntities, scopeAllows, type SyncEntity } from './entityAccess';
 import { ADMIN_ROLE_ID, atLeast } from './permissions';
@@ -311,7 +311,7 @@ export async function handleSync(ctx: Ctx): Promise<Response> {
     (!SCOPED_ENTITIES.has(row.entity) || scopeAllows(row.scope, session.userId, isAdmin)));
 
   const changes = await attachRecords(ctx, visible);
-  const lastSeq = rows.length > 0 ? rows[rows.length - 1].seq : cursor;
+  const lastSeq = rows.at(-1)?.seq ?? cursor;
   return json({
     mode: 'incremental',
     cursor: lastSeq,
@@ -330,9 +330,9 @@ export async function handleSync(ctx: Ctx): Promise<Response> {
 async function visibleRows(ctx: Ctx, session: SessionData, entity: SyncEntity, rows: Record<string, unknown>[], isAdmin: boolean): Promise<Record<string, unknown>[]> {
   if (entity === 'conversation') return rows.filter(row => mayUseConversation(session.userId, isAdmin, roomAccessOf(row)));
   if (entity !== 'message') return rows;
-  const rooms = await conversationMemberships(ctx, rows.map(r => String(r.conversation_id)));
+  const rooms = await conversationMemberships(ctx, rows.map(r => text(r.conversation_id)));
   return rows.filter(row => {
-    const room = rooms.get(String(row.conversation_id));
+    const room = rooms.get(text(row.conversation_id));
     return !!room && mayUseConversation(session.userId, isAdmin, room);
   });
 }
@@ -373,7 +373,7 @@ async function snapshot(
   let rows = (result.results || []) as Record<string, unknown>[];
   const hasMore = rows.length > limit;
   rows = rows.slice(0, limit);
-  const after = rows.length > 0 ? String(rows[rows.length - 1].id) : afterId;
+  const after = rows.length > 0 ? text(rows.at(-1)?.id) : afterId;
 
   // afterId always advances past every raw row so a filtered row can't stall the pagination.
   const map = ENTITY_MAPPERS[entity];
@@ -386,11 +386,11 @@ async function conversationMemberships(ctx: Ctx, conversationIds: string[]): Pro
   const map = new Map<string, RoomAccess>();
   const unique = [...new Set(conversationIds)].filter(Boolean);
   if (unique.length === 0) return map;
-  for (const chunk of chunks(unique, MAX_BOUND_PARAMS)) {
-    // SELECT *: works whether or not the private-room columns exist yet.
-    const res = await ctx.env.VAYU_DB.prepare(
-      `SELECT * FROM conversations WHERE id IN (${chunk.map(() => '?').join(',')})`,
-    ).bind(...chunk).all<Record<string, unknown>>();
+  // SELECT *: works whether or not the private-room columns exist yet.
+  const pages = await Promise.all(chunks(unique, MAX_BOUND_PARAMS).map(chunk => ctx.env.VAYU_DB.prepare(
+    `SELECT * FROM conversations WHERE id IN (${chunk.map(() => '?').join(',')})`,
+  ).bind(...chunk).all<Record<string, unknown>>()));
+  for (const res of pages) {
     addD1Usage(ctx.request, res.meta?.rows_read ?? 0, 0);
     for (const row of res.results || []) map.set(String(row.id), roomAccessOf(row));
   }
@@ -455,17 +455,16 @@ async function attachRecords(ctx: Ctx, rows: ChangeRow[]): Promise<SyncChange[]>
   }
 
   const records = new Map<string, unknown>();
-  for (const [entity, ids] of idsByEntity) {
-    if (!(entity in ENTITY_TABLES)) continue;
-    const table = ENTITY_TABLES[entity as SyncEntity];
-    const map = ENTITY_MAPPERS[entity as SyncEntity];
-    for (const chunk of chunks([...new Set(ids)], MAX_BOUND_PARAMS)) {
-      const res = await ctx.env.VAYU_DB.prepare(
-        `SELECT * FROM ${table} WHERE id IN (${chunk.map(() => '?').join(',')})`,
-      ).bind(...chunk).all<Record<string, unknown>>();
-      addD1Usage(ctx.request, res.meta?.rows_read ?? 0, 0);
-      for (const row of res.results || []) records.set(`${entity}|${String(row.id)}`, map(row));
-    }
+  const reads = [...idsByEntity].filter(([entity]) => entity in ENTITY_TABLES).flatMap(([entity, ids]) =>
+    chunks([...new Set(ids)], MAX_BOUND_PARAMS).map(async chunk => ({
+      entity: entity as SyncEntity,
+      res: await ctx.env.VAYU_DB.prepare(
+        `SELECT * FROM ${ENTITY_TABLES[entity as SyncEntity]} WHERE id IN (${chunk.map(() => '?').join(',')})`,
+      ).bind(...chunk).all<Record<string, unknown>>(),
+    })));
+  for (const { entity, res } of await Promise.all(reads)) {
+    addD1Usage(ctx.request, res.meta?.rows_read ?? 0, 0);
+    for (const row of res.results || []) records.set(`${entity}|${String(row.id)}`, ENTITY_MAPPERS[entity](row));
   }
 
   return rows.map(row => {

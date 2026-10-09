@@ -25,6 +25,7 @@ import { getEffectiveLoginMethods } from './platform/settings';
 import { resolveEntitlements } from './platform/plans';
 import { fromTrustedPage } from './sessionCookies';
 import { orgDatabase, orgFilePrefix, orgKvPrefix, prefixedBucket, prefixedKv } from './orgStorage';
+import { text } from './rows';
 import type { Env, SessionData } from './workerEnv';
 import type { SectionId } from './permissions';
 import type { StoredUser } from './workerRoles';
@@ -316,7 +317,7 @@ export async function orgMemberRecords(env: Env): Promise<StoredUser[]> {
 
 /** D1 keeps Better Auth's dates as ISO text. */
 const sessionTime = (value: unknown): number => {
-  const ms = typeof value === 'number' ? value : Date.parse(String(value ?? ''));
+  const ms = typeof value === 'number' ? value : Date.parse(text(value));
   return Number.isFinite(ms) ? ms : 0;
 };
 

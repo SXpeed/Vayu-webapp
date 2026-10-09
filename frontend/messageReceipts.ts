@@ -29,7 +29,7 @@ export function ensureMessageColumns(db: D1Database): Promise<void> {
     for (const column of ['read_by', 'reactions']) {
       if (existing.has(column)) continue;
       try {
-        await db.prepare(`ALTER TABLE messages ADD COLUMN ${column} TEXT`).run();
+        await db.prepare(`ALTER TABLE messages ADD COLUMN ${column} TEXT`).run(); // NOSONAR: schema steps run one at a time
       } catch (e) {
         // Another isolate may have added it at the same moment.
         if (!/duplicate column/i.test((e as Error).message)) throw e;

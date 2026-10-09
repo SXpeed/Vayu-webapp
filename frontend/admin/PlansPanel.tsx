@@ -77,7 +77,7 @@ function draftFlags(schema: PlanSchema, l: Limits | null): Record<string, boolea
 }
 
 /** Rupees as typed (commas allowed) in paise. */
-const toMinor = (s: string) => Math.round((Number(s.replace(/,/g, '')) || 0) * 100);
+const toMinor = (s: string) => Math.round((Number(s.replaceAll(',', '')) || 0) * 100);
 
 /** The version to save: prices only for paid plans, trial days for trial and paid ones. */
 function versionBody(schema: PlanSchema, f: { billing: string; monthly: string; annual: string; trial: string; notes: string }, limits: Record<string, LimitDraft>, flags: Record<string, boolean>) {

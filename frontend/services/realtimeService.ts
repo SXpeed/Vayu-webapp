@@ -66,7 +66,7 @@ class RealtimeService {
     private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     private reauthTimer: ReturnType<typeof setTimeout> | undefined;
     private keepaliveTimer: ReturnType<typeof setInterval> | undefined;
-    private listeners = new Set<Listener>();
+    private readonly listeners = new Set<Listener>();
     private isConnected = false;
 
     /** True when this browser has a live socket (in this tab or the leader tab). */
@@ -171,7 +171,8 @@ class RealtimeService {
     }
 
     /** A fresh single-use ticket; every connect and re-auth needs its own. */
-    private async fetchTicket(): Promise<string | 'disabled' | 'unauthorized' | null> {
+    /** A ticket, or 'disabled' / 'unauthorized', or null when it couldn't be fetched. */
+    private async fetchTicket(): Promise<string | null> {
         try {
             const res = await fetch(`${apiBase()}/realtime/ticket`, {
                 method: 'POST',

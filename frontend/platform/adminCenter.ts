@@ -8,6 +8,7 @@
 
 import { hashPassword } from 'better-auth/crypto';
 import type { Env } from '../workerEnv';
+import { text } from '../rows';
 import { auditStmt } from './audit';
 import { googleConfigured, getEffectiveLoginMethods } from './settings';
 import { OrgError, type Actor } from './orgs';
@@ -206,7 +207,7 @@ export async function updateAdmin(db: D1Database, userId: string, body: Record<s
   if (userId === actor.userId) throw new OrgError(409, 'self', 'You cannot change your own administrator access.');
   const current = await db.prepare('SELECT role, status FROM provider_admins WHERE user_id = ?').bind(userId).first<{ role: string; status: string }>();
   if (!current) throw new OrgError(404, 'not_found', 'Not an administrator.');
-  const validRole = ADMIN_ROLES.includes(body.role as never) ? String(body.role) : null;
+  const validRole = ADMIN_ROLES.includes(body.role as never) ? text(body.role) : null;
   const validStatus = body.status === 'disabled' || body.status === 'active' ? body.status : null;
   const role = body.role === undefined ? current.role : validRole;
   const status = body.status === undefined ? current.status : validStatus;

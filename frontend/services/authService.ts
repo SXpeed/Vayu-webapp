@@ -66,7 +66,7 @@ const SYSTEMS: [RegExp, string][] = [[/iPhone/, 'iPhone'], [/iPad/, 'iPad'], [/A
 
 /** "Chrome on Windows" from a browser's user agent string. */
 function deviceLabel(userAgent: string | null | undefined): string {
-  const ua = userAgent ?? '';
+  const ua = typeof userAgent === 'string' ? userAgent : '';
   const pick = (list: [RegExp, string][]) => list.find(([pattern]) => pattern.test(ua))?.[1];
   const system = pick(SYSTEMS);
   // The installed iPhone/iPad app reports WebKit without a browser name.

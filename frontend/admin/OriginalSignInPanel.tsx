@@ -23,7 +23,7 @@ export const OriginalSignInPanel: React.FC<{ reauth: Reauth }> = ({ reauth }) =>
     const load = useCallback(async () => {
         try { setStatus(await api<Status>('/admin/settings/original-signin')); } catch (e) { toast.error((e as ApiError).message); }
     }, []);
-    useEffect(() => { load(); }, [load]);
+    useEffect(() => { void load(); }, [load]);
 
     if (!status) return <Section title="Original app sign-in"><SkeletonRows rows={3} /></Section>;
 
@@ -57,6 +57,7 @@ export const OriginalSignInPanel: React.FC<{ reauth: Reauth }> = ({ reauth }) =>
 
     const { people } = status;
     const missing = people.total - people.withAccount;
+    const stillNeed = missing ? `; ${missing} still need one (bring in the original app's people).` : '.';
 
     return (
         <Section
@@ -76,7 +77,7 @@ export const OriginalSignInPanel: React.FC<{ reauth: Reauth }> = ({ reauth }) =>
                         <p className="ac-muted text-[12px]">
                             {people.total === 0
                                 ? 'No original accounts found.'
-                                : `${people.withAccount} of ${people.total} people have an email account${missing ? `; ${missing} still need one (bring in the original app's people).` : '.'}`}
+                                : `${people.withAccount} of ${people.total} people have an email account${stillNeed}`}
                         </p>
                         {missing > 0 && (
                             <p className="ac-muted text-[12px] break-all">Still to come: {people.withoutAccount.join(', ')}{missing > people.withoutAccount.length ? '…' : ''}</p>

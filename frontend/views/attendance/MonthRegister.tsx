@@ -4,13 +4,13 @@ import { ChevronLeft, ChevronRight, Download, Loader2 } from 'lucide-react';
 import { AuthUser } from '../../services/authService';
 import { AttendanceRecord, StoreConfig } from '../../types';
 import { attendanceService } from '../../services/attendanceService';
-import { ALL_STORES, LONG_SHIFT_MS, MONTHS, downloadCsv, fmtHours, inStore, monthRange, peopleFrom, startOfDay, storeName, toDateInput, workedMs, type StoreScope } from './attendanceUtils';
+import { ALL_STORES, LONG_SHIFT_MS, MONTHS, downloadCsv, fmtHours, inStore, monthRange, peopleFrom, startOfDay, storeName, toDateInput, workedMs } from './attendanceUtils';
 
 interface MonthRegisterProps {
     team: AuthUser[];
     stores: StoreConfig[];
     /** All stores, or one store's people and check-ins. */
-    scope: StoreScope;
+    scope: string;
     refreshKey: number;
     /** Open the day view for a date (start of day). */
     onOpenDay: (day: number) => void;
@@ -29,7 +29,7 @@ const workedText = (c: { forgot: boolean; worked: number }): string => (c.forgot
 export const MonthRegister: React.FC<MonthRegisterProps> = ({ team: everyone, stores, scope, refreshKey, onOpenDay }) => {
     const [year, setYear] = useState(() => new Date().getFullYear());
     const [month, setMonth] = useState(() => new Date().getMonth());
-    const [allRecords, setRecords] = useState<AttendanceRecord[]>([]);
+    const [allRecords, setAllRecords] = useState<AttendanceRecord[]>([]);
     const { team, records } = useMemo(() => inStore(everyone, allRecords, scope), [everyone, allRecords, scope]);
     const [loading, setLoading] = useState(true);
     const now = Date.now();
@@ -40,7 +40,7 @@ export const MonthRegister: React.FC<MonthRegisterProps> = ({ team: everyone, st
         const { from, to } = monthRange(year, month);
         try {
             const all = await attendanceService.getRecords({ from, to });
-            setRecords(all.filter(r => r.checkInAt && r.checkInAt >= from && r.checkInAt < to));
+            setAllRecords(all.filter(r => r.checkInAt && r.checkInAt >= from && r.checkInAt < to));
         } catch (e) {
             toast.error((e as Error).message || 'Failed to load the month');
         } finally {

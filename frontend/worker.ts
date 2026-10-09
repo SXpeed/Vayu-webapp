@@ -8,7 +8,7 @@ import { salesRoutes } from './sales';
 import {
   CORS, json, err, normalizeRoute, rowToConversation, rowToMessage, rowToArtwork,
   rowToCollection, rowToCatalog, rowToInquiry, rowToInquiryMessage, rowToEvent,
-  rowToContact, rowToStore, rowToAttendance, runSetupOnce, useSetupStore, contactLists,
+  rowToContact, rowToStore, rowToAttendance, runSetupOnce, useSetupStore, contactLists, text,
 } from './rows';
 import {
   fileKeyFromUrl, fileUrl, rawRealtimeSecret, realtimeEnabled, requestMetrics, resolveRealtimeSecret,
@@ -22,7 +22,6 @@ import {
 import { originalSignInOpen } from './platform/originalSignIn';
 import { ORG_PATH, forgetOrgAccess, forgetPlanActive, openOrgRequest, orgMemberDevices, orgMemberRecords, orgStorageEnv, signOutOrgMemberDevices } from './orgApp';
 import { orgAccountRoutes } from './orgTeam';
-import { OrgAppDb } from './orgAppDb';
 import { orgKvPrefix } from './orgStorage';
 import { sectionRecipients, staleRegistration, type PushOwner } from './pushRules';
 import {
@@ -37,7 +36,6 @@ import {
   fileAccessAllowed, fileAuthEnabled, fileCacheHeaders, fileCookieClearHeaders,
   fileCookieToken, fileCookieValid, forgetFileToken, issueFileCookie,
 } from './fileAuth';
-import { SyncHub } from './realtime';
 import { ensureMessageColumns, reactionStmts, readReceiptStmts, userPath } from './messageReceipts';
 import { isReactionEmoji } from './chatReactions';
 import { SNIFF_BYTES, delivery, downloadName, isRasterImage, safeExtension, storedContentType } from './fileTypes';
@@ -69,7 +67,6 @@ import {
 } from './platform/billing';
 import { OrgError } from './platform/orgs';
 import { planAndUsage } from './planUsage';
-import { OrgStore } from './platform/orgStore';
 import { deliverOutbox } from './platform/notify';
 import { recordRun, runJob } from './platform/jobs';
 import { emailConfigured } from './platform/email';
@@ -79,7 +76,9 @@ import {
 } from './deviceSessions';
 
 // Durable Object classes must be exported from the entry module.
-export { SyncHub, OrgStore, OrgAppDb };
+export { SyncHub } from './realtime';
+export { OrgStore } from './platform/orgStore';
+export { OrgAppDb } from './orgAppDb';
 
 type FormField = File | string | null;
 
@@ -124,9 +123,10 @@ async function setPresence(kv: KVNamespace, userId: string): Promise<void> {
 async function getPresenceMap(kv: KVNamespace): Promise<Record<string, { isOnline: boolean; lastSeen: number }>> {
   const list = await kv.list({ prefix: 'presence:' });
   const map: Record<string, { isOnline: boolean; lastSeen: number }> = {};
-  for (const key of list.keys) {
+  const raws = await Promise.all(list.keys.map(key => kv.get(key.name)));
+  for (const [i, key] of list.keys.entries()) {
     const userId = key.name.slice('presence:'.length);
-    const raw = await kv.get(key.name);
+    const raw = raws[i];
     if (raw) {
       const data = JSON.parse(raw);
       map[userId] = { isOnline: true, lastSeen: data.lastSeen || Date.now() };
@@ -437,8 +437,9 @@ async function deliverPush(env: Env, subs: Array<{ key: string; sub: StoredPushS
 async function collectSubs(env: Env, prefix: string): Promise<Array<{ key: string; sub: StoredPushSubscription }>> {
   const list = await env.VAYU_KV.list({ prefix });
   const subs: Array<{ key: string; sub: StoredPushSubscription }> = [];
-  for (const key of list.keys) {
-    const raw = await env.VAYU_KV.get(key.name);
+  const raws = await Promise.all(list.keys.map(key => env.VAYU_KV.get(key.name)));
+  for (const [i, key] of list.keys.entries()) {
+    const raw = raws[i];
     if (raw) subs.push({ key: key.name, sub: JSON.parse(raw) });
   }
   return subs;
@@ -458,10 +459,7 @@ async function currentMembers(env: Env, userIds: Iterable<string>): Promise<Map<
 async function sendPushToUsers(env: Env, userIds: string[], payload: PushPayload): Promise<void> {
   const members = await currentMembers(env, userIds);
   await recordNotifications(env, [...members.keys()], payload).catch(e => console.error('Bell notify failed:', e));
-  const subs: Array<{ key: string; sub: StoredPushSubscription }> = [];
-  for (const userId of members.keys()) {
-    subs.push(...await collectSubs(env, `push:sub:${userId}:`));
-  }
+  const subs = (await Promise.all([...members.keys()].map(userId => collectSubs(env, `push:sub:${userId}:`)))).flat();
   await deliverPush(env, subs, payload);
 }
 
@@ -580,11 +578,9 @@ async function handlePushSubscribe(ctx: Ctx): Promise<Response> {
   // A device endpoint belongs to whoever is logged in on it — remove any
   // mapping of this endpoint to other users (e.g. after switching accounts).
   const existing = await ctx.env.VAYU_KV.list({ prefix: 'push:sub:' });
-  for (const key of existing.keys) {
-    if (key.name.endsWith(`:${id}`) && key.name !== `push:sub:${session.userId}:${id}`) {
-      await ctx.env.VAYU_KV.delete(key.name);
-    }
-  }
+  await Promise.all(existing.keys
+    .filter(key => key.name.endsWith(`:${id}`) && key.name !== `push:sub:${session.userId}:${id}`)
+    .map(key => ctx.env.VAYU_KV.delete(key.name)));
   // …and in every other organization too: each keeps its own list, so a
   // phone that moved to another workspace (or another person signed in
   // there) used to go on getting the old one's notifications.
@@ -635,7 +631,7 @@ async function releasePushDevice(env: Env, deviceId: string, userId: string): Pr
   const ownerKey = `push:owner:${deviceId}`;
   const raw = await shared.get(ownerKey);
   const owner = raw ? JSON.parse(raw) as PushOwner : null;
-  if (owner && owner.scope === pushScope(env) && owner.userId === userId) await shared.delete(ownerKey);
+  if (owner?.scope === pushScope(env) && owner.userId === userId) await shared.delete(ownerKey);
 }
 
 // ── Razorpay payment links ──────────────────────────────────────────────────
@@ -747,7 +743,7 @@ function noteProvenMode(link: StoredPaymentLink, keys: { mode: PaymentMode | nul
 }
 
 /** One payment, from Razorpay's Payments API, with the given account's keys. */
-async function razorpayPayment(env: Env, keys: { keyId: string; keySecret: string }, paymentId: string): Promise<any | null> {
+async function razorpayPayment(env: Env, keys: { keyId: string; keySecret: string }, paymentId: string): Promise<any> { // null when there is none
   const res = await fetch(`${razorpayApiBase(env)}/v1/payments/${encodeURIComponent(paymentId)}`, {
     headers: { 'Authorization': basicAuthHeader(keys.keyId, keys.keySecret) },
   });
@@ -954,12 +950,8 @@ function ensurePaymentLinkRequests(db: D1Database): Promise<void> {
 /** Every payment link stored for this workspace. */
 async function storedLinks(ctx: Ctx): Promise<StoredPaymentLink[]> {
   const list = await ctx.env.VAYU_KV.list({ prefix: 'payment:link:' });
-  const links: StoredPaymentLink[] = [];
-  for (const key of list.keys) {
-    const raw = await ctx.env.VAYU_KV.get(key.name);
-    if (raw) links.push(JSON.parse(raw));
-  }
-  return links;
+  const raws = await Promise.all(list.keys.map(key => ctx.env.VAYU_KV.get(key.name)));
+  return raws.filter((raw): raw is string => raw !== null).map(raw => JSON.parse(raw) as StoredPaymentLink);
 }
 
 /** The immutable record of what was approved when a link was made. */
@@ -1061,7 +1053,7 @@ async function approveAmount(ctx: Ctx, session: SessionData, body: LinkRequestBo
 }
 
 /** The link Razorpay made for a reference, if it made one. */
-async function linkByReference(env: Env, keys: { keyId: string; keySecret: string }, referenceId: string): Promise<any | null> {
+async function linkByReference(env: Env, keys: { keyId: string; keySecret: string }, referenceId: string): Promise<any> { // null when there is none
   const res = await razorpayLinkCall(env, keys, 'GET', `?reference_id=${encodeURIComponent(referenceId)}`).catch(() => null);
   if (!res?.ok) return null;
   const found = (Array.isArray(res.data?.payment_links) ? res.data.payment_links : []) as { reference_id?: string }[];
@@ -1340,12 +1332,9 @@ async function linkForPayment(env: Env, paymentId: string): Promise<StoredPaymen
     if (raw) return JSON.parse(raw) as StoredPaymentLink;
   }
   const list = await env.VAYU_KV.list({ prefix: 'payment:link:' });
-  for (const key of list.keys) {
-    const raw = await env.VAYU_KV.get(key.name);
-    const link = raw ? JSON.parse(raw) as StoredPaymentLink : null;
-    if (link && (link.paymentId === paymentId || link.payments?.some(p => p.id === paymentId))) return link;
-  }
-  return null;
+  const links = (await Promise.all(list.keys.map(key => env.VAYU_KV.get(key.name))))
+    .filter((raw): raw is string => raw !== null).map(raw => JSON.parse(raw) as StoredPaymentLink);
+  return links.find(link => link.paymentId === paymentId || link.payments?.some(p => p.id === paymentId)) ?? null;
 }
 
 /**
@@ -1542,7 +1531,7 @@ async function reconcileRefunds(ctx: Ctx, link: StoredPaymentLink, out: Reconcil
     const status = apiRefundStatus((item as { status?: unknown })?.status);
     const refund = status ? refundFrom(item, status) : null;
     if (!refund || refund.paymentId !== link.paymentId) continue;
-    const outcome = await recordRefund(ctx.env, link.account ?? 'shared', refund, link);
+    const outcome = await recordRefund(ctx.env, link.account ?? 'shared', refund, link); // NOSONAR: one payment's refunds are recorded in order
     if (outcome === 'new' || outcome === 'advanced') { changed = true; out.missed++; }
   }
   await ctx.env.VAYU_KV.put(`payment:link:${link.id}`, JSON.stringify(link));
@@ -1560,19 +1549,21 @@ async function reconcileWorkspace(ctx: Ctx, budget: { left: number }, outcomes: 
   for (const link of open) {
     if (budget.left <= 0) break;
     budget.left--;
-    if (await reconcileOpenLink(ctx, link, outcomeFor(outcomes, link.account ?? 'shared'))) changed.push(link.id);
+    // One at a time: each check spends from the run's Razorpay call budget.
+    if (await reconcileOpenLink(ctx, link, outcomeFor(outcomes, link.account ?? 'shared'))) changed.push(link.id); // NOSONAR
   }
   for (const link of paid) {
     if (budget.left <= 0) break;
     budget.left--;
-    if (await reconcileRefunds(ctx, link, outcomeFor(outcomes, link.account ?? 'shared'))) changed.push(link.id);
+    if (await reconcileRefunds(ctx, link, outcomeFor(outcomes, link.account ?? 'shared'))) changed.push(link.id); // NOSONAR
   }
   if (changed.length) queueHubNotify(ctx, changed.map(id => ({ entity: 'payments' as const, id, op: 'put' as const })));
 }
 
 async function saveOutcomes(env: Env, outcomes: Outcomes): Promise<void> {
   if (!env.PLATFORM_DB) return;
-  for (const [account, o] of outcomes) await recordReconcile(env.PLATFORM_DB, account, o);
+  const platformDb = env.PLATFORM_DB;
+  await Promise.all([...outcomes].map(([account, o]) => recordReconcile(platformDb, account, o)));
 }
 
 /** POST /payments/links/refresh — check this workspace's due links now (the Payments screen's refresh). */
@@ -1607,7 +1598,7 @@ async function reconcileAllWorkspaces(env: Env, execCtx: ExecutionContext): Prom
     const url = new URL('https://scheduled.invalid/api/payments/reconcile');
     const ctx: Ctx = { request: new Request(url, { method: 'POST' }), env: space, url, path: '/payments/reconcile', method: 'POST', execCtx };
     try {
-      await reconcileWorkspace(ctx, budget, outcomes);
+      await reconcileWorkspace(ctx, budget, outcomes); // NOSONAR: workspaces share one call budget, so they go in turn
     } catch (e) {
       console.error(JSON.stringify({ event: 'reconcile_workspace_failed', org: space.ORG_ID ?? 'original', reason: safeError(e) }));
     }
@@ -1896,7 +1887,7 @@ async function applyPaymentLinkEvent(ctx: Ctx, event: any, receivingAccount: str
 
   const updated: StoredPaymentLink = record ?? linkFromEvent(plink, incoming, receivingAccount);
   const newStatus = nextLinkStatus(record?.status, incoming);
-  if (record && newStatus === record.status && event.event !== 'payment_link.paid') return;
+  if (record?.status === newStatus && event.event !== 'payment_link.paid') return;
   updated.status = newStatus;
   if (event.event === 'payment_link.paid' && !alreadyPaid) notePayment(updated, event?.payload?.payment?.entity);
   if (Number.isSafeInteger(plink.amount_paid) && plink.amount_paid >= (updated.amountPaid ?? 0)) updated.amountPaid = plink.amount_paid;
@@ -2200,12 +2191,8 @@ async function handleAuthLogout(ctx: Ctx): Promise<Response> {
 async function userRecords(env: Env): Promise<StoredUser[]> {
   if (env.ORG_ID) return orgMemberRecords(env);
   const list = await env.VAYU_KV.list({ prefix: 'auth:user:' });
-  const users: StoredUser[] = [];
-  for (const key of list.keys) {
-    const raw = await env.VAYU_KV.get(key.name);
-    if (raw) users.push(JSON.parse(raw) as StoredUser);
-  }
-  return users;
+  const raws = await Promise.all(list.keys.map(key => env.VAYU_KV.get(key.name)));
+  return raws.filter((raw): raw is string => raw !== null).map(raw => JSON.parse(raw) as StoredUser);
 }
 
 async function handleAuthUsersList(ctx: Ctx): Promise<Response> {
@@ -2233,7 +2220,8 @@ async function handleAuthUsersList(ctx: Ctx): Promise<Response> {
       pub.devices = orgDevices.get(pub.id) ?? [];
     } else {
       pub.deviceLimit = deviceLimit(stored);
-      pub.devices = await listDevices(ctx.env.VAYU_KV, pub.id, pub.id === session.userId ? bearerToken(ctx.request) : null);
+      // In turn: the first call may run the one-time device-index migration.
+      pub.devices = await listDevices(ctx.env.VAYU_KV, pub.id, pub.id === session.userId ? bearerToken(ctx.request) : null); // NOSONAR
     }
     users.push(pub);
   }
@@ -2631,7 +2619,7 @@ async function handleFilesMissingThumbs(ctx: Ctx): Promise<Response> {
   const thumbs = new Set<string>();
   let cursor: string | undefined;
   do {
-    const res = await ctx.env.VAYU_R2.list({ prefix, cursor, limit: 1000 });
+    const res = await ctx.env.VAYU_R2.list({ prefix, cursor, limit: 1000 }); // NOSONAR: each page needs the previous page's cursor
     for (const obj of res.objects) {
       if (obj.key.endsWith('__thumb')) thumbs.add(obj.key);
       else originals.push(obj.key);
@@ -2820,7 +2808,7 @@ async function handleConversationsUpdate(ctx: Ctx): Promise<Response> {
   if (room.isPrivate && !managesConversation(session, room)) {
     participantIds = room.members;
     let storedNames: unknown = [];
-    try { storedNames = JSON.parse(String(current.participant_names ?? '[]')); } catch { /* malformed row */ }
+    try { storedNames = JSON.parse(text(current.participant_names) || '[]'); } catch { /* malformed row */ }
     conv.participantNames = storedNames;
     conv.groupName = current.group_name ?? undefined;
   }
@@ -2893,7 +2881,7 @@ async function handleConversationsDelete(ctx: Ctx): Promise<Response> {
     logEntityChange(ctx, session, 'deleted', 'conversation', convId, 'Deleted a private room');
   } else if (conv) {
     const raw = conv as Record<string, unknown>;
-    const label = String(raw.group_name || raw.title || 'conversation');
+    const label = text(raw.group_name) || text(raw.title) || 'conversation';
     archiveDeletedAsync(ctx, session, 'conversation', convId,
       `Conversation "${label}" (${msgCount?.n || 0} messages)`,
       { conversation: conv, messageCount: msgCount?.n || 0 });
@@ -3206,7 +3194,7 @@ async function addMissingColumns(db: D1Database, table: MigratedTable): Promise<
   for (const [column, definition] of Object.entries(COLUMN_MIGRATIONS[table])) {
     if (existing.has(column)) continue;
     try {
-      await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
+      await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run(); // NOSONAR: schema steps run one at a time
     } catch (e) {
       // Another isolate may have added it concurrently.
       if (!/duplicate column/i.test((e as Error).message)) throw e;
@@ -3340,9 +3328,9 @@ function archivedPayload(row: Record<string, unknown>): Record<string, unknown> 
 
 /** Puts back a KV-backed user: the login and the email lookup. A refusal comes back as the response. */
 async function restoreArchivedUser(kv: KVNamespace, payload: Record<string, unknown>): Promise<Response | null> {
-  const userId = String(payload.id || '');
+  const userId = text(payload.id);
   if (!userId || !payload.email) return err('Archived user snapshot is incomplete');
-  const emailKey = `auth:email:${payload.email}`;
+  const emailKey = `auth:email:${text(payload.email)}`;
   if (await kv.get(emailKey)) return err('A user with this email already exists', 409);
   if (await kv.get(`auth:user:${userId}`)) return err('This user already exists', 409);
   await kv.put(`auth:user:${userId}`, JSON.stringify(payload));
@@ -3358,15 +3346,15 @@ async function restoreArchivedRow(ctx: Ctx, session: SessionData, entity: string
   if (!table) return err(`Cannot restore entity type "${entity}"`);
   const cols = Object.keys(payload).filter(k => typeof payload[k] !== 'object' || payload[k] === null);
   if (cols.length === 0 || !payload.id) return err('Archived snapshot is incomplete');
-  const existing = await ctx.env.VAYU_DB.prepare(`SELECT id FROM ${table} WHERE id = ?`).bind(String(payload.id)).first();
+  const existing = await ctx.env.VAYU_DB.prepare(`SELECT id FROM ${table} WHERE id = ?`).bind(text(payload.id)).first();
   if (existing) return err('An item with this id already exists — restore aborted', 409);
   await ctx.env.VAYU_DB.batch([
     ctx.env.VAYU_DB.prepare(
       `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`
     ).bind(...cols.map(c => (payload[c] === undefined ? null : payload[c]) as string | number | null)),
-    changeLogStmt(ctx.env.VAYU_DB, ctx.env, entity, String(payload.id), 'put', { actorId: session.userId }),
+    changeLogStmt(ctx.env.VAYU_DB, ctx.env, entity, text(payload.id), 'put', { actorId: session.userId }),
   ]);
-  queueHubNotify(ctx, [{ entity, id: String(payload.id), op: 'put' }]);
+  queueHubNotify(ctx, [{ entity, id: text(payload.id), op: 'put' }]);
   return null;
 }
 
@@ -3389,7 +3377,7 @@ async function handleDeletedItemsRestore(ctx: Ctx): Promise<Response> {
   if (refused) return refused;
 
   await ctx.env.VAYU_DB.prepare('DELETE FROM deleted_items WHERE id = ?').bind(id).run();
-  logEntityChange(ctx, session, 'updated', entity, String(payload.id || id), `Restored deleted ${entity} from archive`);
+  logEntityChange(ctx, session, 'updated', entity, text(payload.id) || id, `Restored deleted ${entity} from archive`);
   return json({ success: true });
 }
 
@@ -3404,9 +3392,7 @@ async function handleDeletedItemsPurge(ctx: Ctx): Promise<Response> {
   const rows = id
     ? [await ctx.env.VAYU_DB.prepare('SELECT * FROM deleted_items WHERE id = ?').bind(id).first()].filter(r => r !== null)
     : ((await ctx.env.VAYU_DB.prepare('SELECT * FROM deleted_items').all()).results || []);
-  for (const row of rows as Record<string, unknown>[]) {
-    await cleanupArchivedFiles(ctx.env.VAYU_R2, row.entity as string, archivedPayload(row));
-  }
+  await Promise.all((rows as Record<string, unknown>[]).map(row => cleanupArchivedFiles(ctx.env.VAYU_R2, row.entity as string, archivedPayload(row))));
   if (id) {
     await ctx.env.VAYU_DB.prepare('DELETE FROM deleted_items WHERE id = ?').bind(id).run();
     logEntityChange(ctx, session, 'deleted', 'deleted item', id, 'Permanently purged an archived item');
@@ -4346,11 +4332,9 @@ async function handleContactsBulkTags(ctx: Ctx): Promise<Response> {
   await ensureChangeLogTable(db);
   const add = await existingTagIds(db, cleanList(body?.add, () => null, 50));
   const remove = new Set(cleanList(body?.remove, () => null, 50));
-  const rows: Record<string, unknown>[] = [];
-  for (let i = 0; i < ids.length; i += 90) {
-    const chunk = ids.slice(i, i + 90);
-    rows.push(...(await db.prepare(`SELECT id, tags FROM contacts WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).all<Record<string, unknown>>()).results);
-  }
+  const chunks = Array.from({ length: Math.ceil(ids.length / 90) }, (_, i) => ids.slice(i * 90, (i + 1) * 90));
+  const rows = (await Promise.all(chunks.map(chunk =>
+    db.prepare(`SELECT id, tags FROM contacts WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).all<Record<string, unknown>>()))).flatMap(r => r.results);
   const now = Date.now();
   const changed = rows.flatMap(row => {
     const before = contactLists(row).tags;
@@ -4516,7 +4500,7 @@ function storeWifiProblem(store: { wifiRequired: boolean; wifiSsid: string }, bo
   if (!store.wifiRequired) return null;
   if (body.connectionType !== 'wifi') return err('Please connect to the store Wi-Fi before checking in', 422);
   const approved = store.wifiSsid.trim().toLowerCase();
-  const reported = String(body.wifiSsid || '').trim().toLowerCase();
+  const reported = text(body.wifiSsid).trim().toLowerCase();
   if (!approved || reported !== approved) return err('You are not on the approved store Wi-Fi network', 422);
   return null;
 }
@@ -4566,10 +4550,10 @@ async function handleStoresList(ctx: Ctx): Promise<Response> {
 }
 
 function readStoreBody(body: Record<string, unknown>): { error: Response } | { data: { name: string; latitude: number; longitude: number; gpsRadius: number; wifiRequired: number; wifiSsid: string } } {
-  const name = String(body.name || '').trim();
+  const name = text(body.name).trim();
   const latitude = typeof body.latitude === 'number' ? body.latitude : Number.parseFloat(String(body.latitude));
   const longitude = typeof body.longitude === 'number' ? body.longitude : Number.parseFloat(String(body.longitude));
-  const gpsRadius = Number.parseInt(String(body.gpsRadius ?? 150), 10);
+  const gpsRadius = Number.parseInt(text(body.gpsRadius ?? 150), 10);
   if (!name) return { error: err('Store name is required', 400) };
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return { error: err('Valid store latitude and longitude are required', 400) };
   if (!Number.isFinite(gpsRadius) || gpsRadius < 20 || gpsRadius > 5000) return { error: err('GPS radius must be between 20 and 5000 meters', 400) };
@@ -4580,7 +4564,7 @@ function readStoreBody(body: Record<string, unknown>): { error: Response } | { d
       longitude,
       gpsRadius,
       wifiRequired: body.wifiRequired ? 1 : 0,
-      wifiSsid: String(body.wifiSsid || '').trim(),
+      wifiSsid: text(body.wifiSsid).trim(),
     },
   };
 }
@@ -4685,7 +4669,7 @@ async function handleAttendanceCheckIn(ctx: Ctx): Promise<Response> {
     id, employee_id: session.userId, employee_name: session.name, store_id: store.id,
     check_in_at: serverNow, check_in_lat: body.lat as number, check_in_lng: body.lng as number, check_in_accuracy: body.accuracy as number,
     check_out_at: null, check_out_lat: null, check_out_lng: null, check_out_accuracy: null,
-    connection_type: String(body.connectionType || 'unknown'), status: 'checked-in', created_at: serverNow,
+    connection_type: text(body.connectionType) || 'unknown', status: 'checked-in', created_at: serverNow,
   };
   await ensureChangeLogTable(ctx.env.VAYU_DB);
   await ctx.env.VAYU_DB.batch([
@@ -4696,7 +4680,7 @@ async function handleAttendanceCheckIn(ctx: Ctx): Promise<Response> {
     ).bind(
       id, session.userId, session.name, store.id,
       serverNow, body.lat, body.lng, body.accuracy,
-      String(body.connectionType || 'unknown'), serverNow
+      text(body.connectionType) || 'unknown', serverNow
     ),
     // Scoped to the employee: only they (and attendance managers) see the row
     // through sync — see the attendance rule in deltaSync.
@@ -4729,7 +4713,7 @@ async function handleAttendanceCheckOut(ctx: Ctx): Promise<Response> {
   const record: Record<string, unknown> = {
     ...open,
     check_out_at: serverNow, check_out_lat: body.lat as number, check_out_lng: body.lng as number, check_out_accuracy: body.accuracy as number,
-    connection_type: String(body.connectionType || 'unknown'), status: 'checked-out',
+    connection_type: text(body.connectionType) || 'unknown', status: 'checked-out',
   };
   await ensureChangeLogTable(ctx.env.VAYU_DB);
   await ctx.env.VAYU_DB.batch([
@@ -4737,7 +4721,7 @@ async function handleAttendanceCheckOut(ctx: Ctx): Promise<Response> {
       `UPDATE attendance SET
          check_out_at = ?, check_out_lat = ?, check_out_lng = ?, check_out_accuracy = ?, connection_type = ?, status = 'checked-out'
        WHERE id = ?`
-    ).bind(serverNow, body.lat, body.lng, body.accuracy, String(body.connectionType || 'unknown'), open.id as string),
+    ).bind(serverNow, body.lat, body.lng, body.accuracy, text(body.connectionType) || 'unknown', open.id as string),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'attendance', open.id as string, 'put',
       { scope: [session.userId], actorId: session.userId }),
   ]);
@@ -4866,8 +4850,8 @@ async function handleInvoicesSave(ctx: Ctx): Promise<Response> {
     ).bind(
       invoiceId,
       inv.invoiceNumber,
-      String(inv.customerName || ''),
-      String(inv.status || 'Draft'),
+      text(inv.customerName),
+      text(inv.status) || 'Draft',
       Number(inv.date) || Date.now(),
       JSON.stringify(inv),
       existing ? existing.created_by : session.userId,
@@ -4878,7 +4862,7 @@ async function handleInvoicesSave(ctx: Ctx): Promise<Response> {
   ]);
   queueHubNotify(ctx, [{ entity: 'invoice', id: invoiceId, op: 'put' }]);
   logEntityChange(ctx, session, existing ? 'updated' : 'created', 'invoice', invoiceId,
-    `${existing ? 'Updated' : 'Created'} proforma ${inv.invoiceNumber} (${String(inv.customerName || '')})`);
+    `${existing ? 'Updated' : 'Created'} proforma ${inv.invoiceNumber} (${text(inv.customerName)})`);
   return json(inv, existing ? 200 : 201);
 }
 
@@ -4919,9 +4903,8 @@ async function artworksByIds(db: D1Database, ids: string[]): Promise<ReturnType<
   if (ids.length === 0) return [];
   await ensureColumns(db, 'artworks');
   const found = new Map<string, ReturnType<typeof rowToArtwork>>();
-  for (let i = 0; i < ids.length; i += 90) {
-    const chunk = ids.slice(i, i + 90);
-    const res = await db.prepare(`SELECT * FROM artworks WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).all();
+  const chunks = Array.from({ length: Math.ceil(ids.length / 90) }, (_, i) => ids.slice(i * 90, (i + 1) * 90));
+  for (const res of await Promise.all(chunks.map(chunk => db.prepare(`SELECT * FROM artworks WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).all()))) {
     for (const row of res.results || []) found.set(String(row.id), rowToArtwork(row));
   }
   return ids.map(id => found.get(id)).filter((a): a is ReturnType<typeof rowToArtwork> => !!a);
@@ -5026,7 +5009,7 @@ async function gatherRoomChanges(db: D1Database, body: Record<string, unknown>, 
     if (!expiresAt) return { problem: `Choose how long the link works: ${EXPIRY_DAY_CHOICES.join(', ')} days` };
     u.sets.push('expires_at = ?');
     u.binds.push(expiresAt);
-    u.changes.push(`link valid ${body.expiresInDays} more days`);
+    u.changes.push(`link valid ${text(body.expiresInDays)} more days`);
   }
   if (body.newPasscode !== true) return {};
   const secret = await passcodeColumns();
@@ -5131,9 +5114,9 @@ async function handleViewingOpen(ctx: Ctx): Promise<Response> {
   const res = json({
     room: {
       name: String(row.name),
-      clientName: String(row.client_name ?? ''),
-      message: String(row.message ?? ''),
-      sharedBy: String(row.created_by_name ?? ''),
+      clientName: text(row.client_name),
+      message: text(row.message),
+      sharedBy: text(row.created_by_name),
       showPrices,
       expiresAt: Number(row.expires_at),
     },
@@ -5219,7 +5202,7 @@ async function handleViewingInterest(ctx: Ctx): Promise<Response> {
          artwork_ids, notes, source, status, catalog_shared, date, created_by, created_by_name, image_urls)
        VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, 0, ?, ?, ?, '[]')`,
     ).bind(inquiry.id, inquiry.inquiryNumber, name, phone, email, JSON.stringify(artworkIds), inquiry.notes,
-      inquiry.source, inquiry.status, now, String(row.created_by ?? ''), actorName),
+      inquiry.source, inquiry.status, now, text(row.created_by), actorName),
     changeLogStmt(db, ctx.env, 'inquiry', inquiry.id, 'put', { actorId: 'viewing-room' }),
     db.prepare('UPDATE viewing_rooms SET inquiry_count = inquiry_count + 1 WHERE id = ?').bind(row.id),
   ]);
@@ -5675,7 +5658,7 @@ function pageVisit(request: Request): Response | null {
 // different from Worker CPU time. Telemetry failure never fails the request.
 
 function writeAnalytics(
-  env: Env, execCtx: ExecutionContext, request: Request, route: string,
+  env: Env, request: Request, route: string,
   status: number, durationMs: number, isWebSocket: boolean,
 ): void {
   if (!env.ANALYTICS) return;
@@ -5769,6 +5752,47 @@ async function organizationScope(request: Request, env: Env): Promise<Response |
   return { request: scoped, env: opened.env, orgUser: opened.session ? `${opened.orgId}:${opened.session.userId}` : null };
 }
 
+/**
+ * The original app's sign-in: cookie (or, until the cutoff, the old bearer
+ * token), and CSRF checks on cookie-signed changes. A refusal comes back as
+ * the response; `closed` marks a session that counts as signed out.
+ */
+async function originalSignInGate(request: Request, env: Env): Promise<Response | { request: Request; closed: boolean }> {
+  const auth = normalizeAuth(request, env);
+  const problem = await legacyCsrfProblem(auth.request, env, auth);
+  if (problem) {
+    // Read the refused body first: leaving it unread on a rebuilt request
+    // upsets the connection for the caller's next request.
+    await auth.request.arrayBuffer().catch(() => undefined);
+    return json(problem, 403);
+  }
+  // Closed from the control centre (platform/originalSignIn.ts): no new
+  // original session, and an existing one counts as signed out, so the
+  // app shows its sign-in screen, which uses the platform account.
+  if (await originalSignInOpen(env.PLATFORM_DB)) return { request: auth.request, closed: false };
+  if (CSRF_TOKEN_EXEMPT.has(new URL(auth.request.url).pathname)) {
+    await auth.request.arrayBuffer().catch(() => undefined);
+    return json({ error: 'Sign in with your email account on the sign-in screen.', code: 'original_signin_closed' }, 403);
+  }
+  if (!auth.token) return { request: auth.request, closed: false };
+  primeSession(auth.request, null);
+  return { request: auth.request, closed: true };
+}
+
+/** Runs the route; an unexpected error becomes a plain 500 (the details go to the logs only). */
+async function safeDispatch(ctx: Ctx, env: Env, orgUser: Parameters<typeof dispatch>[2], route: string): Promise<Response> {
+  try {
+    const response = await dispatch(ctx, env, orgUser);
+    // A refused request whose body nobody read: let it go, so the connection stays usable.
+    if (ctx.request.body && !ctx.request.bodyUsed) await ctx.request.arrayBuffer().catch(() => undefined);
+    return response;
+  } catch (e) {
+    // Internal messages can reveal table names, queries or other internals.
+    console.error(`Unhandled error on ${ctx.request.method} ${route}:`, e);
+    return json({ error: 'Something went wrong. Please try again.' }, 500);
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env, execCtx: ExecutionContext): Promise<Response> {
     const startedAt = Date.now();
@@ -5804,28 +5828,9 @@ export default {
     // requests use the platform session and are checked in openOrgRequest.
     let originalClosed = false;
     if (!ORG_PATH.test(new URL(request.url).pathname)) {
-      const auth = normalizeAuth(request, env);
-      request = auth.request;
-      const problem = await legacyCsrfProblem(request, env, auth);
-      if (problem) {
-        // Read the refused body first: leaving it unread on a rebuilt request
-        // upsets the connection for the caller's next request.
-        await request.arrayBuffer().catch(() => undefined);
-        return json(problem, 403);
-      }
-      // Closed from the control centre (platform/originalSignIn.ts): no new
-      // original session, and an existing one counts as signed out, so the
-      // app shows its sign-in screen, which uses the platform account.
-      if (!(await originalSignInOpen(env.PLATFORM_DB))) {
-        if (CSRF_TOKEN_EXEMPT.has(new URL(request.url).pathname)) {
-          await request.arrayBuffer().catch(() => undefined);
-          return json({ error: 'Sign in with your email account on the sign-in screen.', code: 'original_signin_closed' }, 403);
-        }
-        if (auth.token) {
-          primeSession(request, null);
-          originalClosed = true;
-        }
-      }
+      const gate = await originalSignInGate(request, env);
+      if (gate instanceof Response) return gate;
+      ({ request, closed: originalClosed } = gate);
     }
     const gateStartedAt = Date.now();
     const scope = await organizationScope(request, env);
@@ -5843,17 +5848,7 @@ export default {
     execCtx.waitUntil(eraseShowcaseData(env.VAYU_DB).catch(e => console.error('Showcase data erase failed:', e)));
 
     const route = normalizeRoute(path);
-    let response: Response;
-    try {
-      response = await dispatch(ctx, env, orgUser);
-      // A refused request whose body nobody read: let it go, so the connection stays usable.
-      if (request.body && !request.bodyUsed) await request.arrayBuffer().catch(() => undefined);
-    } catch (e) {
-      // The details go to the logs, not to the caller: internal messages can
-      // reveal table names, queries or other internals.
-      console.error(`Unhandled error on ${request.method} ${route}:`, e);
-      response = json({ error: 'Something went wrong. Please try again.' }, 500);
-    }
+    let response = await safeDispatch(ctx, env, orgUser, route);
     response = originalClosed && response.status === 401
       ? json({ error: 'Unauthorized', reason: 'original-signin-closed' }, 401)
       : await explainSignedOut(response, request, env);
@@ -5861,7 +5856,7 @@ export default {
     const totalMs = Date.now() - startedAt;
     // 101 marks the WebSocket upgrade; everything else is an ordinary call.
     execCtx.waitUntil(Promise.resolve().then(() =>
-      writeAnalytics(env, execCtx, request, route, response.status, totalMs, response.status === 101),
+      writeAnalytics(env, request, route, response.status, totalMs, response.status === 101),
     ));
     return withServerTiming(response, request, totalMs);
   },
@@ -5871,7 +5866,7 @@ export default {
    * and carry on a started payment-key rotation one batch at a time. Each job
    * fails on its own; one failing never stops the others.
    */
-  async scheduled(_controller: ScheduledController, env: Env, execCtx: ExecutionContext): Promise<void> {
+  scheduled(_controller: ScheduledController, env: Env, execCtx: ExecutionContext): void {
     const db = env.PLATFORM_DB;
     if (!db) {
       execCtx.waitUntil(reconcileAllWorkspaces(env, execCtx).catch(e => console.error('scheduled payment reconciliation failed', safeError(e))));

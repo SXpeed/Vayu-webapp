@@ -16,7 +16,7 @@
 // Like the showcase Roster, nothing here goes through change_log: a change
 // sends a signal-only "schedule" invalidate and an open roster refetches.
 
-import { err, json, runSetupOnce } from './rows';
+import { err, json, runSetupOnce, text } from './rows';
 import {
     DEFAULT_JOB_TITLES, LEAVE_TYPES, addDays, findConflicts, isIsoDate, mondayOf, shiftFieldErrors, toTs,
     type LeaveStatus, type ShiftKind, type StaffLeave, type StaffShift,
@@ -132,12 +132,6 @@ export interface StaffRosterDeps {
 const SHIFT_PATH = /^\/staff-roster\/shifts\/([A-Za-z0-9_-]{1,64})$/;
 const LEAVE_PATH = /^\/staff-roster\/leaves\/([A-Za-z0-9_-]{1,64})$/;
 const TITLE_PATH = /^\/staff-roster\/titles\/([^/]{1,128})$/;
-
-/** A stored or sent value as text: strings as they are, numbers written out, anything else empty. */
-function text(v: unknown): string {
-    if (typeof v === 'string') return v;
-    return typeof v === 'number' ? String(v) : '';
-}
 const cleanText = (v: unknown, max: number): string => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const intIn = (v: unknown, min: number, max: number): number | null =>
     (typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max ? v : null);

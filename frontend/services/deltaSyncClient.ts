@@ -109,7 +109,7 @@ export function createDeltaSync(options: DeltaSyncOptions, now: () => number = D
 
     const run = (): Promise<SyncOutcome> => {
         if (unavailable()) return Promise.resolve('unavailable');
-        if (inFlight) {
+        if (inFlight !== null) {
             again = true;
             return inFlight;
         }
@@ -118,7 +118,7 @@ export function createDeltaSync(options: DeltaSyncOptions, now: () => number = D
                 let outcome: SyncOutcome;
                 do {
                     again = false;
-                    outcome = await pass();
+                    outcome = await pass(); // NOSONAR: each pass continues from the cursor the last one saved
                 } while (again && outcome === 'synced' && options.isCurrent());
                 unavailableAt = outcome === 'unavailable' ? now() : null;
                 return outcome;
@@ -182,7 +182,8 @@ export function savedCursor(options: SavedCursorOptions) {
                 return;
             }
             const mark = options.read();
-            const fullCopyAt = fullCopyTaken ? now() : (mark?.identity === options.identity ? mark.fullCopyAt : 0);
+            const keptAt = mark?.identity === options.identity ? mark.fullCopyAt : 0;
+            const fullCopyAt = fullCopyTaken ? now() : keptAt;
             fullCopyTaken = false;
             options.write({ identity: options.identity, cursor: value, fullCopyAt });
         },

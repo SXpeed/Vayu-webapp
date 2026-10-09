@@ -139,7 +139,7 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                             endPageDesigns: designs,
                             lastPage: prev.lastPage && designs.includes(prev.lastPage) ? prev.lastPage : undefined,
                         };
-                        localforage.setItem('vayu-pdf-options', next);
+                        void localforage.setItem('vayu-pdf-options', next);
                         return next;
                     });
                 }
@@ -150,7 +150,7 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                             ...(globalSettings.customLogo1 && { customLogo1: globalSettings.customLogo1 }),
                             ...(globalSettings.customLogo2 && { customLogo2: globalSettings.customLogo2 }),
                         };
-                        localforage.setItem('vayu-pdf-options', next);
+                        void localforage.setItem('vayu-pdf-options', next);
                         return next;
                     });
                 }
@@ -162,12 +162,12 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
             if (savedTheme) setSelectedTheme(savedTheme);
         };
 
-        loadInitialData();
+        void loadInitialData();
     }, []);
 
     const updateTheme = (themeId: CatalogTheme) => {
         setSelectedTheme(themeId);
-        localforage.setItem('vayu-pdf-theme', themeId);
+        void localforage.setItem('vayu-pdf-theme', themeId);
     };
 
     const updateOption = (key: keyof PdfOptions, value: unknown) => {
@@ -851,7 +851,7 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                                 </span>
                             ) : (
                                 <span className="flex items-center justify-center gap-2">
-                                    Generate PDF
+                                    <span>Generate PDF</span>
                                     <span className="text-[11px] font-normal opacity-70">· {pageCountLabel}</span>
                                 </span>
                             )}
@@ -1006,12 +1006,9 @@ const GenerationProgress: React.FC<{ progress: CatalogPdfProgress | null; remove
                 <p className="text-xs font-semibold text-gray-800 dark:text-gray-100">Creating your catalog</p>
                 <p className="text-sm font-semibold tabular-nums text-gold-700 dark:text-gold-300">{pct}%</p>
             </div>
+            <progress className="sr-only" aria-label="Catalog PDF progress" max={100} value={pct} />
             <div
-                role="progressbar"
-                aria-label="Catalog PDF progress"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={pct}
+                aria-hidden="true"
                 className="mt-2 h-2 rounded-full bg-gray-300/50 dark:bg-white/10 overflow-hidden"
             >
                 <div
@@ -1131,11 +1128,15 @@ const ColourPicker: React.FC<{
     return (
         <div className="mb-4 space-y-3">
             {/* Saturation (across) × brightness (up) for the current hue */}
-            <div
+            {/* Two-dimensional, so no native control fits. */}
+            <div // NOSONAR
                 ref={areaRef}
                 role="slider"
                 tabIndex={0}
                 aria-label="Colour: vividness across, brightness up and down"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(hsv.s * 100)}
                 aria-valuetext={`${hex}, vividness ${Math.round(hsv.s * 100)}%, brightness ${Math.round(hsv.v * 100)}%`}
                 onPointerDown={start('area')}
                 onPointerMove={drag('area')}
@@ -1194,7 +1195,7 @@ const ColourPicker: React.FC<{
                     className={`shrink-0 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-medium active-scale ${usingTheme ? 'neu-inset text-gold-700 dark:text-gold-300' : 'neu-raised-sm text-gray-700 dark:text-gray-300'}`}
                 >
                     <span className="w-3.5 h-3.5 rounded-full" style={{ background: themeSwatch }} />
-                    Theme colour
+                    <span>Theme colour</span>
                 </button>
             </div>
         </div>
@@ -1474,7 +1475,7 @@ const EndPagePreviewOverlay: React.FC<{ url: string; dialog: boolean; pageBg: st
     }, [dialog, onClose]);
 
     return (
-        <div
+        <div // NOSONAR: a dialog only when opened as one; otherwise a passive preview
             className={`absolute inset-0 z-[90] bg-black/70 backdrop-blur-sm flex flex-col animate-fade-in ${dialog ? '' : 'pointer-events-none'}`}
             role={dialog ? 'dialog' : undefined}
             aria-modal={dialog || undefined}

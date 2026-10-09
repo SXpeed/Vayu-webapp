@@ -65,7 +65,7 @@ export const Landing: React.FC = () => {
                         {/* Words rise one after another; they stay real text, so the heading reads as one sentence. */}
                         <h1 id="hero-title" className="mt-4 font-serif text-[2.4rem] sm:text-5xl lg:text-[3.6rem] leading-[1.06] tracking-[-0.01em] text-gray-900 dark:text-gray-100">
                             {words.map((w, n) => (
-                                <React.Fragment key={n}>
+                                <React.Fragment key={n} /* NOSONAR: fixed words that never reorder, and may repeat */>
                                     <span className="mk-word mk-rise" style={d(110 + n * 45)}>{w}</span>{n < words.length - 1 ? ' ' : ''}
                                 </React.Fragment>
                             ))}
@@ -108,7 +108,7 @@ export const Landing: React.FC = () => {
                                 {/* Every scene shares one grid cell, so the panel is as tall as the tallest and never crops. */}
                                 <div className="grid">
                                     {SCENES.map((Scene, n) => (
-                                        <div key={n} className="mk-scene [grid-area:1/1]" data-active={activeStory === story[n].id ? 'true' : 'false'}
+                                        <div key={story[n].id} className="mk-scene [grid-area:1/1]" data-active={activeStory === story[n].id ? 'true' : 'false'}
                                             aria-hidden={activeStory !== story[n].id}>
                                             <Scene />
                                         </div>
@@ -196,10 +196,10 @@ export const Landing: React.FC = () => {
                     <div className="flex flex-wrap items-end justify-between gap-6">
                         <SectionHeading id="pricing-title" eyebrow="Pricing" title="Choose a plan" />
                         {hasPaid && (
-                            <div data-reveal style={i(2)} className="flex gap-2" role="group" aria-label="Billing period">
+                            <fieldset data-reveal style={i(2)} className="flex gap-2" aria-label="Billing period">
                                 <button type="button" onClick={() => setCycle('monthly')} aria-pressed={cycle === 'monthly'} className={`neu-pill ${cycle === 'monthly' ? 'neu-pill-active' : ''}`}>Monthly</button>
                                 <button type="button" onClick={() => setCycle('annual')} aria-pressed={cycle === 'annual'} className={`neu-pill ${cycle === 'annual' ? 'neu-pill-active' : ''}`}>Yearly</button>
-                            </div>
+                            </fieldset>
                         )}
                     </div>
                     {/* Space is kept while plans load, so the page below does not jump. */}
