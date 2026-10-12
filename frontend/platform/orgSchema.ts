@@ -143,6 +143,11 @@ export const ORG_MIGRATIONS: OrgMigration[] = [
        )`,
     ],
   },
+  {
+    // Numbered editions: JSON {size, proofs, number}; '' is a unique work.
+    version: 3,
+    statements: [`ALTER TABLE artworks ADD COLUMN edition TEXT DEFAULT ''`],
+  },
 ];
 
 export const ORG_SCHEMA_VERSION = ORG_MIGRATIONS.at(-1)!.version;

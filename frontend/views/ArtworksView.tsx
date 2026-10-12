@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { Plus, Image as ImageIcon, X, Trash2, Loader2, Camera, Folder } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton, EmptyState, Pill } from '../components/ui';
-import { Artwork } from '../types';
+import { Artwork, Edition } from '../types';
 import toast from 'react-hot-toast';
 import storageService, { getThumbUrl } from '../services/storageService';
 import { fileKeyOf } from '../services/workspace';
@@ -142,6 +142,10 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
         plusGst: initialData?.plusGst || false,
         imageUrls: initialData?.imageUrls ?? []
     });
+    const [isEdition, setIsEdition] = useState(!!initialData?.edition);
+    const [edition, setEdition] = useState<Edition>(initialData?.edition ?? { size: '' });
+    const editionField = (key: keyof Edition) => (e: React.ChangeEvent<HTMLInputElement>) =>
+        setEdition(prev => ({ ...prev, [key]: e.target.value }));
     const [showUploadOptions, setShowUploadOptions] = useState(false);
 
     const [isUploading, setIsUploading] = useState(false);
@@ -154,7 +158,8 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
         e.preventDefault();
         onSave({
             ...formData,
-            price: Number(formData.price) || 0
+            price: Number(formData.price) || 0,
+            edition: isEdition ? edition : undefined,
         });
     };
 
@@ -348,6 +353,30 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
                                 <label htmlFor="artwork-medium" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Medium</label>
                                 <input id="artwork-medium" name="medium" value={formData.medium} onChange={handleChange} className="neu-field" placeholder="e.g. Oil on Canvas" />
                             </div>
+                        </div>
+
+                        <div>
+                            <label htmlFor="artwork-edition" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Edition</label>
+                            <select id="artwork-edition" value={isEdition ? 'edition' : 'unique'} onChange={e => setIsEdition(e.target.value === 'edition')} className="neu-field">
+                                <option value="unique" className="dark:bg-gray-800">Unique work</option>
+                                <option value="edition" className="dark:bg-gray-800">Edition</option>
+                            </select>
+                            {isEdition && (
+                                <div className="flex gap-3 mt-3">
+                                    <div className="flex-1">
+                                        <label htmlFor="edition-number" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">This copy</label>
+                                        <input id="edition-number" value={edition.number ?? ''} onChange={editionField('number')} className="neu-field" placeholder="e.g. 3 or AP 1" />
+                                    </div>
+                                    <div className="flex-1">
+                                        <label htmlFor="edition-size" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Edition size *</label>
+                                        <input id="edition-size" required type="number" min="1" inputMode="numeric" value={edition.size} onChange={editionField('size')} className="neu-field" placeholder="e.g. 10" />
+                                    </div>
+                                    <div className="flex-1">
+                                        <label htmlFor="edition-proofs" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Artist proofs</label>
+                                        <input id="edition-proofs" type="number" min="0" inputMode="numeric" value={edition.proofs ?? ''} onChange={editionField('proofs')} className="neu-field" placeholder="e.g. 2" />
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
                         <div>

@@ -1,5 +1,5 @@
 import type { jsPDF } from 'jspdf';
-import { Artwork, Invoice } from '../types';
+import { Artwork, Invoice, editionLabel } from '../types';
 import { getThumbUrl } from './storageService';
 
 // A4 portrait, millimetres.
@@ -131,7 +131,8 @@ function itemDetailLines(art: Artwork | undefined): string[] {
     if (!art) return [];
     const byline = [art.artist, art.artworkYear].filter(Boolean).join(', ');
     const material = [art.medium, art.dimensions].filter(Boolean).join('  |  ');
-    const reference = art.customId ? `Ref: ${art.customId}` : '';
+    // Shares the reference line: rows are a fixed height, with room for three detail lines.
+    const reference = [art.customId ? `Ref: ${art.customId}` : '', editionLabel(art.edition)].filter(Boolean).join('  |  ');
     return [byline, material, reference].filter(Boolean);
 }
 

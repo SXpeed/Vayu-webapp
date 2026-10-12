@@ -99,7 +99,16 @@ export function rowToArtwork(row: Record<string, unknown>): any {
     artworkYear: (row.artwork_year as string) || undefined,
     descriptionTitle: (row.description_title as string) || undefined,
     plusGst: !!row.plus_gst,
+    edition: row.edition ? JSON.parse(row.edition as string) : undefined,
   };
+}
+
+/** An artwork's edition as stored: JSON of trimmed strings, or '' for a unique work. */
+export function editionColumn(edition: unknown): string {
+  const e = (edition && typeof edition === 'object' ? edition : {}) as Record<string, unknown>;
+  const t = (v: unknown) => (typeof v === 'string' ? v.trim().slice(0, 20) : '');
+  const size = t(e.size);
+  return size ? JSON.stringify({ size, proofs: t(e.proofs), number: t(e.number) }) : '';
 }
 
 export function rowToCollection(row: Record<string, unknown>): any {

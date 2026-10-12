@@ -6,7 +6,7 @@ import {
 import { staffRosterRoutes } from './staffRoster';
 import { salesRoutes } from './sales';
 import {
-  CORS, json, err, normalizeRoute, rowToConversation, rowToMessage, rowToArtwork,
+  CORS, json, err, normalizeRoute, rowToConversation, rowToMessage, rowToArtwork, editionColumn,
   rowToCollection, rowToCatalog, rowToInquiry, rowToInquiryMessage, rowToEvent,
   rowToContact, rowToStore, rowToAttendance, runSetupOnce, useSetupStore, contactLists, text,
 } from './rows';
@@ -3160,6 +3160,7 @@ const COLUMN_MIGRATIONS = {
     artwork_year: "TEXT DEFAULT ''",
     description_title: "TEXT DEFAULT ''",
     plus_gst: 'INTEGER DEFAULT 0',
+    edition: "TEXT DEFAULT ''",
   },
   collections: {
     cover_image_url: "TEXT DEFAULT ''",
@@ -3430,6 +3431,7 @@ function artworkValues(art: any): unknown[] {
     art.location || '',
     art.price || 0,
     art.plusGst ? 1 : 0,
+    editionColumn(art.edition),
     JSON.stringify(art.imageUrls || []),
   ];
 }
@@ -3453,8 +3455,8 @@ async function handleArtworksCreate(ctx: Ctx): Promise<Response> {
     ctx.env.VAYU_DB.prepare(
       `INSERT OR REPLACE INTO artworks
        (id, custom_id, title, artist, artwork_year, description_title, description,
-        dimensions, medium, status, location, price, plus_gst, image_urls, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        dimensions, medium, status, location, price, plus_gst, edition, image_urls, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(art.id, ...artworkValues(art), art.createdAt || Date.now()),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'artwork', art.id, 'put', { actorId: session.userId }),
   ]);
@@ -3478,7 +3480,7 @@ async function handleArtworksUpdate(ctx: Ctx): Promise<Response> {
       `UPDATE artworks SET
          custom_id = ?, title = ?, artist = ?, artwork_year = ?, description_title = ?,
          description = ?, dimensions = ?, medium = ?, status = ?, location = ?,
-         price = ?, plus_gst = ?, image_urls = ?
+         price = ?, plus_gst = ?, edition = ?, image_urls = ?
        WHERE id = ?`
     ).bind(...artworkValues(art), artId),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'artwork', artId, 'put', { actorId: session.userId }),

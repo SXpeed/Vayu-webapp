@@ -12,6 +12,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { ORG_MIGRATIONS, ORG_SCHEMA_VERSION } from './orgSchema';
 import type { Env } from '../workerEnv';
+import { editionColumn } from '../rows';
 
 export interface Actor {
   userId: string;
@@ -32,6 +33,7 @@ export interface ArtworkInput {
   location?: string;
   price?: number;
   plusGst?: boolean;
+  edition?: { size?: string; proofs?: string; number?: string };
   imageUrls?: string[];
   /** The version the editor last read. Omitted only when creating. */
   version?: number;
@@ -51,7 +53,7 @@ export class OrgStoreError extends Error {
 interface ArtworkRow extends Record<string, SqlStorageValue> {
   id: string; custom_id: string; title: string; artist: string; artwork_year: string;
   description_title: string; description: string; dimensions: string; medium: string;
-  status: string; location: string; price: number; plus_gst: number; image_urls: string;
+  status: string; location: string; price: number; plus_gst: number; edition: string | null; image_urls: string;
   version: number; created_at: number; created_by: string | null; updated_at: number; updated_by: string | null;
 }
 
@@ -70,6 +72,7 @@ function toArtwork(r: ArtworkRow) {
     location: r.location,
     price: r.price,
     plusGst: r.plus_gst === 1,
+    edition: r.edition ? JSON.parse(r.edition) as { size: string; proofs: string; number: string } : undefined,
     imageUrls: JSON.parse(r.image_urls || '[]') as string[],
     version: r.version,
     createdAt: r.created_at,
@@ -170,12 +173,12 @@ export class OrgStore extends DurableObject<Env> {
       const id = crypto.randomUUID();
       sql.exec(
         `INSERT INTO artworks (id, custom_id, title, artist, artwork_year, description_title, description,
-           dimensions, medium, status, location, price, plus_gst, image_urls, version, created_at, created_by, updated_at, updated_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+           dimensions, medium, status, location, price, plus_gst, edition, image_urls, version, created_at, created_by, updated_at, updated_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
         id, text(input.customId, 60), title, text(input.artist, 120), text(input.artworkYear, 20),
         text(input.descriptionTitle, 200), text(input.description, 4000), text(input.dimensions, 120),
         text(input.medium, 120), status, text(input.location, 120), price, input.plusGst ? 1 : 0,
-        JSON.stringify(images), now, actor.userId, now, actor.userId,
+        editionColumn(input.edition), JSON.stringify(images), now, actor.userId, now, actor.userId,
       );
       this.audit(actor, 'artwork.create', 'artwork', id, { title });
       return this.getArtwork(id);
@@ -189,12 +192,12 @@ export class OrgStore extends DurableObject<Env> {
     sql.exec(
       `UPDATE artworks SET custom_id = ?, title = ?, artist = ?, artwork_year = ?, description_title = ?,
          description = ?, dimensions = ?, medium = ?, status = ?, location = ?, price = ?, plus_gst = ?,
-         image_urls = ?, version = version + 1, updated_at = ?, updated_by = ?
+         edition = ?, image_urls = ?, version = version + 1, updated_at = ?, updated_by = ?
        WHERE id = ? AND version = ?`,
       text(input.customId, 60), title, text(input.artist, 120), text(input.artworkYear, 20),
       text(input.descriptionTitle, 200), text(input.description, 4000), text(input.dimensions, 120),
       text(input.medium, 120), status, text(input.location, 120), price, input.plusGst ? 1 : 0,
-      JSON.stringify(images), now, actor.userId, input.id, input.version,
+      editionColumn(input.edition), JSON.stringify(images), now, actor.userId, input.id, input.version,
     );
     this.audit(actor, 'artwork.update', 'artwork', input.id, { title, version: input.version + 1 });
     return this.getArtwork(input.id);

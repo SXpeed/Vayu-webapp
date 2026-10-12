@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS artworks (
   location TEXT DEFAULT '',
   price REAL DEFAULT 0,
   plus_gst INTEGER DEFAULT 0,         -- 1 when price is shown as "+ GST"
+  edition TEXT DEFAULT '',            -- JSON {size, proofs, number}; '' = unique work
   image_urls TEXT DEFAULT '[]',       -- JSON array of R2 URLs
   created_at INTEGER NOT NULL
 );

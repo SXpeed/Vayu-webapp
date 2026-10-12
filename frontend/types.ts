@@ -14,8 +14,25 @@ export interface Artwork {
     location: string;
     price: number;
     plusGst?: boolean;
+    /** Absent for a unique work. */
+    edition?: Edition;
     imageUrls: string[]; // Changed from imageUrl to imageUrls array
     createdAt: number;
+}
+
+/** A numbered edition (prints, casts, photographs). */
+export interface Edition {
+    size: string;     // copies in the edition, e.g. "10"
+    proofs?: string;  // artist's proofs on top, e.g. "2"
+    number?: string;  // which copy this record is, e.g. "3" or "AP 1"
+}
+
+/** "3/10 · Edition of 10 + 2 AP": this copy, then the whole edition. */
+export function editionLabel(e: Edition | undefined): string {
+    if (!e?.size) return '';
+    const whole = `Edition of ${e.size}${e.proofs ? ` + ${e.proofs} AP` : ''}`;
+    if (!e.number) return whole;
+    return `${/^\d+$/.test(e.number) ? `${e.number}/${e.size}` : e.number} · ${whole}`;
 }
 
 export interface Collection {

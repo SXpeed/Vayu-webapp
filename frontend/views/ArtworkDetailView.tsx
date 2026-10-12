@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { ArrowLeft, Edit2, X, Image as ImageIcon, Share2 } from 'lucide-react';
-import { Artwork } from '../types';
+import { Artwork, editionLabel } from '../types';
 import { ArtworkFormModal } from './ArtworksView';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { ZoomableImage } from '../components/ZoomableImage';
@@ -117,7 +117,7 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
         { label: 'Location', value: artwork.location },
     ].filter(x => x.value?.trim());
     // The wall label's lines: what the piece is, then where it is kept.
-    const labelLines = [artwork.medium, artwork.dimensions].filter(v => v?.trim());
+    const labelLines = [artwork.medium, artwork.dimensions, editionLabel(artwork.edition)].filter(v => v?.trim());
 
     const priceText = `₹${artwork.price.toLocaleString('en-IN')}${artwork.plusGst ? ' + GST' : ''}`;
 
