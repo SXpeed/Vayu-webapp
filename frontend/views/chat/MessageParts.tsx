@@ -1,8 +1,9 @@
 import React, { useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Camera, Loader2, Paperclip, Send, Tag, X } from 'lucide-react';
+import { Camera, FileText, Headphones, Images, Loader2, Paperclip, Send, Tag, X } from 'lucide-react';
 import storageService, { getThumbUrl } from '../../services/storageService';
 import { usePhotoCapture } from '../../hooks/usePhotoCapture';
+import { pastedFiles, safeExtension } from '../../fileTypes';
 import type { Message, MessageAttachment, MessageReplyTo, MessageTag } from '../../types';
 
 /** The message bubble and the message bar every chat uses: team chats
@@ -25,6 +26,29 @@ export const messagePreview = (msg: { text?: string; attachment?: MessageAttachm
     if (!msg.attachment) return '';
     return msg.attachment.type === 'image' ? '📷 Photo' : `📎 ${msg.attachment.name}`;
 };
+
+/** Open a sent file: a PDF or text in a new tab, anything else downloads under
+ *  its own name. Fetched as a blob, like catalog PDFs: installed apps block popups. */
+async function openFile(file: MessageAttachment) {
+    const toastId = toast.loading('Opening…');
+    try {
+        const res = await fetch(file.url);
+        if (!res.ok) throw new Error('Could not open the file');
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const viewable = blob.type === 'application/pdf' || blob.type.startsWith('text/plain');
+        if (!viewable || !globalThis.open(url, '_blank')) {
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = file.name;
+            a.click();
+        }
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        toast.dismiss(toastId);
+    } catch (e) {
+        toast.error((e as Error).message || 'Could not open the file', { id: toastId });
+    }
+}
 
 export const messageTime = (timestamp: number) => new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -60,10 +84,18 @@ export const MessageBubble: React.FC<{
                     <img loading="lazy" decoding="async" src={getThumbUrl(msg.attachment.url)} alt={msg.attachment.name} className="rounded-xl max-w-full max-h-48 object-cover" />
                 </button>
             ) : (
-                <div className="flex items-center gap-2 mb-2 p-2 neu-inset rounded-xl">
-                    <Paperclip size={14} className="text-gold-700 dark:text-gold-300" />
-                    <span className="text-[11px] truncate">{msg.attachment.name}</span>
-                </div>
+                <button
+                    type="button"
+                    onClick={() => msg.attachment && void openFile(msg.attachment)}
+                    aria-label={`Open ${msg.attachment.name}`}
+                    className="flex items-center gap-2 mb-2 p-2 neu-inset rounded-xl w-full text-left active-scale"
+                >
+                    <FileText size={18} className="text-gold-700 dark:text-gold-300 shrink-0" />
+                    <span className="min-w-0">
+                        <span className="block text-[11px] truncate">{msg.attachment.name}</span>
+                        <span className="block text-[10px] uppercase tracking-wider text-[var(--neu-text-dim)]">{safeExtension(msg.attachment.name) || 'File'}</span>
+                    </span>
+                </button>
             )
         )}
         {msg.text && <p className="text-[13px] leading-relaxed">{msg.text}</p>}
@@ -92,6 +124,7 @@ export const ChatComposer: React.FC<{
     const [text, setText] = useState('');
     const [selectedTags, setSelectedTags] = useState<Set<MessageTag>>(new Set());
     const [showTagPicker, setShowTagPicker] = useState(false);
+    const [showAttachMenu, setShowAttachMenu] = useState(false);
     const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
     const [uploadingCount, setUploadingCount] = useState(0);
     const isUploading = uploadingCount > 0;
@@ -131,6 +164,22 @@ export const ChatComposer: React.FC<{
         if (files.length > 0) void upload(files);
     };
 
+    // The attach menu picks the kind, as WhatsApp does; '' takes any file.
+    const pick = (accept: string) => {
+        setShowAttachMenu(false);
+        if (!fileInputRef.current) return;
+        fileInputRef.current.accept = accept;
+        fileInputRef.current.click();
+    };
+
+    // Ctrl/Cmd+V of a screenshot, a copied image or a copied file attaches it.
+    const handlePaste = (e: React.ClipboardEvent) => {
+        const files = pastedFiles(e.clipboardData);
+        if (files.length === 0) return;
+        e.preventDefault();
+        void upload(files);
+    };
+
     // Camera button: snap a photo and attach it straight away.
     const camera = usePhotoCapture(photos => { void upload(photos); });
 
@@ -162,6 +211,26 @@ export const ChatComposer: React.FC<{
                             </button>
                         ))}
                     </div>
+                </div>
+            )}
+
+            {showAttachMenu && (
+                <div className="px-3 py-2 flex gap-2 animate-fade-in">
+                    {([
+                        ['Document', FileText, ''],
+                        ['Photos & videos', Images, 'image/*,video/*'],
+                        ['Audio', Headphones, 'audio/*'],
+                    ] as const).map(([label, Icon, accept]) => (
+                        <button
+                            key={label}
+                            type="button"
+                            onClick={() => pick(accept)}
+                            className="flex-1 flex flex-col items-center gap-1 py-2 neu-raised-sm neu-btn rounded-lg text-[11px] text-gray-700 dark:text-gray-200 active-scale"
+                        >
+                            <Icon size={18} className="text-gold-700 dark:text-gold-300" />
+                            {label}
+                        </button>
+                    ))}
                 </div>
             )}
 
@@ -237,14 +306,15 @@ export const ChatComposer: React.FC<{
                     </button>
                     <button
                         type="button"
-                        onClick={() => fileInputRef.current?.click()}
+                        onClick={() => setShowAttachMenu(!showAttachMenu)}
                         disabled={isUploading}
-                        aria-label="Attach file"
+                        aria-label="Attach"
+                        aria-expanded={showAttachMenu}
                         className="neu-icon-btn-lg text-gray-600 dark:text-gray-300 active-scale disabled:opacity-60"
                     >
                         {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
                     </button>
-                    <input type="file" multiple={multiple} accept="image/*,.pdf,.doc,.docx,.txt" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
+                    <input type="file" multiple={multiple} ref={fileInputRef} className="hidden" onChange={handleFileChange} />
                     {camera.inputs}
                     {/* A one-line textarea, not an input: Chrome on Android never puts
                         its autofill bar (passwords, cards, addresses) over a textarea. */}
@@ -253,6 +323,7 @@ export const ChatComposer: React.FC<{
                         value={text}
                         onChange={e => setText(e.target.value)}
                         onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+                        onPaste={handlePaste}
                         placeholder="Type a message..."
                         enterKeyHint="send"
                         autoComplete="off"

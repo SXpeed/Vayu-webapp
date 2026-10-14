@@ -83,6 +83,12 @@ export function delivery(storedType: string | undefined): Delivery {
     return { contentType: 'application/octet-stream', disposition: 'attachment', csp: SANDBOX_CSP };
 }
 
+/** Files to attach from a paste: none when text was copied too (Word and Excel
+ *  copies carry a picture of the text — the user meant the text). */
+export function pastedFiles(clipboard: { types: readonly string[]; files: ArrayLike<File> }): File[] {
+    return clipboard.types.includes('text/plain') ? [] : Array.from(clipboard.files);
+}
+
 /** A lower-case extension of 1–8 letters or digits, or '' — never path or header characters. */
 export function safeExtension(name: string | undefined): string {
     const ext = (name ?? '').split('.').pop()?.toLowerCase() ?? '';
