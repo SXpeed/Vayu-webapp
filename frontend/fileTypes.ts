@@ -83,10 +83,11 @@ export function delivery(storedType: string | undefined): Delivery {
     return { contentType: 'application/octet-stream', disposition: 'attachment', csp: SANDBOX_CSP };
 }
 
-/** Files to attach from a paste: none when text was copied too (Word and Excel
- *  copies carry a picture of the text — the user meant the text). */
-export function pastedFiles(clipboard: { types: readonly string[]; files: ArrayLike<File> }): File[] {
-    return clipboard.types.includes('text/plain') ? [] : Array.from(clipboard.files);
+/** Files to attach from a paste. Excel cells go as their picture, as on
+ *  WhatsApp; any other copy with text (Word adds a picture too) stays text. */
+export function pastedFiles(clipboard: { types: readonly string[]; files: ArrayLike<File>; getData(format: string): string }): File[] {
+    const fromExcel = /urn:schemas-microsoft-com:office:excel|Excel\.Sheet/i.test(clipboard.getData('text/html'));
+    return clipboard.types.includes('text/plain') && !fromExcel ? [] : Array.from(clipboard.files);
 }
 
 /** A lower-case extension of 1–8 letters or digits, or '' — never path or header characters. */

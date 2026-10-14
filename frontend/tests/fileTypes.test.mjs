@@ -66,12 +66,19 @@ test('names that reach storage keys and headers are cleaned', () => {
     assert.equal(t.isRasterImage(PDF), false);
 });
 
-test('a paste attaches copied images and files, never a copy of text', () => {
+test('a paste attaches copied images, files and Excel cells, never other copied text', () => {
     const shot = new File([PNG], 'image.png', { type: 'image/png' });
-    assert.deepEqual(t.pastedFiles({ types: ['Files'], files: [shot] }), [shot]);
+    const clip = (types, files, html = '') => ({ types, files, getData: f => (f === 'text/html' ? html : '') });
+    assert.deepEqual(t.pastedFiles(clip(['Files'], [shot])), [shot]);
     // A browser "Copy image" also carries HTML, still an image.
-    assert.deepEqual(t.pastedFiles({ types: ['text/html', 'Files'], files: [shot] }), [shot]);
-    // Word/Excel put a picture of the text on the clipboard too.
-    assert.deepEqual(t.pastedFiles({ types: ['text/plain', 'text/html', 'Files'], files: [shot] }), []);
-    assert.deepEqual(t.pastedFiles({ types: ['text/plain'], files: [] }), []);
+    assert.deepEqual(t.pastedFiles(clip(['text/html', 'Files'], [shot], '<img src="x">')), [shot]);
+    // Excel cells go as their picture, as on WhatsApp.
+    const excel = '<html xmlns:x="urn:schemas-microsoft-com:office:excel"><meta name=ProgId content=Excel.Sheet>';
+    assert.deepEqual(t.pastedFiles(clip(['text/plain', 'text/html', 'Files'], [shot], excel)), [shot]);
+    // Excel without a picture (Excel on the web): the text.
+    assert.deepEqual(t.pastedFiles(clip(['text/plain', 'text/html'], [], excel)), []);
+    // Word puts a picture of the text on the clipboard too: the text wins.
+    const word = '<html xmlns:w="urn:schemas-microsoft-com:office:word"><meta name=ProgId content=Word.Document>';
+    assert.deepEqual(t.pastedFiles(clip(['text/plain', 'text/html', 'Files'], [shot], word)), []);
+    assert.deepEqual(t.pastedFiles(clip(['text/plain'], [])), []);
 });
