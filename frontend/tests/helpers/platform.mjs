@@ -13,7 +13,7 @@ const frontend = fileURLToPath(new URL('../..', import.meta.url));
 
 /** Splits a migration file into statements, keeping trigger bodies whole. */
 export function sqlStatements(text) {
-    const parts = text.replace(/--.*$/gm, '').split(/;\s*(?=\n|$)/).map(s => s.trim()).filter(Boolean);
+    const parts = text.replace(/--.*/g, '').split(/;[ \t\r]*(?=\n|$)/).map(s => s.trim()).filter(Boolean);
     const merged = [];
     for (const s of parts) {
         const last = merged.at(-1);
@@ -29,8 +29,8 @@ export async function startPlatform(envExtra = {}) {
     const proxy = await getPlatformProxy({ configPath: join(frontend, 'wrangler.json'), persist: { path: persistDir } });
     const db = proxy.env.PLATFORM_DB;
     const dir = join(frontend, 'platform/migrations');
-    for (const file of readdirSync(dir).filter(f => f.endsWith('.sql')).sort()) {
-        for (const statement of sqlStatements(readFileSync(join(dir, file), 'utf8'))) await db.prepare(statement).run();
+    for (const file of readdirSync(dir).filter(f => f.endsWith('.sql')).sort((a, b) => a.localeCompare(b))) {
+        for (const statement of sqlStatements(readFileSync(join(dir, file), 'utf8'))) await db.prepare(statement).run(); // NOSONAR: migrations run in order
     }
     const env = {
         PLATFORM_DB: db,
@@ -52,7 +52,7 @@ export async function startPlatform(envExtra = {}) {
                 if (body !== undefined && !isRaw && !h.has('Content-Type')) h.set('Content-Type', 'application/json');
                 if (method !== 'GET' && !h.has('Origin')) h.set('Origin', origin);
                 h.set('cf-connecting-ip', ip);
-                const payload = body === undefined ? undefined : (isRaw ? body : JSON.stringify(body));
+                const payload = isRaw || body === undefined ? body : JSON.stringify(body);
                 const req = new Request(`${origin}/api/v2${path}`, { method, headers: h, body: payload });
                 const res = await platform.handlePlatformRequest(req, { ...env, ...envOverride });
                 for (const c of res.headers.getSetCookie?.() ?? []) {
@@ -89,11 +89,11 @@ export async function startPlatform(envExtra = {}) {
 export function totp(secretBase32, time = Date.now()) {
     const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
     let bits = '';
-    for (const ch of secretBase32.replace(/=+$/, '').toUpperCase()) bits += alphabet.indexOf(ch).toString(2).padStart(5, '0');
-    const key = Buffer.from(bits.match(/.{8}/g).map(b => parseInt(b, 2)));
+    for (const ch of secretBase32.replaceAll('=', '').toUpperCase()) bits += alphabet.indexOf(ch).toString(2).padStart(5, '0');
+    const key = Buffer.from(bits.match(/.{8}/g).map(b => Number.parseInt(b, 2)));
     const counter = Buffer.alloc(8);
     counter.writeBigUInt64BE(BigInt(Math.floor(time / 30_000)));
     const mac = createHmac('sha1', key).update(counter).digest();
-    const offset = mac[mac.length - 1] & 0xf;
+    const offset = mac.at(-1) & 0xf;
     return String((mac.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, '0');
 }

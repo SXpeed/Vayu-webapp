@@ -15,7 +15,7 @@ const dist = (site, file = '') => join(frontend, 'dist', site, file);
 for (const site of ['app', 'admin', 'welcome']) {
     // vite.config.ts reads SITE to pick the pages and the output folder.
     process.env.SITE = site;
-    await build({ root: frontend, configFile: join(frontend, 'vite.config.ts') });
+    await build({ root: frontend, configFile: join(frontend, 'vite.config.ts') }); // NOSONAR: SITE is global, so one build at a time
 }
 
 // Each site's main page is the root of its address.

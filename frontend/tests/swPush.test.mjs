@@ -47,6 +47,7 @@ function worker({ identity, windows = [] } = {}) {
     Object.assign(self, { caches: context.caches });
     vm.runInContext(source, context);
     const fire = async (type, event) => {
+        /** @type {Promise<unknown> | undefined} */
         let done;
         listeners[type]({ ...event, waitUntil: p => { done = p; } });
         await done;

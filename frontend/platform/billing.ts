@@ -16,7 +16,7 @@
 // Nothing renews by itself: a payment buys one month or one year. Paying for
 // the same plan again adds the period on to the end of the current one.
 
-import type { Env } from '../workerEnv';
+import { timingSafeEqual, type Env } from '../workerEnv';
 import { auditStmt } from './audit';
 import { OrgError, type Actor } from './orgs';
 import { WEBHOOK_OVERLAP_MS, razorpayApiBase, signRazorpayBody } from './payments';
@@ -404,13 +404,6 @@ export async function startCheckout(
   ]);
   const row = await db.prepare('SELECT * FROM billing_payments WHERE id = ?').bind(id).first<BillingPaymentRow>();
   return checkoutFor(row!, org.name, payer);
-}
-
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= (a.codePointAt(i) ?? 0) ^ (b.codePointAt(i) ?? 0);
-  return diff === 0;
 }
 
 async function loadOrgPayment(db: D1Database, orgId: string, id: string): Promise<BillingPaymentRow> {

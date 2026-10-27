@@ -12,7 +12,7 @@ import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { after, before, test } from 'node:test';
-import { sessionTokenFrom, withSessionToken } from './helpers/session.mjs';
+import { sessionTokenFrom } from './helpers/session.mjs';
 import { startDevWorker } from './helpers/devWorker.mjs';
 
 const SHARED_KEY = 'rzp_test_SHARED00001';
@@ -120,15 +120,21 @@ const paidEvent = (plinkId) => ({
     event: 'payment_link.paid',
     payload: {
         payment_link: { entity: { id: plinkId, amount: 250000, status: 'paid' } },
-        payment: { entity: { id: `pay_${plinkId}`, method: 'upi' } },
+        // Paid an hour before the (retried) webhook arrived.
+        payment: { entity: { id: `pay_${plinkId}`, method: 'upi', created_at: PAID_AT_SEC } },
     },
 });
+const PAID_AT_SEC = Math.floor(Date.now() / 1000) - 3600;
+
+const KV_LINK = { id: 'plink_fromkv01', shortUrl: 'https://rzp.io/old', amount: 90000, description: 'Older link', customerName: 'Mrs. Old', customerPhone: '', customerEmail: '',
+    status: 'paid', createdAt: Date.now() - 86_400_000, createdBy: 'u', createdByName: 'Owner', account: 'shared', mode: 'test', paidAt: Date.now() - 3_600_000, paymentId: 'pay_fromkv01' };
 
 before(async () => {
     razorpay = await startRazorpay();
     const schema = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
     worker = await startDevWorker({
-        seedLegacy: { sql: schema },
+        // A link from before links moved into the database: copied in on first use.
+        seedLegacy: { sql: schema, kv: [['payment:link:plink_fromkv01', KV_LINK]] },
         vars: { RAZORPAY_API_BASE: `http://127.0.0.1:${razorpay.address().port}`, RAZORPAY_KEY_ID: SHARED_KEY, RAZORPAY_KEY_SECRET: 'shared-secret-value' },
     });
     // The app's own admin (bearer token), and the control centre's (cookies).
@@ -165,6 +171,14 @@ test('the original app (no organization) makes links in the shared account only,
     assert.equal(calls.at(-1).keyId, SHARED_KEY);
     assert.equal(calls.at(-1).body.amount, 250000, 'rupees from older clients become whole paise');
     assert.ok(calls.at(-1).body.reference_id?.length <= 40);
+});
+
+test('links stored in KV before the move are copied into the database, payment index included', async () => {
+    const copied = (await links()).find(l => l.id === KV_LINK.id);
+    assert.equal(copied?.status, 'paid');
+    assert.equal(copied.paymentId, 'pay_fromkv01');
+    // Still a paid link: kept (it counts toward the totals).
+    assert.equal((await app(`/payments/links/${KV_LINK.id}`, { method: 'DELETE' })).status, 409);
 });
 
 test('a test-mode account needs the test confirmed', async () => {
@@ -214,6 +228,7 @@ test("a workspace's links use its own verified account; only its webhook marks t
     const paid = (await orgLinks()).find(l => l.id === res.body.id);
     assert.equal(paid.status, 'paid');
     assert.equal(paid.paymentMethod, 'upi');
+    assert.equal(paid.paidAt, PAID_AT_SEC * 1000, 'paid when the customer paid, not when the webhook came');
     // A retry is harmless, and a late "expired" doesn't un-pay it.
     assert.equal(await orgWebhook(orgA.id, WEBHOOK_SECRET, paidEvent(res.body.id), 'evt_a_1'), 200);
     assert.equal(await orgWebhook(orgA.id, WEBHOOK_SECRET, { event: 'payment_link.expired', payload: { payment_link: { entity: { id: res.body.id } } } }, 'evt_a_2'), 200);
@@ -373,11 +388,11 @@ test('a link paid just before it was deleted is kept, and shows as paid', async 
     const kept = (await links()).find(l => l.id === link.id);
     assert.equal(kept?.status, 'paid');
     assert.equal(kept.paymentId, 'pay_late');
-    // A paid link can then be removed from the list; Razorpay isn't asked to cancel it.
+    // A paid link can't be removed: it counts toward its invoice, so the invoice can't be billed again.
     calls.length = 0;
-    assert.equal((await app(`/payments/links/${link.id}`, { method: 'DELETE' })).status, 200);
+    assert.equal((await app(`/payments/links/${link.id}`, { method: 'DELETE' })).status, 409);
     assert.equal(calls.filter(c => c.path.endsWith('/cancel')).length, 0);
-    assert.equal((await links()).some(l => l.id === link.id), false);
+    assert.equal((await links()).some(l => l.id === link.id), true);
 });
 
 test('without a webhook, the app picks up a payment by asking Razorpay (refresh), and the list itself changes nothing', async () => {

@@ -30,9 +30,11 @@ export interface Edition {
 /** "3/10 · Edition of 10 + 2 AP": this copy, then the whole edition. */
 export function editionLabel(e: Edition | undefined): string {
     if (!e?.size) return '';
-    const whole = `Edition of ${e.size}${e.proofs ? ` + ${e.proofs} AP` : ''}`;
+    const proofs = e.proofs ? ` + ${e.proofs} AP` : '';
+    const whole = `Edition of ${e.size}${proofs}`;
     if (!e.number) return whole;
-    return `${/^\d+$/.test(e.number) ? `${e.number}/${e.size}` : e.number} · ${whole}`;
+    const copy = /^\d+$/.test(e.number) ? `${e.number}/${e.size}` : e.number;
+    return `${copy} · ${whole}`;
 }
 
 export interface Collection {
@@ -99,9 +101,12 @@ export interface PdfOptions {
 export type CatalogTheme = 1 | 2 | 3 | 4 | 5;
 
 export interface InvoiceItem {
+    /** '' for an item that isn't in the inventory. */
     artworkId: string;
     title: string;
     price: number;
+    /** An item not in the inventory: its own photos (the first shows on the proforma). */
+    photoUrls?: string[];
 }
 
 /** A proforma invoice (quotation). Synced through the server; a copy is kept on each device for offline use. */

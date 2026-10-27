@@ -8,7 +8,7 @@
 // with that organization's own webhook secret, and are stored once per event
 // id, so retries and replays are no-ops.
 
-import type { Env } from '../workerEnv';
+import { timingSafeEqual, type Env } from '../workerEnv';
 import { text } from '../rows';
 import { auditStmt } from './audit';
 import { OrgError, type Actor } from './orgs';
@@ -258,13 +258,6 @@ export async function razorpayCredentials(env: Env, db: D1Database, orgId: strin
 
 function hex(bytes: ArrayBuffer): string {
   return [...new Uint8Array(bytes)].map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= (a.codePointAt(i) ?? 0) ^ (b.codePointAt(i) ?? 0);
-  return diff === 0;
 }
 
 export async function signRazorpayBody(secret: string, body: string): Promise<string> {

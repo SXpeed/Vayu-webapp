@@ -2,6 +2,117 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Moved from index.html's <style>: Sonar can't take a NOSONAR there.
+ * Near the top, so the rules below still win as they did over the inline style. */
+/* Prevent iOS zoom on input focus: the text must be >= 16px as drawn,
+   after the UI-size zoom on body. A plain 16px drew at 15.2px on the
+   default size (95%), so every field zoomed the app in. */
+input[type="text"],
+input[type="email"],
+input[type="tel"],
+input[type="number"],
+input[type="search"],
+input[type="password"],
+input[type="date"],
+input[type="time"],
+input[type="datetime-local"],
+textarea,
+select {
+    font-size: calc(16.5px / var(--ui-zoom, 1)) !important; /* NOSONAR: beats text-* utilities: under 16px, iPhone Safari zooms into the field */
+}
+
+/* 
+ * Safe area: When running as standalone PWA on iPhone with notch/Dynamic Island,
+ * add extra top padding to all headers that use pt-8 to account for the notch.
+ * This is applied via CSS so no component changes are needed.
+ */
+@supports (padding-top: env(safe-area-inset-top)) {
+    @media all and (display-mode: standalone),
+    all and (display-mode: fullscreen) {
+
+        /* Boost header padding for safe area on iPhone */
+        .pt-8 {
+            padding-top: calc(2rem + var(--safe-top)) !important; /* NOSONAR: safe-area padding has to beat the utility classes it extends */
+        }
+
+        /* Ensure bottom nav doesn't overlap the home indicator */
+        .pb-safe-auto {
+            padding-bottom: var(--safe-bottom-ui) !important; /* NOSONAR: safe-area padding has to beat the utility classes it extends */
+        }
+    }
+}
+
+/* Custom Animations — quick and light. Content should feel *there*
+ * the moment you tap: entrances were 0.5–0.7s with per-card
+ * staggers up to ~0.5s, so a list took over a second to settle
+ * (measured ~1s to the 6th card at 4x CPU throttle). */
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(8px) scale(0.995);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes scaleIn {
+    from {
+        opacity: 0;
+        transform: scale(0.94);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* `animation-delay` is pinned to 0: views set inline staggers (up to
+ * `400ms + index * 50ms`), which only postponed content. !important
+ * is what lets a stylesheet win over those inline styles. */
+.animate-fade-in-up {
+    animation: fadeInUp 0.28s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    animation-delay: 0ms !important; /* NOSONAR: beats the inline animation-delay staggers the views set */
+    opacity: 0;
+}
+
+.animate-fade-in {
+    animation: fadeIn 0.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    animation-delay: 0ms !important; /* NOSONAR: beats the inline animation-delay staggers the views set */
+    opacity: 0;
+}
+
+.animate-scale-in {
+    animation: scaleIn 0.26s cubic-bezier(0.34, 1.2, 0.64, 1) forwards;
+    animation-delay: 0ms !important; /* NOSONAR: beats the inline animation-delay staggers the views set */
+    opacity: 0;
+}
+
+.active-scale {
+    /* Smooth, springy press feedback: the :active scale applies
+       instantly (no delay on press); the release eases back with a
+       soft spring so taps feel fluid and substantial. */
+    transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.active-scale:active {
+    transform: scale(0.94);
+    transition: transform 0.08s ease-out;
+}
+
 /* Self-hosted variable fonts (latin subset) — no render-blocking request to
    Google Fonts, and they work offline in the PWA. */
 @font-face {
@@ -312,8 +423,8 @@ html {
     .animate-fade-in,
     .animate-fade-in-up,
     .animate-scale-in {
-        transition: none !important;
-        animation: none !important;
+        transition: none !important; /* NOSONAR: reduced motion has to beat every transition */
+        animation: none !important; /* NOSONAR: reduced motion has to beat every animation and transition */
     }
 
     /* The entrance classes start at opacity:0 and rely on their animation's
@@ -323,8 +434,13 @@ html {
     .animate-fade-in,
     .animate-fade-in-up,
     .animate-scale-in {
-        opacity: 1 !important;
-        transform: none !important;
+        opacity: 1 !important; /* NOSONAR: reduced motion has to beat every animation and transition */
+        transform: none !important; /* NOSONAR: reduced motion has to beat every animation and transition */
+    }
+
+    /* A press doesn't shrink the button either. */
+    .active-scale:active {
+        transform: none;
     }
 }
 
@@ -368,7 +484,7 @@ html {
     select {
         /* 16.5, not 16: 16px / 0.95 * 0.95 rounds to 15.999…px, under the
          * line, and Safari zoomed in on every field at the default UI size. */
-        font-size: calc(16.5px / var(--ui-zoom, 1)) !important;
+        font-size: calc(16.5px / var(--ui-zoom, 1)) !important; /* NOSONAR: beats text-* utilities: under 16px, iPhone Safari zooms into the field */
     }
 }
 
@@ -780,12 +896,12 @@ html.dark { /* NOSONAR: this section's own tokens, kept beside it */
     .neu-pill,
     .neu-toggle-knob,
     .neu-field {
-        transition: none !important;
+        transition: none !important; /* NOSONAR: reduced motion has to beat every animation and transition */
     }
 
     .neu-card-interactive:hover,
     .neu-button:hover {
-        transform: none !important;
+        transform: none !important; /* NOSONAR: reduced motion has to beat every animation and transition */
     }
 }
 
@@ -881,7 +997,7 @@ html.dark { /* NOSONAR: this section's own tokens, kept beside it */
     .search-chip,
     .search-chip::before,
     .search-chip svg {
-        transition: none !important;
+        transition: none !important; /* NOSONAR: reduced motion has to beat every animation and transition */
     }
 }
 
@@ -920,7 +1036,7 @@ html.dark { /* NOSONAR: this section's own tokens, kept beside it */
     .cal-float-out,
     .cal-scrim-in,
     .cal-scrim-out {
-        animation-duration: 0.01s !important;
+        animation-duration: 0.01s !important; /* NOSONAR: reduced motion has to beat every animation and transition */
     }
 }
 
@@ -1001,12 +1117,12 @@ html.dark { /* NOSONAR: this section's own tokens, kept beside it */
     .neu-icon-btn,
     .neu-icon-btn-sm,
     .neu-icon-btn-lg {
-        transition: none !important;
+        transition: none !important; /* NOSONAR: reduced motion has to beat every animation and transition */
     }
 
     .neu-icon-btn:hover,
     .neu-icon-btn-lg:hover {
-        transform: none !important;
+        transform: none !important; /* NOSONAR: reduced motion has to beat every animation and transition */
     }
 }
 
@@ -1170,7 +1286,7 @@ select.neu-field option {
 
 @media (prefers-reduced-motion: reduce) {
     .neu-nav-row {
-        transition: none !important;
+        transition: none !important; /* NOSONAR: reduced motion has to beat every animation and transition */
     }
 }
 
@@ -1244,7 +1360,7 @@ select.neu-field option {
 
 @media (prefers-reduced-motion: reduce) {
     .neu-tile {
-        transition: none !important;
+        transition: none !important; /* NOSONAR: reduced motion has to beat every animation and transition */
     }
 
     .neu-tile-interactive:hover {
@@ -1375,7 +1491,7 @@ html.kb-open .neu-dock-scrim {
     .neu-dock-well,
     .neu-dock-item,
     .neu-dock-icon {
-        transition: none !important;
+        transition: none !important; /* NOSONAR: reduced motion has to beat every animation and transition */
     }
 }
 

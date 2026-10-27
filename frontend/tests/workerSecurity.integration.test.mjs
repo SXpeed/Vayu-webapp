@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { after, before, test } from 'node:test';
-import { sessionTokenFrom, withSessionToken } from './helpers/session.mjs';
+import { withSessionToken } from './helpers/session.mjs';
 import { startDevWorker } from './helpers/devWorker.mjs';
 
 const ADMIN = { name: 'Owner', email: 'owner@example.com', password: 'owner-password-1234' };
@@ -192,6 +192,18 @@ test('the list of files is limited to your own unless you are an admin', async (
 });
 
 /* ── Sign-in abuse (last: it uses up this address's sign-in allowance) ──── */
+
+test('shared settings need a sign-in to read and Catalogs "edit" to change', async () => {
+    assert.equal((await api(null, '/settings')).status, 401);
+    const viewer = await api(admin.token, '/auth/roles', { method: 'POST', body: { name: 'Catalog viewer', permissions: { catalogs: 'view' } } });
+    assert.equal(viewer.status, 201, viewer.text);
+    const viewerUser = await api(admin.token, '/auth/users', { method: 'POST', body: { name: 'Cato', email: 'cato@example.com', password: PASSWORD, role: viewer.body.id } });
+    assert.ok(viewerUser.status === 200 || viewerUser.status === 201, viewerUser.text);
+    const cato = await login('cato@example.com', PASSWORD);
+    assert.equal((await api(cato.token, '/settings')).status, 200);
+    assert.equal((await api(cato.token, '/settings', { method: 'POST', body: { endPageDesigns: [] } })).status, 403);
+    assert.equal((await api(admin.token, '/settings', { method: 'POST', body: { endPageDesigns: [] } })).status, 200);
+});
 
 test('an unknown email and a wrong password get the same answer', async () => {
     const unknown = await api(null, '/auth/login', { method: 'POST', body: { email: 'nobody@example.com', password: 'whatever-1234' } });

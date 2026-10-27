@@ -1,7 +1,8 @@
 // Each person's bell (notifications) and the inquiries they have not opened
 // yet (unread_items). Two separate things on purpose:
-//   - a notification is new until it is opened (tapped) or dismissed, and
-//     neither touches the inquiry it is about;
+//   - a notification stays in the bell until it is opened (tapped) or
+//     dismissed, and neither touches the inquiry it is about; opening the bell
+//     marks the ones there "seen", so the bell's count drops to what came since;
 //   - an inquiry stays unread for a person until they open its details or
 //     mark it read, whatever happened to its notifications.
 // Notifications are written where pushes are sent (worker.ts), so every event
@@ -69,7 +70,7 @@ async function mayViewInquiries(ctx: Ctx, session: SessionData): Promise<boolean
   return atLeast(perms.inquiries, 'view');
 }
 
-/** GET /inbox — this person's new notifications and unread inquiries. */
+/** GET /inbox — this person's notifications (new or seen) and unread inquiries. */
 export async function handleInbox(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
@@ -79,8 +80,8 @@ export async function handleInbox(ctx: Ctx): Promise<Response> {
   ctx.execCtx.waitUntil(linkPendingInquiries(ctx.env).catch(e => console.error('Linking inquiries failed:', e)));
   const [, notes, unread] = await db.batch([
     db.prepare('DELETE FROM notifications WHERE user_id = ? AND created_at < ?').bind(session.userId, Date.now() - KEEP_MS),
-    db.prepare(`SELECT id, group_key, title, body, link, created_at FROM notifications
-      WHERE user_id = ? AND state = 'new' ORDER BY created_at DESC LIMIT ?`).bind(session.userId, LIST_LIMIT),
+    db.prepare(`SELECT id, group_key, title, body, link, created_at, state FROM notifications
+      WHERE user_id = ? AND state IN ('new', 'seen') ORDER BY created_at DESC LIMIT ?`).bind(session.userId, LIST_LIMIT),
     // Joined so a deleted inquiry stops counting.
     db.prepare(`SELECT u.item_id FROM unread_items u JOIN inquiries i ON i.id = u.item_id
       WHERE u.user_id = ? AND u.kind = 'inquiry'`).bind(session.userId),
@@ -88,7 +89,7 @@ export async function handleInbox(ctx: Ctx): Promise<Response> {
   const notifications = (notes.results as Record<string, unknown>[]).map(row => {
     let link: unknown = {};
     try { link = JSON.parse(text(row.link) || 'null'); } catch { /* malformed: no link */ }
-    return { id: row.id, groupKey: row.group_key, title: row.title, body: row.body, link, createdAt: row.created_at };
+    return { id: row.id, groupKey: row.group_key, title: row.title, body: row.body, link, createdAt: row.created_at, seen: row.state === 'seen' };
   });
   const unreadInquiryIds = await mayViewInquiries(ctx, session)
     ? (unread.results as { item_id: string }[]).map(r => r.item_id)
@@ -96,13 +97,13 @@ export async function handleInbox(ctx: Ctx): Promise<Response> {
   return json({ notifications, unreadInquiryIds });
 }
 
-/** POST /inbox/notifications { ids, state: 'opened' | 'dismissed' } — never touches what they are about. */
+/** POST /inbox/notifications { ids, state: 'seen' | 'opened' | 'dismissed' } — never touches what they are about. */
 export async function handleInboxNotifications(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
   const body = await ctx.request.json().catch(() => null) as { ids?: unknown; state?: unknown } | null;
   const state = body?.state;
-  if (state !== 'opened' && state !== 'dismissed') return err('state must be opened or dismissed');
+  if (state !== 'seen' && state !== 'opened' && state !== 'dismissed') return err('state must be seen, opened or dismissed');
   const ids = Array.isArray(body?.ids) ? [...new Set(body.ids.filter((id): id is string => typeof id === 'string' && id.length <= 64))] : [];
   if (ids.length === 0) return err('ids are required');
   if (ids.length > LIST_LIMIT) return err(`At most ${LIST_LIMIT} at a time`);
@@ -111,8 +112,9 @@ export async function handleInboxNotifications(ctx: Ctx): Promise<Response> {
   const stmts = [];
   for (let i = 0; i < ids.length; i += MAX_IDS) {
     const chunk = ids.slice(i, i + MAX_IDS);
-    // Only this person's own, and only while still new.
-    stmts.push(db.prepare(`UPDATE notifications SET state = ? WHERE user_id = ? AND state = 'new' AND id IN (${chunk.map(() => '?').join(',')})`)
+    // Only this person's own, and only forward: new -> seen -> opened or dismissed.
+    const from = state === 'seen' ? "state = 'new'" : "state IN ('new', 'seen')";
+    stmts.push(db.prepare(`UPDATE notifications SET state = ? WHERE user_id = ? AND ${from} AND id IN (${chunk.map(() => '?').join(',')})`)
       .bind(state, session.userId, ...chunk));
   }
   await db.batch(stmts);

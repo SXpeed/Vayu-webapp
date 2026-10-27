@@ -230,7 +230,7 @@ export async function buildProformaPdf(invoice: Invoice, artworks: Artwork[]): P
         // The invoice's own letterhead logo, kept apart from the app icon.
         loadImage('/invoice-logo.png', 400),
         ...invoice.items.map((item) => {
-            const url = artById.get(item.artworkId)?.imageUrls?.[0];
+            const url = artById.get(item.artworkId)?.imageUrls?.[0] ?? item.photoUrls?.[0];
             return url ? loadImage(getThumbUrl(url), 600) : Promise.resolve(null);
         }),
     ]);

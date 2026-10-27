@@ -246,6 +246,8 @@ export const authService = {
   /** Asks the server who is signed in here, keeping the answer for the next start (savedUser). */
   async checkSignIn(): Promise<SignInCheck> {
     if (isPlatformSession()) {
+      // The only place the platform sign-in is renewed (cookie included); see platform/auth.ts.
+      void authClient.getSession().catch(() => undefined);
       try {
         const user = await call<AuthUser>('/auth/me');
         authService.rememberUser(user);

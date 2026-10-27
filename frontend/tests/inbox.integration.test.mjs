@@ -130,3 +130,26 @@ test('people react to inquiry messages, one reaction each, as in chat', async ()
     assert.equal((await react(owner, 'not-an-emoji')).status, 400);
     assert.equal((await api(owner, '/inquiry-messages/nope/reaction', { method: 'PUT', body: { emoji: '👍' } })).status, 404);
 });
+
+test('opening the bell marks what is there seen: still listed, out of the count; a new one counts again', async () => {
+    const first = await newInquiry(staff);
+    let box = await inboxWhen(owner, b => b.notifications.some(x => x.link.inquiryId === first.id));
+    const note = box.notifications.find(x => x.link.inquiryId === first.id);
+    assert.equal(note.seen, false);
+    // The title names the inquiry first: a phone cuts long titles short.
+    assert.equal(note.title, `New inquiry: ${first.customerName}`);
+
+    const ids = box.notifications.map(x => x.id);
+    assert.equal((await api(owner, '/inbox/notifications', { method: 'POST', body: { ids, state: 'seen' } })).status, 200);
+    box = await inbox(owner);
+    assert.deepEqual(box.notifications.map(x => x.id), ids, 'seen ones stay in the bell');
+    assert.ok(box.notifications.every(x => x.seen));
+
+    const second = await newInquiry(staff);
+    box = await inboxWhen(owner, b => b.notifications.some(x => x.link.inquiryId === second.id));
+    assert.deepEqual(box.notifications.filter(x => !x.seen).map(x => x.link.inquiryId), [second.id], 'only the newer one counts');
+
+    // Seen never goes back to new; opening a seen one clears it.
+    await api(owner, '/inbox/notifications', { method: 'POST', body: { ids: [note.id], state: 'opened' } });
+    assert.ok(!(await inbox(owner)).notifications.some(x => x.id === note.id));
+});

@@ -12,6 +12,7 @@ import { createServer } from 'node:net';
 
 const frontend = fileURLToPath(new URL('../..', import.meta.url));
 const wranglerBin = join(dirname(createRequire(import.meta.url).resolve('wrangler/package.json')), 'bin', 'wrangler.js');
+const TASKKILL = join(process.env.SystemRoot || String.raw`C:\Windows`, 'System32', 'taskkill.exe');
 
 const runWrangler = (args, opts = {}) =>
     execFileSync(process.execPath, [wranglerBin, ...args], { cwd: frontend, encoding: 'utf8', ...opts });
@@ -32,9 +33,61 @@ function freePort() {
 /** Ends a wrangler process. On Windows, killing wrangler leaves its workerd child running, so end the whole tree. */
 function stopTree(child) {
     if (process.platform === 'win32') {
-        try { execFileSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* already gone */ }
+        try { execFileSync(TASKKILL, ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* already gone */ }
     } else {
         child.kill();
+    }
+}
+
+/**
+ * Starts `wrangler dev` and waits until it is ready. Gives back the process,
+ * its address and its log (which keeps growing while it runs).
+ */
+async function spawnWorker(persistDir, { port, inspectorPort, vars }) {
+    const fixedPorts = port !== undefined;
+    // With many test files starting at once, workerd occasionally dies while
+    // starting (seen on Windows). That is the machine, not the code under
+    // test: start it again, on fresh ports, a couple of times.
+    for (let attempt = 1; ; attempt++) {
+        // Free ports by default, so test files running side by side never collide.
+        if (!fixedPorts || attempt > 1) {
+            [port, inspectorPort] = await Promise.all([freePort(), freePort()]); // NOSONAR: each retry needs the previous one to have failed
+        }
+        const origin = `http://127.0.0.1:${port}`;
+        const child = spawn(process.execPath, [wranglerBin, 'dev', '-c', 'wrangler.json', '--local',
+            '--persist-to', persistDir, '--port', String(port), '--inspector-port', String(inspectorPort), '--test-scheduled',
+            '--var', `AUTH_ORIGINS:${origin}`, '--var', 'PLATFORM_ENV:development', '--var', 'ADMIN_REQUIRE_2FA:off',
+            '--var', `PAYMENT_SECRETS_KEY:${randomBytes(32).toString('base64')}`,
+            '--var', `BETTER_AUTH_SECRET:${randomBytes(32).toString('base64')}`,
+            ...Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}:${v}`]),
+        ], { cwd: frontend, stdio: ['ignore', 'pipe', 'pipe'] });
+        const run = { child, origin, log: '' };
+        child.stdout.on('data', d => { run.log += d; });
+        child.stderr.on('data', d => { run.log += d; });
+
+        if (await ready(run)) return run; // NOSONAR: each retry needs the previous one to have failed
+        const why = child.exitCode === null ? 'did not start' : 'exited';
+        stopTree(child);
+        if (attempt >= 3) throw new Error(`wrangler dev ${why}: ${run.log.slice(-1500)}`);
+    }
+}
+
+/** True once wrangler says it is ready; false if it exits or 90 s pass. */
+async function ready(run) {
+    const deadline = Date.now() + 90_000;
+    while (Date.now() < deadline && !/Ready on/.test(run.log) && run.child.exitCode === null) {
+        await new Promise(r => setTimeout(r, 400)); // NOSONAR: polling
+    }
+    return /Ready on/.test(run.log);
+}
+
+/** Waits for the first request to succeed (workerd finishes wiring up bindings). */
+async function firstResponse(origin) {
+    for (let i = 0; i < 40; i++) {
+        try {
+            if ((await fetch(`${origin}/api/v2/public/login-methods`)).ok) return; // NOSONAR: polling
+        } catch { /* not up yet */ }
+        await new Promise(r => setTimeout(r, 500)); // NOSONAR: polling
     }
 }
 
@@ -44,7 +97,6 @@ function stopTree(child) {
  */
 export async function startDevWorker({ port, inspectorPort, adminEmail = 'admin@example.com', adminPassword = 'provider-admin-password', seedLegacy, vars = {} } = {}) {
     const persistDir = mkdtempSync(join(tmpdir(), 'as-dev-'));
-    const fixedPorts = port !== undefined;
 
     /** Runs SQL against a local D1 database in this test's storage. */
     const execSql = (binding, sql) => {
@@ -66,48 +118,9 @@ export async function startDevWorker({ port, inspectorPort, adminEmail = 'admin@
         '--email', adminEmail, '--name', 'Test Admin', '--persist-to', persistDir],
         { cwd: frontend, stdio: 'pipe', env: { ...process.env, ADMIN_PASSWORD: adminPassword } });
 
-    let child;
-    let log = '';
-    let origin = '';
-    // With many test files starting at once, workerd occasionally dies while
-    // starting (seen on Windows). That is the machine, not the code under
-    // test: start it again, on fresh ports, a couple of times.
-    for (let attempt = 1; ; attempt++) {
-        // Free ports by default, so test files running side by side never collide.
-        if (!fixedPorts || attempt > 1) {
-            port = await freePort();
-            inspectorPort = await freePort();
-        }
-        origin = `http://127.0.0.1:${port}`;
-        child = spawn(process.execPath, [wranglerBin, 'dev', '-c', 'wrangler.json', '--local',
-            '--persist-to', persistDir, '--port', String(port), '--inspector-port', String(inspectorPort), '--test-scheduled',
-            '--var', `AUTH_ORIGINS:${origin}`, '--var', 'PLATFORM_ENV:development', '--var', 'ADMIN_REQUIRE_2FA:off',
-            '--var', `PAYMENT_SECRETS_KEY:${randomBytes(32).toString('base64')}`,
-            '--var', `BETTER_AUTH_SECRET:${randomBytes(32).toString('base64')}`,
-            ...Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}:${v}`]),
-        ], { cwd: frontend, stdio: ['ignore', 'pipe', 'pipe'] });
-
-        log = '';
-        child.stdout.on('data', d => { log += d; });
-        child.stderr.on('data', d => { log += d; });
-
-        const deadline = Date.now() + 90_000;
-        while (Date.now() < deadline && !/Ready on/.test(log) && child.exitCode === null) {
-            await new Promise(r => setTimeout(r, 400));
-        }
-        if (/Ready on/.test(log)) break;
-        const why = child.exitCode === null ? 'did not start' : 'exited';
-        stopTree(child);
-        if (attempt >= 3) throw new Error(`wrangler dev ${why}: ${log.slice(-1500)}`);
-    }
-    // Wait for the first request to succeed (workerd finishes wiring up bindings).
-    for (let i = 0; i < 40; i++) {
-        try {
-            const res = await fetch(`${origin}/api/v2/public/login-methods`);
-            if (res.ok) break;
-        } catch { /* not up yet */ }
-        await new Promise(r => setTimeout(r, 500));
-    }
+    const run = await spawnWorker(persistDir, { port, inspectorPort, vars });
+    const { origin } = run;
+    await firstResponse(origin);
 
     /** One simulated browser: its own cookie jar. */
     function browser() {
@@ -144,7 +157,7 @@ export async function startDevWorker({ port, inspectorPort, adminEmail = 'admin@
     return {
         origin,
         browser,
-        log: () => log,
+        log: () => run.log,
         /** Rows from SQL run against a local D1 database. Stop the Worker first: it holds the files while running. */
         query(binding, sql) {
             const out = JSON.parse(execSql(binding, sql));
@@ -155,7 +168,7 @@ export async function startDevWorker({ port, inspectorPort, adminEmail = 'admin@
          * message's text to a file and logs where; this reads them back.
          */
         emails() {
-            const plain = log.replace(/\u001b\[[0-9;]*m/g, '');
+            const plain = run.log.replace(/\u001b\[[0-9;]*m/g, '');
             const out = [];
             for (const block of plain.split('send_email binding called with MessageBuilder:').slice(1)) {
                 const to = /^To: (.+)$/m.exec(block)?.[1]?.trim();
@@ -173,8 +186,8 @@ export async function startDevWorker({ port, inspectorPort, adminEmail = 'admin@
         },
         /** Stops the Worker; storage stays so it can still be inspected. */
         async stop() {
-            if (child.exitCode === null) {
-                stopTree(child);
+            if (run.child.exitCode === null) {
+                stopTree(run.child);
                 await new Promise(r => setTimeout(r, 500));
             }
         },

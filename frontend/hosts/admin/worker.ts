@@ -6,7 +6,7 @@
 import { type HostEnv, isAdminPath, isApi, notFound, redirect, toApi } from '../shared';
 
 export default {
-  async fetch(request: Request, env: HostEnv): Promise<Response> {
+  fetch(request: Request, env: HostEnv): Response | Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
     // The platform API only (sign-in, /admin/*, public branding). The app's

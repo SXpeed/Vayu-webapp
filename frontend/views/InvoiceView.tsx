@@ -10,6 +10,8 @@ import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { makeDocumentNumber } from '../services/documentNumber';
 import { exportProformaPdf } from '../services/proformaPdf';
 import { IfCan } from '../components/Layout';
+import { PhotoAttachments } from '../components/PhotoAttachments';
+import { MAX_PHOTOS } from '../salesRules';
 
 export type NewInvoice = Omit<Invoice, 'id' | 'date'>;
 
@@ -296,13 +298,14 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({ invoice,
 
                     <h3 className="text-[11px] font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-4">Items</h3>
                     <div className="space-y-4 mb-6">
-                        {invoice.items.map((item) => {
+                        {invoice.items.map((item, index) => {
                             const art = artworks.find(a => a.id === item.artworkId);
+                            const photo = art?.imageUrls?.[0] ?? item.photoUrls?.[0];
                             return (
-                                <div key={item.artworkId} className="flex justify-between items-center">
+                                <div key={item.artworkId || `item-${index}`} className="flex justify-between items-center">
                                     <div className="flex items-center gap-3">
-                                        {art?.imageUrls?.length ? (
-                                            <img loading="lazy" decoding="async" src={getThumbUrl(art.imageUrls[0])} alt={item.title} className="w-10 h-10 rounded-[3px] object-contain p-0.5 tile-backdrop" />
+                                        {photo ? (
+                                            <img loading="lazy" decoding="async" src={getThumbUrl(photo)} alt={item.title} className="w-10 h-10 rounded-[3px] object-contain p-0.5 tile-backdrop" />
                                         ) : (
                                             <div className="w-10 h-10 rounded-[3px] neu-inset flex items-center justify-center text-gray-400">
                                                 <ImageIcon size={14} />
@@ -380,7 +383,22 @@ export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData,
     const [customerEmail, setCustomerEmail] = useState(start?.customerEmail ?? '');
     const [customerAddress, setCustomerAddress] = useState(start?.customerAddress ?? '');
     const [status, setStatus] = useState<Invoice['status']>(start?.status ?? 'Draft');
-    const [selectedArtworkIds, setSelectedArtworkIds] = useState<Set<string>>(new Set(start?.items?.map(item => item.artworkId) ?? []));
+    const [selectedArtworkIds, setSelectedArtworkIds] = useState<Set<string>>(new Set(start?.items?.filter(item => item.artworkId).map(item => item.artworkId) ?? []));
+    // Items not in the inventory (no artworkId), typed in: a title and a price each.
+    type OtherItem = { key: string; title: string; priceText: string; photoUrls: string[] };
+    const newOtherItem = (from?: InvoiceItem): OtherItem =>
+        ({ key: crypto.randomUUID(), title: from?.title ?? '', priceText: from ? String(from.price) : '', photoUrls: from?.photoUrls ?? [] });
+    const [otherItems, setOtherItems] = useState(() => (start?.items ?? []).filter(item => !item.artworkId).map(item => newOtherItem(item)));
+    // By key, and from the row as it is now: a photo upload can finish at any time.
+    const setOtherItem = (key: string, change: (item: OtherItem) => Partial<OtherItem>) =>
+        setOtherItems(prev => prev.map(item => (item.key === key ? { ...item, ...change(item) } : item)));
+    const [uploadingRows, setUploadingRows] = useState<ReadonlySet<string>>(new Set());
+    // Focus moves to the row the person just asked for, not on its own.
+    const addOtherItem = () => {
+        const row = newOtherItem();
+        setOtherItems(prev => [...prev, row]);
+        requestAnimationFrame(() => document.getElementById(`invoice-other-title-${row.key}`)?.focus());
+    };
     const [taxRate, setTaxRate] = useState(start?.taxRate ?? 0.18);
     const [isSaving, setIsSaving] = useState(false);
 
@@ -399,8 +417,12 @@ export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData,
             const art = artworks.find(a => a.id === id);
             if (!art) return null;
             return { artworkId: art.id, title: art.title, price: art.price };
-        }).filter((item): item is InvoiceItem => item !== null);
-    }, [selectedArtworkIds, artworks]);
+        }).filter((item): item is InvoiceItem => item !== null)
+            .concat(otherItems.map(item => ({
+                artworkId: '', title: item.title.trim(), price: Number(item.priceText) || 0,
+                ...(item.photoUrls.length ? { photoUrls: item.photoUrls } : {}),
+            })));
+    }, [selectedArtworkIds, artworks, otherItems]);
 
     const subtotal = useMemo(() => selectedItems.reduce((sum, item) => sum + item.price, 0), [selectedItems]);
     const taxAmount = subtotal * taxRate;
@@ -409,7 +431,10 @@ export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData,
     const handleSubmit = async () => {
         if (!customerName.trim()) return toast.error('Client name is required');
         if (!customerPhone.trim() && !customerEmail.trim()) return toast.error('Add the client’s phone number or email');
-        if (selectedItems.length === 0) return toast.error('Select at least one artwork');
+        if (selectedItems.length === 0) return toast.error('Select at least one artwork or add an item');
+        if (otherItems.some(item => !item.title.trim())) return toast.error('Name each item that isn’t in the inventory');
+        if (otherItems.some(item => Number(item.priceText) < 0)) return toast.error('A price can’t be below 0');
+        if (uploadingRows.size > 0) return toast.error('Wait for the photos to finish uploading');
 
         setIsSaving(true);
         try {
@@ -520,6 +545,39 @@ export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData,
                     <ArtworkPicker artworks={availableArtworks} selected={selectedArtworkIds} onToggle={toggleArtwork} onInfo={onArtworkClick} scroll
                         statusFilters={false} searchPlaceholder="Search available artworks…"
                         detail={art => `₹${art.price.toLocaleString('en-IN')}${art.plusGst ? ' + GST' : ''}`} />
+
+                    {otherItems.map(item => (
+                        <div key={item.key} className="mt-4 space-y-2">
+                            <div className="flex items-end gap-2">
+                                <div className="flex-[2] min-w-0">
+                                    <label htmlFor={`invoice-other-title-${item.key}`} className={labelClass}>Item not in inventory</label>
+                                    <input id={`invoice-other-title-${item.key}`} value={item.title} onChange={e => setOtherItem(item.key, () => ({ title: e.target.value }))}
+                                        className={inputClass} placeholder="e.g. Framing, installation" maxLength={200} />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <label htmlFor={`invoice-other-price-${item.key}`} className={labelClass}>Price (₹)</label>
+                                    <input id={`invoice-other-price-${item.key}`} type="number" inputMode="decimal" min={0} step="0.01" value={item.priceText}
+                                        onChange={e => setOtherItem(item.key, () => ({ priceText: e.target.value }))} className={inputClass} />
+                                </div>
+                                <button type="button" onClick={() => setOtherItems(prev => prev.filter(i => i.key !== item.key))}
+                                    aria-label={`Remove ${item.title || 'this item'}`} className="neu-icon-btn text-gray-600 dark:text-gray-300 active-scale shrink-0">
+                                    <X size={16} />
+                                </button>
+                            </div>
+                            <PhotoAttachments
+                                urls={item.photoUrls}
+                                onAdd={urls => setOtherItem(item.key, row => ({ photoUrls: [...row.photoUrls, ...urls].slice(0, MAX_PHOTOS) }))}
+                                onRemove={url => setOtherItem(item.key, row => ({ photoUrls: row.photoUrls.filter(u => u !== url) }))}
+                                onUploadingChange={busy => setUploadingRows(prev => {
+                                    const next = new Set(prev);
+                                    if (busy) next.add(item.key); else next.delete(item.key);
+                                    return next;
+                                })}
+                            />
+                        </div>
+                    ))}
+                    <button type="button" onClick={addOtherItem}
+                        className="mt-3 text-[12px] font-semibold text-gold-700 dark:text-gold-300 underline underline-offset-2">Item not in the list?</button>
                 </div>
 
                 {/* Totals */}

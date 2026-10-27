@@ -133,7 +133,7 @@
   .ac-check:has(input:focus-visible) { outline: 2px solid var(--ac-ring); outline-offset: 2px; }
 
   /* The version in force is ringed in gold. */
-  .ac-current { box-shadow: 9px 9px 22px var(--neu-shadow-dark), -9px -9px 22px var(--neu-shadow-light), 0 0 0 2px var(--ac-ring) !important; }
+  .ac-current { box-shadow: 9px 9px 22px var(--neu-shadow-dark), -9px -9px 22px var(--neu-shadow-light), 0 0 0 2px var(--ac-ring) !important; } /* NOSONAR: the current version ring has to beat the card shadow */
 
   /* A usage bar: pressed track, coloured fill. The fill scales rather than
      resizing, so it animates without touching layout. */
@@ -175,7 +175,7 @@
   @media (max-width: 639px) {
     .ac-drawer {
       top: auto; left: 0; right: 0; bottom: 0; height: 92dvh; width: 100vw;
-      border-radius: 1.5rem 1.5rem 0 0 !important;
+      border-radius: 1.5rem 1.5rem 0 0 !important; /* NOSONAR: the bottom-sheet corners have to beat the drawer radius */
       animation-name: ac-sheet-in;
     }
     .ac-drawer.ac-drawer-fit { height: auto; max-height: 92dvh; }
@@ -210,7 +210,7 @@
   @keyframes ac-rotate { to { transform: rotate(360deg); } }
 
   @media (prefers-reduced-motion: reduce) {
-    .ac *, .ac *::before, .ac *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+    .ac *, .ac *::before, .ac *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; } /* NOSONAR: reduced motion has to beat every animation and transition */
   }
 
   /* The overlay host is an empty box; only the fixed layers inside it show. */
@@ -219,12 +219,12 @@
   /* Toasts render outside `.ac`, and the library sets inline styles, hence
      the !important. The app's modal surface. */
   .ac-toast {
-    background: linear-gradient(145deg, var(--neu-bg-hi), var(--neu-bg-lo)) !important;
-    color: var(--neu-text) !important;
-    border-radius: 1rem !important;
-    padding: 10px 14px !important;
-    font-size: 13px !important;
-    box-shadow: 10px 10px 24px var(--neu-shadow-dark), -8px -8px 20px var(--neu-shadow-light), inset 0 1px 0 var(--neu-highlight) !important;
-    max-width: min(420px, calc(100vw - 32px)) !important;
+    background: linear-gradient(145deg, var(--neu-bg-hi), var(--neu-bg-lo)) !important; /* NOSONAR: react-hot-toast sets inline styles */
+    color: var(--neu-text) !important; /* NOSONAR: react-hot-toast sets inline styles */
+    border-radius: 1rem !important; /* NOSONAR: react-hot-toast sets inline styles */
+    padding: 10px 14px !important; /* NOSONAR: react-hot-toast sets inline styles */
+    font-size: 13px !important; /* NOSONAR: react-hot-toast sets inline styles */
+    box-shadow: 10px 10px 24px var(--neu-shadow-dark), -8px -8px 20px var(--neu-shadow-light), inset 0 1px 0 var(--neu-highlight) !important; /* NOSONAR: react-hot-toast sets inline styles */
+    max-width: min(420px, calc(100vw - 32px)) !important; /* NOSONAR: react-hot-toast sets inline styles */
   }
 }

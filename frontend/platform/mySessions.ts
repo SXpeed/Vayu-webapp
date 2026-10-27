@@ -20,7 +20,7 @@ export interface MySession {
 }
 
 async function currentSession(auth: PlatformAuth, request: Request) {
-  const session = await auth.api.getSession({ headers: request.headers });
+  const session = await auth.api.getSession({ headers: request.headers, query: { disableRefresh: true } });
   if (!session) throw new OrgAccessError(401, 'unauthenticated', 'Sign in first.');
   return session;
 }

@@ -458,7 +458,7 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
         const notified = raw?.notify === true ? staff.filter(id => id !== session.userId) : [];
         if (notified.length) {
             deps.push(ctx, notified, {
-                title: 'Your roster is ready',
+                title: `Your roster: ${fmtRange(weekStart, end)}`,
                 body: `${session.name} published the shifts for ${fmtRange(weekStart, end)}.`,
                 tag: `roster-${weekStart}`,
                 data: { view: 'schedule' },
@@ -520,7 +520,7 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
         if (status === 'approved') await markChangedForLeave(db, decided);
         if (leave.employeeId !== session.userId) {
             deps.push(ctx, [leave.employeeId], {
-                title: status === 'approved' ? 'Leave approved' : 'Leave declined',
+                title: `${status === 'approved' ? 'Leave approved' : 'Leave declined'}: ${fmtRange(leave.from, leave.to)}`,
                 body: `${session.name} ${status} your ${leave.type.toLowerCase()} for ${fmtRange(leave.from, leave.to)}.`,
                 tag: `leave-${id}`,
                 data: { view: 'schedule' },

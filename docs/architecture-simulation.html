@@ -18,6 +18,7 @@
   .seqchip{margin-left:auto;font:600 12px/1 ui-monospace,Consolas,monospace;color:var(--gold);
     border:1px solid #5a4a14;background:#241f0d;padding:7px 10px;border-radius:8px}
   .seqchip.pop{animation:pop .35s}
+  @media (prefers-reduced-motion:reduce){.seqchip.pop{animation:none}}
   @keyframes pop{0%{transform:scale(1)}40%{transform:scale(1.18)}100%{transform:scale(1)}}
   .wrap{display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:12px;padding:12px 16px}
   @media (max-width:1100px){.wrap{grid-template-columns:1fr}}
@@ -40,7 +41,7 @@
     padding:6px 8px;border-radius:8px;font-size:12px}
   .logbox{flex:1;min-height:180px;overflow:auto;background:#0a0e15;border:1px solid var(--line);
     border-radius:10px;padding:8px 10px;font:11.5px/1.55 ui-monospace,Consolas,monospace}
-  .logbox .l{margin:2px 0;white-space:pre-wrap;word-break:break-word}
+  .logbox .l{margin:2px 0;white-space:pre-wrap;overflow-wrap:anywhere}
   .logbox .t{color:#4c5b74;margin-right:6px}
   .k-req{color:var(--acc2)} .k-db{color:var(--gold)} .k-signal{color:var(--purple)}
   .k-sec{color:var(--green)} .k-info{color:var(--dim)} .k-ok{color:#4ade80;font-weight:700}
@@ -55,7 +56,7 @@
   .zone{fill:#0d1320;stroke:#26354d;stroke-width:1.5}
   .zlab{fill:#5f7292;font-size:12px;font-weight:700;letter-spacing:.8px}
   .node{cursor:pointer}
-  .node rect{fill:#17202f;stroke:#3d5a80;stroke-width:1.6;rx:10;transition:all .25s}
+  .node rect{fill:#17202f;stroke:#3d5a80;stroke-width:1.6;rx:10px;transition:fill .25s,stroke .25s,stroke-width .25s,filter .25s}
   .node text{fill:var(--txt);pointer-events:none}
   .node .tt{font-size:13px;font-weight:700}
   .node .ln{font-size:11px;fill:var(--dim)}
@@ -231,7 +232,7 @@
       <button id="play">▶ Play</button>
       <button id="step">⏭ Step</button>
       <button id="reset">↺ Reset</button>
-      <select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
+      <select id="speed" aria-label="Speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
     </div>
     <div class="logbox" id="log"></div>
     <div class="cardbox" id="card"><h4>Inspector</h4><p>Click any component, zone, or user in the diagram to see its card (supporting detail lives here, not in extra edges).</p></div>
@@ -397,7 +398,7 @@ let scen=null, idx=0, playing=false, paused=false, speed=1, token=0, seq=1040;
 let clock=new Date(2026,8,30,10,0,0); // fake timestamps for the log
 
 function wait(ms){ return new Promise(res=>{ let left=ms/speed, t0=null;
-  function f(ts){ if(myTok!==token){res();return;} if(!t0)t0=ts; if(!paused) left-=(ts-t0); t0=ts;
+  function f(ts){ if(myTok!==token){res();return;} if(!t0){t0=ts;} if(!paused){left-=(ts-t0);} t0=ts;
     if(left<=0) res(); else requestAnimationFrame(f); }
   const myTok=token; requestAnimationFrame(f); }); }
 
@@ -409,7 +410,7 @@ function animateDot(pathId,dur,cls){ return new Promise(res=>{
   $('dots').appendChild(c);
   let t0=null, prog=0;
   function f(ts){ if(myTok!==token){c.remove();res();return;}
-    if(!t0)t0=ts; if(!paused) prog+=(ts-t0);
+    if(!t0){t0=ts;} if(!paused){prog+=(ts-t0);}
     const fr=Math.min(1,prog/(dur/speed)), pt=p.getPointAtLength(fr*len);
     c.setAttribute('cx',pt.x); c.setAttribute('cy',pt.y);
     if(fr<1) requestAnimationFrame(f); else { c.remove(); res(); } }
@@ -418,32 +419,35 @@ function animateDot(pathId,dur,cls){ return new Promise(res=>{
 function glow(id){ const n=$(id); if(n) n.classList.add('on'); }
 function unglowAll(){ document.querySelectorAll('.node.on').forEach(n=>n.classList.remove('on')); }
 
-function stamp(){ clock=new Date(clock.getTime()+700+Math.random()*900);
+function stamp(){ clock=new Date(clock.getTime()+700+(seq*137)%900); // fake log times: a varied but fixed gap
   const p=n=>String(n).padStart(2,'0');
   return `${p(clock.getHours())}:${p(clock.getMinutes())}:${p(clock.getSeconds())}`; }
 
 function addLog(l){ const d=document.createElement('div'); d.className='l';
-  d.innerHTML=`<span class="t">${stamp()}</span><span class="k-${l.k}">${l.txt.replace(/</g,'&lt;')}</span>`;
+  d.innerHTML=`<span class="t">${stamp()}</span><span class="k-${l.k}">${l.txt.replaceAll('<','&lt;')}</span>`;
   const box=$('log'); box.appendChild(d); box.scrollTop=box.scrollHeight; }
 
 function bumpSeq(n){ seq+=n; const el=$('seq'); el.textContent='change_log seq: '+seq;
-  el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); }
+  el.classList.remove('pop'); el.getBoundingClientRect(); el.classList.add('pop'); } // reading layout restarts the pop animation
 
 function setCap(s,i){ $('cap').textContent=s.cap;
   $('prog').textContent=`step ${i+1} of ${scen.steps.length} · scenario ${scen.id}`; }
 
 async function runStep(i,myTok){ const s=scen.steps[i]; setCap(s,i);
   s.logs.forEach((l,j)=>setTimeout(()=>addLog(l), j*140));
-  for(const a of (s.acts||[])){
-    if(myTok!==token) return;
-    if(a.g) glow(a.g);
-    if(a.dot) await animateDot(a.dot,a.dur||900,a.dotc);
-    if(a.seq) bumpSeq(a.seq);
-  } }
+  await runActs(s.acts||[],myTok); }
 
-async function play(){ if(!scen||playing) return; playing=true; paused=false; $('play').textContent='⏸ Pause';
+// One act after another; each may wait for its dot to arrive.
+async function runActs([a,...rest],myTok){
+  if(!a||myTok!==token) return;
+  if(a.g) glow(a.g);
+  if(a.dot) await animateDot(a.dot,a.dur||900,a.dotc);
+  if(a.seq) bumpSeq(a.seq);
+  return runActs(rest,myTok); }
+
+async function play(){ if(!scen||playing){return;} playing=true; paused=false; $('play').textContent='⏸ Pause';
   const myTok=token;
-  while(idx<scen.steps.length){ if(myTok!==token) return; await runStep(idx,myTok); idx++;
+  while(idx<scen.steps.length){ if(myTok!==token){return;} await runStep(idx,myTok); idx++;
     if(idx<scen.steps.length){ await wait(650); if(myTok!==token) return; } }
   playing=false; paused=false; $('play').textContent='▶ Play'; $('prog').textContent+=' · complete'; }
 
@@ -466,7 +470,7 @@ $('step').onclick=async()=>{ if(!scen||playing) return;
   if(idx<scen.steps.length){ await runStep(idx,token); idx++;
     $('prog').textContent+=idx>=scen.steps.length?' · complete':''; } };
 $('reset').onclick=()=>reset();
-$('speed').onchange=e=>{ speed=parseFloat(e.target.value); };
+$('speed').onchange=e=>{ speed=Number.parseFloat(e.target.value); };
 
 document.querySelectorAll('#nodes .node, #zones .zone').forEach(n=>{
   n.addEventListener('click',()=>{ const c=CARDS[n.dataset.card]; if(!c) return;

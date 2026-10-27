@@ -43,7 +43,7 @@ function die(message) {
   process.exit(1);
 }
 
-if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) die('--email is required and must be an email address');
+if (!/^[^\s@]+@[^\s@.]+\.[^\s@]+$/.test(email)) die('--email is required and must be an email address');
 if (!name) die('--name is required');
 if (!['owner', 'admin', 'support'].includes(role)) die('--role must be owner, admin or support');
 if (password.length < 10) die('set ADMIN_PASSWORD (at least 10 characters)');

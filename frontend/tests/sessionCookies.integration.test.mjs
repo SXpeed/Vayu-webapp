@@ -79,7 +79,10 @@ test('sign-in sets an HttpOnly, SameSite, host-wide cookie and returns no creden
 
 test('the cookie alone signs requests in; a missing or unknown session is refused', async () => {
     const s = await signedIn(worker, PEOPLE[0]);
-    assert.equal((await fetch(`${worker.origin}/api/auth/me`, { headers: { Cookie: s.cookie } })).status, 200);
+    const me = await fetch(`${worker.origin}/api/auth/me`, { headers: { Cookie: s.cookie } });
+    assert.equal(me.status, 200);
+    // Renewed only past half its 30 days, not on every start.
+    assert.equal(cookieFrom(me, 'vayu_session'), null);
     assert.equal((await fetch(`${worker.origin}/api/auth/me`)).status, 401);
     assert.equal((await fetch(`${worker.origin}/api/auth/me`, { headers: { Cookie: 'vayu_session=' + 'a'.repeat(64) } })).status, 401);
 });

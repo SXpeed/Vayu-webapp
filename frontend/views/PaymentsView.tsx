@@ -517,7 +517,8 @@ export const PaymentsView: React.FC<{ invoices?: Invoice[] }> = ({ invoices = []
                                                         </IfCan>
                                                     </>
                                                 )}
-                                                <IfCan section="payments">
+                                                {/* A paid link stays: it counts toward its invoice and the totals. */}
+                                                {link.status !== 'paid' && link.status !== 'partially_paid' && <IfCan section="payments">
                                                     <button
                                                         onClick={() => void deleteLink(link)}
                                                         disabled={busyId === link.id}
@@ -527,7 +528,7 @@ export const PaymentsView: React.FC<{ invoices?: Invoice[] }> = ({ invoices = []
                                                     >
                                                         <Trash2 size={14} />
                                                     </button>
-                                                </IfCan>
+                                                </IfCan>}
                                             </div>
                                         </div>
                                         {confirmDeleteId === link.id && (

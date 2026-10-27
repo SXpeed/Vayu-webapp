@@ -118,7 +118,8 @@ export function useHandlers(args: HandlerArgs) {
 
     // ── Artworks ──────────────────────────────────────────────────────────
     const handleAddArtwork = useCallback(async (newArt: Omit<Artwork, 'id' | 'createdAt'>) => {
-        const artwork: Artwork = { ...newArt, id: `art_${Date.now()}`, createdAt: Date.now() };
+        // Random part: an import adds many in the same millisecond, and the server replaces on a repeated id.
+        const artwork: Artwork = { ...newArt, id: `art_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`, createdAt: Date.now() };
         await stores.artworks.put(artwork);
         sendInBackground('Artwork not saved', () => artworkService.saveArtwork(artwork), () => stores.artworks.drop(artwork.id));
         return artwork;

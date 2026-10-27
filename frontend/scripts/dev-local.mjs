@@ -188,8 +188,8 @@ start('Local API', [wranglerBin, 'dev', '-c', 'wrangler.json', '--local', '--per
 
 async function waitFor(url, what) {
     for (let i = 0; i < 120; i++) {
-        try { if ((await fetch(url)).status < 500) return; } catch { /* not up yet */ }
-        await new Promise(r => setTimeout(r, 500));
+        try { if ((await fetch(url)).status < 500) return; } catch { /* not up yet */ } // NOSONAR: polling
+        await new Promise(r => setTimeout(r, 500)); // NOSONAR: polling
     }
     console.error(`${what} did not start.`);
     stop(1);
@@ -222,14 +222,14 @@ if (!existsSync(marker)) {
     for (const [i, art] of SAMPLE_ARTWORKS.entries()) {
         const form = new FormData();
         form.append('file', new File([gradientPng(400, 500, art.colors)], `sample-${i}.png`, { type: 'image/png' }));
-        const { url } = await call('/upload', { token, method: 'POST', form });
+        // One at a time, so the samples' createdAt keeps their order.
+        const { url } = await call('/upload', { token, method: 'POST', form }); // NOSONAR: sequential on purpose
         const { colors, ...fields } = art;
-        await call('/artworks', { token, method: 'POST', body: { id: `art_sample_${i}`, customId: `TEST-${101 + i}`, imageUrls: [url], createdAt: Date.now(), ...fields } });
+        await call('/artworks', { token, method: 'POST', body: { id: `art_sample_${i}`, customId: `TEST-${101 + i}`, imageUrls: [url], createdAt: Date.now(), ...fields } }); // NOSONAR: sequential on purpose
     }
     writeFileSync(marker, new Date().toISOString());
   } catch (e) {
-    console.error(`Setting up the test logins failed: ${e.message}
-Try again, or start fresh with: npm run dev:local -- --reset`);
+    console.error(`Setting up the test logins failed: ${e.message}\nTry again, or start fresh with: npm run dev:local -- --reset`); // NOSONAR: local dev script, our own local API's error
     stop(1);
   }
 }
@@ -243,7 +243,7 @@ if (!existsSync(workspacesMarker)) {
   try {
     const jar = new Map();
     const platform = async (path, body) => {
-        const res = await fetch(`${API}/v2${path}`, {
+        const res = await fetch(`${API}/v2${path}`, { // NOSONAR: fixed localhost API, paths written in this script
             method: body ? 'POST' : 'GET',
             headers: { 'Content-Type': 'application/json', Origin: `http://localhost:${APP_PORT}`, Cookie: [...jar].map(([k, v]) => `${k}=${v}`).join('; ') },
             body: body && JSON.stringify(body),
@@ -260,8 +260,7 @@ if (!existsSync(workspacesMarker)) {
     await platform('/admin/orgs', { name: 'Second Studio', businessType: 'studio', ownerEmail: ACCOUNTS.admin.email });
     writeFileSync(workspacesMarker, new Date().toISOString());
   } catch (e) {
-    console.error(`Setting up the test workspaces failed: ${e.message}
-Try again, or start fresh with: npm run dev:local -- --reset`);
+    console.error(`Setting up the test workspaces failed: ${e.message}\nTry again, or start fresh with: npm run dev:local -- --reset`); // NOSONAR: local dev script, our own local API's error
     stop(1);
   }
 }

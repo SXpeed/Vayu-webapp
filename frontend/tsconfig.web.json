@@ -40,6 +40,7 @@
     "viewingRooms.ts",
     "staffRoster.ts",
     "sales.ts",
+    "paymentLinks.ts",
     "sessionCookies.ts",
     "rateLimits.ts",
     "fileAuth.ts",

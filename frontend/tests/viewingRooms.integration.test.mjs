@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { after, before, test } from 'node:test';
-import { sessionTokenFrom, withSessionToken } from './helpers/session.mjs';
+import { withSessionToken } from './helpers/session.mjs';
 import { startDevWorker } from './helpers/devWorker.mjs';
 
 const OWNER = { name: 'Owner', email: 'owner@example.com', password: 'owner-password-1234' };

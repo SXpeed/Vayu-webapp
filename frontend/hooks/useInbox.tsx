@@ -20,16 +20,20 @@ export interface BellNotification {
     body: string;
     link: Record<string, unknown>;
     createdAt: number;
+    /** Already there when the bell was last opened: in the list, not in the count. */
+    seen: boolean;
 }
 
 interface InboxState {
     notifications: BellNotification[];
+    /** The bell's count: notifications not seen in the bell yet. */
+    unseenCount: number;
     unreadInquiryIds: ReadonlySet<string>;
     /** Unread chat messages, per conversation. */
     unreadChats: ReadonlyMap<string, number>;
     unreadChatTotal: number;
-    /** Tapped or dismissed: gone from the bell, nothing else changes. */
-    setNotificationsState: (ids: string[], state: 'opened' | 'dismissed') => void;
+    /** Seen (the bell was opened): out of the count. Tapped or dismissed: gone from the bell. Nothing else changes. */
+    setNotificationsState: (ids: string[], state: 'seen' | 'opened' | 'dismissed') => void;
     /** Details opened (read), or "Mark unread". */
     setInquiryRead: (inquiryId: string, read: boolean) => void;
     /** Goes where a notification leads (the same as tapping its push). */
@@ -37,7 +41,7 @@ interface InboxState {
 }
 
 const EMPTY: InboxState = {
-    notifications: [], unreadInquiryIds: new Set(), unreadChats: new Map(), unreadChatTotal: 0,
+    notifications: [], unseenCount: 0, unreadInquiryIds: new Set(), unreadChats: new Map(), unreadChatTotal: 0,
     setNotificationsState: () => { }, setInquiryRead: () => { }, openLink: () => { },
 };
 
@@ -100,11 +104,13 @@ export function useInboxState(
         };
     }, [userId, refresh]);
 
-    const setNotificationsState = useCallback((ids: string[], state: 'opened' | 'dismissed') => {
+    const setNotificationsState = useCallback((ids: string[], state: 'seen' | 'opened' | 'dismissed') => {
         if (ids.length === 0) return;
-        const gone = new Set(ids);
+        const changed = new Set(ids);
         generation.current++; // a reply already on its way would bring them back
-        setNotifications(prev => prev.filter(n => !gone.has(n.id)));
+        setNotifications(prev => (state === 'seen'
+            ? prev.map(n => (changed.has(n.id) ? { ...n, seen: true } : n))
+            : prev.filter(n => !changed.has(n.id))));
         apiCall('/inbox/notifications', { method: 'POST', body: JSON.stringify({ ids, state }) })
             .catch(() => undefined)
             .finally(() => void refresh());
@@ -125,10 +131,11 @@ export function useInboxState(
 
     const unreadChats = useMemo(() => (userId ? countUnreadChats(conversations, messages, userId) : new Map<string, number>()), [conversations, messages, userId]);
     const unreadChatTotal = useMemo(() => [...unreadChats.values()].reduce((a, b) => a + b, 0), [unreadChats]);
+    const unseenCount = useMemo(() => notifications.filter(n => !n.seen).length, [notifications]);
 
     return useMemo(() => ({
-        notifications, unreadInquiryIds, unreadChats, unreadChatTotal, setNotificationsState, setInquiryRead, openLink,
-    }), [notifications, unreadInquiryIds, unreadChats, unreadChatTotal, setNotificationsState, setInquiryRead, openLink]);
+        notifications, unseenCount, unreadInquiryIds, unreadChats, unreadChatTotal, setNotificationsState, setInquiryRead, openLink,
+    }), [notifications, unseenCount, unreadInquiryIds, unreadChats, unreadChatTotal, setNotificationsState, setInquiryRead, openLink]);
 }
 
 /** 0 hides; above 99 reads 99+. */

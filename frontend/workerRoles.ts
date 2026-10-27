@@ -78,11 +78,10 @@ async function loadSession(request: Request, kv: KVNamespace): Promise<SessionDa
 // never stored; "user" (Staff) is built in but its permissions are editable.
 
 const ROLES_KEY = 'auth:roles';
-const ROLES_CACHE_MS = 15_000;
-let rolesCache: { at: number; roles: RoleDef[] } | null = null;
 
+// No in-memory cache: one isolate serves every organization, and a shared
+// cache handed one organization's roles to another (and saved them there).
 export async function getRoles(kv: KVNamespace): Promise<RoleDef[]> {
-  if (rolesCache && Date.now() - rolesCache.at < ROLES_CACHE_MS) return rolesCache.roles;
   const raw = await kv.get(ROLES_KEY);
   const stored: RoleDef[] = raw ? JSON.parse(raw) : [];
   const staff = stored.find(r => r.id === STAFF_ROLE_ID);
@@ -97,7 +96,6 @@ export async function getRoles(kv: KVNamespace): Promise<RoleDef[]> {
       .filter(r => r.id !== ADMIN_ROLE_ID && r.id !== STAFF_ROLE_ID)
       .map(r => ({ id: r.id, name: r.name, permissions: normalizePermissions(r.permissions) })),
   ];
-  rolesCache = { at: Date.now(), roles };
   return roles;
 }
 
@@ -106,7 +104,6 @@ export async function saveRoles(kv: KVNamespace, roles: RoleDef[]): Promise<void
     .filter(r => r.id !== ADMIN_ROLE_ID)
     .map(r => ({ id: r.id, name: r.name, permissions: r.permissions }));
   await kv.put(ROLES_KEY, JSON.stringify(toStore));
-  rolesCache = null;
 }
 
 export function permissionsFor(roles: RoleDef[], roleId: string): Permissions {

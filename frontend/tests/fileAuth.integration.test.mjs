@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { after, before, test } from 'node:test';
-import { sessionTokenFrom, withSessionToken } from './helpers/session.mjs';
+import { sessionTokenFrom } from './helpers/session.mjs';
 import { startDevWorker } from './helpers/devWorker.mjs';
 
 const OWNER = { name: 'Owner', email: 'owner@example.com', password: 'owner-password-1234' };
@@ -81,6 +81,26 @@ test('opening the app again renews a missing cookie, and only then', async () =>
     assert.equal((await get(fileUrl, { Cookie: renewed })).status, 200);
     const withIt = await get('/api/auth/me', { Authorization: `Bearer ${token}`, Cookie: renewed });
     assert.equal(fileCookieFrom(withIt), null, 'a valid cookie is left alone');
+});
+
+test("purging a deleted proforma removes the photos of its items that aren't in the inventory", async () => {
+    const auth = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const form = new FormData();
+    form.append('file', new File([PNG], 'frame.png', { type: 'image/png' }));
+    const photo = (await (await fetch(`${worker.origin}/api/upload`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form })).json()).url;
+    const invoice = { id: 'inv-photo-1', invoiceNumber: 'PI-PHOTO', customerName: 'Mrs. Mehta', customerEmail: '', items: [{ artworkId: '', title: 'Framing', price: 500, photoUrls: [photo] }], subtotal: 500, taxRate: 0, total: 500, date: Date.now(), status: 'Draft' };
+    assert.equal((await fetch(`${worker.origin}/api/invoices/${invoice.id}`, { method: 'PUT', headers: auth, body: JSON.stringify(invoice) })).status, 201);
+    assert.equal((await fetch(`${worker.origin}/api/invoices/${invoice.id}`, { method: 'DELETE', headers: auth })).status, 200);
+    assert.equal((await get(photo, { Authorization: `Bearer ${token}` })).status, 200, 'deleting only archives: the photo stays for a restore');
+
+    let archived;
+    for (let i = 0; i < 50 && !archived; i++) { // archived after the response
+        archived = (await (await get('/api/deleted-items', { Authorization: `Bearer ${token}` })).json()).find(d => d.entityId === invoice.id);
+        if (!archived) await new Promise(r => setTimeout(r, 100));
+    }
+    assert.ok(archived, 'the proforma is in the archive');
+    assert.equal((await fetch(`${worker.origin}/api/deleted-items/${archived.id}`, { method: 'DELETE', headers: auth })).status, 200);
+    assert.equal((await get(photo, { Authorization: `Bearer ${token}` })).status, 404, 'purged: its photo is gone');
 });
 
 test('signing out ends the file cookie', async () => {

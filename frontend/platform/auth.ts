@@ -195,6 +195,10 @@ function buildAuth(env: Env, db: D1Database, origin: string, methods: LoginMetho
     },
     session: {
       expiresIn: 14 * 86_400,
+      // Renewed only by the browser's own GET /api/v2/auth/get-session, which
+      // also renews the cookie. Server-side checks pass disableRefresh: a
+      // renewal there moved the database expiry but threw the new cookie
+      // away, so people were signed out 14 days after signing in.
       updateAge: 86_400,
       // Sensitive actions (control-panel settings, support sessions) ask for
       // a sign-in newer than this.

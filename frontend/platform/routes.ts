@@ -118,7 +118,7 @@ async function requireProviderAdmin(env: Env, db: D1Database, auth: PlatformAuth
   if (env.ADMIN_HOST && url.host !== env.ADMIN_HOST) {
     return { ok: false, response: fail(404, 'not_found', 'Not found') };
   }
-  const session = await auth.api.getSession({ headers: request.headers });
+  const session = await auth.api.getSession({ headers: request.headers, query: { disableRefresh: true } });
   if (!session) return { ok: false, response: fail(401, 'unauthenticated', 'Sign in first.') };
   const row = await db.prepare(
     "SELECT role FROM provider_admins WHERE user_id = ? AND status = 'active'",
@@ -501,7 +501,7 @@ async function handleInvitationRoute(env: Env, db: D1Database, auth: PlatformAut
   try {
     if (!action && request.method === 'GET') return reply(await describeInvitation(db, token));
     if (action === '/accept' && request.method === 'POST') {
-      const session = await auth.api.getSession({ headers: request.headers });
+      const session = await auth.api.getSession({ headers: request.headers, query: { disableRefresh: true } });
       if (!session) return fail(401, 'unauthenticated', 'Sign in first.');
       return reply(await acceptInvitation(env, db, token, session.user));
     }

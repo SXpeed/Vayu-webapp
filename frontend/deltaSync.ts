@@ -29,7 +29,7 @@ import { ADMIN_ROLE_ID, atLeast } from './permissions';
 import { CONVERSATION_SCOPE_SQL, mayUseConversation, roomAccessOf, type RoomAccess } from './privateRooms';
 import { getRoles, getSession } from './workerRoles';
 import {
-  addD1Usage, flagEnabled, rawRealtimeSecret, realtimeEnabled, workspaceId,
+  addD1Usage, databaseKey, flagEnabled, rawRealtimeSecret, realtimeEnabled, workspaceId,
   type ChangeEvent, type Ctx, type Env, type SessionData,
 } from './workerEnv';
 
@@ -175,7 +175,8 @@ export async function notifyHub(env: Env, events: ChangeEvent[]): Promise<void> 
 /** How long change rows are kept; older cursors get `resyncRequired`. */
 export const CHANGE_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
-let lastPruneAt = 0;
+/** Per database: one isolate serves every organization, each with its own. */
+const lastPruneAt = new Map<string, number>();
 
 /**
  * Delete change rows older than the retention window. The newest row is always
@@ -194,8 +195,9 @@ export async function pruneChangeLog(env: Env, now = Date.now()): Promise<number
 /** Opportunistic, per-isolate-throttled pruning off the request path. */
 function maybePrune(ctx: Ctx): void {
   const now = Date.now();
-  if (now - lastPruneAt < PRUNE_INTERVAL_MS) return;
-  lastPruneAt = now;
+  const db = databaseKey(ctx.env.VAYU_DB);
+  if (now - (lastPruneAt.get(db) ?? 0) < PRUNE_INTERVAL_MS) return;
+  lastPruneAt.set(db, now);
   ctx.execCtx.waitUntil(pruneChangeLog(ctx.env, now).catch(e => {
     console.error('change_log prune failed:', e);
   }));

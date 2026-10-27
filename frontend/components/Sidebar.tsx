@@ -94,7 +94,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         setTip({ label, top: toBodyPx(r.top + r.height / 2), left: toBodyPx(r.right) + 12 });
     };
     const hideTip = () => setTip(null);
-    const { notifications, unreadInquiryIds, unreadChatTotal } = useInbox();
+    const { unseenCount, unreadInquiryIds, unreadChatTotal } = useInbox();
     const [bellOpen, setBellOpen] = useState(false);
     const unreadOf: Partial<Record<ViewState, number>> = { inquiry: unreadInquiryIds.size, messaging: unreadChatTotal };
 
@@ -225,7 +225,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     icon: Bell,
                     isActive: bellOpen,
                     onClick: () => setBellOpen(true),
-                    count: notifications.length,
+                    count: unseenCount,
                 })}
                 {isAdmin && onOpenAdmin && renderRow({
                     key: 'admin',

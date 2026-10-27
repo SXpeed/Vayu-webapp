@@ -19,7 +19,7 @@
 //    passcode replaces grant_key, which cancels every pass issued before.
 //
 // Pure helpers here; the route handlers live in worker.ts.
-import { fileKeyFromUrl } from './workerEnv';
+import { fileKeyFromUrl, timingSafeEqual } from './workerEnv';
 import { text } from './rows';
 
 export const PASS_TTL_MS = 6 * 60 * 60 * 1000;
@@ -69,17 +69,9 @@ export async function hashPasscode(passcode: string, saltHex: string): Promise<s
   return hex(bits);
 }
 
-/** Constant-time comparison of two equal-length hex strings. */
-export function sameHex(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= (a.codePointAt(i) ?? 0) ^ (b.codePointAt(i) ?? 0);
-  return diff === 0;
-}
-
 export async function passcodeMatches(passcode: string, row: { passcode_hash: string; passcode_salt: string }): Promise<boolean> {
   if (!/^\d{6}$/.test(passcode)) return false;
-  return sameHex(await hashPasscode(passcode, row.passcode_salt), row.passcode_hash);
+  return timingSafeEqual(await hashPasscode(passcode, row.passcode_salt), row.passcode_hash);
 }
 
 // ── Passes (short-lived proof that the passcode was entered) ─────────────
@@ -101,7 +93,7 @@ export async function passValid(pass: string | null, grantKey: string, token: st
   if (!m) return false;
   const expiresAt = Number(m[1]);
   if (expiresAt <= now || expiresAt > now + PASS_TTL_MS) return false;
-  return sameHex(await hmacHex(grantKey, `${token}.${expiresAt}`), m[2]);
+  return timingSafeEqual(await hmacHex(grantKey, `${token}.${expiresAt}`), m[2]);
 }
 
 // ── Room state and client view ───────────────────────────────────────────

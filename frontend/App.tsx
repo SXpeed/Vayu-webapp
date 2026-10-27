@@ -499,7 +499,7 @@ const App: React.FC = () => {
             case 'home':
                 return userProfile ? <HomeView artworks={artworks} catalogs={catalogs} events={events} teamMembers={teamMembers} onNavigate={navigateTo} userProfile={userProfile} onAddEvent={handlers.handleAddEvent} onUpdateEvent={handlers.handleUpdateEvent} onDeleteEvent={handlers.handleDeleteEvent} /> : null;
             case 'artworks':
-                return <ArtworksView artworks={artworks} onAddArtwork={handlers.handleAddArtwork} onArtworkClick={handleArtworkClick} />;
+                return <ArtworksView artworks={artworks} onAddArtwork={handlers.handleAddArtwork} onUpdateArtwork={handlers.handleUpdateArtwork} onArtworkClick={handleArtworkClick} />;
             case 'collections':
                 return <CollectionsView collections={collections} artworks={artworks} onAddCollection={handlers.handleAddCollection} onUpdateCollection={handlers.handleUpdateCollection} onDeleteCollection={handlers.handleDeleteCollection} onArtworkClick={handleArtworkClick} onAddArtwork={handlers.handleAddArtwork} />;
             case 'catalogs':

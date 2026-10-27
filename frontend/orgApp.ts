@@ -203,7 +203,7 @@ async function platformSignIn(request: Request, env: Env, db: D1Database): Promi
   const authOrigin = resolveAuthOrigin(env, new URL(request.url));
   if (!authOrigin) return { user: null, expiresAt: 0 };
   const auth = await getAuth(env, db, authOrigin, await getEffectiveLoginMethods(env, db));
-  const signedIn = await auth.api.getSession({ headers: request.headers });
+  const signedIn = await auth.api.getSession({ headers: request.headers, query: { disableRefresh: true } });
   if (!signedIn) return { user: null, expiresAt: 0 };
   const value = { user: signedIn.user, expiresAt: new Date(signedIn.session.expiresAt).getTime(), sessionId: signedIn.session.id };
   // Only a confirmed sign-in is remembered: a signed-out answer is asked again.

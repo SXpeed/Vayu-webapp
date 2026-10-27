@@ -315,6 +315,14 @@ export function workspaceId(env: Env): string {
   return id || 'default';
 }
 
+/** Constant-time string comparison, for signatures and secrets. */
+export function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= (a.codePointAt(i) ?? 0) ^ (b.codePointAt(i) ?? 0);
+  return diff === 0;
+}
+
 export function flagEnabled(value: string | undefined): boolean {
   return value === 'on' || value === 'true' || value === '1';
 }
@@ -350,7 +358,7 @@ export function rawRealtimeSecret(env: Env): string {
 }
 
 /** 32-byte signing key derived from the raw secret. */
-export async function resolveRealtimeSecret(env: Env): Promise<CryptoKey> {
+export function resolveRealtimeSecret(env: Env): Promise<CryptoKey> {
   return crypto.subtle.importKey(
     'raw', new TextEncoder().encode(rawRealtimeSecret(env)),
     { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify'],

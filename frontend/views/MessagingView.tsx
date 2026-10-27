@@ -161,13 +161,14 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
         const isMenuOpen = openMenuId === conv.id;
         const displayName = getConvDisplayName(conv);
         const unread = unreadChats.get(conv.id) ?? 0;
+        const unreadText = unread ? `, ${unread} unread` : '';
         // On desktop the thread sits beside the list, so the open conversation
         // has to read as selected — pressed in, with a gold edge marker.
         const isSelected = isDesktop && selectedConv?.id === conv.id;
         return (
             <div key={conv.id} className="relative">
                 <div
-                    className={`relative w-full text-left rounded-2xl p-3 flex items-center gap-2 animate-fade-in-up cursor-pointer active-scale ${isSelected ? 'neu-inset' : 'neu-raised'}`}
+                    className={`relative w-full text-left rounded-2xl p-3 flex items-center gap-2 animate-fade-in-up cursor-pointer active-scale ${isSelected ? 'neu-inset' : 'neu-raised'} ${unread && !isSelected ? 'ring-2 ring-gold-500/70 dark:ring-gold-400/70' : ''}`}
                     style={{ animationDelay: `${index * 45}ms` }}
                 >
                     {isSelected && (
@@ -177,7 +178,7 @@ export const MessagingView: React.FC<MessagingViewProps> = ({ conversations, mes
                     <button
                         type="button"
                         onClick={() => { setOpenMenuId(null); handleConvClick(conv); }}
-                        aria-label={`Open conversation with ${displayName}`}
+                        aria-label={`Open conversation with ${displayName}${unreadText}`}
                         className="absolute inset-0 z-[1] w-full h-full rounded-lg cursor-pointer"
                     />
                     <div className="relative shrink-0">

@@ -173,7 +173,7 @@
    * Content shows at once; the only motion left is a short fade. */
   @media (prefers-reduced-motion: reduce) {
     .mk-rise, .mk-settle { animation: mk-fade 200ms linear both; animation-delay: 0ms; }
-    .mk-loop { animation: none !important; }
+    .mk-loop { animation: none !important; } /* NOSONAR: reduced motion has to beat every animation and transition */
     .mk [data-reveal] { transition: opacity 200ms linear; transition-delay: 0ms; }
     .mk-reveal-ready [data-reveal]:not([data-reveal-in]),
     .mk-reveal-ready [data-reveal="scale"]:not([data-reveal-in]) { transform: none; }
@@ -185,6 +185,6 @@
   }
 
   @media print {
-    .mk [data-reveal], .mk-rise, .mk-settle { opacity: 1 !important; transform: none !important; animation: none !important; }
+    .mk [data-reveal], .mk-rise, .mk-settle { opacity: 1 !important; transform: none !important; animation: none !important; } /* NOSONAR: printing shows everything, whatever its animation state */
   }
 }

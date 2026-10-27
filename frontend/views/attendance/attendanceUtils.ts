@@ -142,7 +142,8 @@ export function detectConnectionType(): 'wifi' | 'mobile' | 'unknown' {
 
 export function downloadCsv(filename: string, rows: (string | number)[][]): void {
     const csv = rows.map(r => r.map(v => `"${String(v).replaceAll('"', '""')}"`).join(',')).join('\n');
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    // The BOM tells Excel the file is UTF-8 (₹, accents).
+    const url = URL.createObjectURL(new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8' }));
     const a = document.createElement('a');
     a.href = url;
     a.download = filename;

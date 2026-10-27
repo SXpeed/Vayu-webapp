@@ -32,7 +32,7 @@ const WRITE_ROLES = new Set(['owner', 'admin', 'manager', 'staff']);
 const MANAGE_ROLES = new Set(['owner', 'admin', 'manager']);
 
 export async function resolveOrgContext(env: Env, db: D1Database, auth: PlatformAuth, request: Request, orgId: string): Promise<OrgContext> {
-  const session = await auth.api.getSession({ headers: request.headers });
+  const session = await auth.api.getSession({ headers: request.headers, query: { disableRefresh: true } });
   if (!session) throw new OrgAccessError(401, 'unauthenticated', 'Sign in first.');
 
   // One query decides membership AND organization status, so a suspended
@@ -60,7 +60,7 @@ export async function resolveOrgContext(env: Env, db: D1Database, auth: Platform
 
 /** Organizations the signed-in person can open, for the workspace switcher. */
 export async function listMyOrganizations(db: D1Database, auth: PlatformAuth, request: Request) {
-  const session = await auth.api.getSession({ headers: request.headers });
+  const session = await auth.api.getSession({ headers: request.headers, query: { disableRefresh: true } });
   if (!session) throw new OrgAccessError(401, 'unauthenticated', 'Sign in first.');
   const { results } = await db.prepare(
     `SELECT o.id, o.name, o.slug, o.business_type, o.status, o.country, m.role

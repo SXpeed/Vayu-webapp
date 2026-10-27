@@ -107,6 +107,17 @@ test('one organization never sees another\'s data', async () => {
     assert.equal(again.body[0].title, 'Monsoon Study');
 });
 
+test('custom roles belong to their organization', async () => {
+    const made = await post(ownerA, app(orgA.id, '/auth/roles'), { name: 'Framers', permissions: {} });
+    assert.equal(made.status, 201, made.text);
+    const namesIn = async (b, orgId) => (await b.call(app(orgId, '/auth/roles'))).body.map(r => r.name);
+    assert.ok(!(await namesIn(ownerB, orgB.id)).includes('Framers'), 'B never sees A\'s role');
+    // A role B makes right after A's is saved with B's roles only.
+    assert.equal((await post(ownerB, app(orgB.id, '/auth/roles'), { name: 'Hangers', permissions: {} })).status, 201);
+    assert.ok(!(await namesIn(ownerB, orgB.id)).includes('Framers'));
+    assert.ok((await namesIn(ownerA, orgA.id)).includes('Framers'), 'A keeps its own');
+});
+
 test('notifications, unread inquiries, contacts and tags stay in their organization', async () => {
     const inq = { id: 'inq-a-1', inquiryNumber: 'INQ-A-1', customerName: 'Rahul', customerPhone: '+91 98765 43210', customerEmail: '', artworkIds: [], notes: '', source: 'Walk-in', status: 'New', catalogShared: false, date: Date.now() };
     assert.equal((await post(staffA, app(orgA.id, '/inquiries'), inq)).status, 201);
@@ -195,6 +206,13 @@ test('files are stored per organization and served only to its members', async (
     const key = up.body.url.slice(`/api/o/${orgA.id}/files/`.length);
     assert.equal((await ownerB.call(app(orgB.id, `/files/${key}`))).status, 404);
     assert.equal((await worker.browser().call(up.body.url)).status, 401, 'no sign-in, no file');
+
+    // The original app (no organization) sees the whole bucket; its sign-in still opens no organization's file.
+    const original = worker.browser();
+    const owner = { name: 'Original Owner', email: 'original@example.com', password: 'original password 123' };
+    await original.call('/api/auth/setup', { method: 'POST', body: owner });
+    assert.equal((await original.call('/api/auth/login', { method: 'POST', body: owner })).status, 200);
+    assert.equal((await original.call(`/api/files/orgs/${orgA.id}/${key}`)).status, 404);
 });
 
 test('delta sync and realtime run per organization', async () => {

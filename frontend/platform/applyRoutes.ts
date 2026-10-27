@@ -23,7 +23,7 @@ export interface ApplyOptions {
 
 export async function handleApplyRoute(db: D1Database, auth: PlatformAuth, request: Request, path: string, opts: ApplyOptions): Promise<Response | null> {
   if (path !== '/apply' && !path.startsWith('/apply/')) return null;
-  const session = await auth.api.getSession({ headers: request.headers });
+  const session = await auth.api.getSession({ headers: request.headers, query: { disableRefresh: true } });
   if (!session) return fail(401, 'unauthenticated', 'Sign in first.');
   const emailVerified = !!session.user.emailVerified;
   if (path === '/apply/submit' && request.method === 'POST' && opts.requireVerifiedEmail && !emailVerified) {

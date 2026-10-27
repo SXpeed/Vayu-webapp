@@ -16,7 +16,7 @@
 // HttpOnly keeps a script from reading the session token; it does not stop a
 // script injected into our own pages from acting as the signed-in person.
 
-import type { Env } from './workerEnv';
+import { timingSafeEqual, type Env } from './workerEnv';
 
 export type AuthKind = 'cookie' | 'bearer' | 'none';
 
@@ -49,13 +49,6 @@ async function hmacHex(key: string, message: string): Promise<string> {
 
 /** The CSRF value for a session: derived from its (secret) token, so it needs no storage. */
 export const csrfFor = (sessionToken: string) => hmacHex(sessionToken, 'vayu-csrf-v1');
-
-function sameText(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= (a.codePointAt(i) ?? 0) ^ (b.codePointAt(i) ?? 0);
-  return diff === 0;
-}
 
 /** The two cookies for a new session: the HttpOnly session, and the readable CSRF value. */
 export async function sessionCookies(request: Request, token: string, maxAgeSeconds: number): Promise<string[]> {
@@ -136,6 +129,6 @@ export async function csrfProblem(request: Request, env: Pick<Env, 'AUTH_ORIGINS
   if (kind !== 'cookie' || !token || SAFE_METHODS.has(request.method)) return null;
   if (!fromTrustedPage(request, env)) return { code: 'csrf_origin', error: 'This request came from a page that is not allowed.' };
   const sent = request.headers.get('X-CSRF-Token') ?? '';
-  if (!sent || !sameText(sent, await csrfFor(token))) return { code: 'csrf_token', error: 'This page is out of date. Reload it and try again.' };
+  if (!sent || !timingSafeEqual(sent, await csrfFor(token))) return { code: 'csrf_token', error: 'This page is out of date. Reload it and try again.' };
   return null;
 }

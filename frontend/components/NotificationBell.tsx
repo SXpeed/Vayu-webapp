@@ -31,6 +31,12 @@ export const NotificationSheet: React.FC<{ onClose: () => void }> = ({ onClose }
     const groups = useMemo(() => groupNotifications(notifications), [notifications]);
     const closeRef = useRef<HTMLButtonElement>(null);
 
+    // Looking at the bell is seeing what's in it: the count drops to what comes after.
+    useEffect(() => {
+        const unseen = notifications.filter(n => !n.seen).map(n => n.id);
+        if (unseen.length) setNotificationsState(unseen, 'seen');
+    }, [notifications, setNotificationsState]);
+
     useEffect(() => {
         closeRef.current?.focus();
         const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -97,18 +103,18 @@ export const NotificationSheet: React.FC<{ onClose: () => void }> = ({ onClose }
 
 /** A round bell button with its count, for page headers on phones. */
 export const BellButton: React.FC = () => {
-    const { notifications } = useInbox();
+    const { unseenCount } = useInbox();
     const [open, setOpen] = useState(false);
     return (
         <>
             <button
                 type="button"
                 onClick={() => setOpen(true)}
-                aria-label={notifications.length ? `Notifications, ${notifications.length} new` : 'Notifications'}
+                aria-label={unseenCount ? `Notifications, ${unseenCount} new` : 'Notifications'}
                 className="relative w-9 h-9 rounded-full neu-raised-sm neu-btn text-brand-900 dark:text-gold-400 flex items-center justify-center active-scale"
             >
                 <Bell size={17} />
-                <CountBadge count={notifications.length} className="absolute -top-1 -right-1" />
+                <CountBadge count={unseenCount} className="absolute -top-1 -right-1" />
             </button>
             {open && <NotificationSheet onClose={() => setOpen(false)} />}
         </>

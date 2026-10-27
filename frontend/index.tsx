@@ -24,7 +24,8 @@ function page() {
 
 if (onOldAddress && !installed) {
     // A browser tab: just go to the new address, keeping the path.
-    location.replace(APP_ORIGIN + location.pathname + location.search + location.hash);
+    // Not an open redirect: the host is the fixed APP_ORIGIN and pathname always starts with '/'.
+    location.replace(APP_ORIGIN + location.pathname + location.search + location.hash); // NOSONAR
 } else {
     ReactDOM.createRoot(rootElement).render(
         <React.StrictMode>

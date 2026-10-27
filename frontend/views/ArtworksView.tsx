@@ -1,25 +1,30 @@
 import React, { useState, useRef } from 'react';
-import { Plus, Image as ImageIcon, X, Trash2, Loader2, Camera, Folder } from 'lucide-react';
+import { Plus, Image as ImageIcon, X, Trash2, Loader2, Camera, Folder, Download, Upload } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
-import { PageRoot, PageHeader, PageBody, PrimaryIconButton, EmptyState, Pill } from '../components/ui';
+import { PageRoot, PageHeader, PageBody, PrimaryIconButton, GhostIconButton, EmptyState, Pill } from '../components/ui';
 import { Artwork, Edition } from '../types';
 import toast from 'react-hot-toast';
 import storageService, { getThumbUrl } from '../services/storageService';
 import { fileKeyOf } from '../services/workspace';
 import { IfCan } from '../components/Layout';
+import { downloadCsv } from './attendance/attendanceUtils';
+import { inventoryRows, planImport, readInventoryCsv, skippedNote } from './inventoryCsv';
 
 
 interface ArtworksViewProps {
     artworks: Artwork[];
-    onAddArtwork: (artwork: Omit<Artwork, 'id' | 'createdAt'>) => void;
+    onAddArtwork: (artwork: Omit<Artwork, 'id' | 'createdAt'>) => unknown;
+    onUpdateArtwork: (artwork: Artwork) => unknown;
     onArtworkClick: (artwork: Artwork) => void;
 }
 
 const STATUS_FILTERS = ['All', 'Available', 'Sold'] as const;
 type StatusFilter = typeof STATUS_FILTERS[number];
 
-export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwork, onArtworkClick }) => {
+export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwork, onUpdateArtwork, onArtworkClick }) => {
     const [isAdding, setIsAdding] = useState(false);
+    const [isImporting, setIsImporting] = useState(false);
+    const importInputRef = useRef<HTMLInputElement>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
 
@@ -30,11 +35,45 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
         )
     );
 
+    const handleExport = () => downloadCsv(`inventory-${new Date().toISOString().slice(0, 10)}.csv`, inventoryRows(filteredArtworks));
+
+    const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        e.target.value = ''; // the same file can be chosen again
+        if (!file) return;
+        setIsImporting(true);
+        try {
+            const { artworks: rows, skipped } = readInventoryCsv(await file.text());
+            const { adds, updates } = planImport(artworks, rows);
+            const note = skippedNote(skipped);
+            if (adds.length + updates.length === 0) {
+                toast.error(`Nothing to import: no new or changed artworks.${note}`);
+                return;
+            }
+            const existing = updates.length === 1 ? 'artwork' : 'artworks';
+            if (!globalThis.confirm(`Add ${adds.length} new and update ${updates.length} existing ${existing}?${note}`)) return;
+            for (const row of adds) await onAddArtwork({ ...row, imageUrls: [] }); // NOSONAR: in file order
+            for (const art of updates) await onUpdateArtwork(art); // NOSONAR
+            toast.success(`Imported: ${adds.length} added, ${updates.length} updated`);
+        } catch (err) {
+            toast.error((err as Error).message || 'Could not read the file as CSV');
+        } finally {
+            setIsImporting(false);
+        }
+    };
+
     return (
         <PageRoot>
             <PageHeader
                 title="Inventory"
-                actions={<IfCan section="inventory"><PrimaryIconButton onClick={() => setIsAdding(true)} label="Add artwork" icon={<Plus size={16} />} /></IfCan>}
+                actions={<>
+                    <GhostIconButton onClick={handleExport} label="Export these artworks as CSV" icon={<Download size={16} />} disabled={filteredArtworks.length === 0} />
+                    <IfCan section="inventory">
+                        <GhostIconButton onClick={() => importInputRef.current?.click()} label="Import artworks from CSV" icon={isImporting ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />} disabled={isImporting} />
+                        <input ref={importInputRef} type="file" accept=".csv,text/csv" className="hidden" aria-label="CSV file to import" onChange={e => { void handleImport(e); }} />
+                        <PrimaryIconButton onClick={() => setIsAdding(true)} label="Add artwork" icon={<Plus size={16} />} />
+                    </IfCan>
+                </>}
             >
                 <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search artworks..." />
                 <div className="flex items-center gap-2 overflow-x-auto no-scrollbar -mx-1 px-1 py-1">

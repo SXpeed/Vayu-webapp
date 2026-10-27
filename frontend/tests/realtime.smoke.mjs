@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const frontend = fileURLToPath(new URL('..', import.meta.url));
+const TASKKILL = join(process.env.SystemRoot || String.raw`C:\Windows`, 'System32', 'taskkill.exe');
 const PORT = 8799;
 const BASE = `http://localhost:${PORT}`;
 const persist = mkdtempSync(join(tmpdir(), 'vayu-smoke-'));
@@ -45,16 +46,16 @@ function openSocket(ticket, origin = BASE) {
     const frames = [];
     const waiters = [];
     const url = `ws://localhost:${PORT}/api/realtime/ws?ticket=${encodeURIComponent(ticket)}`;
-    const ws = new WebSocket(url, origin === null ? {} : { headers: { Origin: origin } });
+    const ws = new WebSocket(url, origin ? { headers: { Origin: origin } } : {});
     const state = { closeCode: null, frames, ws };
     ws.onmessage = event => {
         if (event.data === 'pong') return;
         const frame = JSON.parse(event.data);
         frames.push(frame);
-        for (const w of [...waiters]) if (w.match(frame)) { waiters.splice(waiters.indexOf(w), 1); w.resolve(frame); }
+        for (const w of waiters.slice()) if (w.match(frame)) { waiters.splice(waiters.indexOf(w), 1); w.resolve(frame); }
     };
     state.next = (match, timeoutMs = 5_000) => {
-        const hit = frames.find(match);
+        const hit = frames.find(f => match(f));
         if (hit) { frames.splice(frames.indexOf(hit), 1); return Promise.resolve(hit); }
         return new Promise((resolve, reject) => {
             const w = { match, resolve: f => { clearTimeout(t); frames.splice(frames.indexOf(f), 1); resolve(f); } };
@@ -75,7 +76,7 @@ async function waitForServer(child) {
     let exited = false;
     child.on('exit', () => { exited = true; });
     while (Date.now() < deadline && !exited) {
-        try { await fetch(`${BASE}/api/auth/status`); return; } catch { await new Promise(r => setTimeout(r, 500)); }
+        try { await fetch(`${BASE}/api/auth/status`); return; } catch { await new Promise(r => setTimeout(r, 500)); } // NOSONAR: polling
     }
     throw new Error('wrangler dev did not start');
 }
@@ -247,8 +248,8 @@ try {
         assert.equal(back.data.deviceLimit, 2);
 
         const adminTokens = [];
-        for (let i = 0; i < 4; i++) adminTokens.push(await loginAs('smoke@test.local', 'smoke-pass', 'Firefox/131.0'));
-        for (const t of adminTokens) assert.equal(await works(t), true, 'admin logins are never limited');
+        for (let i = 0; i < 4; i++) adminTokens.push(await loginAs('smoke@test.local', 'smoke-pass', 'Firefox/131.0')); // NOSONAR: one device after another
+        assert.deepEqual(await Promise.all(adminTokens.map(t => works(t))), [true, true, true, true], 'admin logins are never limited');
     });
 
     await check('everyone can list their own devices, with this device marked', async () => {
@@ -349,7 +350,7 @@ try {
 } finally {
     child.kill();
     if (process.platform === 'win32' && child.pid) {
-        try { execFileSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* gone */ }
+        try { execFileSync(TASKKILL, ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* gone */ }
     }
     await new Promise(r => setTimeout(r, 500));
     try { rmSync(persist, { recursive: true, force: true }); } catch { /* files still locked on Windows */ }

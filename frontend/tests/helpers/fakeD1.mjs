@@ -41,7 +41,7 @@ export function fakeD1({ migrate = true, before = null } = {}) {
             sqlite.exec('BEGIN');
             try {
                 const out = [];
-                for (const s of stmts) out.push(await s.run());
+                for (const s of stmts) out.push(await s.run()); // NOSONAR: a batch runs in order, inside one transaction
                 sqlite.exec('COMMIT');
                 return out;
             } catch (e) {

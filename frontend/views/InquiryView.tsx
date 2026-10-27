@@ -224,7 +224,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                             <div
                                 key={inquiry.id}
                                 className={`relative w-full text-left neu-raised rounded-2xl p-3 border animate-fade-in-up active-scale ${inquiry.status === 'Closed' ? 'border-gray-200 dark:border-gray-800 opacity-70' : 'border-gray-100 dark:border-gray-800'
-                                    }`}
+                                    } ${unread ? 'ring-2 ring-gold-500/70 dark:ring-gold-400/70' : ''}`}
                                 style={{ animationDelay: `${250 + index * 50}ms` }}
                             >
                                 {/* Whole-card tap target behind the content. The content ignores

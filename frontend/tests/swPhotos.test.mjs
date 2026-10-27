@@ -54,7 +54,7 @@ function worker(files = {}) {
 
     /** A page asking for a file: the worker's answer, or null when it lets the request through. */
     const get = async (path, headers = {}) => {
-        let answer = null;
+        let answer = /** @type {Promise<Response> | null} */ (null);
         const pending = [];
         listeners.fetch({
             request: new Request(`${ORIGIN}${path}`, { headers }),
@@ -132,6 +132,7 @@ test('kept photos survive an update of the app', async () => {
     const w = worker({ [PHOTO]: [200, 'image/jpeg', 'full-bytes'] });
     await w.get(PHOTO);
     w.stores.set('vayu-design-v1', new Map());
+    /** @type {Promise<unknown> | undefined} */
     let done;
     w.listeners.activate({ waitUntil: p => { done = p; } });
     await done;
