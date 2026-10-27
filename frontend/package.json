@@ -42,5 +42,10 @@
     "typescript": "^6.0.3",
     "vite": "^8.1.0",
     "wrangler": "^4.105.0"
+  },
+  "overrides": {
+    "@imgly/background-removal": {
+      "zod": "^4.6.7"
+    }
   }
 }
