@@ -19,7 +19,7 @@
 import { timingSafeEqual, type Env } from '../workerEnv';
 import { auditStmt } from './audit';
 import { OrgError, type Actor } from './orgs';
-import { WEBHOOK_OVERLAP_MS, razorpayApiBase, signRazorpayBody } from './payments';
+import { WEBHOOK_OVERLAP_MS, razorpay, signRazorpayBody } from './payments';
 import { recordRejection, recordVerified } from './webhookHealth';
 import { parseLimits } from './plans';
 import { discounted, runningOffers, type Offer } from './offers';
@@ -148,7 +148,7 @@ export async function verifyBillingAccount(env: Env, db: D1Database, actor: Acto
   let status: 'verified' | 'failed' = 'failed';
   let error: string | null = null;
   try {
-    const res = await fetch(`${razorpayApiBase(env)}/v1/orders?count=1`, { headers: { Authorization: basicAuth(a.keyId, secret) } });
+    const res = await razorpay(env, { keyId: a.keyId, keySecret: secret }, 'GET', '/orders?count=1');
     if (res.ok) status = 'verified';
     else if (res.status === 401) error = 'Razorpay rejected these keys (401). Check the key ID and secret.';
     else error = `Razorpay answered ${res.status}. Try again later.`;
@@ -173,11 +173,6 @@ export async function disconnectBillingAccount(db: D1Database, actor: Actor): Pr
   ]);
 }
 
-function basicAuth(keyId: string, secret: string): string {
-  const pair = `${keyId}:${secret}`;
-  return `Basic ${btoa(pair)}`;
-}
-
 /** The account's keys when organizations can pay into it (verified). */
 async function payableKeys(env: Env, db: D1Database): Promise<{ keyId: string; keySecret: string; mode: 'test' | 'live' } | null> {
   const a = await readAccount(db);
@@ -196,16 +191,6 @@ async function keysForPayment(env: Env, db: D1Database, keyId: string): Promise<
   if (a?.keyId !== keyId) return null;
   const keySecret = await tryDecryptSecret(env, secretContext('key_secret'), a.keySecretEnc, 'billing.keysForPayment');
   return keySecret === null ? null : { keyId: a.keyId, keySecret };
-}
-
-async function razorpay(env: Env, keys: { keyId: string; keySecret: string }, method: 'GET' | 'POST', path: string, body?: unknown) {
-  const res = await fetch(`${razorpayApiBase(env)}/v1${path}`, {
-    method,
-    headers: { Authorization: basicAuth(keys.keyId, keys.keySecret), 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const data = await res.json().catch(() => ({})) as Record<string, any>;
-  return { ok: res.ok, status: res.status, data };
 }
 
 // ── Plans an organization can pay for ─────────────────────────────────────

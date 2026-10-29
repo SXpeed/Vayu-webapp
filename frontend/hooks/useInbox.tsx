@@ -13,6 +13,14 @@ import { apiCall } from '../services/apiClient';
 import { realtimeService } from '../services/realtimeService';
 import type { Conversation, Message } from '../types';
 
+/** Closes this device's notifications that match; browsers without them do nothing. */
+function closeNotifications(match: (n: Notification) => boolean): void {
+    navigator.serviceWorker?.getRegistration()
+        .then(reg => reg?.getNotifications())
+        .then(list => list?.filter(match).forEach(n => n.close()))
+        .catch(() => undefined);
+}
+
 export interface BellNotification {
     id: string;
     groupKey: string;
@@ -61,6 +69,16 @@ export function countUnreadChats(conversations: Conversation[], messages: Messag
         counts.set(m.conversationId, (counts.get(m.conversationId) ?? 0) + 1);
     }
     return counts;
+}
+
+/**
+ * A chat notification can go once `me` has read the message it shows, here
+ * or on another device, as on WhatsApp. One for a message not synced yet stays.
+ */
+export function chatNotificationRead(tag: string, data: { messageId?: unknown } | null, messages: Message[], me: string): boolean {
+    if (!tag.startsWith('conv-')) return false;
+    const msg = messages.find(m => m.id === data?.messageId);
+    return !!msg && !!(msg.readBy?.[me] || msg.status === 'read');
 }
 
 export function useInboxState(
@@ -117,6 +135,7 @@ export function useInboxState(
     }, [refresh]);
 
     const setInquiryRead = useCallback((inquiryId: string, read: boolean) => {
+        if (read) closeNotifications(n => n.tag === `inquiry-${inquiryId}`);
         generation.current++;
         setUnreadInquiryIds(prev => {
             if (prev.has(inquiryId) !== read) return prev;
@@ -132,6 +151,11 @@ export function useInboxState(
     const unreadChats = useMemo(() => (userId ? countUnreadChats(conversations, messages, userId) : new Map<string, number>()), [conversations, messages, userId]);
     const unreadChatTotal = useMemo(() => [...unreadChats.values()].reduce((a, b) => a + b, 0), [unreadChats]);
     const unseenCount = useMemo(() => notifications.filter(n => !n.seen).length, [notifications]);
+
+    // A chat's notification goes when its message is read, here or (once synced) elsewhere.
+    useEffect(() => {
+        if (userId) closeNotifications(n => chatNotificationRead(n.tag, n.data, messages, userId));
+    }, [userId, messages]);
 
     return useMemo(() => ({
         notifications, unseenCount, unreadInquiryIds, unreadChats, unreadChatTotal, setNotificationsState, setInquiryRead, openLink,

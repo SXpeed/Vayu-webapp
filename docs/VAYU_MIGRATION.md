@@ -1,5 +1,9 @@
 # Moving Vayu in as the first organization
 
+> **Removed 2026-10-29.** This import wrote into OrgStore, which the app never
+> read; it is deleted. A copy into `OrgAppDb` is still to be built
+> (IMPLEMENTATION_PLAN.md, Step 4). Kept for history.
+
 The existing app keeps one business's data in a shared database (`VAYU_DB`) and
 its users in KV. This copies both into **one organization**: business rows into
 that organization's own database, users into platform accounts plus memberships.

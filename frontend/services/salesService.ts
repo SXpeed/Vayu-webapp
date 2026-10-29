@@ -1,5 +1,6 @@
 import { summarize, type Sale, type SaleInput, type SalesSummary } from '../salesRules';
 import { apiCall as call } from './apiClient';
+import { authService } from './authService';
 import { db, type PendingSale } from './db';
 
 export type { PendingSale } from './db';
@@ -9,6 +10,8 @@ export interface SalesPage {
     to: string;
     sales: Sale[];
     summary: SalesSummary;
+    /** More sales than the list holds: only the latest are listed, the summary covers all. */
+    truncated?: boolean;
     /** Every tag in use, most recent first (suggestions and filters). */
     allTags: string[];
 }
@@ -31,6 +34,9 @@ export const newSaleId = (): string => `sale_${crypto.randomUUID().replaceAll('-
 
 let flushing: Promise<void> | null = null;
 
+/** A shared tablet keeps each person's offline sales for them: they upload, and show, only under their own sign-in. */
+const mine = (p: PendingSale): boolean => !p.userId || p.userId === authService.savedUser()?.id;
+
 /**
  * Uploads the sales recorded offline, oldest first. The server gives each its
  * number. A sale it refuses (the piece was sold meanwhile, say) stays on the
@@ -40,7 +46,7 @@ let flushing: Promise<void> | null = null;
 export function flushPendingSales(): Promise<void> {
     flushing ??= (async () => {
         for (const item of db.getPendingSales()) {
-            if (item.error) continue;
+            if (item.error || !mine(item)) continue;
             try {
                 await call<Sale>('/sales', { method: 'POST', body: JSON.stringify({ ...item.input, id: item.id }) });
                 db.setPendingSales(db.getPendingSales().filter(p => p.id !== item.id));
@@ -63,7 +69,7 @@ export const salesService = {
     /** The sales between two days (inclusive): from the server, or the device's copy when offline. */
     async load(from: string, to: string): Promise<SalesData> {
         await flushPendingSales().catch(() => undefined);
-        const pending = db.getPendingSales().filter(p => p.input.saleDate >= from && p.input.saleDate <= to);
+        const pending = db.getPendingSales().filter(p => mine(p) && p.input.saleDate >= from && p.input.saleDate <= to);
         try {
             const page = await call<SalesPage>(`/sales?from=${from}&to=${to}`);
             db.saveSalesPage({ ...page, savedAt: Date.now() });
@@ -71,7 +77,7 @@ export const salesService = {
         } catch (e) {
             if (!unreachable(e)) throw e;
             const saved = db.getSavedSalesPage(from, to);
-            if (saved) return { from, to, sales: saved.sales, summary: saved.summary, allTags: saved.allTags ?? [], pending, offline: true, savedAt: saved.savedAt };
+            if (saved) return { from, to, sales: saved.sales, summary: saved.summary, truncated: saved.truncated, allTags: saved.allTags ?? [], pending, offline: true, savedAt: saved.savedAt };
             return { from, to, sales: [], summary: summarize([]), allTags: [], pending, offline: true, savedAt: null };
         }
     },
@@ -86,7 +92,7 @@ export const salesService = {
             return { sale: await call<Sale>('/sales', { method: 'POST', body: JSON.stringify({ ...input, id }) }) };
         } catch (e) {
             if (!unreachable(e)) throw e;
-            const pending: PendingSale = { id, input, savedAt: Date.now() };
+            const pending: PendingSale = { id, input, savedAt: Date.now(), userId: authService.savedUser()?.id };
             db.setPendingSales([...db.getPendingSales(), pending]);
             return { pending };
         }
@@ -108,7 +114,7 @@ export const salesService = {
 
     /** Tries a refused offline sale again (after, say, the piece was put back on sale). */
     retryPending(id: string): Promise<void> {
-        db.setPendingSales(db.getPendingSales().map(p => (p.id === id ? { id: p.id, input: p.input, savedAt: p.savedAt } : p)));
+        db.setPendingSales(db.getPendingSales().map(p => (p.id === id ? { id: p.id, input: p.input, savedAt: p.savedAt, userId: p.userId } : p)));
         return flushPendingSales();
     },
 };

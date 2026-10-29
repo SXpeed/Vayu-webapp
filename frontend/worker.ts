@@ -34,7 +34,7 @@ import { cleanList, contactKeys, emailKey, phoneKey, tagNameKey } from './contac
 import { ensureContactSchema, isUniqueViolation, keyOwners, linkInquiryContact, orgCountry, replaceKeyStmts } from './contactStore';
 import { signTicket, TICKET_TTL_MS } from './realtimeTickets';
 import {
-  fileAccessAllowed, fileAuthEnabled, fileCacheHeaders, fileCookieClearHeaders,
+  fileAccessAllowed, fileCacheHeaders, fileCookieClearHeaders,
   fileCookieToken, fileCookieValid, forgetFileToken, issueFileCookie,
 } from './fileAuth';
 import { ensureMessageColumns, reactionStmts, readReceiptStmts, userPath } from './messageReceipts';
@@ -73,7 +73,6 @@ import {
 
 // Durable Object classes must be exported from the entry module.
 export { SyncHub } from './realtime';
-export { OrgStore } from './platform/orgStore';
 export { OrgAppDb } from './orgAppDb';
 
 type FormField = File | string | null;
@@ -508,7 +507,7 @@ async function notifyConversationMessage(env: Env, msg: any, session: SessionDat
       title: groupName || senderName,
       body: groupName ? `${senderName}: ${attachmentPreviewText(msg)}` : attachmentPreviewText(msg),
       tag: `conv-${msg.conversationId}`,
-      data: { view: 'messaging', conversationId: msg.conversationId },
+      data: { view: 'messaging', conversationId: msg.conversationId, messageId: msg.id },
     });
   } catch (e) {
     console.error('Push notify (message) failed:', e);
@@ -780,7 +779,7 @@ async function handleAuthLogin(ctx: Ctx): Promise<Response> {
   for (const c of await sessionCookies(ctx.request, token, SESSION_TTL_DAYS * 86_400)) res.headers.append('Set-Cookie', c);
   // Same-origin HttpOnly capability cookie so <img>/jsPDF loads (which cannot
   // send headers) still authenticate.
-  if (fileAuthEnabled(ctx)) res.headers.append('Set-Cookie', await issueFileCookie(ctx, user.id));
+  res.headers.append('Set-Cookie', await issueFileCookie(ctx, user.id));
   return res;
 }
 
@@ -807,7 +806,7 @@ async function handleAuthSessionExchange(ctx: Ctx): Promise<Response> {
   await registerDevice(ctx.env.VAYU_KV, user, token, next.expiresAt, ctx.request.headers.get('User-Agent'));
   const res = json({ user: await withAccess(ctx, user), exchanged: true });
   for (const c of await sessionCookies(ctx.request, token, SESSION_TTL_DAYS * 86_400)) res.headers.append('Set-Cookie', c);
-  if (fileAuthEnabled(ctx)) res.headers.append('Set-Cookie', await issueFileCookie(ctx, user.id));
+  res.headers.append('Set-Cookie', await issueFileCookie(ctx, user.id));
   return res;
 }
 
@@ -824,7 +823,7 @@ async function handleAuthMe(ctx: Ctx): Promise<Response> {
   }
   // Re-issue only when the cookie is missing or its KV token expired — the
   // bearer session is always valid here, so it can't be the test.
-  if (fileAuthEnabled(ctx) && !(await fileCookieValid(ctx))) {
+  if (!(await fileCookieValid(ctx))) {
     res.headers.append('Set-Cookie', await issueFileCookie(ctx, session.userId));
   }
   const cookieSession = meToken && ctx.request.headers.get(AUTH_KIND_HEADER) === 'cookie';
@@ -986,10 +985,8 @@ async function handleAuthLogout(ctx: Ctx): Promise<Response> {
   const res = json({ success: true });
   // The session and CSRF cookies go too, cleared with the attributes they were set with.
   for (const c of clearedSessionCookies(ctx.request)) res.headers.append('Set-Cookie', c);
-  if (fileAuthEnabled(ctx)) {
-    for (const [name, value] of Object.entries(fileCookieClearHeaders())) {
-      res.headers.append(name, value);
-    }
+  for (const [name, value] of Object.entries(fileCookieClearHeaders())) {
+    res.headers.append(name, value);
   }
   return res;
 }
@@ -1362,9 +1359,9 @@ async function handleFileGet(ctx: Ctx): Promise<Response> {
   const key = decodeURIComponent(ctx.path.slice('/files/'.length));
   // The original app sees the whole bucket; organizations' files are theirs alone.
   if (!key || (!ctx.env.ORG_ID && key.startsWith('orgs/'))) return err('File not found', 404);
-  // FILE_AUTH=on: an unguessable R2 key is not authorization — require the
+  // An unguessable R2 key is not authorization — require the
   // file capability cookie (img/PDF flows) or a bearer session (fetch flows).
-  if (fileAuthEnabled(ctx) && !(await fileAccessAllowed(ctx))) {
+  if (!(await fileAccessAllowed(ctx))) {
     return err('Unauthorized', 401);
   }
   let obj = await ctx.env.VAYU_R2.get(key);
@@ -1385,16 +1382,11 @@ async function handleFileGet(ctx: Ctx): Promise<Response> {
   headers.set('Content-Disposition', `${how.disposition}; filename="${downloadName(key)}"`);
   headers.set('X-Content-Type-Options', 'nosniff');
   if (how.csp) headers.set('Content-Security-Policy', how.csp);
-  if (fileAuthEnabled(ctx)) {
-    // Private: this browser may reuse it, no shared cache may. Repeat views
-    // then cost no Worker request, no R2 read and no CPU.
-    headers.set('Cache-Control', fileCacheHeaders(previewStandIn));
-    // The app's saved photos (sw.js) keep a stand-in only as long as the browser would.
-    if (previewStandIn) headers.set('X-Preview-Stand-In', '1');
-  } else {
-    // Legacy behaviour while the flag is off (rollback path).
-    headers.set('Cache-Control', 'public, max-age=31536000, immutable');
-  }
+  // Private: this browser may reuse it, no shared cache may. Repeat views
+  // then cost no Worker request, no R2 read and no CPU.
+  headers.set('Cache-Control', fileCacheHeaders(previewStandIn));
+  // The app's saved photos (sw.js) keep a stand-in only as long as the browser would.
+  if (previewStandIn) headers.set('X-Preview-Stand-In', '1');
   headers.set('Access-Control-Allow-Origin', '*');
   return new Response(obj.body, { status: 200, headers });
 }

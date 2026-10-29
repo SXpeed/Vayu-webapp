@@ -7,7 +7,7 @@
 // only as "configured" or "missing".
 
 import { hashPassword } from 'better-auth/crypto';
-import type { Env } from '../workerEnv';
+import { realtimeEnabled, type Env } from '../workerEnv';
 import { text } from '../rows';
 import { auditStmt } from './audit';
 import { googleConfigured, getEffectiveLoginMethods } from './settings';
@@ -276,9 +276,8 @@ export async function systemHealth(env: Env, db: D1Database) {
   const check = (name: string, ok: boolean, detail: string, fix?: string) => checks.push({ name, ok, detail, ...(ok || !fix ? {} : { fix }) });
 
   check('Platform database', true, 'Connected');
-  check('Organization databases', ...status(!!env.ORG_STORE, 'Available', 'ORG_STORE binding missing'));
   check('File storage', ...status(!!env.VAYU_R2, 'Available', 'R2 binding missing'));
-  check('Original app database', ...status(!!env.VAYU_DB, 'Available (needed for the import)', 'Not bound'));
+  check('Original app database', ...status(!!env.VAYU_DB, 'Available', 'Not bound'));
   check('Sign-in secret', ...status((env.BETTER_AUTH_SECRET?.length ?? 0) >= 32, 'Configured', 'Missing or too short'));
   const keys = await paymentKeysCheck(env, db);
   check('Payment credential keys', keys.ok, keys.detail, keys.ok ? undefined : 'security');
@@ -294,7 +293,7 @@ export async function systemHealth(env: Env, db: D1Database) {
   // on it can reach the app at once (webhook) or only via its status check.
   const links = await appPaymentLinksCheck(env, db);
   check('App payment links', links.ok, links.detail);
-  check('Private file access', ...status(env.FILE_AUTH === 'on', 'Files need a session', 'OFF — files are reachable by URL'));
+  check('Live updates', ...status(realtimeEnabled(env), 'On', 'OFF — REALTIME_SECRET or the SyncHub binding is missing'));
   const jobs = await jobsHealth(db);
   check('Scheduled jobs', jobs.ok, jobs.detail);
 
@@ -312,6 +311,5 @@ export async function systemHealth(env: Env, db: D1Database) {
     loginMethods: methods,
     jobs: jobs.jobs,
     authOrigins: (env.AUTH_ORIGINS ?? '').split(',').map(s => s.trim()).filter(Boolean),
-    flags: { realtime: env.REALTIME_ENABLED ?? 'off', deltaSync: env.DELTA_SYNC_ENABLED ?? 'off', fileAuth: env.FILE_AUTH ?? 'off' },
   };
 }

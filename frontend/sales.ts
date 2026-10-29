@@ -26,8 +26,8 @@
 import { changeLogStmt, ensureChangeLogTable } from './deltaSync';
 import { err, json, runSetupOnce, text } from './rows';
 import {
-    MAX_AMOUNT, cleanTags, isAmount, isIsoDate, isPaymentMode, saleFieldErrors, summarize,
-    type PaymentMode, type Sale, type SaleInput,
+    MAX_AMOUNT, cleanTags, isAmount, isIsoDate, isPaymentMode, saleFieldErrors,
+    type PaymentMode, type Sale, type SaleInput, type SalesSummary,
 } from './salesRules';
 import type { ChangeEvent, Ctx, SessionData } from './workerEnv';
 import { getSession } from './workerRoles';
@@ -127,6 +127,21 @@ function rowToSale(r: Record<string, unknown>): Sale {
 const SELECT_SALE = `SELECT s.*, a.id AS art_id, a.image_urls AS art_images
     FROM sales s LEFT JOIN artworks a ON a.id = s.artwork_id`;
 
+/** The range's totals from the database, so they cover every sale and not only the rows listed. */
+function summaryOf(rows: Record<string, unknown>[]): SalesSummary {
+    const byMode: SalesSummary['byMode'] = {};
+    let count = 0;
+    let paise = 0;
+    for (const r of rows) {
+        const mode: PaymentMode = isPaymentMode(r.payment_mode) ? r.payment_mode : 'Other';
+        const m = byMode[mode] ?? { count: 0, amount: 0 };
+        byMode[mode] = { count: m.count + Number(r.count), amount: (Math.round(m.amount * 100) + Number(r.paise)) / 100 };
+        count += Number(r.count);
+        paise += Number(r.paise);
+    }
+    return { count, totalAmount: paise / 100, byMode };
+}
+
 // ── Routes ──────────────────────────────────────────────────────────────────
 
 type Handler = (ctx: Ctx) => Promise<Response>;
@@ -199,52 +214,50 @@ async function contactExists(db: D1Database, id: string): Promise<boolean> {
     }
 }
 
-/**
- * Marks an inventory piece Sold and gives its title and price for the
- * sale's snapshot. The check and the change are one statement, so two
- * sales of the same piece can't both get through.
- */
-async function sellPiece(db: D1Database, artworkId: string): Promise<{ title: string; price: number } | Response> {
-    const art = await db.prepare('SELECT title, custom_id, price, status FROM artworks WHERE id = ?').bind(artworkId)
-        .first<{ title: string; custom_id: string; price: number; status: string }>();
+/** An inventory piece's title and price, for the sale's snapshot. */
+async function pieceSnapshot(db: D1Database, artworkId: string): Promise<{ title: string; price: number } | Response> {
+    const art = await db.prepare('SELECT title, custom_id, price FROM artworks WHERE id = ?').bind(artworkId)
+        .first<{ title: string; custom_id: string; price: number }>();
     if (!art) return err('That piece is no longer in the inventory.', 404);
-    const sold = await db.prepare("UPDATE artworks SET status = 'Sold' WHERE id = ? AND status = 'Available'").bind(artworkId).run();
-    if (!sold.meta.changes) {
-        const now = await db.prepare('SELECT status FROM artworks WHERE id = ?').bind(artworkId).first<{ status: string }>();
-        return json(now?.status === 'Reserved'
-            ? { error: 'That piece is reserved. Mark it available first.', code: 'reserved' }
-            : { error: 'That piece is already sold', code: 'already_sold' }, 409);
-    }
     return { title: String(art.title || art.custom_id || 'Untitled'), price: Number(art.price) || 0 };
+}
+
+/** Why a piece couldn't be sold: it went, or someone reserved or sold it first. */
+async function notForSale(db: D1Database, artworkId: string): Promise<Response> {
+    const now = await db.prepare('SELECT status FROM artworks WHERE id = ?').bind(artworkId).first<{ status: string }>();
+    if (!now) return err('That piece is no longer in the inventory.', 404);
+    return json(now.status === 'Reserved'
+        ? { error: 'That piece is reserved. Mark it available first.', code: 'reserved' }
+        : { error: 'That piece is already sold', code: 'already_sold' }, 409);
 }
 
 /**
  * Saves the sale with the next number, in a single statement so two sales
  * recorded at once can't share one (seq is UNIQUE besides). Deleted sales
- * keep theirs: numbers are never reused. If saving fails, a piece this
- * sale sold goes back on sale.
+ * keep theirs: numbers are never reused. Selling an inventory piece marks it
+ * Sold (only if still Available) in the same batch, and the sale is saved
+ * only if that worked: both commit or neither does, even if the request is
+ * cut off. Returns false when the piece was no longer Available.
  */
-async function insertSale(ctx: Ctx, session: SessionData, id: string, input: SaleInput, item: { title: string; price: number }): Promise<void> {
+async function insertSale(ctx: Ctx, session: SessionData, id: string, input: SaleInput, item: { title: string; price: number }): Promise<boolean> {
     const db = ctx.env.VAYU_DB;
     const now = Date.now();
     // An inventory piece shows its own photos; the sale keeps none of its own.
     const photoUrls = input.artworkId ? [] : input.photoUrls;
-    try {
-        await ensureChangeLogTable(db);
-        const stmts: D1PreparedStatement[] = [db.prepare(
-            `INSERT INTO sales (id, seq, sale_number, artwork_id, item_title, item_price, contact_id, buyer_name, buyer_phone,
-                sale_date, recorded_at, amount, payment_mode, reference_no, notes, tags, photo_urls, created_by, created_by_name, updated_at, updated_by)
-             SELECT ?, n, printf('SAL-%03d', n), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-             FROM (SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM sales)`,
-        ).bind(id, input.artworkId, item.title, item.price, input.contactId, input.buyerName, input.buyerPhone,
-            input.saleDate, now, input.amount, input.paymentMode, input.referenceNo, input.notes,
-            JSON.stringify(input.tags), JSON.stringify(photoUrls), session.userId, session.name, now, session.userId)];
-        if (input.artworkId) stmts.push(changeLogStmt(db, ctx.env, 'artwork', input.artworkId, 'put', { actorId: session.userId }));
-        await db.batch(stmts);
-    } catch (e) {
-        if (input.artworkId) await db.prepare("UPDATE artworks SET status = 'Available' WHERE id = ? AND status = 'Sold'").bind(input.artworkId).run().catch(() => undefined);
-        throw e;
-    }
+    await ensureChangeLogTable(db);
+    const stmts: D1PreparedStatement[] = [];
+    if (input.artworkId) stmts.push(db.prepare("UPDATE artworks SET status = 'Sold' WHERE id = ? AND status = 'Available'").bind(input.artworkId));
+    stmts.push(db.prepare(
+        `INSERT INTO sales (id, seq, sale_number, artwork_id, item_title, item_price, contact_id, buyer_name, buyer_phone,
+            sale_date, recorded_at, amount, payment_mode, reference_no, notes, tags, photo_urls, created_by, created_by_name, updated_at, updated_by)
+         SELECT ?, n, printf('SAL-%03d', n), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         FROM (SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM sales)${input.artworkId ? ' WHERE changes() = 1' : ''}`,
+    ).bind(id, input.artworkId, item.title, item.price, input.contactId, input.buyerName, input.buyerPhone,
+        input.saleDate, now, input.amount, input.paymentMode, input.referenceNo, input.notes,
+        JSON.stringify(input.tags), JSON.stringify(photoUrls), session.userId, session.name, now, session.userId));
+    if (input.artworkId) stmts.push(changeLogStmt(db, ctx.env, 'artwork', input.artworkId, 'put', { actorId: session.userId }));
+    const results = await db.batch(stmts);
+    return results[input.artworkId ? 1 : 0].meta.changes === 1;
 }
 
 /**
@@ -274,11 +287,16 @@ export function salesRoutes(deps: SalesDeps): SalesRoute[] {
         const to = ctx.url.searchParams.get('to') ?? today;
         if (!isIsoDate(from) || !isIsoDate(to) || to < from) return err('Give a valid date range.');
         if ((Date.parse(to) - Date.parse(from)) / 86_400_000 > MAX_RANGE_DAYS) return err(`Ask for at most ${MAX_RANGE_DAYS} days at a time.`);
-        const rows = (await ctx.env.VAYU_DB.prepare(
-            `${SELECT_SALE} WHERE s.deleted_at IS NULL AND s.sale_date >= ? AND s.sale_date <= ? ORDER BY s.sale_date DESC, s.seq DESC LIMIT ${MAX_ROWS}`,
-        ).bind(from, to).all()).results || [];
-        const sales = rows.map(r => rowToSale(r as Record<string, unknown>));
-        return json({ from, to, sales, summary: summarize(sales), allTags: await tagsInUse(ctx.env.VAYU_DB) });
+        const db = ctx.env.VAYU_DB;
+        // One row past the limit tells the screen there are more than it shows.
+        const [listed, totals] = await db.batch<Record<string, unknown>>([
+            db.prepare(`${SELECT_SALE} WHERE s.deleted_at IS NULL AND s.sale_date >= ? AND s.sale_date <= ? ORDER BY s.sale_date DESC, s.seq DESC LIMIT ${MAX_ROWS + 1}`).bind(from, to),
+            db.prepare(`SELECT payment_mode, COUNT(*) AS count, SUM(ROUND(amount * 100)) AS paise FROM sales
+                WHERE deleted_at IS NULL AND sale_date >= ? AND sale_date <= ? GROUP BY payment_mode`).bind(from, to),
+        ]);
+        const rows = listed.results || [];
+        const sales = rows.slice(0, MAX_ROWS).map(rowToSale);
+        return json({ from, to, sales, truncated: rows.length > MAX_ROWS, summary: summaryOf(totals.results || []), allTags: await tagsInUse(db) });
     };
 
     /** POST /sales — record a sale. An inventory piece is marked Sold, only if it is still Available. */
@@ -299,12 +317,12 @@ export function salesRoutes(deps: SalesDeps): SalesRoute[] {
 
         let item = { title: input.itemTitle, price: input.itemPrice };
         if (input.artworkId) {
-            const piece = await sellPiece(db, input.artworkId);
+            const piece = await pieceSnapshot(db, input.artworkId);
             if (piece instanceof Response) return piece;
             item = piece;
         }
         if (!isAmount(item.price) || item.price > MAX_AMOUNT) item.price = 0;
-        await insertSale(ctx, session, id, input, item);
+        if (!(await insertSale(ctx, session, id, input, item))) return notForSale(db, input.artworkId!);
 
         const sale = await loadSale(db, id);
         if (!sale) return err('The sale could not be saved. Please try again.', 500);

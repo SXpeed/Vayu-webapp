@@ -324,7 +324,6 @@ interface Health {
     migrations: string[];
     loginMethods: { emailPassword: { signIn: boolean; signUp: boolean }; google: { signIn: boolean; signUp: boolean } };
     authOrigins: string[];
-    flags: Record<string, string>;
 }
 
 export const HealthPanel: React.FC<{ navigate: Navigate }> = ({ navigate }) => {
@@ -412,7 +411,6 @@ export const HealthPanel: React.FC<{ navigate: Navigate }> = ({ navigate }) => {
                         <Detail label="Email sign-in">{h.loginMethods.emailPassword.signIn ? 'On' : 'Off'}</Detail>
                         <Detail label="Google sign-in">{h.loginMethods.google.signIn ? 'On' : 'Off'}</Detail>
                         <Detail label="Public sign-up">{h.loginMethods.emailPassword.signUp ? 'Open' : 'Closed'}</Detail>
-                        {Object.entries(h.flags).map(([k, v]) => <Detail key={k} label={k}><span className="[overflow-wrap:anywhere]">{v}</span></Detail>)}
                         <div className="col-span-2">
                             <Detail label="Allowed addresses">
                                 {h.authOrigins.length === 0 ? null : (

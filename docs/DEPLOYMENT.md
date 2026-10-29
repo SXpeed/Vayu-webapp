@@ -11,37 +11,17 @@ at every step, so the order below is safe.
 npx wrangler secret put REALTIME_SECRET      # ≥ 32 random chars, e.g. `openssl rand -hex 32`
 ```
 
-Without it, `REALTIME_ENABLED=on` does nothing (fail-closed). Rotating it
+Without it, realtime stays off (fail-closed). Rotating it
 invalidates outstanding tickets. Connected sockets keep working until their
 next re-auth, then reconnect with fresh tickets.
 
-## 2. Deploy with flags off
+## 2. Switches (removed 2026-10-29)
 
-`wrangler.jsonc` (repo root) and `frontend/wrangler.json` both declare:
-
-- the `SYNC_HUB` Durable Object binding, plus migration `v1` (`new_sqlite_classes: ["SyncHub"]`)
-- the `ANALYTICS` Analytics Engine dataset
-- vars `WORKSPACE_ID=default`, `DELTA_SYNC_ENABLED=off`, `REALTIME_ENABLED=off`, `FILE_AUTH=off`
-
-Deploy as usual from the repo root. `change_log` is created at runtime; it's
-also in `frontend/schema.sql`.
-
-**Verify:** the app works as before, and `GET /api/sync` / `POST
-/api/realtime/ticket` return 404. Also check one write (e.g. edit an
-artwork): this release changes every mutation into a D1 batch.
-
-## 3. Turn features on, one at a time
-
-Flip in the dashboard (Workers → vayu-webapp → Settings → Variables) or in
-config + deploy. Watch for a day between steps.
-
-1. `DELTA_SYNC_ENABLED=on`. Each poll tick becomes one `/api/sync` request
-   instead of one request per dataset.
-2. `REALTIME_ENABLED=on`. One socket per browser; polling drops to a
-   10-minute safety sync while connected.
-3. `FILE_AUTH=on`. Private files need the session or file cookie. **Test
-   image loading in the installed PWA** before leaving it on. Users signed in
-   before this step get their cookie on their next app start (`/auth/me`).
+Delta sync, realtime and private files were rolled out behind
+`DELTA_SYNC_ENABLED`, `REALTIME_ENABLED` and `FILE_AUTH`, all on in production
+since 2026-09-24 (history below). The switches and their "off" paths are gone:
+rolling back now means reverting the code. Realtime still stays off without
+`REALTIME_SECRET` or the `SYNC_HUB` binding (System health, "Live updates").
 
 ## Scheduled jobs and alerts
 
@@ -55,17 +35,14 @@ Notification in the dashboard (Workers → error rate) — owner.
 
 ## Rollback
 
-- Set the flag back to `off`. Clients fall back automatically: a 404 from
-  `/api/sync` means "poll", and a 404 on tickets means "no socket, retry in
-  30 min".
+- Clients fall back automatically: a 404 on realtime tickets (no secret or
+  hub) means "no socket, retry in 30 min".
 - Never delete `change_log` or user data. The log is bounded (30 days) and
   harmless when unused.
-- `FILE_AUTH=off` restores the old behaviour: `/api/files/*` served to anyone
-  with `public, immutable` caching. **Historical exposure:** before this
-  change every file URL was public and cacheable. If a shared cache (a
-  Cloudflare Cache Rule, a proxy) ever stored `/api/files/*`, purge that
-  prefix after enabling `FILE_AUTH`. Do **not** add a public Cache Rule for
-  `/api/files/*`.
+- **Historical exposure:** before private files every file URL was public
+  and cacheable. If a shared cache (a Cloudflare Cache Rule, a proxy) ever
+  stored `/api/files/*`, purge that prefix. Do **not** add a public Cache Rule
+  for `/api/files/*`.
 
 ## Measuring the effect (don't assume savings)
 

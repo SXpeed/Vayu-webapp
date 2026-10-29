@@ -60,7 +60,7 @@ before(async () => {
     proxy = await getPlatformProxy({ configPath: join(frontend, 'wrangler.json'), persist: { path: persistDir } });
     db = proxy.env.VAYU_DB;
     kv = proxy.env.VAYU_KV;
-    env = { VAYU_DB: db, VAYU_KV: kv, DELTA_SYNC_ENABLED: 'on', WORKSPACE_ID: 'default' };
+    env = { VAYU_DB: db, VAYU_KV: kv, WORKSPACE_ID: 'default' };
 
     // schema.sql, minus comments (some contain semicolons).
     const statements = readFileSync(join(frontend, 'schema.sql'), 'utf8')
@@ -84,10 +84,9 @@ after(async () => {
     if (persistDir) rmSync(persistDir, { recursive: true, force: true });
 });
 
-test('auth and flag gates', async () => {
+test('auth gates', async () => {
     assert.equal((await get('/sync', null)).status, 401);
     assert.equal((await get('/sync', 'bogus')).status, 401);
-    assert.equal((await get('/sync', 't-admin', { DELTA_SYNC_ENABLED: 'off' })).status, 404);
     assert.equal((await get('/sync?cursor=-1', 't-admin')).status, 400);
     assert.equal((await get('/sync?cursor=abc', 't-admin')).status, 400);
 });

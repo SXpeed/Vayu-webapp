@@ -38,7 +38,7 @@ Point Razorpay webhooks at
 
 ## Why the API keeps the name `vayu-webapp`
 
-The organization databases (the `OrgStore` and `SyncHub` Durable Objects) and
+The organization databases (the `OrgAppDb` and `SyncHub` Durable Objects) and
 every secret (`BETTER_AUTH_SECRET`, `PAYMENT_SECRETS_KEY`, `REALTIME_SECRET`,
 Razorpay, Calendarific) belong to the Worker's name. A new name would start
 with none of them.

@@ -169,11 +169,10 @@ test('realtime fails closed without a proper secret', async () => {
     const envMod = await load('workerEnv.ts');
     const hub = {};
     const strong = 'x'.repeat(32);
-    assert.equal(envMod.realtimeEnabled({ REALTIME_ENABLED: 'on', SYNC_HUB: hub, REALTIME_SECRET: strong }), true);
-    assert.equal(envMod.realtimeEnabled({ REALTIME_ENABLED: 'on', SYNC_HUB: hub }), false, 'no secret');
-    assert.equal(envMod.realtimeEnabled({ REALTIME_ENABLED: 'on', SYNC_HUB: hub, REALTIME_SECRET: 'short' }), false);
-    assert.equal(envMod.realtimeEnabled({ REALTIME_ENABLED: 'off', SYNC_HUB: hub, REALTIME_SECRET: strong }), false);
-    assert.equal(envMod.realtimeEnabled({ REALTIME_ENABLED: 'on', REALTIME_SECRET: strong }), false, 'no hub binding');
+    assert.equal(envMod.realtimeEnabled({ SYNC_HUB: hub, REALTIME_SECRET: strong }), true);
+    assert.equal(envMod.realtimeEnabled({ SYNC_HUB: hub }), false, 'no secret');
+    assert.equal(envMod.realtimeEnabled({ SYNC_HUB: hub, REALTIME_SECRET: 'short' }), false);
+    assert.equal(envMod.realtimeEnabled({ REALTIME_SECRET: strong }), false, 'no hub binding');
     // The stand-in is random, never a value an attacker could read from source.
     const standIn = envMod.rawRealtimeSecret({});
     assert.ok(standIn.length >= 64);

@@ -46,7 +46,7 @@ const PNG = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAA
 
 before(async () => {
     worker = await startDevWorker({ adminPassword: ADMIN_PASSWORD, vars: {
-        FILE_AUTH: 'on', DELTA_SYNC_ENABLED: 'on', REALTIME_ENABLED: 'on', REALTIME_SECRET: 'a-realtime-secret-for-tests-0123456789',
+        REALTIME_SECRET: 'a-realtime-secret-for-tests-0123456789',
     } });
     admin = worker.browser();
     assert.equal((await admin.signIn('admin@example.com', ADMIN_PASSWORD)).status, 200);

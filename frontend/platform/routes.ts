@@ -17,7 +17,6 @@
 //   PUT             /api/v2/admin/orgs/:id/payments/razorpay/test-links  { allow } test keys may make customer links
 //   DELETE          /api/v2/admin/orgs/:id/payments/razorpay/app  clear the retired "app account" setting (POST: 410)
 //   POST            /api/v2/admin/users                      create a sign-in account
-//   GET|POST        /api/v2/admin/orgs/:id/import-legacy     move the original app in
 //   POST            /api/v2/admin/orgs/:id/app-storage       use the original app's data (or its own)
 //   POST            /api/v2/admin/orgs/:id/import-original-people  the original app's people join it
 //   GET|POST        /api/v2/invitations/:token[/accept|/create-account]  the join page
@@ -53,7 +52,6 @@
 //   GET             /api/v2/me/orgs                          my organizations
 //   GET             /api/v2/me/sessions                      my signed-in devices
 //   POST            /api/v2/me/sessions/signout { id? }      sign out one other device, or all of them
-//   /api/v2/org/:orgId/*                                     that org's own data
 //   /api/v2/apply*                                           my business application (applyRoutes.ts)
 //   /api/v2/admin/{overview,applications,accounts,admins,notifications,health}  (centerRoutes.ts)
 //
@@ -75,7 +73,6 @@ import {
 import { keyUsage, runRotationBatch, startRotation } from './secretRotation';
 import { recordProcessed, recordProcessingFailure } from './webhookHealth';
 import { clearAppPaymentsOrg, connectRazorpay, describeRazorpay, disconnectRazorpay, receiveRazorpayWebhook, setAllowTestLinks, verifyRazorpay } from './payments';
-import { importLegacyWorkspace, listImports } from './legacyImport';
 import { PLAN_SCHEMA } from './planFields';
 import {
   getBranding, getOrgBranding, orgLogoUrl, orgLogoUrls, publicBranding, removeOrgLogo, serveLogo, serveOrgLogo,
@@ -92,7 +89,7 @@ import {
   connectBillingAccount, describeBillingAccount, disconnectBillingAccount, listAllPayments, paymentView,
   receiveBillingWebhook, recheckAnyPayment, verifyBillingAccount,
 } from './billing';
-import { OrgAccessError, handleOrgRequest, listMyOrganizations, resolveOrgContext } from './orgApi';
+import { OrgAccessError, listMyOrganizations } from './orgApi';
 
 import { fail, jsonBody, reply } from './http';
 import { handleCenterRoute } from './centerRoutes';
@@ -441,8 +438,6 @@ const ORG_ROUTES: AdminRoute[] = [
       return reply(next);
     },
   },
-  { path: orgPath('/import-legacy'), methods: ['GET'], run: async (c, m) => reply({ imports: await listImports(c.db, m![1]) }) },
-  { path: orgPath('/import-legacy'), methods: ['POST'], run: (c, m) => dryRunOrFresh(c, m![1], importLegacyWorkspace) },
   // Which data this organization works on in the app (originalApp.ts).
   { path: orgPath('/app-storage'), methods: ['POST'], fresh: true, run: async (c, m) => reply(await setAppStorage(c.db, m![1], await objectBody(c.request), c.actor)) },
   { path: orgPath('/import-original-people'), methods: ['POST'], run: (c, m) => dryRunOrFresh(c, m![1], importOriginalPeople) },
@@ -592,23 +587,6 @@ async function handleMe(db: D1Database, auth: PlatformAuth, request: Request, pa
   return null;
 }
 
-/**
- * An organization's own business data. resolveOrgContext checks the session,
- * the membership and the organization's status before any database is
- * opened; it never falls back to another organization.
- */
-async function handleOrgData(env: Env, db: D1Database, auth: PlatformAuth, request: Request, path: string, url: URL): Promise<Response | null> {
-  const org = /^\/org\/([A-Za-z0-9-]{1,64})(\/.*)?$/.exec(path);
-  if (!org) return null;
-  try {
-    const ctx = await resolveOrgContext(env, db, auth, request, org[1]);
-    return reply(await handleOrgRequest(ctx, request, org[2] ?? '', url));
-  } catch (e) {
-    if (e instanceof OrgAccessError) return fail(e.status, e.code, e.message);
-    throw e;
-  }
-}
-
 /** Everything that needs the sign-in layer, in order. */
 async function handleSignedInArea(env: Env, db: D1Database, request: Request, url: URL, path: string, origin: string): Promise<Response> {
   const methods = await getEffectiveLoginMethods(env, db);
@@ -621,9 +599,7 @@ async function handleSignedInArea(env: Env, db: D1Database, request: Request, ur
   if (apply) return apply;
   const invitation = await handleInvitationRoute(env, db, auth, request, path);
   if (invitation) return invitation;
-  return (await handleMe(db, auth, request, path))
-    ?? (await handleOrgData(env, db, auth, request, path, url))
-    ?? fail(404, 'not_found', 'Not found');
+  return (await handleMe(db, auth, request, path)) ?? fail(404, 'not_found', 'Not found');
 }
 
 async function routePlatformRequest(request: Request, env: Env, hooks: PlatformHooks): Promise<Response | null> {

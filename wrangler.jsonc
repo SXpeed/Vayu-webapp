@@ -45,8 +45,6 @@
   "durable_objects": {
     "bindings": [
       { "name": "SYNC_HUB", "class_name": "SyncHub" },
-      // One object (with its own SQLite database) per organization.
-      { "name": "ORG_STORE", "class_name": "OrgStore" },
       // Each organization's app database: the original app's tables, one
       // SQLite database per organization (frontend/orgStorage.ts).
       { "name": "ORG_APP_DB", "class_name": "OrgAppDb" }
@@ -55,7 +53,9 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["SyncHub"] },
     { "tag": "v2", "new_sqlite_classes": ["OrgStore"] },
-    { "tag": "v3", "new_sqlite_classes": ["OrgAppDb"] }
+    { "tag": "v3", "new_sqlite_classes": ["OrgAppDb"] },
+    // The unused /api/v2/org API's per-organization databases (removed 2026-10-29).
+    { "tag": "v4", "deleted_classes": ["OrgStore"] }
   ],
   "analytics_engine_datasets": [{ "binding": "ANALYTICS" }],
   // Cloudflare Email Service: sign-up confirmations, password resets,
@@ -78,11 +78,6 @@
   ],
   "vars": {
     "WORKSPACE_ID": "default",
-    "DELTA_SYNC_ENABLED": "on",
-    "REALTIME_ENABLED": "on",
-    // Private files: /api/files/* needs the app's sign-in or its file cookie
-    // (frontend/fileAuth.ts); an address alone opens nothing.
-    "FILE_AUTH": "on",
     // Plain vars, not secrets: committed here (not set via the dashboard)
     // so they survive every deploy instead of being wiped by the next one.
     // Every address whose Worker hands /api to this one, so Better Auth

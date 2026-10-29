@@ -2,7 +2,7 @@
 //
 // /api/files/* used to serve every R2 object to anyone with no auth at all and
 // a `public, immutable` cache header — an unguessable path was the only
-// protection. With FILE_AUTH=on, private files require either the caller's
+// protection. Now private files require either the caller's
 // bearer session (fetch flows) or a short-lived HttpOnly capability cookie
 // (img/PDF flows, which cannot send headers).
 //
@@ -22,7 +22,7 @@
 //    list here rather than a cache rule.
 
 import { getSession } from './workerRoles';
-import { flagEnabled, type Ctx } from './workerEnv';
+import type { Ctx } from './workerEnv';
 
 const FILE_COOKIE = 'vayu_files';
 const FILE_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -40,11 +40,6 @@ export function fileCookieToken(ctx: Ctx): string | null {
 export async function fileCookieValid(ctx: Ctx): Promise<boolean> {
   const token = fileCookieToken(ctx);
   return token !== null && (await fileTokenUser(ctx, token)) !== null;
-}
-
-/** True when private-file authorization is enforced. */
-export function fileAuthEnabled(ctx: Ctx): boolean {
-  return flagEnabled(ctx.env.FILE_AUTH);
 }
 
 /**
@@ -85,7 +80,7 @@ async function fileTokenUser(ctx: Ctx, token: string): Promise<string | null> {
 }
 
 /**
- * Authorization for GET /files/:key when FILE_AUTH is on: a valid file cookie
+ * Authorization for GET /files/:key: a valid file cookie
  * for a known user, or the caller's own bearer session.
  */
 export async function fileAccessAllowed(ctx: Ctx): Promise<boolean> {

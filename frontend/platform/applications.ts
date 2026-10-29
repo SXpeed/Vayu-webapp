@@ -21,7 +21,6 @@ import { auditStmt } from './audit';
 import { BUSINESS_TYPES, OrgError, slugify, type Actor } from './orgs';
 import { outboxStmt, getNotificationSettings } from './notify';
 import { resolveEntitlements, setSubscription } from './plans';
-import type { OrgStore } from './orgStore';
 
 const OPEN = new Set(['draft', 'pending_review', 'needs_information']);
 const EDITABLE = new Set(['draft', 'pending_review', 'needs_information']);
@@ -432,12 +431,6 @@ export async function approveApplication(env: Env, db: D1Database, id: string, b
     if (!existing) {
       await setSubscription(db, orgId, { planVersionId: versionId, waivePayment: waive, reason: exception ?? 'Assigned on approval' }, actor);
     }
-
-    // Create the organization's own database now, so the first sign-in finds
-    // it ready. Opening it applies the current schema.
-    if (!env.ORG_STORE) throw new Error('Organization storage (ORG_STORE) is not configured.');
-    const store = env.ORG_STORE.get(env.ORG_STORE.idFromName(orgId)) as DurableObjectStub<OrgStore>;
-    await store.info();
   } catch (e) {
     const error = String((e as Error)?.message ?? e).slice(0, 300);
     await db.batch([

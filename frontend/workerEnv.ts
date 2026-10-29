@@ -33,19 +33,13 @@ export interface Env {
   CALENDARIFIC_API_KEY?: string;
   // HMAC secret shared by the Worker and the SyncHub Durable Object. Used for
   // realtime connection tickets. Set via `wrangler secret put REALTIME_SECRET`
-  // (at least 32 characters). Without it realtime stays off even when
-  // REALTIME_ENABLED is on — see realtimeEnabled().
+  // (at least 32 characters). Without it realtime stays off — see realtimeEnabled().
   REALTIME_SECRET?: string;
   // Bindings added for the sync/realtime rollout. Optional in the type so the
   // worker still typechecks (and runs) before the wrangler config is updated.
   SYNC_HUB?: DurableObjectNamespace;
   ANALYTICS?: AnalyticsEngineDataset;
-  // Non-secret feature flags. "on" enables, anything else leaves the old
-  // behaviour in place, so rollback is a config change rather than a revert.
   WORKSPACE_ID?: string;
-  REALTIME_ENABLED?: string;
-  DELTA_SYNC_ENABLED?: string;
-  FILE_AUTH?: string;
   // Extra allowed origin(s) for the WebSocket handshake, comma-separated.
   // Same-origin always works; set this only if the app is served from another
   // origin than the API.
@@ -55,9 +49,6 @@ export interface Env {
   // Central platform database: identity, provider admins, settings, audit.
   // Absent until the database is created; /api/v2 then answers 503.
   PLATFORM_DB?: D1Database;
-  // One Durable Object (with its own SQLite database) per organization,
-  // named by organization id. See frontend/platform/orgStore.ts.
-  ORG_STORE?: DurableObjectNamespace;
   // Better Auth signing/encryption secret (`wrangler secret put
   // BETTER_AUTH_SECRET`), at least 32 characters, different per environment.
   BETTER_AUTH_SECRET?: string;
@@ -323,10 +314,6 @@ export function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-export function flagEnabled(value: string | undefined): boolean {
-  return value === 'on' || value === 'true' || value === '1';
-}
-
 const MIN_REALTIME_SECRET_LENGTH = 32;
 let unconfiguredSecret: string | null = null;
 
@@ -335,9 +322,9 @@ export function realtimeSecretConfigured(env: Env): boolean {
   return (env.REALTIME_SECRET?.length ?? 0) >= MIN_REALTIME_SECRET_LENGTH;
 }
 
-/** Realtime is live only with the flag on, the hub bound AND a real secret. */
+/** Realtime is live only with the hub bound AND a real secret. */
 export function realtimeEnabled(env: Env): boolean {
-  return flagEnabled(env.REALTIME_ENABLED) && !!env.SYNC_HUB && realtimeSecretConfigured(env);
+  return !!env.SYNC_HUB && realtimeSecretConfigured(env);
 }
 
 /**

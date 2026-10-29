@@ -112,10 +112,13 @@ async function upload(token, content, name, type) {
     return res.body.key;
 }
 
+/** A file as the signed-in app fetches it: files need a session. */
+const file = (token, url) => fetch(`${worker.origin}${url}`, { headers: { Authorization: `Bearer ${token}` } });
+
 test('an uploaded web page is never served as a web page', async () => {
     for (const [name, type] of [['page.html', 'text/html'], ['sneaky.png', 'image/png'], ['doc.pdf', 'application/pdf']]) {
         const key = await upload(mallory.token, HTML, name, type);
-        const res = await fetch(`${worker.origin}/api/files/${key}`);
+        const res = await file(mallory.token, `/api/files/${key}`);
         assert.equal(res.status, 200);
         assert.equal(res.headers.get('content-type'), 'application/octet-stream', name);
         assert.match(res.headers.get('content-disposition'), /^attachment;/, name);
@@ -125,16 +128,16 @@ test('an uploaded web page is never served as a web page', async () => {
 });
 
 test('real images still show, SVG only inside a sandbox', async () => {
-    const png = await fetch(`${worker.origin}/api/files/${await upload(alice.token, PNG, 'art.png', 'image/png')}`);
+    const png = await file(alice.token, `/api/files/${await upload(alice.token, PNG, 'art.png', 'image/png')}`);
     assert.equal(png.headers.get('content-type'), 'image/png');
     assert.match(png.headers.get('content-disposition'), /^inline;/);
     assert.equal(png.headers.get('x-content-type-options'), 'nosniff');
 
     // Claimed as text, but the bytes are a PNG: stored and shown as the image it is.
-    const relabelled = await fetch(`${worker.origin}/api/files/${await upload(alice.token, PNG, 'art.txt', 'text/plain')}`);
+    const relabelled = await file(alice.token, `/api/files/${await upload(alice.token, PNG, 'art.txt', 'text/plain')}`);
     assert.equal(relabelled.headers.get('content-type'), 'image/png');
 
-    const svg = await fetch(`${worker.origin}/api/files/${await upload(alice.token, '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>', 'logo.svg', 'image/svg+xml')}`);
+    const svg = await file(alice.token, `/api/files/${await upload(alice.token, '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>', 'logo.svg', 'image/svg+xml')}`);
     assert.equal(svg.headers.get('content-type'), 'image/svg+xml');
     assert.match(svg.headers.get('content-security-policy'), /sandbox/);
 });
@@ -146,7 +149,7 @@ test('a thumbnail must be an image', async () => {
     const res = await api(alice.token, '/upload', { method: 'POST', form });
     assert.equal(res.status, 200);
     // No thumbnail stored, so the thumbnail address falls back to the original image.
-    const thumb = await fetch(`${worker.origin}${res.body.thumbUrl}`);
+    const thumb = await file(alice.token, res.body.thumbUrl);
     assert.equal(thumb.headers.get('content-type'), 'image/png');
 });
 

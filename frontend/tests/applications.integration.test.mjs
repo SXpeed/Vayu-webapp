@@ -18,16 +18,6 @@ let other;
 let applicationId;
 let paidVersion;
 
-/** A stand-in for the organization-database namespace: records who was opened. */
-function fakeOrgStore() {
-    const opened = [];
-    return {
-        opened,
-        idFromName: (name) => name,
-        get: (id) => ({ info: async () => { opened.push(id); return { schemaVersion: 2, artworks: 0 }; } }),
-    };
-}
-
 const post = (b, path, body, opts = {}) => b.call(path, { method: 'POST', body, ...opts });
 
 before(async () => {
@@ -143,38 +133,18 @@ test('the provider can change the plan, with a reason on record', async () => {
     assert.ok(res.body.events.some(e => e.action === 'plan_changed' && /Confirmed on the phone/.test(e.message)));
 });
 
-test('approval that cannot finish provisioning fails visibly and creates nothing twice', async () => {
-    // No organization-database binding: provisioning cannot complete.
-    let res = await post(admin, `/admin/applications/${applicationId}/approve`, {}, { envOverride: { ORG_STORE: undefined } });
-    assert.equal(res.status, 200, JSON.stringify(res.body));
-    assert.equal(res.body.application.status, 'provisioning_failed');
-    assert.match(res.body.application.provisioningError, /ORG_STORE/);
-
-    // Retrying without fixing it: still failed, still one organization.
-    res = await post(admin, `/admin/applications/${applicationId}/approve`, {}, { envOverride: { ORG_STORE: undefined } });
-    assert.equal(res.body.application.status, 'provisioning_failed');
-    const orgs = await db.prepare('SELECT COUNT(*) AS n FROM organizations WHERE id = ?').bind(applicationId).first();
-    const members = await db.prepare('SELECT COUNT(*) AS n FROM memberships WHERE org_id = ?').bind(applicationId).first();
-    const subs = await db.prepare('SELECT COUNT(*) AS n FROM subscriptions WHERE org_id = ?').bind(applicationId).first();
-    assert.deepEqual([orgs.n, members.n, subs.n], [1, 1, 1]);
-
-    // Applicants never see the internal error text.
-    const mine = (await applicant.call('/apply')).body;
-    assert.equal(mine.application.status, 'provisioning_failed');
-    assert.ok(!mine.events.some(e => e.action === 'provisioning_failed'), 'internal failures are not shown to the applicant');
-});
-
-test('retrying approval once storage works finishes it: paid plans wait for payment', async () => {
-    const store = fakeOrgStore();
-    const res = await post(admin, `/admin/applications/${applicationId}/approve`, {}, { envOverride: { ORG_STORE: store } });
+test('approval: paid plans wait for payment, and approving again creates nothing twice', async () => {
+    const res = await post(admin, `/admin/applications/${applicationId}/approve`, {});
     assert.equal(res.body.application.status, 'payment_required', 'approved and provisioned, but not paid');
     assert.equal(res.body.application.orgId, applicationId);
-    assert.deepEqual(store.opened, [applicationId], "the organization's own database was created");
 
     // Approving yet again changes nothing.
-    const again = await post(admin, `/admin/applications/${applicationId}/approve`, {}, { envOverride: { ORG_STORE: store } });
+    const again = await post(admin, `/admin/applications/${applicationId}/approve`, {});
     assert.equal(again.body.application.status, 'payment_required');
-    assert.deepEqual(store.opened, [applicationId], 'no second provisioning');
+    const orgRows = await db.prepare('SELECT COUNT(*) AS n FROM organizations WHERE id = ?').bind(applicationId).first();
+    const members = await db.prepare('SELECT COUNT(*) AS n FROM memberships WHERE org_id = ?').bind(applicationId).first();
+    const subs = await db.prepare('SELECT COUNT(*) AS n FROM subscriptions WHERE org_id = ?').bind(applicationId).first();
+    assert.deepEqual([orgRows.n, members.n, subs.n], [1, 1, 1]);
     const notices = await db.prepare("SELECT COUNT(*) AS n FROM notification_outbox WHERE kind = 'workspace_ready'").first();
     assert.equal(notices.n, 1);
 
@@ -188,7 +158,7 @@ test('an approval with a documented billing exception activates immediately', as
     await other.call('/apply', { method: 'PUT', body: { ...details, businessName: 'Second Studio', businessType: 'studio' } });
     const submitted = (await post(other, '/apply/submit', {})).body.application;
     assert.equal((await post(admin, `/admin/applications/${submitted.id}/approve`, { waivePayment: true })).body.code, 'invalid', 'an exception needs a reason');
-    const res = await post(admin, `/admin/applications/${submitted.id}/approve`, { waivePayment: true, reason: 'Pilot customer, free for 3 months' }, { envOverride: { ORG_STORE: fakeOrgStore() } });
+    const res = await post(admin, `/admin/applications/${submitted.id}/approve`, { waivePayment: true, reason: 'Pilot customer, free for 3 months' });
     assert.equal(res.body.application.status, 'active');
     assert.match(res.body.application.billingExceptionReason, /Pilot customer/);
 });

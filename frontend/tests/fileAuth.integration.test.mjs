@@ -1,4 +1,4 @@
-// Private files (FILE_AUTH=on) against a real local Worker: a file address
+// Private files against a real local Worker: a file address
 // alone opens nothing; the app's signed-in requests and its file cookie do;
 // signing out ends the cookie. Files the app shows keep working.
 //
@@ -24,7 +24,7 @@ const get = (url, headers = {}) => fetch(`${worker.origin}${url}`, { headers });
 
 before(async () => {
     const schema = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
-    worker = await startDevWorker({ seedLegacy: { sql: schema }, vars: { FILE_AUTH: 'on' } });
+    worker = await startDevWorker({ seedLegacy: { sql: schema } });
     await fetch(`${worker.origin}/api/auth/setup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(OWNER) });
     const login = await fetch(`${worker.origin}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: OWNER.email, password: OWNER.password }) });
     token = sessionTokenFrom(login);

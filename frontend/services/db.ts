@@ -62,10 +62,15 @@ function settle<T>(step: () => T): Promise<T> {
 }
 
 /** One date range of the sales ledger, as last loaded (shown when offline). */
-export interface SavedSalesPage { from: string; to: string; sales: Sale[]; summary: SalesSummary; allTags?: string[]; savedAt: number }
+export interface SavedSalesPage { from: string; to: string; sales: Sale[]; summary: SalesSummary; truncated?: boolean; allTags?: string[]; savedAt: number }
 
 /** A sale recorded while offline: uploaded, and given its number, when the server can be reached. */
-export interface PendingSale { id: string; input: SaleInput; savedAt: number; /** Why the server refused it, if it did. */ error?: string }
+export interface PendingSale {
+  id: string; input: SaleInput; savedAt: number;
+  /** Who recorded it (absent on sales saved before 2026-10-29): only they upload it. */
+  userId?: string;
+  /** Why the server refused it, if it did. */ error?: string;
+}
 
 const MAX_SAVED_SALES_PAGES = 6;
 
@@ -92,8 +97,8 @@ export const db = {
    * Removes every saved copy from the device — every workspace's and the
    * original app's — when signing out, so the next person at this device
    * finds no organization's data. Sales recorded offline that still couldn't
-   * be uploaded stay: they exist nowhere else, and upload at the next sign-in
-   * to their workspace.
+   * be uploaded stay: they exist nowhere else, and upload when the person who
+   * recorded them next signs in to their workspace.
    */
   clearSavedCopies(): void {
     const names = Object.values(STORAGE_KEYS).filter(k => k !== STORAGE_KEYS.salesPending && k !== STORAGE_KEYS.seedVersion);

@@ -29,7 +29,7 @@ import { ADMIN_ROLE_ID, atLeast } from './permissions';
 import { CONVERSATION_SCOPE_SQL, mayUseConversation, roomAccessOf, type RoomAccess } from './privateRooms';
 import { getRoles, getSession } from './workerRoles';
 import {
-  addD1Usage, databaseKey, flagEnabled, rawRealtimeSecret, realtimeEnabled, workspaceId,
+  addD1Usage, databaseKey, rawRealtimeSecret, realtimeEnabled, workspaceId,
   type ChangeEvent, type Ctx, type Env, type SessionData,
 } from './workerEnv';
 
@@ -270,7 +270,6 @@ interface SyncChange {
 export async function handleSync(ctx: Ctx): Promise<Response> {
   const session = await getSessionOf(ctx);
   if (!session) return err('Unauthorized', 401);
-  if (!flagEnabled(ctx.env.DELTA_SYNC_ENABLED)) return err('Not found', 404);
   const db = ctx.env.VAYU_DB;
   await ensureChangeLogTable(db);
   maybePrune(ctx);

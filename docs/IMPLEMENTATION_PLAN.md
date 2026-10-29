@@ -76,8 +76,8 @@ Auth: email and password, Google, two-factor, Forgot password). Data stays in
 
 ## Step 4 — Vayu's data into its own database (Stage B)
 
-**Not built.** `platform/legacyImport.ts` writes into OrgStore, which the app
-never reads, so it cannot be used. Needs a new copy tool into `OrgAppDb`:
+**Not built.** The old import into OrgStore (never read by the app) was deleted
+2026-10-29. Needs a new copy tool into `OrgAppDb`:
 
 | What | From → to | Notes |
 |---|---|---|
@@ -102,10 +102,10 @@ After a few stable weeks, with the owner's OK:
 
 ## Step 5 — Cleanup and simplification
 
-- [ ] Delete OrgStore, `orgApi.ts`, `orgSchema.ts`, `/api/v2/org/*` and the
+- [x] Delete OrgStore, `orgApi.ts`, `orgSchema.ts`, `/api/v2/org/*` and the
       old-data import (about 900 lines; needs a Durable Object deletion migration)
-- [ ] Remove the always-on switches `DELTA_SYNC_ENABLED`, `REALTIME_ENABLED`,
-      `FILE_AUTH` and their "off" branches (about 30 checks)
+- [x] Remove the always-on switches `DELTA_SYNC_ENABLED`, `REALTIME_ENABLED`,
+      `FILE_AUTH` and their "off" branches (done 2026-10-29)
 - [ ] Load background removal on demand (23 MB of the 30 MB build); stop
       bundling four libraries twice for the PDF worker
 - [ ] Offline copy from localStorage (about 5 MB cap, freezes while saving) to

@@ -37,7 +37,6 @@ each visible tab ──► GET /api/sync?cursor=N ──► merge into React sta
 | `cursor=N` (0 is valid) | `{mode:'incremental', cursor, hasMore, changes:[{seq,entity,id,op,record?}]}` |
 | cursor pruned, or ahead of the log | `{resyncRequired:true, cursor}`, then a fresh full copy |
 | `snapshot=<entity>&after_id=&cursor=` | keyset-paginated snapshot (available; the web client uses the list endpoints instead) |
-| `DELTA_SYNC_ENABLED` ≠ on | 404, and the client falls back to per-screen polling |
 
 - Filtering: the role's readable entities (`entityAccess.ts`, which mirrors
   the REST rules), plus `scope` (conversation participants for chat rows, the
@@ -100,9 +99,9 @@ and KV can't share a transaction with D1. They keep their REST refresh paths.
 Payment links get a signal-only `payments` invalidate (from the Razorpay
 webhook) that makes an open Payments screen refetch.
 
-## Private files (`FILE_AUTH`)
+## Private files (`fileAuth.ts`)
 
-With `FILE_AUTH=on`, `/api/files/*` requires the bearer session or the
+`/api/files/*` requires the bearer session or the
 HttpOnly `vayu_files` capability cookie (random, KV-backed, 7 days,
 `Path=/api` so `/auth/me` can re-issue it and logout can delete it).
 Responses are `private, max-age=86400`: browser cache only, never shared

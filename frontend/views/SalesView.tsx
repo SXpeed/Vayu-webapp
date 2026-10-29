@@ -342,9 +342,10 @@ export const SalesView: React.FC<SalesViewProps> = ({ artworks, contacts }) => {
     const shown = useMemo(() => (tagFilter.kind === 'all' ? matching : matching.filter(s => hasTag(s, tagFilter.tag))), [matching, tagFilter]);
     const byTag = useMemo(() => summarizeByTag(matching), [matching]);
     const anyTagged = byTag.some(r => r.tag !== '');
-    // The figures follow the filters, so choosing an event's tag gives that event's takings.
-    const summary = useMemo(() => (data ? summarize(shown) : null), [data, shown]);
     const filtered = mode !== 'all' || !!q || tagFilter.kind !== 'all';
+    // The figures follow the filters, so choosing an event's tag gives that event's takings.
+    // Unfiltered, the server's totals count every sale, past the listed rows too.
+    const summary = useMemo(() => (data ? (filtered ? summarize(shown) : data.summary) : null), [data, shown, filtered]);
     const activeTag = tagFilter.kind === 'tag' ? tagFilter.tag : null;
 
     const today = todayIso();
@@ -400,6 +401,7 @@ export const SalesView: React.FC<SalesViewProps> = ({ artworks, contacts }) => {
 
             <PageBody space="md">
                 {data?.offline && <OfflineNote savedAt={data.savedAt} canRecord={canRecord} />}
+                {data?.truncated && <Msg kind="info">Showing the latest {data.sales.length.toLocaleString('en-IN')} sales. The totals count all {data.summary.count.toLocaleString('en-IN')}; choose shorter dates to see the rest.</Msg>}
 
                 {anyTagged && <TagFilterBar byTag={byTag} allCount={matching.length} activeTag={activeTag} onAll={() => setTagFilter({ kind: 'all' })} onPick={pickTag} />}
 

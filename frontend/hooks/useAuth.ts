@@ -110,7 +110,7 @@ export function useAuth() {
         navigateTo('login');
     }, [clearAuth]);
 
-    // Photos and attachments load with a private 7-day file cookie (FILE_AUTH)
+    // Photos and attachments load with a private 7-day file cookie (fileAuth.ts)
     // that /auth/me renews when it is missing or expired. /auth/me runs when
     // the app starts, but an installed app can stay suspended for longer than
     // a week, so ask again when it comes back after a long while (and hourly

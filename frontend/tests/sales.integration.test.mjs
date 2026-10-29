@@ -26,7 +26,11 @@ const SALES_TABLE_V1 = `CREATE TABLE sales (
     deleted_at INTEGER, deleted_by TEXT, deleted_by_name TEXT NOT NULL DEFAULT ''
 );
 INSERT INTO sales (id, seq, sale_number, item_title, buyer_name, sale_date, recorded_at, amount, payment_mode, updated_at)
-VALUES ('sale_from_before_tags', 1, 'SAL-001', 'Recorded before tags', 'Early buyer', '2026-06-10', 1, 100, 'Cash', 1);`;
+VALUES ('sale_from_before_tags', 1, 'SAL-001', 'Recorded before tags', 'Early buyer', '2026-06-10', 1, 100, 'Cash', 1);
+-- A month with more sales than the list holds. Negative seqs leave MAX(seq), so new sale numbers stay SAL-00n.
+WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2001)
+INSERT INTO sales (id, seq, sale_number, item_title, buyer_name, sale_date, recorded_at, amount, payment_mode, updated_at)
+SELECT 'sale_bulk_' || i, -i, 'BULK-' || i, 'Print', 'Bulk buyer', '2024-03-15', 1, 10.1, 'Cash', 1 FROM n;`;
 const MONTH = { from: '2026-09-01', to: '2026-09-30' };
 
 let worker;
@@ -114,6 +118,7 @@ test('selling a piece marks it Sold, keeps a snapshot, and a second sale is refu
     assert.equal(made.body.inInventory, true);
     assert.equal(made.body.imageUrl, `/api/files/${art}.jpg`);
     assert.equal(await statusOf(art), 'Sold');
+    const count = (await month()).body.summary.count;
 
     const again = await api(owner, '/sales', { method: 'POST', body: sale({ artworkId: art }) });
     assert.equal(again.status, 409);
@@ -124,6 +129,7 @@ test('selling a piece marks it Sold, keeps a snapshot, and a second sale is refu
     assert.equal(r.status, 409);
     assert.equal(r.body.code, 'reserved');
     assert.equal(await statusOf(reserved), 'Reserved');
+    assert.equal((await month()).body.summary.count, count, 'a refused sale saves nothing');
 
     assert.equal((await api(owner, '/sales', { method: 'POST', body: sale({ artworkId: 'art_gone' }) })).status, 404);
 });
@@ -213,11 +219,21 @@ test('the summary adds up, by payment mode, within the dates asked for', async (
         'Bank transfer': { count: 1, amount: 250.5 },
     });
     assert.equal(body.sales.length, 4);
+    assert.equal(body.truncated, false);
 
     // The month: what the sales there add up to, deleted ones left out.
     const sept = (await month()).body;
     assert.equal(sept.summary.count, sept.sales.length);
     assert.equal(sept.summary.totalAmount, sept.sales.reduce((a, s) => a + Math.round(s.amount * 100), 0) / 100);
+});
+
+test('past the list limit, the totals still count every sale', async () => {
+    const { body } = await api(staff, '/sales?from=2024-03-01&to=2024-03-31');
+    assert.equal(body.sales.length, 2000);
+    assert.equal(body.truncated, true);
+    assert.equal(body.summary.count, 2001);
+    assert.deepEqual(body.summary.byMode, { Cash: { count: 2001, amount: 20210.1 } });
+    assert.equal(body.summary.totalAmount, 20210.1);
 });
 
 test('a table from before tags and photos gains them; its sales read back untouched', async () => {

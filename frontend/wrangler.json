@@ -37,14 +37,14 @@
   "durable_objects": {
     "bindings": [
       { "name": "SYNC_HUB", "class_name": "SyncHub" },
-      { "name": "ORG_STORE", "class_name": "OrgStore" },
       { "name": "ORG_APP_DB", "class_name": "OrgAppDb" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["SyncHub"] },
     { "tag": "v2", "new_sqlite_classes": ["OrgStore"] },
-    { "tag": "v3", "new_sqlite_classes": ["OrgAppDb"] }
+    { "tag": "v3", "new_sqlite_classes": ["OrgAppDb"] },
+    { "tag": "v4", "deleted_classes": ["OrgStore"] }
   ],
   "analytics_engine_datasets": [{ "binding": "ANALYTICS" }],
   "send_email": [{ "name": "EMAIL" }],
@@ -59,9 +59,6 @@
   ],
   "vars": {
     "WORKSPACE_ID": "default",
-    "DELTA_SYNC_ENABLED": "off",
-    "REALTIME_ENABLED": "off",
-    "FILE_AUTH": "off",
     "EMAIL_SENDING": "off",
     "LEGACY_PAYMENT_LINKS": "on",
     "LEGACY_BEARER_UNTIL": "2099-01-01"

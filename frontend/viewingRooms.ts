@@ -14,7 +14,7 @@
 //    switched off at any time.
 //  - A correct passcode returns a short-lived "pass": an HMAC over the token
 //    and an expiry, keyed by the room's own random grant_key. Photos and the
-//    interest form need a valid pass, so images keep working when FILE_AUTH
+//    interest form need a valid pass, so images keep working while sign-in
 //    locks /api/files, and only the room's own photos are served. A new
 //    passcode replaces grant_key, which cancels every pass issued before.
 //

@@ -138,6 +138,20 @@ export function razorpayApiBase(env: Env): string {
   return env.PLATFORM_ENV === 'development' && env.RAZORPAY_API_BASE ? env.RAZORPAY_API_BASE.replace(/\/$/, '') : 'https://api.razorpay.com';
 }
 
+/** One Razorpay API call with an account's keys. A hung Razorpay fails after 15 s instead of holding the request open. */
+export async function razorpay(
+  env: Env, keys: { keyId: string; keySecret: string }, method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown,
+): Promise<{ ok: boolean; status: number; data: any }> {
+  const res = await fetch(`${razorpayApiBase(env)}/v1${path}`, {
+    method,
+    headers: { Authorization: `Basic ${btoa(`${keys.keyId}:${keys.keySecret}`)}`, 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(15_000),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, data };
+}
+
 /**
  * Checks the stored keys against Razorpay with one read-only call. Only this
  * organization's own keys are used.
@@ -152,6 +166,7 @@ export async function verifyRazorpay(env: Env, db: D1Database, orgId: string, ac
     const credentials = btoa(`${r.key_id}:${secret}`);
     const res = await fetcher(`${razorpayApiBase(env)}/v1/payments?count=1`, {
       headers: { Authorization: `Basic ${credentials}` },
+      signal: AbortSignal.timeout(15_000),
     });
     if (res.ok) status = 'verified';
     else if (res.status === 401) error = 'Razorpay rejected these keys (401). Check the key ID and secret.';

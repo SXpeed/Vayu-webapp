@@ -1,5 +1,9 @@
 # One database per organization
 
+> **Removed 2026-10-29.** OrgStore and `/api/v2/org/*` were never used by the
+> app and are deleted (Durable Object migration `v4`). Organizations' data lives
+> in `OrgAppDb` behind `/api/o/:id` (`frontend/orgApp.ts`). Kept for history.
+
 Each organization's business data lives in its **own** SQLite database, inside
 its own Durable Object named by the organization id. Isolation is physical: code
 holding one organization's database cannot reach another's rows, so a forgotten

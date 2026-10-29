@@ -8,7 +8,7 @@ import { timingSafeEqual, type Ctx, type Env, type SessionData } from './workerE
 import { getSession } from './workerRoles';
 import { orgStorageEnv } from './orgApp';
 import { queueHubNotify } from './deltaSync';
-import { razorpayApiBase, razorpayCredentials, signRazorpayBody, verifiedRazorpayKeys } from './platform/payments';
+import { razorpay, razorpayCredentials, signRazorpayBody, verifiedRazorpayKeys } from './platform/payments';
 import { maskKeyId } from './platform/secrets';
 import { recordProcessed, recordProcessingFailure, recordReconcile, recordRejection, recordVerified, safeError, type ReconcileOutcome } from './platform/webhookHealth';
 import {
@@ -139,27 +139,6 @@ function noteProvenMode(link: StoredPaymentLink, keys: { mode: PaymentMode | nul
   if (!link.mode && keys.mode) link.mode = keys.mode;
 }
 
-/** One payment, from Razorpay's Payments API, with the given account's keys. */
-async function razorpayPayment(env: Env, keys: { keyId: string; keySecret: string }, paymentId: string): Promise<any> { // null when there is none
-  const res = await fetch(`${razorpayApiBase(env)}/v1/payments/${encodeURIComponent(paymentId)}`, {
-    headers: { 'Authorization': basicAuthHeader(keys.keyId, keys.keySecret) },
-  });
-  return res.ok ? res.json().catch(() => null) : null;
-}
-
-/** One Razorpay Payment Links API call with the given account's keys. */
-async function razorpayLinkCall(
-  env: Env, keys: { keyId: string; keySecret: string }, method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown,
-): Promise<{ ok: boolean; status: number; data: any }> {
-  const res = await fetch(`${razorpayApiBase(env)}/v1/payment_links${path}`, {
-    method,
-    headers: { 'Authorization': basicAuthHeader(keys.keyId, keys.keySecret), 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const data = await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, data };
-}
-
 /** Copy Razorpay's view of a link onto the record; true when the status changed to paid. */
 function applyRazorpayLinkState(record: StoredPaymentLink, entity: any): boolean {
   const wasPaid = record.status === 'paid';
@@ -232,11 +211,6 @@ async function linkAccountFor(env: Env): Promise<LinkAccount | LinkAccountRefusa
 
 function formatRupees(paise: number): string {
   return `₹${(paise / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
-}
-
-function basicAuthHeader(username: string, password: string): string {
-  const credentials = btoa(`${username}:${password}`);
-  return `Basic ${credentials}`;
 }
 
 /** A refusal as the API's usual error shape, with a machine-readable code. */
@@ -449,7 +423,7 @@ async function approveAmount(ctx: Ctx, session: SessionData, body: LinkRequestBo
 
 /** The link Razorpay made for a reference, if it made one. */
 async function linkByReference(env: Env, keys: { keyId: string; keySecret: string }, referenceId: string): Promise<any> { // null when there is none
-  const res = await razorpayLinkCall(env, keys, 'GET', `?reference_id=${encodeURIComponent(referenceId)}`).catch(() => null);
+  const res = await razorpay(env, keys, 'GET', `/payment_links?reference_id=${encodeURIComponent(referenceId)}`).catch(() => null);
   if (!res?.ok) return null;
   const found = (Array.isArray(res.data?.payment_links) ? res.data.payment_links : []) as { reference_id?: string }[];
   return found.find(l => l?.reference_id === referenceId) ?? null;
@@ -496,18 +470,8 @@ const finishLinkRequest = (db: D1Database, scope: string, key: string, linkId: s
  * instead of being made again.
  */
 async function createAtRazorpay(env: Env, account: LinkAccount, payload: Record<string, unknown>, referenceId: string): Promise<{ entity: any } | { error: string; status: number }> {
-  let res: Response | null = null;
-  try {
-    res = await fetch(`${razorpayApiBase(env)}/v1/payment_links`, {
-      method: 'POST',
-      headers: { 'Authorization': basicAuthHeader(account.keyId, account.keySecret), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...payload, reference_id: referenceId }),
-      signal: AbortSignal.timeout(15_000),
-    });
-  } catch {
-    res = null;
-  }
-  const data = res ? await res.json().catch(() => ({})) as any : null;
+  const res = await razorpay(env, account, 'POST', '/payment_links', { ...payload, reference_id: referenceId }).catch(() => null);
+  const data = res?.data;
   if (res?.ok && data?.id) return { entity: data };
   const description = String(data?.error?.description ?? '');
   const ambiguous = !res || res.status >= 500 || /reference/i.test(description);
@@ -872,7 +836,7 @@ const outcomeFor = (o: Outcomes, account: string): ReconcileOutcome => {
 /** One open link against Razorpay. True when its status changed. */
 async function reconcileOpenLink(ctx: Ctx, link: StoredPaymentLink, out: ReconcileOutcome): Promise<boolean> {
   const keys = await linkAccountKeys(ctx.env, link);
-  const res = keys ? await razorpayLinkCall(ctx.env, keys, 'GET', `/${encodeURIComponent(link.id)}`).catch(() => null) : null;
+  const res = keys ? await razorpay(ctx.env, keys, 'GET', `/payment_links/${encodeURIComponent(link.id)}`).catch(() => null) : null;
   link.checkedAt = Date.now();
   if (!keys || !res?.ok) {
     link.checkFailures = (link.checkFailures ?? 0) + 1;
@@ -895,7 +859,7 @@ async function reconcileOpenLink(ctx: Ctx, link: StoredPaymentLink, out: Reconci
 async function reconcileRefunds(ctx: Ctx, link: StoredPaymentLink, out: ReconcileOutcome): Promise<boolean> {
   const keys = await linkAccountKeys(ctx.env, link);
   const res = keys && link.paymentId
-    ? await fetch(`${razorpayApiBase(ctx.env)}/v1/payments/${encodeURIComponent(link.paymentId)}/refunds`, { headers: { Authorization: basicAuthHeader(keys.keyId, keys.keySecret) } }).catch(() => null)
+    ? await razorpay(ctx.env, keys, 'GET', `/payments/${encodeURIComponent(link.paymentId)}/refunds`).catch(() => null)
     : null;
   link.refundsCheckedAt = Date.now();
   if (!res?.ok) {
@@ -905,7 +869,7 @@ async function reconcileRefunds(ctx: Ctx, link: StoredPaymentLink, out: Reconcil
     return false;
   }
   out.checked++;
-  const items = ((await res.json().catch(() => ({}))) as { items?: unknown[] }).items ?? [];
+  const items: unknown[] = Array.isArray(res.data?.items) ? res.data.items : [];
   let changed = false;
   for (const item of items.slice(0, 50)) {
     const status = apiRefundStatus((item as { status?: unknown })?.status);
@@ -1000,14 +964,14 @@ export async function reconcileAllWorkspaces(env: Env, execCtx: ExecutionContext
 async function freshLinkDetails(ctx: Ctx, link: StoredPaymentLink, persist: boolean): Promise<Response> {
   const keys = await linkAccountKeys(ctx.env, link);
   if (!keys) return json({ link, checked: false, reason: "The Razorpay account this link was made in isn't connected." });
-  const res = await razorpayLinkCall(ctx.env, keys, 'GET', `/${encodeURIComponent(link.id)}`).catch(() => null);
+  const res = await razorpay(ctx.env, keys, 'GET', `/payment_links/${encodeURIComponent(link.id)}`).catch(() => null);
   if (!res?.ok) return json({ link, checked: false, reason: "Couldn't reach Razorpay. Showing what was last recorded." });
 
   noteProvenMode(link, keys);
   const nowPaid = applyRazorpayLinkState(link, res.data);
   const paymentIds: string[] = (Array.isArray(res.data?.payments) ? res.data.payments : [])
     .map((p: any) => p?.payment_id).filter((v: unknown): v is string => typeof v === 'string' && !!v).slice(0, 10);
-  const fetched = await Promise.all(paymentIds.map(pid => razorpayPayment(ctx.env, keys, pid).catch(() => null)));
+  const fetched = await Promise.all(paymentIds.map(pid => razorpay(ctx.env, keys, 'GET', `/payments/${encodeURIComponent(pid)}`).then(r => (r.ok ? r.data : null), () => null)));
   const payments = fetched.filter(Boolean).map(toPaymentDetail);
   if (payments.length) link.payments = payments;
   // The payment that settled it: its own time and method, not our record's guess.
@@ -1086,10 +1050,10 @@ async function cancelOpenLink(ctx: Ctx, link: StoredPaymentLink): Promise<Respon
   if (!OPEN_LINK_STATUSES.has(link.status)) return null;
   const keys = await linkAccountKeys(ctx.env, link);
   if (!keys) return err("The Razorpay account this link was made in isn't connected, so it can't be cancelled. Nothing was deleted.", 503);
-  const cancel = await razorpayLinkCall(ctx.env, keys, 'POST', `/${encodeURIComponent(link.id)}/cancel`);
+  const cancel = await razorpay(ctx.env, keys, 'POST', `/payment_links/${encodeURIComponent(link.id)}/cancel`);
   if (cancel.ok) return null;
   // Already paid, expired or cancelled at Razorpay? Then it can't be cancelled.
-  const current = await razorpayLinkCall(ctx.env, keys, 'GET', `/${encodeURIComponent(link.id)}`);
+  const current = await razorpay(ctx.env, keys, 'GET', `/payment_links/${encodeURIComponent(link.id)}`);
   if (!current.ok) return err(cancel.data?.error?.description || `Razorpay couldn't cancel the link (${cancel.status}). Nothing was deleted.`, 502);
   const nowPaid = applyRazorpayLinkState(link, current.data);
   if (link.status === 'paid' || link.status === 'partially_paid') {
@@ -1133,7 +1097,7 @@ async function handlePaymentLinkUpdate(ctx: Ctx): Promise<Response> {
   if (!OPEN_LINK_STATUSES.has(link.status)) return err('Only a link that is still waiting for payment can be changed', 409);
   const keys = await linkAccountKeys(ctx.env, link);
   if (!keys) return err("The Razorpay account this link was made in isn't connected.", 503);
-  const res = await razorpayLinkCall(ctx.env, keys, 'PATCH', `/${encodeURIComponent(link.id)}`, { expire_by: Math.floor(expiresAt / 1000) });
+  const res = await razorpay(ctx.env, keys, 'PATCH', `/payment_links/${encodeURIComponent(link.id)}`, { expire_by: Math.floor(expiresAt / 1000) });
   if (!res.ok) return err(res.data?.error?.description || `Razorpay couldn't change the link (${res.status})`, 502);
   applyRazorpayLinkState(link, res.data);
   link.expiresAt = Number(res.data?.expire_by) > 0 ? Number(res.data.expire_by) * 1000 : expiresAt;

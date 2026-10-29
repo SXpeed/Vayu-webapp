@@ -87,7 +87,6 @@ execFileSync(npx, ['wrangler', 'd1', 'execute', 'vayu-messaging-db', '--local', 
 });
 const child = spawn(npx, [
     'wrangler', 'dev', '--local', '--port', String(PORT), '--persist-to', persist,
-    '--var', 'DELTA_SYNC_ENABLED:on', '--var', 'REALTIME_ENABLED:on',
     '--var', 'REALTIME_SECRET:local-smoke-secret-not-for-production',
 ], { cwd: frontend, stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' });
 let serverLog = '';

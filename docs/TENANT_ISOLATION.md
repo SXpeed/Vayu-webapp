@@ -51,10 +51,10 @@ each part is tested, and what is still a known limit.
 
 | Brief scenario | Test |
 |---|---|
-| 1, 6, 15, 17 — two organizations, other ids, same URLs | `orgApp` "one organization never sees another", "the address alone opens nothing"; `orgStore` "business data stays inside its own organization"; `platformOrgs` "ids from another organization are not found" |
-| 5, 18 — manipulated organization id / privilege | `orgApp` "the address alone opens nothing"; `orgStore` "roles are enforced on the server"; `platformOrgs` "organization owners are not provider admins" |
+| 1, 6, 15, 17 — two organizations, other ids, same URLs | `orgApp` "one organization never sees another", "the address alone opens nothing"; `platformOrgs` "ids from another organization are not found" |
+| 5, 18 — manipulated organization id / privilege | `orgApp` "the address alone opens nothing"; `platformOrgs` "organization owners are not provider admins" |
 | 8 — realtime per organization | `orgApp` "delta sync and realtime run per organization" |
-| 9, 10 — removed member, role change | `orgApp` "removing someone takes effect on their next request", "an app role change moves the platform role with it"; `orgStore` "a disabled member loses access…" |
+| 9, 10 — removed member, role change | `orgApp` "removing someone takes effect on their next request", "an app role change moves the platform role with it" |
 | 11 — files through manipulated URLs | `orgApp` "files are stored per organization…"; `fileAuth` suite |
 | 7, 16 — caches | `orgApp` "an organization's data is never kept by a browser or shared cache"; `tenantStorage` "signing out removes every organization's saved copy" |
 | 14 — data after logout | `tenantStorage`; `fileAuth` "signing out ends the file cookie" |
