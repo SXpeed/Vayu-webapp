@@ -5,7 +5,8 @@ import { Plus, X, FileText, Image as ImageIcon, ArrowLeft, Edit2, Trash2, Downlo
 import { SearchBar } from '../components/SearchBar';
 import { ArtworkPicker } from '../components/ArtworkPicker';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton, EmptyState } from '../components/ui';
-import { Invoice, Artwork, InvoiceItem } from '../types';
+import { Invoice, Artwork, InvoiceItem, type Contact } from '../types';
+import { ContactSuggest } from '../components/ContactSuggest';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { makeDocumentNumber } from '../services/documentNumber';
 import { exportProformaPdf } from '../services/proformaPdf';
@@ -33,9 +34,11 @@ interface InvoiceViewProps {
     onUpdateInvoice: (invoice: Invoice) => void;
     onDeleteInvoice: (id: string) => void;
     onArtworkClick: (artwork: Artwork) => void;
+    /** Saved contacts, suggested in the client's name, phone and email fields. */
+    contacts?: readonly Contact[];
 }
 
-export const InvoiceView: React.FC<InvoiceViewProps> = ({ invoices, artworks, onAddInvoice, onUpdateInvoice, onDeleteInvoice, onArtworkClick }) => {
+export const InvoiceView: React.FC<InvoiceViewProps> = ({ invoices, artworks, onAddInvoice, onUpdateInvoice, onDeleteInvoice, onArtworkClick, contacts = [] }) => {
     const [isAdding, setIsAdding] = useState(false);
     const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
@@ -135,6 +138,7 @@ export const InvoiceView: React.FC<InvoiceViewProps> = ({ invoices, artworks, on
             {isAdding && (
                 <InvoiceFormModal
                     artworks={artworks}
+                    contacts={contacts}
                     onClose={() => setIsAdding(false)}
                     onSave={async (newInv) => {
                         const created = await onAddInvoice(newInv);
@@ -150,6 +154,7 @@ export const InvoiceView: React.FC<InvoiceViewProps> = ({ invoices, artworks, on
                 <InvoiceDetailModal
                     invoice={selectedInvoice}
                     artworks={artworks}
+                    contacts={contacts}
                     onClose={handleCloseModal}
                     onUpdateInvoice={(updated) => {
                         onUpdateInvoice(updated);
@@ -235,9 +240,10 @@ interface InvoiceDetailModalProps {
     onUpdateInvoice: (invoice: Invoice) => void;
     onDeleteInvoice: () => void;
     onArtworkClick: (artwork: Artwork) => void;
+    contacts?: readonly Contact[];
 }
 
-export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({ invoice, artworks, onClose, onUpdateInvoice, onDeleteInvoice, onArtworkClick }) => {
+export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({ invoice, artworks, onClose, onUpdateInvoice, onDeleteInvoice, onArtworkClick, contacts = [] }) => {
     const [isEditing, setIsEditing] = useState(false);
 
     const handleSaveEdit = (updatedData: NewInvoice) => {
@@ -348,6 +354,7 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({ invoice,
                     <InvoiceFormModal
                         initialData={invoice}
                         artworks={artworks}
+                        contacts={contacts}
                         onClose={() => setIsEditing(false)}
                         onSave={handleSaveEdit}
                         onArtworkClick={onArtworkClick}
@@ -373,15 +380,23 @@ interface InvoiceFormModalProps {
     onArtworkClick: (artwork: Artwork) => void;
     /** Shown only when editing an existing proforma — delete lives inside the edit form. */
     onDelete?: () => void;
+    /** Saved contacts, suggested in the client's name, phone and email fields. */
+    contacts?: readonly Contact[];
 }
 
-export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData, prefill, artworks, saveLabel = 'Save', onClose, onSave, onArtworkClick, onDelete }) => {
+export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData, prefill, artworks, saveLabel = 'Save', onClose, onSave, onArtworkClick, onDelete, contacts = [] }) => {
     const [confirmDelete, setConfirmDelete] = useState(false);
     const start = initialData ?? prefill;
     const [customerName, setCustomerName] = useState(start?.customerName ?? '');
     const [customerPhone, setCustomerPhone] = useState(start?.customerPhone ?? '');
     const [customerEmail, setCustomerEmail] = useState(start?.customerEmail ?? '');
     const [customerAddress, setCustomerAddress] = useState(start?.customerAddress ?? '');
+    // A saved contact picked from the suggestions fills the client's details it has.
+    const pickContact = (c: Contact) => {
+        setCustomerName(c.name);
+        if (c.phone) setCustomerPhone(c.phone);
+        if (c.email) setCustomerEmail(c.email);
+    };
     const [status, setStatus] = useState<Invoice['status']>(start?.status ?? 'Draft');
     const [selectedArtworkIds, setSelectedArtworkIds] = useState<Set<string>>(new Set(start?.items?.filter(item => item.artworkId).map(item => item.artworkId) ?? []));
     // Items not in the inventory (no artworkId), typed in: a title and a price each.
@@ -478,35 +493,50 @@ export const InvoiceFormModal: React.FC<InvoiceFormModalProps> = ({ initialData,
                     </div>
                     <div>
                         <label htmlFor="invoice-customer-name" className={labelClass}>Name *</label>
-                        <input
-                            id="invoice-customer-name"
-                            value={customerName}
-                            onChange={e => setCustomerName(e.target.value)}
-                            className={inputClass}
-                            placeholder="Client Name"
-                        />
+                        <ContactSuggest contacts={contacts} query={customerName} onPick={pickContact}>
+                            {p => (
+                                <input
+                                    id="invoice-customer-name"
+                                    value={customerName}
+                                    onChange={e => setCustomerName(e.target.value)}
+                                    className={inputClass}
+                                    placeholder="Client Name"
+                                    {...p}
+                                />
+                            )}
+                        </ContactSuggest>
                     </div>
                     <div>
                         <label htmlFor="invoice-customer-phone" className={labelClass}>Phone</label>
-                        <input
-                            id="invoice-customer-phone"
-                            type="tel"
-                            value={customerPhone}
-                            onChange={e => setCustomerPhone(e.target.value)}
-                            className={inputClass}
-                            placeholder="+91 98765 43210"
-                        />
+                        <ContactSuggest contacts={contacts} query={customerPhone} onPick={pickContact}>
+                            {p => (
+                                <input
+                                    id="invoice-customer-phone"
+                                    type="tel"
+                                    value={customerPhone}
+                                    onChange={e => setCustomerPhone(e.target.value)}
+                                    className={inputClass}
+                                    placeholder="+91 98765 43210"
+                                    {...p}
+                                />
+                            )}
+                        </ContactSuggest>
                     </div>
                     <div>
                         <label htmlFor="invoice-customer-email" className={labelClass}>Email</label>
-                        <input
-                            id="invoice-customer-email"
-                            type="email"
-                            value={customerEmail}
-                            onChange={e => setCustomerEmail(e.target.value)}
-                            className={inputClass}
-                            placeholder="client@example.com"
-                        />
+                        <ContactSuggest contacts={contacts} query={customerEmail} onPick={pickContact}>
+                            {p => (
+                                <input
+                                    id="invoice-customer-email"
+                                    type="email"
+                                    value={customerEmail}
+                                    onChange={e => setCustomerEmail(e.target.value)}
+                                    className={inputClass}
+                                    placeholder="client@example.com"
+                                    {...p}
+                                />
+                            )}
+                        </ContactSuggest>
                     </div>
                     <div>
                         <label htmlFor="invoice-customer-address" className={labelClass}>Address</label>

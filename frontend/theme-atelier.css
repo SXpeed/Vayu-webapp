@@ -1,0 +1,136 @@
+/* Atelier app style (Profile → App Settings → App style), keyed on
+ * <html data-skin="atelier"> (appStyle.ts, set before first paint in
+ * index.html). Classic is index.css unchanged.
+ *
+ * Colours, depth, corner radius and motion only: nothing here changes a size,
+ * a spacing or a position, so every screen keeps its layout. Imported by the
+ * org app only (index.tsx); admin, website and private rooms stay as they are.
+ *
+ * The soft-UI surfaces in index.css all read the --neu-* tokens, including in
+ * their hover/pressed states, so redefining the tokens restyles them all. */
+
+/* ── Tokens ───────────────────────────────────────────────────────────── */
+html[data-skin='atelier'] {
+    --neu-bg: #ecebe6;
+    --neu-bg-hi: #ffffff;
+    --neu-bg-lo: #ffffff;
+    --neu-shadow-dark: rgba(30, 28, 20, 0.08);
+    --neu-shadow-light: transparent;
+    --neu-highlight: transparent;
+    --neu-text: #151515;
+    --neu-text-dim: #5f5f66;
+    --neu-line: rgba(20, 20, 20, 0.08);
+    --neu-gold: #aa8520;
+    --neu-radius: 1.4rem;
+    --at-well: #f4f3ef;
+    --at-ink: #151515;
+    --at-on-ink: #f4f1e8;
+    --at-lift: 0 18px 40px rgba(30, 28, 20, 0.13);
+    --at-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+html.dark[data-skin='atelier'] {
+    --neu-bg: #0e0e0f;
+    --neu-bg-hi: #19191b;
+    --neu-bg-lo: #19191b;
+    --neu-shadow-dark: rgba(0, 0, 0, 0.5);
+    --neu-text: #f1efe9;
+    --neu-text-dim: #a3a19b;
+    --neu-line: rgba(255, 255, 255, 0.08);
+    --neu-gold: #e6c27a;
+    --at-well: #232326;
+    --at-ink: #f1efe9;
+    --at-on-ink: #151515;
+    --at-lift: 0 18px 40px rgba(0, 0, 0, 0.55);
+}
+
+/* ── Surfaces ─────────────────────────────────────────────────────────── */
+/* Wells (fields, pressed chips, toggles) sit a shade off the white cards. */
+html[data-skin='atelier'] :is(.neu-inset, .neu-field, .neu-search, .neu-toggle, .neu-pill-active, .neu-picture-well:not(.tile-backdrop)) {
+    background: var(--at-well);
+}
+
+/* The phone dock's sliding well becomes an ink pill. */
+html[data-skin='atelier'] .neu-dock-well {
+    background: var(--at-ink);
+    box-shadow: none;
+}
+
+html[data-skin='atelier'] .neu-dock-item[aria-current='page'] {
+    color: var(--at-on-ink);
+}
+
+/* Hover lift on cards and tiles that open something (transform: no layout). */
+@media (hover: hover) {
+    html[data-skin='atelier'] :is(.neu-card-interactive, .neu-tile-interactive):hover {
+        transform: translateY(-4px);
+        box-shadow: var(--at-lift);
+    }
+}
+
+/* ── Entrances: blur in, a short stagger between siblings ────────────── */
+@keyframes at-blur-in {
+    from { opacity: 0; filter: blur(8px); transform: translateY(12px) scale(0.99); }
+}
+
+@keyframes at-blur-fade {
+    from { opacity: 0; filter: blur(6px); }
+}
+
+/* `backwards`, not `forwards`: once it ends the element is back to its own
+ * styles, so hover lifts and centring transforms still apply. */
+html[data-skin='atelier'] .animate-fade-in-up {
+    opacity: 1;
+    animation: at-blur-in 0.42s var(--at-ease) backwards;
+}
+
+html[data-skin='atelier'] .animate-fade-in {
+    opacity: 1;
+    animation: at-blur-fade 0.3s var(--at-ease) backwards;
+}
+
+/* index.css pins delays to 0 with !important; siblings get a short stagger
+ * back (capped at 200ms). Sheets and dialogs always open at once. */
+html[data-skin='atelier'] .animate-fade-in-up:not(.neu-sheet, .neu-sheet-wide, .neu-modal):nth-child(2) { animation-delay: 40ms !important; } /* NOSONAR: beats index.css's !important 0ms */
+html[data-skin='atelier'] .animate-fade-in-up:not(.neu-sheet, .neu-sheet-wide, .neu-modal):nth-child(3) { animation-delay: 80ms !important; } /* NOSONAR: same */
+html[data-skin='atelier'] .animate-fade-in-up:not(.neu-sheet, .neu-sheet-wide, .neu-modal):nth-child(4) { animation-delay: 120ms !important; } /* NOSONAR: same */
+html[data-skin='atelier'] .animate-fade-in-up:not(.neu-sheet, .neu-sheet-wide, .neu-modal):nth-child(5) { animation-delay: 160ms !important; } /* NOSONAR: same */
+html[data-skin='atelier'] .animate-fade-in-up:not(.neu-sheet, .neu-sheet-wide, .neu-modal):nth-child(n + 6) { animation-delay: 200ms !important; } /* NOSONAR: same */
+
+/* ── Page transitions (View Transitions; appStyle.ts starts them) ─────── */
+@keyframes at-page-out {
+    to { opacity: 0; filter: blur(8px); }
+}
+
+@keyframes at-page-in {
+    from { opacity: 0; filter: blur(10px); }
+}
+
+html[data-skin='atelier']::view-transition-old(root) {
+    animation: at-page-out 0.18s ease both;
+}
+
+html[data-skin='atelier']::view-transition-new(root) {
+    animation: at-page-in 0.34s var(--at-ease) both;
+}
+
+/* The dock and sidebar stay put while the page changes behind them. */
+html[data-skin='atelier'] .neu-dock-scrim { view-transition-name: at-dock; }
+html[data-skin='atelier'] [data-app-sidebar] { view-transition-name: at-sidebar; }
+
+/* An artwork's picture grows from its tile into the detail view. */
+html[data-skin='atelier']::view-transition-group(at-art) {
+    animation-duration: 0.5s;
+    animation-timing-function: cubic-bezier(0.65, 0, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html[data-skin='atelier'] :is(.animate-fade-in-up, .animate-fade-in) {
+        animation: none !important; /* NOSONAR: reduced motion has to beat every animation */
+        opacity: 1 !important; /* NOSONAR: same */
+    }
+
+    html[data-skin='atelier'] :is(.neu-card-interactive, .neu-tile-interactive):hover {
+        transform: none;
+    }
+}

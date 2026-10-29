@@ -104,7 +104,7 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
                             {/* Photo, set into the card */}
                             <div className="neu-picture-well neu-picture-well-sm tile-backdrop w-full aspect-[4/3] rounded-[1rem]">
                                 {imageCount > 0 ? (
-                                    <img loading="lazy" decoding="async" src={getThumbUrl(artwork.imageUrls[0])} alt={artwork.title} className="w-full h-full object-contain p-2" />
+                                    <img data-art-thumb={artwork.id} loading="lazy" decoding="async" src={getThumbUrl(artwork.imageUrls[0])} alt={artwork.title} className="w-full h-full object-contain p-2" />
                                 ) : (
                                     <div className="w-full h-full flex items-center justify-center text-[var(--neu-text-dim)]">
                                         <ImageIcon size={28} strokeWidth={1} />

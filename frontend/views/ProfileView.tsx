@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { UserProfile } from '../types';
-import { Moon, Sun, LogOut, Check, Bell, BellOff, Pencil, X, Type, Image as ImageIcon } from 'lucide-react';
+import { Moon, Sun, LogOut, Check, Bell, BellOff, Pencil, X, Type, Image as ImageIcon, Palette } from 'lucide-react';
 import { pushService } from '../services/pushService';
 import { MyDevicesCard } from '../components/MyDevicesCard';
 import { EmailCard, PasswordCard, WorkspaceCard } from '../components/AccountCards';
 import { getUiSize, setUiSize, type UiSize } from '../uiSize';
 import { TILE_BACKDROPS, getTileBackdrop, setTileBackdrop, type TileBackdrop } from '../tileBackdrop';
+import { APP_STYLES, getAppStyle, setAppStyle, type AppStyle } from '../appStyle';
 import {
     PageRoot, PageHeader, PageBody, Card, SectionTitle, Field, Input, Textarea,
     ReadOnlyValue, ToggleRow, Button, Divider, Pill,
@@ -129,6 +130,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ profile, onUpdateProfi
 
                     <Divider />
 
+                    <AppStyleRow />
+
+                    <Divider />
+
                     <UiSizeRow />
 
                     <Divider />
@@ -180,23 +185,24 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ profile, onUpdateProfi
     );
 };
 
-/** The backdrop behind product photos in tiles: six choices, this device only. */
+/** The backdrop behind product photos in tiles: six swatches on one line, this device only. */
 const TileBackdropRow: React.FC = () => {
     const [value, setValue] = useState<TileBackdrop>(getTileBackdrop);
     const choose = (next: TileBackdrop) => {
         setTileBackdrop(next);
         setValue(next);
     };
+    const current = TILE_BACKDROPS.find(o => o.value === value)?.label;
     return (
-        <div className="py-1.5 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-1.5">
             <div className="flex items-center gap-3 min-w-0 text-gray-700 dark:text-gray-200">
                 <ImageIcon size={18} className="shrink-0" />
                 <div className="min-w-0">
                     <p className="text-sm font-medium truncate">Product tile background</p>
-                    <p className="text-[11px] text-gray-600 dark:text-gray-400 font-light">Behind product photos in Inventory, collections and pickers. On this device</p>
+                    <p className="text-[11px] text-gray-600 dark:text-gray-400 font-light">{current} · On this device</p>
                 </div>
             </div>
-            <div role="radiogroup" aria-label="Product tile background" className="grid grid-cols-3 sm:grid-cols-6 gap-2.5">
+            <div role="radiogroup" aria-label="Product tile background" className="flex gap-2 shrink-0">
                 {TILE_BACKDROPS.map(o => {
                     const on = value === o.value;
                     return (
@@ -205,17 +211,41 @@ const TileBackdropRow: React.FC = () => {
                             type="button"
                             role="radio"
                             aria-checked={on}
+                            aria-label={o.label}
+                            title={o.label}
                             onClick={() => choose(o.value)}
-                            className={`rounded-2xl p-1.5 flex flex-col items-center gap-1.5 active-scale ${on ? 'neu-inset' : 'neu-raised-sm'}`}
+                            className={`w-8 h-8 rounded-full p-[3px] active-scale ${on ? 'ring-2 ring-gold-500 dark:ring-gold-400' : 'neu-raised-sm'}`}
                         >
-                            <span data-tile-bg={o.value} className="tile-backdrop relative w-full aspect-[4/3] rounded-xl flex items-center justify-center">
-                                {on && <span className="w-6 h-6 rounded-full neu-accent flex items-center justify-center"><Check size={13} strokeWidth={3} className="text-white" /></span>}
-                            </span>
-                            <span className={`text-[11px] ${on ? 'font-semibold text-gold-700 dark:text-gold-300' : 'text-gray-600 dark:text-gray-300'}`}>{o.label}</span>
+                            <span data-tile-bg={o.value} className="tile-backdrop block w-full h-full rounded-full" />
                         </button>
                     );
                 })}
             </div>
+        </div>
+    );
+};
+
+/** Classic (soft UI) or Atelier (flat warm surfaces and motion) — this device only, like the theme. */
+const AppStyleRow: React.FC = () => {
+    const [style, setStyle] = useState<AppStyle>(getAppStyle);
+    const choose = (next: AppStyle) => {
+        setAppStyle(next);
+        setStyle(next);
+    };
+    return (
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-1.5">
+            <div className="flex items-center gap-3 min-w-0 text-gray-700 dark:text-gray-200">
+                <Palette size={18} className="shrink-0" />
+                <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">App style</p>
+                    <p className="text-[11px] text-gray-600 dark:text-gray-400 font-light">Same layout, different look · On this device</p>
+                </div>
+            </div>
+            <fieldset aria-label="App style" className="flex gap-2 shrink-0">
+                {APP_STYLES.map(o => (
+                    <Pill key={o.value} active={style === o.value} onClick={() => choose(o.value)}>{o.label}</Pill>
+                ))}
+            </fieldset>
         </div>
     );
 };

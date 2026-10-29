@@ -5,6 +5,7 @@ import { StatStrip, type Stat } from '../../components/StatStrip';
 import { getThumbUrl } from '../../services/storageService';
 import type { PaymentMode, Sale, SalesSummary, TagTotal } from '../../salesRules';
 import { itemsText, rupees } from '../../components/SalesSummary';
+import { CountUp } from '../../components/CountUp';
 
 // The Sales screen's list, figures and tag filter. The editor and the page
 // itself stay in views/SalesView.
@@ -238,11 +239,11 @@ const averageText = (s: SalesSummary): string => (s.count ? rupees(Math.round(s.
 
 /** The headline figures: three side by side, or on a phone the takings with the rest under them. */
 function salesStats(summary: SalesSummary, phone: boolean): Stat[] {
-    const received: Stat = { label: 'Received', Icon: IndianRupee, value: rupees(summary.totalAmount), className: 'col-span-2 sm:col-span-1' };
+    const received: Stat = { label: 'Received', Icon: IndianRupee, value: <CountUp value={summary.totalAmount} format={rupees} />, className: 'col-span-2 sm:col-span-1' };
     if (phone) return [{ ...received, sub: summary.count ? `${itemsText(summary.count)} · average ${averageText(summary)}` : itemsText(0) }];
     return [
         received,
-        { label: 'Items sold', Icon: HandCoins, value: summary.count },
+        { label: 'Items sold', Icon: HandCoins, value: <CountUp value={summary.count} /> },
         { label: 'Average sale', Icon: TrendingUp, value: averageText(summary) },
     ];
 }

@@ -56,6 +56,16 @@
             try { bg = localStorage.getItem('vayu_tile_bg') || bg; } catch { /* private mode */ }
             document.documentElement.dataset.tileBg = bg;
         })();
+        // App style, before first paint (appStyle.ts, theme-atelier.css). Classic unless Atelier was chosen.
+        (function () {
+            let skin = 'classic';
+            try { if (localStorage.getItem('vayu_app_style') === 'atelier') skin = 'atelier'; } catch { /* private mode */ }
+            document.documentElement.dataset.skin = skin;
+            if (skin === 'atelier') {
+                const dark = document.documentElement.classList.contains('dark');
+                document.querySelector('meta[name="theme-color"]').setAttribute('content', dark ? '#0e0e0f' : '#ecebe6');
+            }
+        })();
     </script>
 
     <style>

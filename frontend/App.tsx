@@ -522,7 +522,7 @@ const App: React.FC = () => {
             case 'attendance':
                 return authUser ? <AttendanceView authUser={authUser} canManage={can('attendance', 'edit')} onBack={() => navigateTo('home')} /> : null;
             case 'invoice':
-                return <InvoiceView invoices={invoices} artworks={artworks} onAddInvoice={handlers.handleAddInvoice} onUpdateInvoice={handlers.handleUpdateInvoice} onDeleteInvoice={handlers.handleDeleteInvoice} onArtworkClick={handleArtworkClick} />;
+                return <InvoiceView invoices={invoices} artworks={artworks} contacts={contacts} onAddInvoice={handlers.handleAddInvoice} onUpdateInvoice={handlers.handleUpdateInvoice} onDeleteInvoice={handlers.handleDeleteInvoice} onArtworkClick={handleArtworkClick} />;
             case 'inquiry':
                 return (
                     <InquiryView
@@ -570,7 +570,7 @@ const App: React.FC = () => {
             case 'activity':
                 return <ActivityLogView onBack={() => navigateTo('home')} />;
             case 'payments':
-                return <PaymentsView invoices={invoices} />;
+                return <PaymentsView invoices={invoices} contacts={contacts} />;
             case 'sales':
                 return <SalesView artworks={artworks} contacts={contacts} />;
             case 'profile':

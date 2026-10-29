@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { createRefreshScheduler } from '../services/refreshScheduler';
 import { realtimeService } from '../services/realtimeService';
 import { photoStore } from '../services/photoStore';
+import { syncThemeColor } from '../appStyle';
 
 /**
  * Manages auth state: authUser, userProfile, theme, and the
@@ -32,6 +33,7 @@ export function useAuth() {
         } else {
             document.documentElement.classList.remove('dark');
         }
+        syncThemeColor();
     }, [theme]);
 
     const applyAuthUser = useCallback((user: AuthUser) => {

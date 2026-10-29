@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast';
 import { ChevronLeft, ChevronRight, CloudOff, HandCoins, Loader2, Plus, RotateCcw, Tag, Trash2, X } from 'lucide-react';
 import { ArtworkPicker } from '../components/ArtworkPicker';
+import { ContactSuggest } from '../components/ContactSuggest';
 import { PhotoAttachments } from '../components/PhotoAttachments';
 import { SearchBar } from '../components/SearchBar';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
@@ -543,18 +544,18 @@ async function saveSale(sale: Sale | null, input: SaleInput): Promise<{ message:
 
 const piecesBack = (sale: Sale | null): boolean => !!sale?.artworkId && sale.inInventory;
 
-const BuyerFields: React.FC<{ s: SaleInput; contacts: Map<string, Contact>; onBuyer: (name: string) => void; onPhone: (phone: string) => void }> = ({ s, contacts, onBuyer, onPhone }) => (
+/** Buyer name and phone; both suggest saved contacts, and picking one fills both and links it. */
+const BuyerFields: React.FC<{ s: SaleInput; contacts: readonly Contact[]; onBuyer: (name: string) => void; onPhone: (phone: string) => void; onPick: (c: Contact) => void }> = ({ s, contacts, onBuyer, onPhone, onPick }) => (
     <>
         <Field label="Buyer" htmlFor="sale-buyer" hint={s.contactId ? 'From your contacts' : undefined}>
-            <Input id="sale-buyer" value={s.buyerName} onChange={e => onBuyer(e.target.value)} list={contacts.size ? 'sale-contacts' : undefined} autoComplete="off" maxLength={120} />
-            {contacts.size > 0 && (
-                <datalist id="sale-contacts">
-                    {[...contacts.values()].map(c => <option key={c.id} value={c.name}>{c.phone}</option>)}
-                </datalist>
-            )}
+            <ContactSuggest contacts={contacts} query={s.buyerName} onPick={onPick}>
+                {p => <Input id="sale-buyer" value={s.buyerName} onChange={e => onBuyer(e.target.value)} autoComplete="off" maxLength={120} {...p} />}
+            </ContactSuggest>
         </Field>
         <Field label="Buyer’s phone (optional)" htmlFor="sale-phone">
-            <Input id="sale-phone" type="tel" inputMode="tel" value={s.buyerPhone} onChange={e => onPhone(e.target.value)} maxLength={40} />
+            <ContactSuggest contacts={contacts} query={s.buyerPhone} onPick={onPick}>
+                {p => <Input id="sale-phone" type="tel" inputMode="tel" value={s.buyerPhone} onChange={e => onPhone(e.target.value)} maxLength={40} {...p} />}
+            </ContactSuggest>
         </Field>
     </>
 );
@@ -701,7 +702,8 @@ const SaleEditor: React.FC<{
                 {sale?.artworkId && <p className="text-[11.5px] text-[var(--neu-text-dim)]">To change the piece, delete this sale (the piece goes back on sale) and record it again.</p>}
             </section>
 
-            <BuyerFields s={s} contacts={contactsByName} onBuyer={name => set(withBuyer(s, name, contactsByName))} onPhone={buyerPhone => set({ buyerPhone })} />
+            <BuyerFields s={s} contacts={contacts} onBuyer={name => set(withBuyer(s, name, contactsByName))} onPhone={buyerPhone => set({ buyerPhone })}
+                onPick={c => set({ buyerName: c.name, buyerPhone: c.phone || s.buyerPhone, contactId: c.id })} />
             <PaymentFields s={s} amountText={amountText} onAmount={v => { amountTouched.current = true; setAmountText(v); }} set={set} />
             <TagEditor tags={s.tags} allTags={allTags} onChange={tags => set({ tags })} carried={carried} />
 

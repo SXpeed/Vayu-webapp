@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import toast from 'react-hot-toast';
-import type { Invoice, PaymentAccountInfo, PaymentLink, PaymentSummary } from '../types';
+import type { Contact, Invoice, PaymentAccountInfo, PaymentLink, PaymentSummary } from '../types';
+import { ContactSuggest } from '../components/ContactSuggest';
 import { paymentService } from '../services/paymentService';
 import { createRefreshScheduler } from '../services/refreshScheduler';
 import { realtimeService } from '../services/realtimeService';
@@ -122,7 +123,8 @@ function linkAmount(amount: string, invoiceId: string): { amountPaise?: number; 
     return { amountPaise: paise };
 }
 
-export const PaymentsView: React.FC<{ invoices?: Invoice[] }> = ({ invoices = [] }) => {
+/** `contacts`: saved contacts, suggested in the customer's name, phone and email fields. */
+export const PaymentsView: React.FC<{ invoices?: Invoice[]; contacts?: readonly Contact[] }> = ({ invoices = [], contacts = [] }) => {
     const { isAdmin } = useAppChrome();
     const [account, setAccount] = useState<PaymentAccountInfo | null>(null);
     const [confirmTest, setConfirmTest] = useState(false);
@@ -136,6 +138,12 @@ export const PaymentsView: React.FC<{ invoices?: Invoice[] }> = ({ invoices = []
     const [customerName, setCustomerName] = useState('');
     const [customerPhone, setCustomerPhone] = useState('');
     const [customerEmail, setCustomerEmail] = useState('');
+    // A saved contact picked from the suggestions fills the customer's details it has.
+    const pickContact = (c: Contact) => {
+        setCustomerName(c.name);
+        if (c.phone) setCustomerPhone(c.phone);
+        if (c.email) setCustomerEmail(c.email);
+    };
     const [description, setDescription] = useState('');
     const [notifySms, setNotifySms] = useState(true);
     const [validity, setValidity] = useState(DEFAULT_VALIDITY);
@@ -369,15 +377,21 @@ export const PaymentsView: React.FC<{ invoices?: Invoice[] }> = ({ invoices = []
                             )}
 
                             <Field label="Customer Name *" htmlFor="pay-name">
-                                <Input id="pay-name" value={customerName} onChange={e => setCustomerName(e.target.value)} />
+                                <ContactSuggest contacts={contacts} query={customerName} onPick={pickContact}>
+                                    {p => <Input id="pay-name" value={customerName} onChange={e => setCustomerName(e.target.value)} {...p} />}
+                                </ContactSuggest>
                             </Field>
 
                             <div className="flex gap-3">
                                 <Field label="Phone" htmlFor="pay-phone" className="flex-1 min-w-0">
-                                    <Input id="pay-phone" type="tel" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} placeholder="+91…" />
+                                    <ContactSuggest contacts={contacts} query={customerPhone} onPick={pickContact}>
+                                        {p => <Input id="pay-phone" type="tel" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} placeholder="+91…" {...p} />}
+                                    </ContactSuggest>
                                 </Field>
                                 <Field label="Email" htmlFor="pay-email" className="flex-1 min-w-0">
-                                    <Input id="pay-email" type="email" value={customerEmail} onChange={e => setCustomerEmail(e.target.value)} />
+                                    <ContactSuggest contacts={contacts} query={customerEmail} onPick={pickContact}>
+                                        {p => <Input id="pay-email" type="email" value={customerEmail} onChange={e => setCustomerEmail(e.target.value)} {...p} />}
+                                    </ContactSuggest>
                                 </Field>
                             </div>
 

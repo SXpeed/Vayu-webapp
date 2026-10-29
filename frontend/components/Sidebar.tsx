@@ -149,6 +149,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
     return (
         <aside
+            data-app-sidebar
             className={`hidden lg:flex relative flex-col shrink-0 h-full z-30 bg-[var(--neu-bg)] transition-[width] duration-300 ease-out
                 ${collapsed ? 'w-20 px-2 py-4' : 'w-60 px-3.5 py-4'}`}
             style={{ boxShadow: '6px 0 14px var(--neu-shadow-dark), 2px 0 6px var(--neu-shadow-light)' }}

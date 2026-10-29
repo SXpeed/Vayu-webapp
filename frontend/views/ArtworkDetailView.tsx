@@ -195,6 +195,8 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                                             >
                                                 <img
                                                     src={url}
+                                                    // The tile's picture morphs into this one (Atelier style; appStyle.ts).
+                                                    style={idx === 0 ? { viewTransitionName: 'at-art' } : undefined}
                                                     alt={`${artwork.title} - ${idx + 1}`}
                                                     loading="lazy"
                                                     decoding="async"

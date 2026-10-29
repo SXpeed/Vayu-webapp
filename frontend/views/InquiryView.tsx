@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { Plus, X, MessageCircle, Search, ArrowLeft, Edit2, Trash2, Phone, Mail, Image as ImageIcon, User, Clock, Tag, BookOpen, CheckCircle2, XCircle, Check, CheckCheck, Reply, Camera, MapPin, FileText, MailWarning } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
 import { ArtworkPicker } from '../components/ArtworkPicker';
+import { ContactSuggest } from '../components/ContactSuggest';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton } from '../components/ui';
 import { Inquiry, Artwork, InquiryMessage, MessageReplyTo, MessageAttachment, MessageTag, UserProfile, Invoice, Contact } from '../types';
 import { contactWithKey, emailKey, phoneKey } from '../contactKeys';
@@ -864,6 +865,7 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, contac
                             items: linkedArtworks.map(art => ({ artworkId: art.id, title: art.title, price: art.price })),
                         }}
                         artworks={artworks}
+                        contacts={contacts}
                         saveLabel="Save & PDF"
                         onClose={() => setIsCreatingProforma(false)}
                         onSave={handleCreateProforma}
@@ -1017,6 +1019,12 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
         if (!customerPhone.trim() && saved.phone) setCustomerPhone(saved.phone);
         if (!customerEmail.trim() && saved.email) setCustomerEmail(saved.email);
     };
+    // Picked from the suggestions under a field: that contact's details replace what was typed.
+    const pickContact = (c: Contact) => {
+        setCustomerName(c.name);
+        if (c.phone) setCustomerPhone(c.phone);
+        if (c.email) setCustomerEmail(c.email);
+    };
 
     const toggleArtwork = (id: string) => {
         const newSet = new Set(selectedArtworkIds);
@@ -1062,24 +1070,34 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                     <h3 className="font-bold text-gray-900 dark:text-gray-100 text-[11px] uppercase tracking-widest">Customer Details</h3>
                     <div>
                         <label htmlFor="customerName" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Name *</label>
-                        <input
-                            id="customerName"
-                            value={customerName}
-                            onChange={e => setCustomerName(e.target.value)}
-                            className="neu-field"
-                            placeholder="Customer Name"
-                        />
+                        <ContactSuggest contacts={contacts} query={customerName} onPick={pickContact}>
+                            {p => (
+                                <input
+                                    id="customerName"
+                                    value={customerName}
+                                    onChange={e => setCustomerName(e.target.value)}
+                                    className="neu-field"
+                                    placeholder="Customer Name"
+                                    {...p}
+                                />
+                            )}
+                        </ContactSuggest>
                     </div>
                     <div>
                         <label htmlFor="customerPhone" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Phone</label>
-                        <input
-                            id="customerPhone"
-                            type="tel"
-                            value={customerPhone}
-                            onChange={e => setCustomerPhone(e.target.value)}
-                            className="neu-field"
-                            placeholder="+91 98765 43210"
-                        />
+                        <ContactSuggest contacts={contacts} query={customerPhone} onPick={pickContact}>
+                            {p => (
+                                <input
+                                    id="customerPhone"
+                                    type="tel"
+                                    value={customerPhone}
+                                    onChange={e => setCustomerPhone(e.target.value)}
+                                    className="neu-field"
+                                    placeholder="+91 98765 43210"
+                                    {...p}
+                                />
+                            )}
+                        </ContactSuggest>
                         {saved?.name && saved.name !== customerName.trim() && (
                             <button
                                 type="button"
@@ -1094,14 +1112,19 @@ const InquiryFormModal: React.FC<InquiryFormModalProps> = ({ initialData, artwor
                     </div>
                     <div>
                         <label htmlFor="customerEmail" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Email</label>
-                        <input
-                            id="customerEmail"
-                            type="email"
-                            value={customerEmail}
-                            onChange={e => setCustomerEmail(e.target.value)}
-                            className="neu-field"
-                            placeholder="customer@example.com"
-                        />
+                        <ContactSuggest contacts={contacts} query={customerEmail} onPick={pickContact}>
+                            {p => (
+                                <input
+                                    id="customerEmail"
+                                    type="email"
+                                    value={customerEmail}
+                                    onChange={e => setCustomerEmail(e.target.value)}
+                                    className="neu-field"
+                                    placeholder="customer@example.com"
+                                    {...p}
+                                />
+                            )}
+                        </ContactSuggest>
                     </div>
                     <div>
                         <label htmlFor="customerAddress" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Address</label>

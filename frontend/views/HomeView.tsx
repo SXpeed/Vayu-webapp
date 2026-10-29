@@ -12,6 +12,7 @@ import type { SectionId } from '../permissions';
 import { HIDDEN_AMOUNT, currentMonth, itemsText, rupees, useMonthSales, type MonthSales } from '../components/SalesSummary';
 import { shiftMonth } from '../salesRules';
 import { TaskBoard } from './tasks/TaskList';
+import { CountUp } from '../components/CountUp';
 
 /** One dashboard metric — raised tile, gold glyph, serif figure. */
 const StatTile: React.FC<{ icon: React.ReactNode; label: string; children?: React.ReactNode }> = ({ icon, label, children }) => (
@@ -37,7 +38,7 @@ const SalesTile: React.FC<{
     let figure: React.ReactNode = <span className="text-gray-500 dark:text-gray-400">…</span>;
     if (sales.failed && !summary) figure = <span className="text-sm font-sans text-gray-500 dark:text-gray-400">Couldn’t load</span>;
     else if (summary && hidden) figure = <span className="tracking-wider" aria-label="Amount hidden">{HIDDEN_AMOUNT}</span>;
-    else if (summary) figure = <span title={itemsText(summary.count)}>{rupees(summary.totalAmount)}</span>;
+    else if (summary) figure = <span title={itemsText(summary.count)}><CountUp value={summary.totalAmount} format={rupees} /></span>;
     // The tile's own controls sit above the tap target that opens Sales.
     const arrow = 'relative z-[2] w-6 h-6 shrink-0 rounded-full flex items-center justify-center text-gold-700 dark:text-gold-300 hover:neu-raised-sm active-scale disabled:opacity-30 disabled:pointer-events-none';
 
@@ -265,17 +266,17 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, events, 
                     )}
                     {can('inventory') && (
                         <StatTile icon={<Palette size={14} className="text-gold-500" />} label="Available">
-                            {availableArtworks} <span className="text-xs font-sans text-gray-500 dark:text-gray-400">/ {artworks.length}</span>
+                            <CountUp value={availableArtworks} /> <span className="text-xs font-sans text-gray-500 dark:text-gray-400">/ {artworks.length}</span>
                         </StatTile>
                     )}
                     {can('catalogs') && (
                         <StatTile icon={<BookOpen size={14} className="text-gold-500" />} label="Catalogs">
-                            {catalogs.length}
+                            <CountUp value={catalogs.length} />
                         </StatTile>
                     )}
                     {can('calendar') && (
                         <StatTile icon={<CalendarDays size={14} className="text-gold-500" />} label="Upcoming">
-                            {upcomingEvents.length}
+                            <CountUp value={upcomingEvents.length} />
                         </StatTile>
                     )}
                 </div>
