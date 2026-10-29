@@ -6,21 +6,35 @@
 
 import { flushSync } from 'react-dom';
 
-export type AppStyle = 'classic' | 'atelier';
+export type AppStyle = 'classic' | 'atelier' | 'lite';
 
 export const APP_STYLES: { value: AppStyle; label: string }[] = [
     { value: 'classic', label: 'Classic' },
     { value: 'atelier', label: 'Atelier' },
+    { value: 'lite', label: 'Lite' },
 ];
 
 const KEY = 'vayu_app_style';
+const OLED_KEY = 'vayu_oled';
 
 export function getAppStyle(): AppStyle {
     try {
-        return localStorage.getItem(KEY) === 'atelier' ? 'atelier' : 'classic';
+        const saved = localStorage.getItem(KEY);
+        return saved === 'atelier' || saved === 'lite' ? saved : 'classic';
     } catch {
         return 'classic';
     }
+}
+
+/** Pure black in dark mode (theme-lite.css), for OLED screens. This device only. */
+export function getOled(): boolean {
+    try { return localStorage.getItem(OLED_KEY) === 'on'; } catch { return false; }
+}
+
+export function setOled(on: boolean): void {
+    try { localStorage.setItem(OLED_KEY, on ? 'on' : 'off'); } catch { /* private mode: applies to this visit only */ }
+    document.documentElement.dataset.oled = on ? 'on' : 'off';
+    syncThemeColor();
 }
 
 export function setAppStyle(value: AppStyle): void {
@@ -30,12 +44,17 @@ export function setAppStyle(value: AppStyle): void {
 }
 
 /** The browser bar colour: the page colour of the current style and light/dark mode. */
-const PAGE_COLOUR = { classic: { light: '#e9edf4', dark: '#22252b' }, atelier: { light: '#ecebe6', dark: '#0e0e0f' } };
+const PAGE_COLOUR = {
+    classic: { light: '#e9edf4', dark: '#22252b' },
+    atelier: { light: '#ecebe6', dark: '#0e0e0f' },
+    lite: { light: '#f2f2f4', dark: '#141416' },
+};
 
 export function syncThemeColor(): void {
     const html = document.documentElement;
-    const style = html.dataset.skin === 'atelier' ? 'atelier' : 'classic';
-    const colour = PAGE_COLOUR[style][html.classList.contains('dark') ? 'dark' : 'light'];
+    const style = html.dataset.skin === 'atelier' || html.dataset.skin === 'lite' ? html.dataset.skin : 'classic';
+    const mode = html.classList.contains('dark') ? 'dark' : 'light';
+    const colour = mode === 'dark' && html.dataset.oled === 'on' ? '#000000' : PAGE_COLOUR[style][mode];
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', colour);
 }
 

@@ -1,0 +1,99 @@
+/* Lite app style (Profile → App Settings → App style), keyed on
+ * <html data-skin="lite">, and the OLED pure-black dark mode, keyed on
+ * <html class="dark" data-oled="on"> (appStyle.ts; both set before first
+ * paint in index.html). Org app only, imported after theme-atelier.css.
+ *
+ * Lite is for phones: flat surfaces (no shadows, no blur) and no entrance
+ * animations or transitions, so the GPU only scrolls. Like Atelier it changes
+ * colours and depth only, never sizes or positions. Spinners keep spinning. */
+
+/* ── Lite tokens ──────────────────────────────────────────────────────── */
+html[data-skin='lite'] {
+    --neu-bg: #f2f2f4;
+    --neu-bg-hi: #ffffff;
+    --neu-bg-lo: #ffffff;
+    --neu-shadow-dark: transparent;
+    --neu-shadow-light: transparent;
+    --neu-highlight: transparent;
+    --neu-text: #111113;
+    --neu-text-dim: #5c5c66;
+    --neu-line: rgba(0, 0, 0, 0.08);
+    --lite-well: #ebebef;
+    --lite-ink: #111113;
+    --lite-on-ink: #ffffff;
+}
+
+html.dark[data-skin='lite'] {
+    --neu-bg: #141416;
+    --neu-bg-hi: #1f1f22;
+    --neu-bg-lo: #1f1f22;
+    --neu-text: #f0f0f2;
+    --neu-text-dim: #a1a1aa;
+    --neu-line: rgba(255, 255, 255, 0.08);
+    --lite-well: #2a2a2e;
+    --lite-ink: #f0f0f2;
+    --lite-on-ink: #111113;
+}
+
+/* Flat surfaces read wells and the active dock tab from a fill, not a shadow. */
+html[data-skin='lite'] :is(.neu-inset, .neu-field, .neu-search, .neu-toggle, .neu-pill-active, .neu-button-active, .neu-picture-well:not(.tile-backdrop)) {
+    background: var(--lite-well);
+}
+
+html[data-skin='lite'] .neu-dock-well {
+    background: var(--lite-ink);
+}
+
+html[data-skin='lite'] .neu-dock-item[aria-current='page'] {
+    color: var(--lite-on-ink);
+}
+
+/* ── Lite: no motion, no blur ─────────────────────────────────────────── */
+/* The entrance classes start at opacity 0 (index.css), so put it back. */
+html[data-skin='lite'] :is(.animate-fade-in-up, .animate-fade-in, .animate-scale-in) {
+    animation: none !important; /* NOSONAR: beats index.css's !important delays */
+    opacity: 1;
+}
+
+html[data-skin='lite'] *,
+html[data-skin='lite'] *::before,
+html[data-skin='lite'] *::after {
+    transition: none !important; /* NOSONAR: Lite has to beat every transition, inline ones included */
+    backdrop-filter: none !important; /* NOSONAR: same, for Tailwind's backdrop-blur-* */
+    -webkit-backdrop-filter: none !important; /* NOSONAR: same */
+}
+
+/* Scrims lose their blur, so they get more cover instead. */
+html[data-skin='lite'] :is(.neu-scrim, .neu-portal-scrim) {
+    background: color-mix(in srgb, var(--neu-bg) 85%, transparent);
+}
+
+/* ── OLED: pure black dark mode, any style ────────────────────────────── */
+/* Black page, near-black cards, no shadows (they don't show on black). */
+html.dark[data-oled='on'] {
+    --neu-bg: #000000;
+    --neu-bg-hi: #121214;
+    --neu-bg-lo: #121214;
+    --neu-shadow-dark: transparent;
+    --neu-shadow-light: transparent;
+    --neu-highlight: transparent;
+    --neu-line: rgba(255, 255, 255, 0.1);
+    --oled-well: #222226;
+    --at-well: var(--oled-well);
+    --lite-well: var(--oled-well);
+}
+
+html.dark[data-oled='on'] :is(.neu-inset, .neu-field, .neu-search, .neu-toggle, .neu-pill-active, .neu-button-active, .neu-picture-well:not(.tile-backdrop)) {
+    background: var(--oled-well);
+}
+
+/* Classic's active dock tab was only an inset shadow. */
+html.dark[data-oled='on'][data-skin='classic'] .neu-dock-well {
+    background: var(--oled-well);
+}
+
+/* ── Lite and OLED: a hairline where the soft shadow was ─────────────── */
+/* No blur, so it costs nothing; without it a button on a card disappears. */
+:is(html[data-skin='lite'], html.dark[data-oled='on']) :is(.neu-raised, .neu-raised-sm, .neu-card, .neu-card-interactive, .neu-tile, .neu-button, .neu-pill:not(.neu-pill-active), .neu-icon-btn-lg, .neu-icon-btn-sm, .neu-dock, .neu-sheet, .neu-sheet-wide, .neu-modal) {
+    box-shadow: 0 0 0 1px var(--neu-line);
+}

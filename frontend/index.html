@@ -56,15 +56,22 @@
             try { bg = localStorage.getItem('vayu_tile_bg') || bg; } catch { /* private mode */ }
             document.documentElement.dataset.tileBg = bg;
         })();
-        // App style, before first paint (appStyle.ts, theme-atelier.css). Classic unless Atelier was chosen.
+        // App style and OLED black, before first paint (appStyle.ts, theme-atelier.css, theme-lite.css).
+        // Classic unless Atelier or Lite was chosen; page colours match PAGE_COLOUR in appStyle.ts.
         (function () {
-            let skin = 'classic';
-            try { if (localStorage.getItem('vayu_app_style') === 'atelier') skin = 'atelier'; } catch { /* private mode */ }
-            document.documentElement.dataset.skin = skin;
-            if (skin === 'atelier') {
-                const dark = document.documentElement.classList.contains('dark');
-                document.querySelector('meta[name="theme-color"]').setAttribute('content', dark ? '#0e0e0f' : '#ecebe6');
-            }
+            let skin = 'classic', oled = 'off';
+            try {
+                const saved = localStorage.getItem('vayu_app_style');
+                if (saved === 'atelier' || saved === 'lite') skin = saved;
+                if (localStorage.getItem('vayu_oled') === 'on') oled = 'on';
+            } catch { /* private mode */ }
+            const html = document.documentElement;
+            html.dataset.skin = skin;
+            html.dataset.oled = oled;
+            const dark = html.classList.contains('dark');
+            const colour = dark && oled === 'on' ? '#000000'
+                : { atelier: dark ? '#0e0e0f' : '#ecebe6', lite: dark ? '#141416' : '#f2f2f4' }[skin];
+            if (colour) document.querySelector('meta[name="theme-color"]').setAttribute('content', colour);
         })();
     </script>
 

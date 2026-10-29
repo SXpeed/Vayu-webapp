@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { UserProfile } from '../types';
-import { Moon, Sun, LogOut, Check, Bell, BellOff, Pencil, X, Type, Image as ImageIcon, Palette } from 'lucide-react';
+import { Moon, Sun, LogOut, Check, Bell, BellOff, Pencil, X, Type, Image as ImageIcon, Palette, Contrast } from 'lucide-react';
 import { pushService } from '../services/pushService';
 import { MyDevicesCard } from '../components/MyDevicesCard';
 import { EmailCard, PasswordCard, WorkspaceCard } from '../components/AccountCards';
 import { getUiSize, setUiSize, type UiSize } from '../uiSize';
 import { TILE_BACKDROPS, getTileBackdrop, setTileBackdrop, type TileBackdrop } from '../tileBackdrop';
-import { APP_STYLES, getAppStyle, setAppStyle, type AppStyle } from '../appStyle';
+import { APP_STYLES, getAppStyle, setAppStyle, getOled, setOled, type AppStyle } from '../appStyle';
 import {
     PageRoot, PageHeader, PageBody, Card, SectionTitle, Field, Input, Textarea,
     ReadOnlyValue, ToggleRow, Button, Divider, Pill,
@@ -128,6 +128,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ profile, onUpdateProfi
                         onChange={onToggleTheme}
                     />
 
+                    {theme === 'dark' && <OledRow />}
+
                     <Divider />
 
                     <AppStyleRow />
@@ -225,7 +227,21 @@ const TileBackdropRow: React.FC = () => {
     );
 };
 
-/** Classic (soft UI) or Atelier (flat warm surfaces and motion) — this device only, like the theme. */
+/** Pure black dark mode for OLED screens — this device only, like the theme. */
+const OledRow: React.FC = () => {
+    const [on, setOn] = useState(getOled);
+    return (
+        <ToggleRow
+            icon={<Contrast size={18} />}
+            title="Pure black (OLED)"
+            description="Saves battery on OLED screens · On this device"
+            checked={on}
+            onChange={() => { setOled(!on); setOn(!on); }}
+        />
+    );
+};
+
+/** Classic (soft UI), Atelier (flat warm surfaces and motion) or Lite (flat, no motion: lightest on phones) — this device only, like the theme. */
 const AppStyleRow: React.FC = () => {
     const [style, setStyle] = useState<AppStyle>(getAppStyle);
     const choose = (next: AppStyle) => {
