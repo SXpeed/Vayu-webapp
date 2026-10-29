@@ -516,7 +516,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                             </button>
                         );
                         return (
-                            <div key={msg.id} className={`flex items-end gap-1.5 ${isMe ? 'justify-end' : 'justify-start'}`}>
+                            <div key={msg.id} data-msg-id={msg.id} className={`flex items-end gap-1.5 rounded-xl ${isMe ? 'justify-end' : 'justify-start'}`}>
                                 {!isMe && replyButton}
                                 <div className={`max-w-[80%] min-w-0 flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
                                     <Holdable onHold={target => setMenu({ msg, anchor: target.getBoundingClientRect() })} className="max-w-full">

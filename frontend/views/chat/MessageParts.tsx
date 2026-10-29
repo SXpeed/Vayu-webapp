@@ -50,6 +50,20 @@ async function openFile(file: MessageAttachment) {
     }
 }
 
+/** Tapping a quoted reply: scroll to the original (each row carries data-msg-id) and flash it, as on WhatsApp. */
+export function jumpToMessage(id: string, from: HTMLElement): void {
+    // Search the tapped quote's own thread: the team chat also renders a hidden desktop copy.
+    const thread = from.closest('[data-msg-id]')?.parentElement ?? document;
+    const row = thread.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(id)}"]`);
+    if (!row) {
+        toast('That message isn’t showing here (deleted, or hidden by a search).');
+        return;
+    }
+    const reduced = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    row.scrollIntoView({ block: 'center', behavior: reduced ? 'auto' : 'smooth' });
+    row.animate([{ backgroundColor: 'rgba(212, 175, 55, 0.28)' }, { backgroundColor: 'rgba(212, 175, 55, 0)' }], { duration: 1600, delay: reduced ? 0 : 300, easing: 'ease-out' });
+}
+
 export const messageTime = (timestamp: number) => new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
 type ChatMessage = Pick<Message, 'senderId' | 'text' | 'tags' | 'replyTo' | 'attachment'>;
@@ -68,10 +82,15 @@ export const MessageBubble: React.FC<{
             <p className="text-[11px] font-bold uppercase tracking-widest mb-1 text-gold-700 dark:text-gold-300">{senderName}</p>
         )}
         {msg.replyTo && (
-            <div className="mb-2 pl-2.5 pr-2 py-1.5 neu-inset rounded-xl border-l-2 border-gold-500">
-                <p className="text-[11px] font-bold text-gold-700 dark:text-gold-300">{replySenderName}</p>
-                <p className="text-[11px] line-clamp-1 text-[var(--neu-text-dim)]">{msg.replyTo.text}</p>
-            </div>
+            <button
+                type="button"
+                onClick={e => msg.replyTo && jumpToMessage(msg.replyTo.id, e.currentTarget)}
+                aria-label={`Go to the message from ${replySenderName}`}
+                className="block w-full text-left mb-2 pl-2.5 pr-2 py-1.5 neu-inset rounded-xl border-l-2 border-gold-500 cursor-pointer active-scale"
+            >
+                <span className="block text-[11px] font-bold text-gold-700 dark:text-gold-300">{replySenderName}</span>
+                <span className="block text-[11px] line-clamp-1 text-[var(--neu-text-dim)]">{msg.replyTo.text}</span>
+            </button>
         )}
         {msg.attachment && (
             msg.attachment.type === 'image' ? (

@@ -698,7 +698,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
             </button>
         );
         return (
-            <div key={msg.id} className={`group flex items-end gap-1.5 ${isMe ? 'justify-end' : 'justify-start'}`}>
+            <div key={msg.id} data-msg-id={msg.id} className={`group flex items-end gap-1.5 rounded-xl ${isMe ? 'justify-end' : 'justify-start'}`}>
                 {isMe && reactButton}
                 {!isMe && replyButton}
                 {held}
