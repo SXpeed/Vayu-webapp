@@ -264,6 +264,10 @@ export const db = {
     // Copies saved before Billing hold the old proforma shape.
     return settle(() => getArray<unknown>(STORAGE_KEYS.invoices).map(toBillingDoc).sort((a, b) => b.date - a.date));
   },
+  /** Replaces the whole device copy in one write (a full sync), instead of one rewrite of the list per document. */
+  replaceInvoices(invoices: Invoice[]): Promise<void> {
+    return settle(() => setArray(STORAGE_KEYS.invoices, invoices));
+  },
   saveInvoice(invoice: Invoice): Promise<void> {
     return settle(() => setArray(STORAGE_KEYS.invoices, upsertById(getArray<Invoice>(STORAGE_KEYS.invoices), invoice)));
   },

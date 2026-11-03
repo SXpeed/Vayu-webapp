@@ -171,6 +171,8 @@ export interface BillingDoc {
     /** Worked out by the server on every save (payment links read these). */
     totalPaise?: number;
     taxPaise?: number;
+    /** What this document's payment links collected, less refunds. Kept by the server as links are paid. */
+    linkPaidPaise?: number;
     payments: Payment[];
     cancelReason?: string;
     seller?: Seller;
@@ -274,6 +276,8 @@ export interface BillingSettings {
     /** Names used in the Tally export; they must match (or will create) ledgers in the Tally company. */
     tally: TallySettings;
     stores: BillingStore[];
+    /** When the setup was last saved; a save from an older copy is refused, so two people never overwrite each other. */
+    updatedAt: number;
 }
 
 export const EMPTY_SETTINGS: BillingSettings = {
@@ -302,6 +306,7 @@ export const EMPTY_SETTINGS: BillingSettings = {
         igstLedger: 'Output IGST', roundOffLedger: 'Round Off', partyGroup: 'Sundry Debtors',
     },
     stores: [],
+    updatedAt: 0,
 };
 
 /** The store a document is billed from, or null when the org has no stores (the org profile sells). */
@@ -487,13 +492,14 @@ export function creditRoom(invoice: BillingDoc, all: readonly BillingDoc[], s: B
 
 export interface Balance { total: number; credited: number; debited: number; paid: number; due: number; state: 'Unpaid' | 'Partly paid' | 'Paid' }
 
-/** What a tax invoice is owed: its total, adjusted by issued notes, less payments. */
+/** What a tax invoice is owed: its total, adjusted by issued notes, less payments (recorded here, or by payment link on it or on its proforma). */
 export function balanceOf(invoice: BillingDoc, all: readonly BillingDoc[], s: BillingSettings): Balance {
     const notes = all.filter(d => d.sourceId === invoice.id && d.status === 'Issued');
+    const source = invoice.sourceId ? all.find(d => d.id === invoice.sourceId) : undefined;
     const credited = notes.filter(d => d.kind === 'credit').reduce((sum, d) => sum + docTotals(d, s).total, 0);
     const debited = notes.filter(d => d.kind === 'debit').reduce((sum, d) => sum + docTotals(d, s).total, 0);
     const total = docTotals(invoice, s).total;
-    const paid = invoice.payments.reduce((sum, p) => sum + p.amountPaise, 0);
+    const paid = invoice.payments.reduce((sum, p) => sum + p.amountPaise, 0) + (invoice.linkPaidPaise ?? 0) + (source?.linkPaidPaise ?? 0);
     const due = total - credited + debited - paid;
     let state: Balance['state'] = 'Unpaid';
     if (due <= 0) state = 'Paid';
@@ -716,6 +722,7 @@ export function cleanDoc(v: unknown): BillingDoc {
         ...optional('inquiryId', str(d.inquiryId, 80)),
         ...optional('totalPaise', d.totalPaise === undefined ? undefined : int(d.totalPaise, -1e13, 1e13)),
         ...optional('taxPaise', d.taxPaise === undefined ? undefined : int(d.taxPaise, -1e13, 1e13)),
+        ...optional('linkPaidPaise', d.linkPaidPaise === undefined ? undefined : int(d.linkPaidPaise, 0, 1e13)),
         payments: cleanPayments(d.payments, now),
         ...optional('cancelReason', str(d.cancelReason, 200)),
         ...optional('seller', cleanSeller(d.seller)),
@@ -821,6 +828,7 @@ export function cleanSettings(v: unknown): BillingSettings {
                 phone: str(o.phone, 30), email: str(o.email, 120), bankId: str(o.bankId, 64),
             };
         }),
+        updatedAt: int(s.updatedAt, 0, MAX_TIME, 0),
     };
 }
 
@@ -842,7 +850,7 @@ export function statusChangeProblem(before: BillingDoc | null, after: BillingDoc
 export function paymentsProblem(before: BillingDoc | null, after: BillingDoc, s: BillingSettings): string | null {
     if (JSON.stringify(before?.payments ?? []) === JSON.stringify(after.payments)) return null;
     if (after.kind !== 'tax' || after.status !== 'Issued') return 'Payments go on an issued tax invoice.';
-    const paid = after.payments.reduce((t, p) => t + p.amountPaise, 0);
+    const paid = after.payments.reduce((t, p) => t + p.amountPaise, 0) + (after.linkPaidPaise ?? 0);
     return paid > docTotals(after, s).total ? 'Payments can’t add up to more than the invoice.' : null;
 }
 

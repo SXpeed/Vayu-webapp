@@ -161,9 +161,7 @@ export function useEntityData(
             try { localStorage.setItem(INVOICES_MIGRATED_KEY, '1'); } catch { /* private mode */ }
         }
         // Mirror the server list on the device for offline use.
-        const onServer = new Set(remote.map(i => i.id));
-        const stale = (await db.getInvoices()).filter(inv => !onServer.has(inv.id));
-        await Promise.all([...stale.map(inv => db.deleteInvoice(inv.id)), ...remote.map(inv => db.saveInvoice(inv))]);
+        await db.replaceInvoices(remote).catch((err: unknown) => console.warn('Device copy of documents not saved:', err));
         return remote.sort((a, b) => b.date - a.date);
     }, [authUserRef]);
 

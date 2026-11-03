@@ -554,3 +554,35 @@ test("webhook health: a refund the webhook missed needs attention, until verifie
     assert.equal(b.webhookHealth.state, 'healthy');
     assert.equal((await orgBLinks()).find(x => x.id === liveLink.id).refundedPaise, 90000, 'the late webhook for an already-found refund adds nothing');
 });
+
+test('Billing and payment links count each other’s money: an advance on the proforma, a payment recorded on the invoice', async () => {
+    const call = (path, opts) => admin.call(`/api/o/${orgA.id}${path}`, opts);
+    const setup = await call('/invoices/settings', { method: 'PUT', body: { legalName: 'Vayu Design Pvt Ltd', address: 'Fort, Mumbai', state: '27', gstin: '27AAPFU0939F1ZV', signatoryName: 'A. Mehra' } });
+    assert.equal(setup.status, 200, setup.text);
+    const doc = (id, kind, extra = {}) => ({
+        id, kind, status: kind === 'proforma' ? 'Sent' : 'Draft', date: Date.now(), placeOfSupply: '27', payments: [],
+        party: { name: 'Mrs. Mehta', phone: '98200 11111', state: '27', sameShipping: true },
+        lines: [{ key: 'k1', description: 'Study', hsn: '9701', qty: 1, unit: 'Nos', ratePaise: 100000_00, gstRate: 5 }], ...extra,
+    });
+    assert.equal((await call('/invoices/pf_links_1', { method: 'PUT', body: doc('pf_links_1', 'proforma') })).status, 201);
+
+    // ₹50,000 advance by link on the proforma, paid.
+    const advance = await orgLink(orgA, linkBody(50000, { invoiceId: 'pf_links_1' }));
+    assert.equal(advance.status, 201, advance.text);
+    const paid = { event: 'payment_link.paid', payload: { payment_link: { entity: { id: advance.body.id, amount: 50000_00, status: 'paid' } }, payment: { entity: { id: 'pay_advance_1', method: 'upi', created_at: PAID_AT_SEC } } } };
+    assert.equal(await orgWebhook(orgA.id, WEBHOOK_SECRET, paid, 'evt_advance_1'), 200);
+    const docs = async () => (await call('/invoices')).body;
+    assert.equal((await docs()).find(d => d.id === 'pf_links_1').linkPaidPaise, 50000_00, 'the proforma knows what its link collected');
+
+    // The tax invoice it became (₹1,05,000), with ₹10,000 recorded by hand.
+    assert.equal((await call('/invoices/inv_links_1', { method: 'PUT', body: doc('inv_links_1', 'tax', { sourceId: 'pf_links_1' }) })).status, 201);
+    const issued = (await call('/invoices/inv_links_1/issue', { method: 'POST' })).body[0];
+    assert.equal(issued.status, 'Issued', JSON.stringify(issued));
+    const withCash = await call('/invoices/inv_links_1', { method: 'PUT', body: { ...issued, payments: [{ id: 'cash1', date: Date.now(), amountPaise: 10000_00, mode: 'Cash', reference: '' }] } });
+    assert.equal(withCash.status, 200, withCash.text);
+
+    // Collecting the balance asks only for what is left: ₹1,05,000 − ₹50,000 − ₹10,000.
+    const balance = await orgLink(orgA, { ...linkBody(), amount: undefined, invoiceId: 'inv_links_1' });
+    assert.equal(balance.status, 201, balance.text);
+    assert.equal(balance.body.amount, 45000_00);
+});

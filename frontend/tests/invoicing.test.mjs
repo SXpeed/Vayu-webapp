@@ -301,3 +301,18 @@ test('Tally XML: a customer ledger, balanced vouchers, credit notes reversed, ca
     assert.match(out, /<VOUCHERNUMBER>INV\/26-27\/0002<\/VOUCHERNUMBER>[\s\S]*?<ISCANCELLED>Yes<\/ISCANCELLED><\/VOUCHER>/);
     assert.equal(rep.tallyDate(Date.UTC(2027, 2, 31, 18, 30)), '20270401', 'the day in India');
 });
+
+test('money collected by payment link counts: on the invoice, and an advance on its proforma', () => {
+    const s = settings();
+    const proforma = { ...doc('proforma', s), id: 'pf1', status: 'Converted', linkPaidPaise: 50000_00 };
+    const invoice = { ...doc('tax', s), id: 'i2', status: 'Issued', sourceId: 'pf1', linkPaidPaise: 5000_00, payments: [{ id: 'p', date: 1, amountPaise: 10000_00, mode: 'Cash', reference: '' }] };
+    const b = inv.balanceOf(invoice, [invoice, proforma], s);
+    assert.equal(b.paid, 10000_00 + 5000_00 + 50000_00);
+    assert.equal(b.due, 105000_00 - 65000_00);
+    assert.equal(b.state, 'Partly paid');
+    // A payment recorded by hand can't take the invoice past what the links left.
+    const over = { ...invoice, payments: [{ id: 'p', date: 1, amountPaise: 100001_00, mode: 'Cash', reference: '' }] };
+    assert.match(inv.paymentsProblem(invoice, over, s), /more than the invoice/);
+    assert.equal(inv.cleanDoc({ linkPaidPaise: -5 }).linkPaidPaise, 0);
+    assert.equal(inv.cleanSettings({ updatedAt: 123 }).updatedAt, 123);
+});

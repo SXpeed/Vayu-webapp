@@ -87,7 +87,9 @@ export async function planAndUsage(env: Env) {
     count('SELECT COUNT(*) AS n FROM contacts'),
     count('SELECT COUNT(*) AS n FROM stores'),
     count('SELECT COUNT(*) AS n FROM conversations WHERE is_private = 1'),
-    count('SELECT COUNT(*) AS n FROM invoices WHERE date >= ?', since),
+    // Proformas, and tax invoices once issued: not drafts, challans or notes. Read from the JSON, so tables from before Billing count too.
+    count(`SELECT COUNT(*) AS n FROM invoices WHERE date >= ? AND (COALESCE(json_extract(data, '$.kind'), 'proforma') = 'proforma'
+      OR (json_extract(data, '$.kind') = 'tax' AND status != 'Draft'))`, since),
     count('SELECT COUNT(*) AS n FROM inquiries WHERE date >= ?', since),
     storageBytes(env).catch(() => null),
   ]);

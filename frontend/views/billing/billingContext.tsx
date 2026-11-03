@@ -3,9 +3,9 @@
 // updating inventory the way the setup asks.
 
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import type { Artwork, ArtworkStatus, Contact } from '../../types';
+import type { Artwork, Contact } from '../../types';
 import {
-    balanceOf, issueProblems, RETURNABLE, statusAfterReturn,
+    balanceOf, issueProblems, statusAfterReturn,
     type BillingDoc, type BillingSettings, type DocStatus, type Payment,
 } from '../../invoicing';
 import { rupeesText } from '../../gstRules';
@@ -17,7 +17,6 @@ export interface BillingHandlers {
     handleIssueInvoice: (id: string) => Promise<BillingDoc[]>;
     handleCancelInvoice: (id: string, reason: string) => Promise<BillingDoc>;
     handleDeleteInvoice: (id: string) => Promise<void>;
-    setArtworksStatus: (ids: string[], status: ArtworkStatus) => void;
 }
 
 export interface BillingApi {
@@ -26,8 +25,10 @@ export interface BillingApi {
     artworks: Artwork[];
     contacts: readonly Contact[];
     online: boolean;
-    /** May create and change documents and the setup (Billing "edit"). */
+    /** May create and change documents (Billing "edit"). */
     canEdit: boolean;
+    /** May change the billing setup (workspace admins: it holds the bank account invoices ask customers to pay into). */
+    isAdmin: boolean;
     onArtworkClick?: (artwork: Artwork) => void;
     saveSettings: (settings: BillingSettings) => Promise<void>;
     saveDoc: (doc: BillingDoc) => Promise<BillingDoc>;
@@ -75,7 +76,9 @@ export const BillingProvider: React.FC<{
 }> = ({ docs, artworks, contacts = [], handlers, onArtworkClick, children }) => {
     const settings = useBillingSettings();
     const online = useOnline();
-    const canEdit = useAppChrome().can('invoices', 'edit');
+    const chrome = useAppChrome();
+    const canEdit = chrome.can('invoices', 'edit');
+    const isAdmin = chrome.isAdmin;
     // Actions read the latest documents and setup, not the ones from when they were made.
     const latest = useRef({ docs, settings, handlers });
     latest.current = { docs, settings, handlers };
@@ -87,8 +90,6 @@ export const BillingProvider: React.FC<{
             return doc;
         };
         const save = (doc: BillingDoc) => latest.current.handlers.handleSaveInvoice({ ...doc, updatedAt: Date.now() });
-        const pieces = (doc: BillingDoc) => doc.lines.map(l => l.artworkId).filter(Boolean);
-        const effects = () => latest.current.settings.inventoryEffects;
 
         return {
             saveSettings: async (next: BillingSettings) => { await saveBillingSettings(next); },
@@ -98,16 +99,10 @@ export const BillingProvider: React.FC<{
                 const problems = issueProblems(doc, latest.current.settings);
                 if (problems.length) throw new Error(problems[0]);
                 const [issued] = await latest.current.handlers.handleIssueInvoice(doc.id);
-                if (effects() && pieces(issued).length) {
-                    if (issued.kind === 'tax') latest.current.handlers.setArtworksStatus(pieces(issued), 'Sold');
-                    if (issued.kind === 'challan' && issued.challanPurpose && RETURNABLE.has(issued.challanPurpose)) latest.current.handlers.setArtworksStatus(pieces(issued), 'Reserved');
-                }
                 return issued;
             },
             async cancelDoc(id: string, reason: string) {
-                const doc = find(id);
                 await latest.current.handlers.handleCancelInvoice(id, reason);
-                if (effects() && (doc.kind === 'tax' || doc.kind === 'challan')) latest.current.handlers.setArtworksStatus(pieces(doc), 'Available');
             },
             async deleteDoc(id: string) {
                 await latest.current.handlers.handleDeleteInvoice(id);
@@ -136,13 +131,11 @@ export const BillingProvider: React.FC<{
                 const lines = doc.lines.map(l => ({ ...l, returnedQty: Math.min(l.qty, Math.max(l.returnedQty ?? 0, Math.floor(returned[l.key] ?? l.returnedQty ?? 0))) }));
                 const updated = { ...doc, lines };
                 await save({ ...updated, status: statusAfterReturn(updated) });
-                const back = lines.filter(l => l.artworkId && (l.returnedQty ?? 0) >= l.qty).map(l => l.artworkId);
-                if (effects() && back.length) latest.current.handlers.setArtworksStatus(back, 'Available');
             },
         };
     }, []);
 
-    const api = useMemo<BillingApi>(() => ({ settings, docs, artworks, contacts, online, canEdit, onArtworkClick, ...actions }),
-        [settings, docs, artworks, contacts, online, canEdit, onArtworkClick, actions]);
+    const api = useMemo<BillingApi>(() => ({ settings, docs, artworks, contacts, online, canEdit, isAdmin, onArtworkClick, ...actions }),
+        [settings, docs, artworks, contacts, online, canEdit, isAdmin, onArtworkClick, actions]);
     return <BillingContext.Provider value={api}>{children}</BillingContext.Provider>;
 };

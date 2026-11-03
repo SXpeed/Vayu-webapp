@@ -230,3 +230,44 @@ test('nothing is issued without the setup', async () => {
     assert.match(res.body.error, /setup/);
     await api(owner, '/invoices/settings', { method: 'PUT', body: SETUP });
 });
+
+test('only workspace admins change the billing setup, and a save from an old copy is refused', async () => {
+    const editor = await person('Accounts Editor', 'accounts.editor@example.com', await role('Billing editor', { invoices: 'edit' }));
+    const refused = await api(editor, '/invoices/settings', { method: 'PUT', body: { ...SETUP, banks: [{ ...SETUP.banks[0], accountNumber: '999999999999' }] } });
+    assert.equal(refused.status, 403, 'Billing "edit" alone can’t change the bank account on every invoice');
+    assert.equal((await save(draft('proforma'), editor)).status, 201, 'but can still make documents');
+
+    const loaded = (await api(owner, '/invoices/settings')).body;
+    const first = await api(owner, '/invoices/settings', { method: 'PUT', body: { ...loaded, tradeName: 'First edit' } });
+    assert.equal(first.status, 200, first.text);
+    assert.ok(first.body.updatedAt > loaded.updatedAt);
+    const stale = await api(owner, '/invoices/settings', { method: 'PUT', body: { ...loaded, tradeName: 'Second edit, from the old copy' } });
+    assert.equal(stale.status, 409, 'the second editor would have wiped the first one’s change');
+    assert.equal((await api(owner, '/invoices/settings')).body.tradeName, 'First edit');
+});
+
+test('issuing, cancelling and returns move inventory on the server', async () => {
+    const piece = async (id) => {
+        const res = await api(owner, '/artworks', { method: 'POST', body: { id, customId: id, title: id, price: 100000, status: 'Available', imageUrls: [], createdAt: Date.now() } });
+        assert.equal(res.status, 201, res.text);
+    };
+    const statusOf = async (id) => (await api(owner, '/artworks')).body.find(a => a.id === id)?.status;
+    await piece('art_sold');
+    await piece('art_out');
+
+    const sale = draft('tax', { lines: [line(100000, { artworkId: 'art_sold' })] });
+    await save(sale);
+    assert.equal(await statusOf('art_sold'), 'Available', 'a draft moves nothing');
+    await issue(sale.id);
+    assert.equal(await statusOf('art_sold'), 'Sold');
+    assert.equal((await api(owner, `/invoices/${sale.id}/cancel`, { method: 'POST', body: { reason: 'Wrong piece' } })).status, 200);
+    assert.equal(await statusOf('art_sold'), 'Available', 'cancelling frees it');
+
+    const approval = draft('challan', { lines: [line(100000, { artworkId: 'art_out' })] });
+    await save(approval);
+    const out = (await issue(approval.id)).body[0];
+    assert.equal(await statusOf('art_out'), 'Reserved', 'out on approval');
+    const back = await save({ ...out, status: 'Returned', lines: out.lines.map(l => ({ ...l, returnedQty: l.qty })) });
+    assert.equal(back.status, 200, back.text);
+    assert.equal(await statusOf('art_out'), 'Available', 'back in stock once returned');
+});

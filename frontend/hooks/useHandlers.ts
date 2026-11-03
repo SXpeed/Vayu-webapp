@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import toast from 'react-hot-toast';
 import {
-    Artwork, ArtworkStatus, CalendarEvent, Catalog, Invoice, Collection, Contact, Inquiry, Conversation,
+    Artwork, CalendarEvent, Catalog, Invoice, Collection, Contact, Inquiry, Conversation,
     ConversationDetails, Message, MessageTag, MessageReplyTo, MessageAttachment,
     InquiryMessage, NewContact, UserProfile, MessageStatus
 } from '../types';
@@ -186,38 +186,34 @@ export function useHandlers(args: HandlerArgs) {
     // The server numbers, locks and totals them, so each change waits for its
     // answer and the screen shows the document as the server saved it.
 
-    /** Puts pieces in a status: an issued invoice sells them, an approval challan reserves them, a return frees them. */
-    const setArtworksStatus = useCallback((ids: string[], status: ArtworkStatus) => {
-        const wanted = new Set(ids);
-        const toMark = artworks.filter(art => wanted.has(art.id) && art.status !== status);
-        if (toMark.length === 0) return;
-        for (const art of toMark) {
-            const updatedArt = { ...art, status };
-            artworkService.updateArtwork(updatedArt).catch(e => console.error('D1 sync failed (billing artwork status):', e));
-            db.saveArtwork(updatedArt).catch(e => console.error('Local save failed (billing artwork status):', e));
+    /** The server holds the document; the device copy is for offline use, so a full device storage only warns. */
+    const keepInvoice = useCallback(async (doc: Invoice) => {
+        try {
+            await stores.invoices.put(doc);
+        } catch (err) {
+            console.warn('Device copy of the document not saved:', err);
+            setInvoices(prev => [doc, ...prev.filter(x => x.id !== doc.id)].sort((a, b) => b.date - a.date));
         }
-        const marked = new Set(toMark.map(art => art.id));
-        setArtworks(prev => prev.map(art => (marked.has(art.id) ? { ...art, status } : art)));
-    }, [artworks, setArtworks]);
+    }, [stores, setInvoices]);
 
     const handleSaveInvoice = useCallback(async (doc: Invoice): Promise<Invoice> => {
         const saved = await invoiceService.saveInvoice(doc);
-        await stores.invoices.put(saved);
+        await keepInvoice(saved);
         return saved;
-    }, [stores]);
+    }, [keepInvoice]);
 
     /** Numbers and locks a draft; the documents it changed (a converted proforma, an invoiced challan) come back too. */
     const handleIssueInvoice = useCallback(async (id: string): Promise<Invoice[]> => {
         const changed = await invoiceService.issueInvoice(id);
-        await Promise.all(changed.map(doc => stores.invoices.put(doc)));
+        await Promise.all(changed.map(keepInvoice));
         return changed;
-    }, [stores]);
+    }, [keepInvoice]);
 
     const handleCancelInvoice = useCallback(async (id: string, reason: string): Promise<Invoice> => {
         const cancelled = await invoiceService.cancelInvoice(id, reason);
-        await stores.invoices.put(cancelled);
+        await keepInvoice(cancelled);
         return cancelled;
-    }, [stores]);
+    }, [keepInvoice]);
 
     /** Drafts and proformas only (the server refuses the rest); archived for admin review. */
     const handleDeleteInvoice = useCallback(async (id: string) => {
@@ -586,7 +582,7 @@ export function useHandlers(args: HandlerArgs) {
         // Collections
         handleAddCollection, handleUpdateCollection, handleDeleteCollection,
         // Invoices
-        handleSaveInvoice, handleIssueInvoice, handleCancelInvoice, handleDeleteInvoice, setArtworksStatus,
+        handleSaveInvoice, handleIssueInvoice, handleCancelInvoice, handleDeleteInvoice,
         // Inquiries
         handleAddInquiry, handleUpdateInquiry, handleDeleteInquiry,
         // Calendar events

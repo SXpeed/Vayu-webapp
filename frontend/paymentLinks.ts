@@ -9,7 +9,7 @@ import { getSession } from './workerRoles';
 import { docTotals, linkProblem, toBillingDoc, type BillingDoc } from './invoicing';
 import { readBillingSettings } from './invoices';
 import { orgStorageEnv } from './orgApp';
-import { queueHubNotify } from './deltaSync';
+import { changeLogStmt, ensureChangeLogTable, queueHubNotify } from './deltaSync';
 import { razorpay, razorpayCredentials, signRazorpayBody, verifiedRazorpayKeys } from './platform/payments';
 import { maskKeyId } from './platform/secrets';
 import { recordProcessed, recordProcessingFailure, recordReconcile, recordRejection, recordVerified, safeError, type ReconcileOutcome } from './platform/webhookHealth';
@@ -315,6 +315,38 @@ async function readLink(env: Env, id: string): Promise<StoredPaymentLink | null>
 async function saveLink(env: Env, link: StoredPaymentLink): Promise<void> {
   await ensurePaymentLinksTable(env);
   await env.VAYU_DB.batch(linkStatements(env.VAYU_DB, link, 'save'));
+  if (link.invoiceId) await syncInvoicePaid(env, link.invoiceId, link.mode ?? 'live');
+}
+
+/**
+ * Puts what a document's links collected (less processed refunds) on the
+ * document, so Billing counts it. Links of the same mode as the one that
+ * changed: test payments never count against a live account's invoices.
+ * Never fails the link update it follows.
+ */
+async function syncInvoicePaid(env: Env, invoiceId: string, mode: PaymentMode): Promise<void> {
+  try {
+    const db = env.VAYU_DB;
+    await ensureInvoicesTable(db);
+    const row = await db.prepare('SELECT data FROM invoices WHERE id = ?').bind(invoiceId).first<{ data: string }>();
+    if (!row) return;
+    const doc = toBillingDoc(JSON.parse(row.data));
+    const links = (await invoiceLinks(env, invoiceId)).filter(l => (l.mode ?? 'live') === mode);
+    await ensureRefundsTable(db);
+    const refunded = links.length
+      ? (await db.prepare(`SELECT COALESCE(SUM(amount), 0) AS n FROM payment_refunds WHERE status = 'processed' AND link_id IN (${links.map(() => '?').join(', ')})`)
+        .bind(...links.map(l => l.id)).first<{ n: number }>())?.n ?? 0
+      : 0;
+    const paid = Math.max(0, links.reduce((t, l) => t + collectedPaise(l), 0) - refunded);
+    if ((doc.linkPaidPaise ?? 0) === paid) return;
+    await ensureChangeLogTable(db);
+    await db.batch([
+      db.prepare('UPDATE invoices SET data = ?, updated_at = ? WHERE id = ?').bind(JSON.stringify({ ...doc, linkPaidPaise: paid }), Date.now(), invoiceId),
+      changeLogStmt(db, env, 'invoice', invoiceId, 'put'),
+    ]);
+  } catch (e) {
+    console.error(JSON.stringify({ event: 'invoice_paid_sync_failed', invoice: invoiceId.slice(0, 80), error: safeError(e) }));
+  }
 }
 
 async function deleteLink(env: Env, id: string): Promise<void> {
@@ -364,7 +396,7 @@ interface LinkRequestBody {
  * need the workspace admin role and a reason.
  */
 /** This workspace's invoice and its totals worked out here (another business's invoice isn't in this database). */
-async function linkInvoice(ctx: Ctx, invoiceId: unknown): Promise<{ id: string; invoice: InvoiceLike; totals: InvoiceTotals } | Response> {
+async function linkInvoice(ctx: Ctx, invoiceId: unknown): Promise<{ id: string; invoice: InvoiceLike; totals: InvoiceTotals; doc: BillingDoc } | Response> {
   const notFound = json({ error: 'Invoice not found', code: 'invoice_not_found' }, 404);
   if (typeof invoiceId !== 'string' || invoiceId.length > 128) return notFound;
   await ensureInvoicesTable(ctx.env.VAYU_DB);
@@ -378,7 +410,7 @@ async function linkInvoice(ctx: Ctx, invoiceId: unknown): Promise<{ id: string; 
   const t = docTotals(doc, await readBillingSettings(ctx.env.VAYU_KV));
   if (t.total <= 0 || !Number.isSafeInteger(t.total)) return json({ error: 'This invoice has nothing to pay. Open it, check its items and save it again.', code: 'invoice_total_mismatch' }, 409);
   const totals: InvoiceTotals = { itemsPaise: t.taxable, taxRate: t.taxable ? Math.round((t.tax * 10_000) / t.taxable) / 100 : 0, taxPaise: t.tax, totalPaise: t.total };
-  return { id: invoiceId, invoice: { id: invoiceId, invoiceNumber: doc.number, status: doc.status }, totals };
+  return { id: invoiceId, invoice: { id: invoiceId, invoiceNumber: doc.number, status: doc.status }, totals, doc };
 }
 
 /** An override's record, or why it isn't allowed: workspace admins only, with a reason. */
@@ -413,8 +445,11 @@ async function approveAmount(ctx: Ctx, session: SessionData, body: LinkRequestBo
   }
   const found = await linkInvoice(ctx, body.invoiceId);
   if (found instanceof Response) return found;
-  const { totals } = found;
-  const outstanding = outstandingPaise(totals.totalPaise, found.id, await invoiceLinks(ctx.env, found.id), mode);
+  const { totals, doc } = found;
+  // What was collected already: payments recorded in Billing, and links on this document or on the proforma it came from (an advance).
+  const recorded = doc.payments.reduce((t, p) => t + p.amountPaise, 0);
+  const advance = doc.sourceId ? (await invoiceLinks(ctx.env, doc.sourceId)).map(l => ({ ...l, invoiceId: found.id })) : [];
+  const outstanding = outstandingPaise(Math.max(0, totals.totalPaise - recorded), found.id, [...await invoiceLinks(ctx.env, found.id), ...advance], mode);
   const paise = asked.paise ?? outstanding;
   if (paise === 0) return json({ error: 'Nothing is outstanding on this invoice: its links already cover the total.', code: 'nothing_outstanding' }, 409);
   const kind = overrideNeeded(paise, outstanding, settlesInFull);
@@ -710,6 +745,7 @@ async function recordRefund(env: Env, account: string, refund: NonNullable<Retur
        updated_at = excluded.updated_at
      WHERE payment_refunds.account = excluded.account`,
   ).bind(refund.id, account, refund.paymentId, link?.id ?? null, link?.mode ?? null, refund.amount, refund.currency, refund.status, refund.createdAt, now).run();
+  if (link?.invoiceId) await syncInvoicePaid(env, link.invoiceId, link.mode ?? 'live');
   if (!before) return 'new';
   const after = await db.prepare('SELECT status FROM payment_refunds WHERE refund_id = ?').bind(refund.id).first<{ status: RefundStatus }>();
   return after?.status === before.status ? 'unchanged' : 'advanced';

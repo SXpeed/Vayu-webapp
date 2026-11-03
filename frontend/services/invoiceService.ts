@@ -66,9 +66,15 @@ export function refreshBillingSettings(force = false): Promise<void> {
 }
 
 export async function saveBillingSettings(next: BillingSettings): Promise<BillingSettings> {
-    const saved = cleanSettings(await call<unknown>('/invoices/settings', { method: 'PUT', body: JSON.stringify(next) }));
-    publish(saved);
-    return saved;
+    try {
+        const saved = cleanSettings(await call<unknown>('/invoices/settings', { method: 'PUT', body: JSON.stringify(next) }));
+        publish(saved);
+        return saved;
+    } catch (e) {
+        // Someone else saved first: bring their version in, so reopening the setup shows it.
+        void refreshBillingSettings(true);
+        throw e;
+    }
 }
 
 const subscribe = (l: () => void) => {

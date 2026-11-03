@@ -78,7 +78,6 @@ export function testModeRefusal(account: { mode: PaymentMode; testAllowed: boole
 
 export interface InvoiceLike {
   id?: unknown; invoiceNumber?: unknown; status?: unknown;
-  items?: unknown; taxRate?: unknown; total?: unknown;
 }
 
 export interface InvoiceTotals {
@@ -86,30 +85,6 @@ export interface InvoiceTotals {
   taxRate: number;
   taxPaise: number;
   totalPaise: number;
-}
-
-/**
- * An invoice's total worked out on the server from its items and tax rate,
- * the way the app computes it (items summed, then tax on the sum, each
- * rounded to the paisa). Null when the invoice doesn't hold up: no items,
- * a bad price or rate, or a stored total that disagrees by more than a paisa.
- */
-export function invoiceTotals(invoice: InvoiceLike): InvoiceTotals | null {
-  if (!Array.isArray(invoice.items) || invoice.items.length === 0) return null;
-  let itemsPaise = 0;
-  for (const item of invoice.items as { price?: unknown }[]) {
-    const price = Number(item?.price);
-    if (!Number.isFinite(price) || price < 0) return null;
-    itemsPaise += Math.round(price * 100);
-  }
-  const taxRate = Number(invoice.taxRate ?? 0);
-  if (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100) return null;
-  const taxPaise = Math.round((itemsPaise * taxRate) / 100);
-  const totalPaise = itemsPaise + taxPaise;
-  const stored = Math.round(Number(invoice.total) * 100);
-  if (!Number.isFinite(stored) || Math.abs(stored - totalPaise) > 1) return null;
-  if (!Number.isSafeInteger(totalPaise)) return null;
-  return { itemsPaise, taxRate, taxPaise, totalPaise };
 }
 
 /** A link counted against an invoice: paid, part-paid, or still open to pay. */

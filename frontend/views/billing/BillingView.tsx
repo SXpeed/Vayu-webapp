@@ -2,6 +2,7 @@
 // switcher, the setup (⚙) button and New (+) in the header of every tab.
 
 import React, { useMemo, useState } from 'react';
+import toast from 'react-hot-toast';
 import { AlertTriangle, FileText, Plus, Receipt, Settings, Truck, FileMinus, BarChart3, Store } from 'lucide-react';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton, GhostIconButton, EmptyState, Pill, Button } from '../../components/ui';
 import { SearchBar } from '../../components/SearchBar';
@@ -55,6 +56,12 @@ export function BillingView({ onCollectPayment }: { readonly onCollectPayment?: 
     const [openId, setOpenId] = useState<string | null>(null);
     const [setup, setSetup] = useState<SettingsSection | null>(null);
     const now = Date.now();
+
+    // The setup holds the bank account invoices ask customers to pay into: admins only.
+    const openSetup = (section: SettingsSection) => {
+        if (b.isAdmin) setSetup(section);
+        else toast('Ask a workspace admin to finish the billing setup.');
+    };
 
     const chooseTab = (t: Tab) => {
         setTab(t);
@@ -116,13 +123,13 @@ export function BillingView({ onCollectPayment }: { readonly onCollectPayment?: 
                             </select>
                         </label>
                     )}
-                    {b.canEdit && <GhostIconButton label="Billing setup" icon={<Settings size={16} className="text-brand-900 dark:text-gold-400" />} onClick={() => setSetup(problems[0]?.[0] as SettingsSection ?? 'business')} />}
+                    {b.isAdmin && <GhostIconButton label="Billing setup" icon={<Settings size={16} className="text-brand-900 dark:text-gold-400" />} onClick={() => openSetup(problems[0]?.[0] as SettingsSection ?? 'business')} />}
                     {b.canEdit && tab !== 'reports' && tab !== 'notes' && (
                         <PrimaryIconButton label={`New ${tabLabel(tab).toLowerCase()}`} icon={<Plus size={16} />} onClick={startNew} />
                     )}
                 </>}
             >
-                <fieldset className="flex gap-2 overflow-x-auto no-scrollbar -mx-1 px-1 py-0.5 border-0 m-0 min-w-0">
+                <fieldset className="flex gap-2 overflow-x-auto no-scrollbar -mx-1 px-1 py-0.5 border-0 min-w-0">
                     <legend className="sr-only">Billing documents</legend>
                     {(['proforma', 'tax', 'challan', 'notes', 'reports'] as Tab[]).map(t => {
                         const Icon = TAB_ICON[t];
@@ -144,7 +151,7 @@ export function BillingView({ onCollectPayment }: { readonly onCollectPayment?: 
                             <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Finish billing setup to issue tax invoices and challans</p>
                             <p className="text-[12px] text-gray-600 dark:text-gray-400 mt-0.5">Still needed: {problems.slice(0, 4).map(p => p[1]).join(', ')}{problems.length > 4 ? '…' : ''}. Proformas work already.</p>
                         </div>
-                        {b.canEdit && <Button variant="primary" onClick={() => setSetup(problems[0][0] as SettingsSection)} className="shrink-0 !py-2 !px-3 text-xs">Set up</Button>}
+                        {b.isAdmin && <Button variant="primary" onClick={() => openSetup(problems[0][0] as SettingsSection)} className="shrink-0 !py-2 !px-3 text-xs">Set up</Button>}
                     </div>
                 )}
 
@@ -207,10 +214,10 @@ export function BillingView({ onCollectPayment }: { readonly onCollectPayment?: 
             </PageBody>
 
             {open && !editing && (
-                <DocDetail doc={open} onClose={() => setOpenId(null)} onEdit={setEditing} onOpen={setOpenId} onSetup={sec => setSetup(sec)} onCollectPayment={onCollectPayment} />
+                <DocDetail doc={open} onClose={() => setOpenId(null)} onEdit={setEditing} onOpen={setOpenId} onSetup={openSetup} onCollectPayment={onCollectPayment} />
             )}
             {editing && (
-                <DocEditor initial={editing} onClose={() => setEditing(null)} onSaved={d => { setEditing(null); setOpenId(d.id); chooseTab(d.kind === 'credit' || d.kind === 'debit' ? 'notes' : d.kind); }} onSetup={sec => setSetup(sec)} />
+                <DocEditor initial={editing} onClose={() => setEditing(null)} onSaved={d => { setEditing(null); setOpenId(d.id); chooseTab(d.kind === 'credit' || d.kind === 'debit' ? 'notes' : d.kind); }} onSetup={openSetup} />
             )}
             {setup && <SettingsSheet initialSection={setup} onClose={() => setSetup(null)} />}
         </PageRoot>

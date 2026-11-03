@@ -8,9 +8,10 @@
 
 import { changeLogStmt, ensureChangeLogTable } from './deltaSync';
 import { err, json, runSetupOnce } from './rows';
+import { ADMIN_ROLE_ID } from './permissions';
 import {
     cleanSettings, creditRoom, currentSeller, docNumberFor, docTotals, isLocked, ISSUED_KINDS, issueProblems, KIND_LABEL,
-    lockedFieldChanged, paymentsProblem, seriesKeyFor, statusChangeProblem, toBillingDoc,
+    lockedFieldChanged, paymentsProblem, RETURNABLE, seriesKeyFor, statusChangeProblem, toBillingDoc,
     type BillingDoc, type BillingSettings,
 } from './invoicing';
 import type { ChangeEvent, Ctx, SessionData } from './workerEnv';
@@ -109,8 +110,40 @@ async function load(db: D1Database, id: string): Promise<Stored | null> {
 
 /** Credit and debit notes against one invoice. */
 async function notesFor(db: D1Database, invoiceId: string): Promise<BillingDoc[]> {
-    const rows = await db.prepare("SELECT data FROM invoices WHERE kind IN ('credit', 'debit')").all<{ data: string }>();
-    return (rows.results || []).map(r => toBillingDoc(JSON.parse(r.data))).filter(d => d.sourceId === invoiceId);
+    const rows = await db.prepare("SELECT data FROM invoices WHERE kind IN ('credit', 'debit') AND json_extract(data, '$.sourceId') = ?")
+        .bind(invoiceId).all<{ data: string }>();
+    return (rows.results || []).map(r => toBillingDoc(JSON.parse(r.data)));
+}
+
+type PieceStatus = 'Available' | 'Reserved' | 'Sold';
+
+/** Pieces a document moves, only from the statuses given, so an older document never undoes a later sale. */
+const pieces = (doc: BillingDoc, ids?: string[]) => ids ?? doc.lines.map(l => l.artworkId).filter(Boolean);
+
+function moveStatements(ctx: Ctx, session: SessionData, ids: string[], to: PieceStatus, from: PieceStatus[]): D1PreparedStatement[] {
+    const db = ctx.env.VAYU_DB;
+    return ids.flatMap(id => [
+        db.prepare(`UPDATE artworks SET status = ? WHERE id = ? AND status IN (${from.map(() => '?').join(', ')})`).bind(to, id, ...from),
+        changeLogStmt(db, ctx.env, 'artwork', id, 'put', { actorId: session.userId }),
+    ]);
+}
+
+/** What happens to inventory when a document is issued, cancelled, or its goods come back (Billing setup → Update inventory). */
+function inventoryMoves(event: 'issue' | 'cancel' | 'return', doc: BillingDoc, returnedIds: string[] = []): { to: PieceStatus; from: PieceStatus[]; ids: string[] } | null {
+    const returnable = doc.kind === 'challan' && !!doc.challanPurpose && RETURNABLE.has(doc.challanPurpose);
+    if (event === 'issue' && doc.kind === 'tax') return { to: 'Sold', from: ['Available', 'Reserved'], ids: pieces(doc) };
+    if (event === 'issue' && returnable) return { to: 'Reserved', from: ['Available'], ids: pieces(doc) };
+    if (event === 'cancel' && doc.kind === 'tax') return { to: 'Available', from: ['Sold'], ids: pieces(doc) };
+    if (event === 'cancel' && returnable) return { to: 'Available', from: ['Reserved'], ids: pieces(doc) };
+    if (event === 'return' && returnable) return { to: 'Available', from: ['Reserved'], ids: returnedIds };
+    return null;
+}
+
+/** Inventory pieces whose every item came back in this save. */
+function fullyReturned(before: BillingDoc | null, after: BillingDoc): string[] {
+    if (!before || after.kind !== 'challan') return [];
+    const was = new Map(before.lines.map(l => [l.key, l.returnedQty ?? 0]));
+    return after.lines.filter(l => l.artworkId && (l.returnedQty ?? 0) >= l.qty && (was.get(l.key) ?? 0) < l.qty).map(l => l.artworkId);
 }
 
 /**
@@ -164,18 +197,24 @@ function sourceAfterIssue(source: BillingDoc, issued: BillingDoc, session: Sessi
 }
 
 export function invoiceRoutes(deps: InvoiceDeps): InvoiceRoute[] {
-    const writeDocs = async (ctx: Ctx, session: SessionData, docs: { doc: BillingDoc; createdBy: string | null; createdByName: string | null }[]) => {
+    /** Writes documents, and the inventory they move, in one batch (a transaction). */
+    const writeDocs = async (ctx: Ctx, session: SessionData, docs: { doc: BillingDoc; createdBy: string | null; createdByName: string | null }[],
+        move: ReturnType<typeof inventoryMoves> = null, s: BillingSettings | null = null) => {
         const db = ctx.env.VAYU_DB;
         await ensureChangeLogTable(db);
-        await db.batch(docs.flatMap(({ doc, createdBy, createdByName }) => [
+        const moved = move && s?.inventoryEffects && move.ids.length ? move : null;
+        await db.batch([...docs.flatMap(({ doc, createdBy, createdByName }) => [
             db.prepare(`INSERT INTO invoices (id, invoice_number, customer_name, status, date, data, created_by, created_by_name, updated_at, kind, series_key, seq)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (id) DO UPDATE SET invoice_number = excluded.invoice_number, customer_name = excluded.customer_name, status = excluded.status,
                     date = excluded.date, data = excluded.data, updated_at = excluded.updated_at, kind = excluded.kind`)
                 .bind(doc.id, doc.number, doc.party.name, doc.status, doc.date, JSON.stringify(doc), createdBy, createdByName, Date.now(), doc.kind, doc.seriesKey ?? null, doc.seq ?? null),
             changeLogStmt(db, ctx.env, 'invoice', doc.id, 'put', { actorId: session.userId }),
-        ]));
-        deps.notify(ctx, docs.map(({ doc }) => ({ entity: 'invoice', id: doc.id, op: 'put' as const })));
+        ]), ...(moved ? moveStatements(ctx, session, moved.ids, moved.to, moved.from) : [])]);
+        deps.notify(ctx, [
+            ...docs.map(({ doc }) => ({ entity: 'invoice', id: doc.id, op: 'put' as const })),
+            ...(moved?.ids ?? []).map(id => ({ entity: 'artwork', id, op: 'put' as const })),
+        ]);
     };
 
     /** GET /invoices — every document, old proformas in the current shape. */
@@ -219,6 +258,7 @@ export function invoiceRoutes(deps: InvoiceDeps): InvoiceRoute[] {
             cancelReason: before?.cancelReason,
             totalPaise: before?.totalPaise,
             taxPaise: before?.taxPaise,
+            linkPaidPaise: before?.linkPaidPaise,
             history: before?.history ?? [],
             createdAt: before?.createdAt ?? now,
         };
@@ -231,7 +271,7 @@ export function invoiceRoutes(deps: InvoiceDeps): InvoiceRoute[] {
 
         doc = withTotals(logged(doc, before ? 'Edited' : 'Created', session, now), s);
         const owner = { createdBy: stored ? stored.createdBy : session.userId, createdByName: stored ? stored.createdByName : session.name };
-        await writeDocs(ctx, session, [{ doc, ...owner }]);
+        await writeDocs(ctx, session, [{ doc, ...owner }], inventoryMoves('return', doc, fullyReturned(before, doc)), s);
         // A proforma is numbered on its first save; the others when issued.
         if (doc.kind === 'proforma' && !doc.number) {
             const { seq, seriesKey } = await allocate(db, id, seriesKeyFor(s, 'proforma', doc.storeId, doc.date), s.series.proforma.start);
@@ -263,7 +303,7 @@ export function invoiceRoutes(deps: InvoiceDeps): InvoiceRoute[] {
         const issued = withTotals(logged({ ...before, number, seq, seriesKey, status: 'Issued', issuedAt: now, seller: currentSeller(s, before.storeId) }, `Issued as ${number}`, session, now), s);
         const sourceAfter = source ? sourceAfterIssue(source.doc, issued, session, now) : null;
         const changed: Stored[] = [{ ...stored, doc: issued }, ...(source && sourceAfter ? [{ ...source, doc: sourceAfter }] : [])];
-        await writeDocs(ctx, session, changed);
+        await writeDocs(ctx, session, changed, inventoryMoves('issue', issued), s);
         deps.logChange(ctx, session, 'updated', 'invoice', issued.id, `Issued ${describe(issued)}`);
         return json(changed.map(c => c.doc));
     };
@@ -278,7 +318,7 @@ export function invoiceRoutes(deps: InvoiceDeps): InvoiceRoute[] {
         if (before.payments.length) return err('Payments are recorded on this invoice. Remove them or issue a credit note instead.', 409);
         if ((await notesFor(ctx.env.VAYU_DB, before.id)).some(n => n.status === 'Issued')) return err('Notes are issued against this invoice. Cancel them first.', 409);
         const cancelled = logged({ ...before, status: 'Cancelled', cancelReason: reason }, `Cancelled: ${reason}`, session);
-        await writeDocs(ctx, session, [{ ...stored, doc: cancelled }]);
+        await writeDocs(ctx, session, [{ ...stored, doc: cancelled }], inventoryMoves('cancel', cancelled), await readBillingSettings(ctx.env.VAYU_KV));
         deps.logChange(ctx, session, 'updated', 'invoice', cancelled.id, `Cancelled ${describe(cancelled)}: ${reason}`);
         return json(cancelled);
     };
@@ -325,15 +365,24 @@ export function invoiceRoutes(deps: InvoiceDeps): InvoiceRoute[] {
         return json(await readBillingSettings(ctx.env.VAYU_KV));
     };
 
-    /** PUT /invoices/settings — replaces the billing setup. */
+    /**
+     * PUT /invoices/settings — replaces the billing setup. Admins only: it holds
+     * the bank account every invoice asks customers to pay into.
+     */
     const putSettings: Handler = async (ctx) => {
         const session = await caller(ctx);
         if (session instanceof Response) return session;
+        if (session.role !== ADMIN_ROLE_ID) return err('Only a workspace admin can change the billing setup.', 403);
         const text = await ctx.request.text();
         if (text.length > MAX_SETTINGS_BYTES) return err('The setup is too large. Use a smaller logo or signature image.', 413);
         let raw: unknown;
         try { raw = JSON.parse(text); } catch { return err('Invalid billing setup'); }
-        const settings = cleanSettings(raw);
+        const sentAt = (raw as { updatedAt?: unknown } | null)?.updatedAt;
+        const current = await readBillingSettings(ctx.env.VAYU_KV);
+        if (typeof sentAt === 'number' && sentAt !== current.updatedAt) {
+            return err('Someone else changed the billing setup meanwhile. Close it and open it again to see their changes.', 409);
+        }
+        const settings = { ...cleanSettings(raw), updatedAt: Date.now() };
         await ctx.env.VAYU_KV.put(SETTINGS_KEY, JSON.stringify(settings));
         deps.logChange(ctx, session, 'updated', 'billing settings', '', 'Updated the billing setup');
         return json(settings);

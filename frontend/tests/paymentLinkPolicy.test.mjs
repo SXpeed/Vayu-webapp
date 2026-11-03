@@ -36,18 +36,6 @@ test('bounds: at least ₹1, at most the configured or hard ceiling; zero and ne
     assert.equal(p.amountProblem(p.HARD_MAX_PAISE + 1, max).code, 'amount_too_large');
 });
 
-test('invoice totals are recomputed from items and tax, rounding to the paisa', () => {
-    // ₹1,000.10 + ₹333.33 = ₹1,333.43; 18% tax = ₹240.0174 → ₹240.02; total ₹1,573.45
-    const inv = { items: [{ price: 1000.1 }, { price: 333.33 }], taxRate: 18, total: 1573.45 };
-    assert.deepEqual(p.invoiceTotals(inv), { itemsPaise: 133343, taxRate: 18, taxPaise: 24002, totalPaise: 157345 });
-    assert.ok(p.invoiceTotals({ ...inv, total: 1573.4449999 }), 'a hair of float error is accepted');
-    assert.equal(p.invoiceTotals({ ...inv, total: 1000 }), null, 'a total that disagrees with the items is refused');
-    assert.equal(p.invoiceTotals({ ...inv, items: [] }), null);
-    assert.equal(p.invoiceTotals({ ...inv, items: [{ price: -5 }] }), null);
-    assert.equal(p.invoiceTotals({ ...inv, taxRate: 400 }), null);
-    assert.deepEqual(p.invoiceTotals({ items: [{ price: 500 }], total: 500 }), { itemsPaise: 50000, taxRate: 0, taxPaise: 0, totalPaise: 50000 });
-});
-
 test("what's outstanding counts paid and still-payable links of the same mode, never other invoices", () => {
     const links = [
         { invoiceId: 'inv-1', amount: 40000, status: 'paid', mode: 'live' },
