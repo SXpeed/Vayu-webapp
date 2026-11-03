@@ -103,7 +103,7 @@ async function uploadDeviceOnlyInvoices(remote: Invoice[]): Promise<Invoice[]> {
     for (const inv of await db.getInvoices()) {
         if (onServer.has(inv.id)) continue;
         // One at a time stays under the API's write rate limit.
-        try { uploaded.push(await invoiceService.saveInvoice(inv)); } catch (err) { console.warn('Could not upload invoice', inv.invoiceNumber, err); } // NOSONAR
+        try { uploaded.push(await invoiceService.saveInvoice(inv)); } catch (err) { console.warn('Could not upload invoice', inv.number, err); } // NOSONAR
     }
     return uploaded;
 }

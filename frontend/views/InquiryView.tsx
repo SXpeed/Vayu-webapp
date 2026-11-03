@@ -16,8 +16,11 @@ import { useStickToBottom } from '../hooks/useStickToBottom';
 import { useMemberNames } from '../hooks/useMemberNames';
 import { PhotoAttachments } from '../components/PhotoAttachments';
 import { makeDocumentNumber } from '../services/documentNumber';
-import { exportProformaPdf } from '../services/proformaPdf';
-import { InvoiceFormModal, ProformaPdfActions, type NewInvoice } from './InvoiceView';
+import { exportDocPdf } from '../services/billingPdf';
+import { BillingProvider, useBilling, type BillingHandlers } from './billing/billingContext';
+import { DocEditor, artworkLine } from './billing/DocEditor';
+import { docTotals, newDoc, type BillingDoc } from '../invoicing';
+import { rupeesText } from '../gstRules';
 import { IfCan } from '../components/Layout';
 import { useInbox } from '../hooks/useInbox';
 import { chatDayLabel, withDayDividers } from './chat/DayDivider';
@@ -52,7 +55,8 @@ interface InquiryViewProps {
     onArtworkClick: (artwork: Artwork) => void;
     inquiryMessages: InquiryMessage[];
     invoices: Invoice[];
-    onAddInvoice: (invoice: NewInvoice) => Promise<Invoice>;
+    /** Billing actions: a proforma can be made from an inquiry. */
+    billingHandlers: BillingHandlers;
     teamMembers: UserProfile[];
     currentUserId: string;
 
@@ -89,7 +93,7 @@ const ARTWORK_STATUS_BADGE: Record<Artwork['status'], string> = {
     'Reserved': 'neu-status text-yellow-700 dark:text-yellow-400',
 };
 
-export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, onAddInquiry, onUpdateInquiry, onDeleteInquiry, onArtworkClick, inquiryMessages, invoices, onAddInvoice, teamMembers, currentUserId, onSendInquiryMessage, openInquiry, onOpenedInquiry, contacts, onReactToInquiryMessage }) => {
+export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, onAddInquiry, onUpdateInquiry, onDeleteInquiry, onArtworkClick, inquiryMessages, invoices, billingHandlers, teamMembers, currentUserId, onSendInquiryMessage, openInquiry, onOpenedInquiry, contacts, onReactToInquiryMessage }) => {
     const resolveName = useMemberNames(teamMembers);
     // Inquiries added before creator tracking have no creator recorded.
     const addedBy = (inquiry: Inquiry) =>
@@ -351,13 +355,13 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
 
             {selectedInquiry && (
                 <FullScreenPortal>
+                    <BillingProvider docs={invoices} artworks={artworks} contacts={contacts} handlers={billingHandlers} onArtworkClick={onArtworkClick}>
                     <InquiryDetailModal
                         inquiry={selectedInquiry}
                         contacts={contacts}
                         addedBy={addedBy(selectedInquiry)}
                         artworks={artworks}
                         proformas={invoices.filter(inv => inv.inquiryId === selectedInquiry.id)}
-                        onAddInvoice={onAddInvoice}
                         onClose={handleCloseModal}
                         onMarkUnread={() => {
                             // Off screen in the same render, or it would be read again at once.
@@ -376,6 +380,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                         }}
                         onArtworkClick={onArtworkClick}
                     />
+                    </BillingProvider>
                 </FullScreenPortal>
             )}
 
@@ -581,7 +586,6 @@ interface InquiryDetailModalProps {
     artworks: Artwork[];
     /** Proforma invoices generated from this inquiry. */
     proformas: Invoice[];
-    onAddInvoice: (invoice: NewInvoice) => Promise<Invoice>;
     contacts: Contact[];
     onClose: () => void;
     onMarkUnread: () => void;
@@ -590,7 +594,7 @@ interface InquiryDetailModalProps {
     onArtworkClick: (artwork: Artwork) => void;
 }
 
-const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, contacts, addedBy, artworks, proformas, onAddInvoice, onClose, onMarkUnread, onUpdateInquiry, onDeleteInquiry, onArtworkClick }) => {
+const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, contacts, addedBy, artworks, proformas, onClose, onMarkUnread, onUpdateInquiry, onDeleteInquiry, onArtworkClick }) => {
     const [isEditing, setIsEditing] = useState(false);
     const [isCreatingProforma, setIsCreatingProforma] = useState(false);
     const [selectedArtworkForPopup, setSelectedArtworkForPopup] = useState<Artwork | null>(null);
@@ -617,17 +621,30 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, contac
         onUpdateInquiry({ ...inquiry, catalogShared: !inquiry.catalogShared });
     };
 
-    // Save the proforma, then hand over the PDF (with artwork images) right away.
-    const handleCreateProforma = async (data: NewInvoice) => {
-        const created = await onAddInvoice(data);
-        setIsCreatingProforma(false);
-        toast.success(`Proforma ${created.invoiceNumber} created`);
+    const billing = useBilling();
+    const pdf = async (doc: BillingDoc) => {
         try {
-            await exportProformaPdf(created, artworks);
+            await exportDocPdf(doc, billing.settings, artworks, 'download');
         } catch (e) {
             console.error('Proforma PDF failed:', e);
-            toast.error('Saved, but the PDF could not be created. Use the PDF button to retry.');
+            toast.error('Could not create the PDF. Please try again.');
         }
+    };
+    // A proforma for this inquiry: its customer and pieces, ready to edit.
+    const startProforma = (): BillingDoc => ({
+        ...newDoc('proforma', billing.settings, billing.settings.stores[0]?.id ?? '', Date.now()),
+        inquiryId: inquiry.id,
+        party: {
+            ...newDoc('proforma', billing.settings, '', 0).party,
+            name: inquiry.customerName, phone: inquiry.customerPhone, email: inquiry.customerEmail, address: inquiry.customerAddress ?? '',
+        },
+        lines: linkedArtworks.map(art => artworkLine(art, billing.settings)),
+    });
+    // Saved: hand over the PDF (with artwork images) right away.
+    const handleCreatedProforma = async (created: BillingDoc) => {
+        setIsCreatingProforma(false);
+        toast.success(`Proforma ${created.number || '(numbered when online)'} created`);
+        await pdf(created);
     };
 
     // Uploads can finish after other edits (or each other), so append to the
@@ -802,12 +819,15 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, contac
                             {proformas.map(proforma => (
                                 <div key={proforma.id} className="flex items-center justify-between gap-2">
                                     <div className="min-w-0">
-                                        <p className="text-sm font-serif text-gray-900 dark:text-white truncate">{proforma.invoiceNumber}</p>
+                                        <p className="text-sm font-serif text-gray-900 dark:text-white truncate">{proforma.number || 'Draft'}</p>
                                         <p className="text-[11px] text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                                            ₹{proforma.total.toLocaleString('en-IN')} • {proforma.items.length} {proforma.items.length === 1 ? 'artwork' : 'artworks'} • {proforma.status}
+                                            {rupeesText(docTotals(proforma, billing.settings).total)} • {proforma.lines.length} {proforma.lines.length === 1 ? 'item' : 'items'} • {proforma.status}
                                         </p>
                                     </div>
-                                    <ProformaPdfActions invoice={proforma} artworks={artworks} compact />
+                                    <button type="button" onClick={() => { void pdf(proforma); }}
+                                        className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-widest active-scale neu-raised-sm neu-btn text-gold-700 dark:text-gold-300">
+                                        <FileText size={13} /> PDF
+                                    </button>
                                 </div>
                             ))}
                         </div>
@@ -855,22 +875,9 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, contac
                 )}
 
                 {isCreatingProforma && (
-                    <InvoiceFormModal
-                        prefill={{
-                            customerName: inquiry.customerName,
-                            customerPhone: inquiry.customerPhone,
-                            customerEmail: inquiry.customerEmail,
-                            customerAddress: inquiry.customerAddress,
-                            inquiryId: inquiry.id,
-                            items: linkedArtworks.map(art => ({ artworkId: art.id, title: art.title, price: art.price })),
-                        }}
-                        artworks={artworks}
-                        contacts={contacts}
-                        saveLabel="Save & PDF"
-                        onClose={() => setIsCreatingProforma(false)}
-                        onSave={handleCreateProforma}
-                        onArtworkClick={onArtworkClick}
-                    />
+                    <DocEditor initial={startProforma()} onClose={() => setIsCreatingProforma(false)}
+                        onSaved={created => { void handleCreatedProforma(created); }}
+                        onSetup={() => toast('Finish the setup in Billing (the ⚙ button).')} />
                 )}
                 {isEditing && (
                     <InquiryFormModal

@@ -2,6 +2,7 @@
 // endpoint (frontend/deltaSync.ts). Extracted so both can import them without
 // a circular import between the two modules.
 import { databaseKey } from './workerEnv';
+import { toBillingDoc, type BillingDoc } from './invoicing';
 
 /**
  * No cross-origin access to the API. Every browser page calls it on its own
@@ -173,9 +174,9 @@ export function rowToInquiryMessage(row: Record<string, unknown>): any {
   };
 }
 
-/** The whole Invoice JSON lives in the `data` column (shape owned by the app). */
-export function rowToInvoice(row: Record<string, unknown>): any {
-  return JSON.parse(row.data as string);
+/** The whole document lives in the `data` column; proformas from before Billing are converted. */
+export function rowToInvoice(row: Record<string, unknown>): BillingDoc {
+  return toBillingDoc(JSON.parse(row.data as string));
 }
 
 export function rowToEvent(row: Record<string, unknown>): any {

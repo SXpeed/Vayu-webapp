@@ -88,7 +88,7 @@ async function takeStoredPushTarget(): Promise<PushTarget | null> {
 const viewLoaders = {
     ArtworksView: () => import('./views/ArtworksView'),
     CatalogsView: () => import('./views/CatalogsView'),
-    InvoiceView: () => import('./views/InvoiceView'),
+    BillingView: () => import('./views/billing/BillingView'),
     CollectionsView: () => import('./views/CollectionsView'),
     ProfileView: () => import('./views/ProfileView'),
     ArtworkDetailView: () => import('./views/ArtworkDetailView'),
@@ -105,7 +105,7 @@ const viewLoaders = {
 
 const ArtworksView = lazy(() => viewLoaders.ArtworksView().then(m => ({ default: m.ArtworksView })));
 const CatalogsView = lazy(() => viewLoaders.CatalogsView().then(m => ({ default: m.CatalogsView })));
-const InvoiceView = lazy(() => viewLoaders.InvoiceView().then(m => ({ default: m.InvoiceView })));
+const BillingScreen = lazy(() => viewLoaders.BillingView().then(m => ({ default: m.BillingScreen })));
 const CollectionsView = lazy(() => viewLoaders.CollectionsView().then(m => ({ default: m.CollectionsView })));
 const ProfileView = lazy(() => viewLoaders.ProfileView().then(m => ({ default: m.ProfileView })));
 const ArtworkDetailView = lazy(() => viewLoaders.ArtworkDetailView().then(m => ({ default: m.ArtworkDetailView })));
@@ -522,7 +522,7 @@ const App: React.FC = () => {
             case 'attendance':
                 return authUser ? <AttendanceView authUser={authUser} canManage={can('attendance', 'edit')} onBack={() => navigateTo('home')} /> : null;
             case 'invoice':
-                return <InvoiceView invoices={invoices} artworks={artworks} contacts={contacts} onAddInvoice={handlers.handleAddInvoice} onUpdateInvoice={handlers.handleUpdateInvoice} onDeleteInvoice={handlers.handleDeleteInvoice} onArtworkClick={handleArtworkClick} />;
+                return <BillingScreen docs={invoices} artworks={artworks} contacts={contacts} handlers={handlers} onArtworkClick={handleArtworkClick} onCollectPayment={() => navigateTo('payments')} />;
             case 'inquiry':
                 return (
                     <InquiryView
@@ -536,7 +536,7 @@ const App: React.FC = () => {
                         onArtworkClick={handleArtworkClick}
                         inquiryMessages={inquiryMessages}
                         invoices={invoices}
-                        onAddInvoice={handlers.handleAddInvoice}
+                        billingHandlers={handlers}
                         teamMembers={teamMembers}
                         currentUserId={userProfile?.id || authUser?.id || ''}
                         onSendInquiryMessage={handlers.handleSendInquiryMessage}

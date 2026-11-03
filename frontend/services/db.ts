@@ -1,6 +1,7 @@
 import { currentWorkspace } from './workspace';
 import { Artwork, CalendarEvent, Catalog, Collection, Contact, Invoice, Inquiry, Conversation, Message, InquiryMessage, UserProfile } from '../types';
 import type { Sale, SaleInput, SalesSummary } from '../salesRules';
+import { toBillingDoc } from '../invoicing';
 
 const STORAGE_KEYS = {
   users: 'vayu_users',
@@ -19,6 +20,7 @@ const STORAGE_KEYS = {
   syncMark: 'vayu_sync_mark',
   seedVersion: 'vayu_seed_version',
   lastSaleTags: 'vayu.sales.lastTags',
+  billingSettings: 'vayu.billing.settings',
 };
 
 // Bumped to 3: mock/dummy data removed. Migration cleans old mock IDs
@@ -108,6 +110,11 @@ export const db = {
         if (key && names.some(name => key === name || key.startsWith(`${name}@`))) localStorage.removeItem(key);
       }
     } catch { /* unavailable */ }
+  },
+
+  /** Where this workspace's copy of the billing setup is kept (it changes with the workspace). */
+  billingSettingsKey(): string {
+    return scoped(STORAGE_KEYS.billingSettings);
   },
 
   /** The tags of the last sale recorded in this workspace (an event's sales share its tag). */
@@ -254,7 +261,8 @@ export const db = {
 
   // Invoices
   getInvoices(): Promise<Invoice[]> {
-    return settle(() => getArray<Invoice>(STORAGE_KEYS.invoices).sort((a, b) => b.date - a.date));
+    // Copies saved before Billing hold the old proforma shape.
+    return settle(() => getArray<unknown>(STORAGE_KEYS.invoices).map(toBillingDoc).sort((a, b) => b.date - a.date));
   },
   saveInvoice(invoice: Invoice): Promise<void> {
     return settle(() => setArray(STORAGE_KEYS.invoices, upsertById(getArray<Invoice>(STORAGE_KEYS.invoices), invoice)));

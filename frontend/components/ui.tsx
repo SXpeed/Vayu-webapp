@@ -485,14 +485,14 @@ export const PrimaryIconButton: React.FC<IconButtonProps> = ({ onClick, label, i
     </button>
 );
 
-/** Subtle raised secondary action. */
+/** Subtle raised secondary action. Black icon, gold in dark mode (the page sets no text colour, so an uncoloured icon went black on black). */
 export const GhostIconButton: React.FC<IconButtonProps> = ({ onClick, label, icon, disabled = false }) => (
     <button
         onClick={onClick}
         aria-label={label}
         title={label}
         disabled={disabled}
-        className="w-9 h-9 shrink-0 neu-raised-sm neu-btn rounded-full flex items-center justify-center active-scale disabled:opacity-40 disabled:pointer-events-none"
+        className="w-9 h-9 shrink-0 neu-raised-sm neu-btn rounded-full flex items-center justify-center text-brand-900 dark:text-gold-400 active-scale disabled:opacity-40 disabled:pointer-events-none"
     >
         {icon}
     </button>

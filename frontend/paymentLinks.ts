@@ -6,13 +6,15 @@ import { ADMIN_ROLE_ID } from './permissions';
 import { err, json, runSetupOnce } from './rows';
 import { timingSafeEqual, type Ctx, type Env, type SessionData } from './workerEnv';
 import { getSession } from './workerRoles';
+import { docTotals, linkProblem, toBillingDoc, type BillingDoc } from './invoicing';
+import { readBillingSettings } from './invoices';
 import { orgStorageEnv } from './orgApp';
 import { queueHubNotify } from './deltaSync';
 import { razorpay, razorpayCredentials, signRazorpayBody, verifiedRazorpayKeys } from './platform/payments';
 import { maskKeyId } from './platform/secrets';
 import { recordProcessed, recordProcessingFailure, recordReconcile, recordRejection, recordVerified, safeError, type ReconcileOutcome } from './platform/webhookHealth';
 import {
-  CURRENCY, amountProblem, idempotencyKey, invoiceTotals, maxPaise, outstandingPaise, overrideNeeded, overrideReason,
+  CURRENCY, amountProblem, idempotencyKey, maxPaise, outstandingPaise, overrideNeeded, overrideReason,
   nextLinkStatus, referenceIdFor, testModeRefusal, requestFingerprint, requestedPaise, type InvoiceLike, type InvoiceTotals, type OverrideKind,
 } from './paymentLinkPolicy';
 import { toPaymentDetail, type PaymentDetail } from './platform/razorpayDetails';
@@ -361,19 +363,22 @@ interface LinkRequestBody {
  * the amount asked for. Overrides (more than outstanding, or a discount)
  * need the workspace admin role and a reason.
  */
-/** This workspace's invoice and its recomputed totals (another business's invoice isn't in this database). */
+/** This workspace's invoice and its totals worked out here (another business's invoice isn't in this database). */
 async function linkInvoice(ctx: Ctx, invoiceId: unknown): Promise<{ id: string; invoice: InvoiceLike; totals: InvoiceTotals } | Response> {
   const notFound = json({ error: 'Invoice not found', code: 'invoice_not_found' }, 404);
   if (typeof invoiceId !== 'string' || invoiceId.length > 128) return notFound;
   await ensureInvoicesTable(ctx.env.VAYU_DB);
   const row = await ctx.env.VAYU_DB.prepare('SELECT data FROM invoices WHERE id = ?').bind(invoiceId).first<{ data: string }>();
-  let invoice: InvoiceLike | null = null;
-  try { invoice = row ? JSON.parse(row.data) as InvoiceLike : null; } catch { invoice = null; }
-  if (!invoice) return notFound;
-  if (invoice.status === 'Paid') return json({ error: 'This invoice is already marked paid.', code: 'invoice_paid' }, 409);
-  const totals = invoiceTotals(invoice);
-  if (!totals) return json({ error: "This invoice's total doesn't match its items and tax. Open it, check it and save it again.", code: 'invoice_total_mismatch' }, 409);
-  return { id: invoiceId, invoice, totals };
+  let doc: BillingDoc | null = null;
+  try { doc = row ? toBillingDoc(JSON.parse(row.data)) : null; } catch { doc = null; }
+  if (!doc) return notFound;
+  const refused = linkProblem(doc);
+  if (refused) return json({ error: refused, code: doc.status === 'Paid' ? 'invoice_paid' : 'invoice_not_payable' }, 409);
+  // The same totals the app shows and the PDF prints: lines, discounts, GST, round-off.
+  const t = docTotals(doc, await readBillingSettings(ctx.env.VAYU_KV));
+  if (t.total <= 0 || !Number.isSafeInteger(t.total)) return json({ error: 'This invoice has nothing to pay. Open it, check its items and save it again.', code: 'invoice_total_mismatch' }, 409);
+  const totals: InvoiceTotals = { itemsPaise: t.taxable, taxRate: t.taxable ? Math.round((t.tax * 10_000) / t.taxable) / 100 : 0, taxPaise: t.tax, totalPaise: t.total };
+  return { id: invoiceId, invoice: { id: invoiceId, invoiceNumber: doc.number, status: doc.status }, totals };
 }
 
 /** An override's record, or why it isn't allowed: workspace admins only, with a reason. */

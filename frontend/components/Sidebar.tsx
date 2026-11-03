@@ -39,7 +39,7 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     {
         title: 'Commerce',
         items: [
-            { id: 'invoice', label: 'Invoices', icon: FileText },
+            { id: 'invoice', label: 'Billing', icon: FileText },
             { id: 'payments', label: 'Payments', icon: CreditCard },
             { id: 'sales', label: 'Sales', icon: HandCoins },
             { id: 'inquiry', label: 'Inquiry', icon: Search },

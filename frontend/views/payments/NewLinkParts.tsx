@@ -4,6 +4,8 @@ import { Field, Input, Select, ToggleRow } from '../../components/ui';
 import { formatRupees } from '../../components/PaymentAttempts';
 import { StatStrip } from '../../components/StatStrip';
 import type { Invoice, PaymentAccountInfo, PaymentLink, PaymentSummary } from '../../types';
+import { docTotals, linkProblem } from '../../invoicing';
+import { useBillingSettings } from '../../services/invoiceService';
 
 // Pieces of the "New payment link" form: which account and mode it uses, the
 // invoice it can collect against, and an admin's override. The server
@@ -16,8 +18,6 @@ export function rupeesToPaise(text: string): number | null {
     return Number(m[1]) * 100 + Number((m[2] ?? '').padEnd(2, '0'));
 }
 
-/** An invoice's total in whole paise, as the app shows it. */
-const invoicePaise = (inv: Invoice) => Math.round(inv.total * 100);
 
 /** Which account and mode links are made in; for a test account, the confirmation. */
 export const AccountNotice: React.FC<{ info: PaymentAccountInfo | null; confirmTest: boolean; onConfirmTest: (v: boolean) => void }> = ({ info, confirmTest, onConfirmTest }) => {
@@ -42,16 +42,17 @@ export const AccountNotice: React.FC<{ info: PaymentAccountInfo | null; confirmT
     );
 };
 
-/** Proforma invoices a link can collect against (not yet marked paid). */
+/** Proformas and issued tax invoices a link can collect against (the server applies the same rule). */
 export const InvoiceField: React.FC<{ invoices: Invoice[]; value: string; onChange: (id: string) => void }> = ({ invoices, value, onChange }) => {
-    const open = invoices.filter(i => i.status !== 'Paid');
+    const settings = useBillingSettings();
+    const open = invoices.filter(i => !linkProblem(i));
     if (open.length === 0) return null;
     return (
-        <Field label="For proforma invoice" htmlFor="pay-invoice" hint="The server works out what’s still to pay from the invoice.">
+        <Field label="For invoice" htmlFor="pay-invoice" hint="The server works out what’s still to pay from the invoice.">
             <Select id="pay-invoice" value={value} onChange={e => onChange(e.target.value)}>
                 <option value="">None: enter any amount</option>
                 {open.map(i => (
-                    <option key={i.id} value={i.id}>{`${i.invoiceNumber || 'Invoice'} · ${i.customerName} · ${formatRupees(invoicePaise(i))}`}</option>
+                    <option key={i.id} value={i.id}>{`${i.number || 'Draft proforma'} · ${i.party.name} · ${formatRupees(docTotals(i, settings).total)}`}</option>
                 ))}
             </Select>
         </Field>

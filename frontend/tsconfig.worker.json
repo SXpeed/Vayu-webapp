@@ -3,11 +3,46 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2022"],
-    "types": ["@cloudflare/workers-types"],
+    "lib": [
+      "ES2022"
+    ],
+    "types": [
+      "@cloudflare/workers-types"
+    ],
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["worker.ts", "hosts/**/*.ts", "types/**/*.d.ts"]
+  "include": [
+    "worker.ts",
+    "hosts/**/*.ts",
+    "types/**/*.d.ts",
+    "webpush.ts",
+    "workerEnv.ts",
+    "workerRoles.ts",
+    "rows.ts",
+    "deltaSync.ts",
+    "realtime.ts",
+    "realtimeTickets.ts",
+    "entityAccess.ts",
+    "privateRooms.ts",
+    "messageReceipts.ts",
+    "pushRules.ts",
+    "viewingRooms.ts",
+    "staffRoster.ts",
+    "sales.ts",
+    "invoices.ts",
+    "paymentLinks.ts",
+    "sessionCookies.ts",
+    "rateLimits.ts",
+    "fileAuth.ts",
+    "deviceSessions.ts",
+    "planUsage.ts",
+    "orgApp.ts",
+    "orgAppDb.ts",
+    "orgStorage.ts",
+    "orgTeam.ts",
+    "inbox.ts",
+    "contactStore.ts"
+  ]
 }

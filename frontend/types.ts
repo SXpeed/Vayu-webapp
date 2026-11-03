@@ -1,3 +1,5 @@
+import type { BillingDoc } from './invoicing';
+
 export type ArtworkStatus = 'Available' | 'Sold' | 'Reserved';
 
 export interface Artwork {
@@ -100,32 +102,8 @@ export interface PdfOptions {
 
 export type CatalogTheme = 1 | 2 | 3 | 4 | 5;
 
-export interface InvoiceItem {
-    /** '' for an item that isn't in the inventory. */
-    artworkId: string;
-    title: string;
-    price: number;
-    /** An item not in the inventory: its own photos (the first shows on the proforma). */
-    photoUrls?: string[];
-}
-
-/** A proforma invoice (quotation). Synced through the server; a copy is kept on each device for offline use. */
-export interface Invoice {
-    id: string;
-    invoiceNumber: string;
-    customerName: string;
-    customerEmail: string;
-    customerPhone?: string;
-    customerAddress?: string;
-    /** Set when the proforma was generated from an inquiry. */
-    inquiryId?: string;
-    items: InvoiceItem[];
-    subtotal: number;
-    taxRate: number;
-    total: number;
-    date: number;
-    status: 'Draft' | 'Sent' | 'Paid';
-}
+/** A billing document (proforma, tax invoice, challan, credit/debit note): see invoicing.ts. */
+export type Invoice = BillingDoc;
 
 export interface Inquiry {
     id: string;

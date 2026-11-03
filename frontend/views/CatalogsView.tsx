@@ -394,7 +394,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                                     onClick={(e) => { e.stopPropagation(); void handleDownloadPdf(catalog); }}
                                     aria-label={`Download ${catalog.name}`}
                                     title="Download PDF"
-                                    className="neu-icon-btn neu-btn active-scale relative z-[2]"
+                                    className="neu-icon-btn neu-btn text-brand-900 dark:text-gold-400 active-scale relative z-[2]"
                                 >
                                     <FileDown size={14} />
                                 </button>
@@ -793,7 +793,7 @@ export const CatalogFormModal: React.FC<CatalogFormModalProps> = ({ initialData,
                             type="button"
                             onClick={() => { void handleGenerate(); }}
                             title="Save and open the PDF generator"
-                            className="text-gray-600 dark:text-gray-300 font-medium px-2 py-2 uppercase tracking-wider text-xs active-scale flex items-center gap-1"
+                            className="text-brand-900 dark:text-gold-400 font-medium px-2 py-2 uppercase tracking-wider text-xs active-scale flex items-center gap-1"
                         >
                             <Download size={13} /> PDF
                         </button>

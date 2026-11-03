@@ -85,7 +85,7 @@ interface HomeViewProps {
 const QUICK_ACTIONS: { section: SectionId; view: ViewState; label: string; Icon: React.ElementType }[] = [
     { section: 'payments', view: 'payments', label: 'Payments', Icon: IndianRupee },
     { section: 'contacts', view: 'contacts', label: 'Contacts', Icon: Users },
-    { section: 'invoices', view: 'invoice', label: 'Proforma Invoice', Icon: Receipt },
+    { section: 'invoices', view: 'invoice', label: 'Billing', Icon: Receipt },
     { section: 'attendance', view: 'attendance', label: 'Attendance', Icon: Clock },
 ];
 

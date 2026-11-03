@@ -642,7 +642,7 @@ export const CatalogStudioView: React.FC<CatalogStudioViewProps> = ({
                                                 inside it — nested controls can't be told apart. */}
                                             <label
                                                 title={custom ? `Replace logo ${i + 1}` : `Upload logo ${i + 1}`}
-                                                className="absolute bottom-2 right-2 neu-icon-btn-sm text-gray-600 dark:text-gray-300 cursor-pointer active-scale"
+                                                className="absolute bottom-2 right-2 neu-icon-btn-sm text-brand-900 dark:text-gold-400 cursor-pointer active-scale"
                                             >
                                                 {uploadingLogo === opt ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
                                                 <span className="sr-only">{custom ? `Replace logo ${i + 1}` : `Upload logo ${i + 1}`}</span>
@@ -1438,7 +1438,7 @@ const EndPageTile: React.FC<{
                 </button>
                 <label
                     title="Replace"
-                    className="neu-icon-btn-sm text-gray-600 dark:text-gray-300 cursor-pointer active-scale focus-within:ring-1 focus-within:ring-[var(--ink-focus)]"
+                    className="neu-icon-btn-sm text-brand-900 dark:text-gold-400 cursor-pointer active-scale focus-within:ring-1 focus-within:ring-[var(--ink-focus)]"
                 >
                     {busy ? <Loader2 size={11} className="animate-spin" /> : <Upload size={11} />}
                     <span className="sr-only">Replace {name.toLowerCase()}</span>

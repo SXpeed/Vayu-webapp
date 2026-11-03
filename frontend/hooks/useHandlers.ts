@@ -1,14 +1,14 @@
 import { useCallback, useMemo } from 'react';
 import toast from 'react-hot-toast';
 import {
-    Artwork, CalendarEvent, Catalog, Invoice, Collection, Contact, Inquiry, Conversation,
+    Artwork, ArtworkStatus, CalendarEvent, Catalog, Invoice, Collection, Contact, Inquiry, Conversation,
     ConversationDetails, Message, MessageTag, MessageReplyTo, MessageAttachment,
     InquiryMessage, NewContact, UserProfile, MessageStatus
 } from '../types';
 import { AuthUser } from '../services/authService';
 import { db } from '../services/db';
 import { messagingService } from '../services/messagingService';
-import { invoiceService, isSyncUnavailable } from '../services/invoiceService';
+import { invoiceService } from '../services/invoiceService';
 import { artworkService } from '../services/artworkService';
 import { collectionService } from '../services/collectionService';
 import { catalogService } from '../services/catalogService';
@@ -182,59 +182,47 @@ export function useHandlers(args: HandlerArgs) {
         sendInBackground("Couldn't delete the collection", () => collectionService.deleteCollection(id), () => before && stores.collections.put(before));
     }, [stores]);
 
-    // ── Proforma invoices ─────────────────────────────────────────────────
-    // A proforma is a quotation: its artworks only become Sold once it's Paid.
-    const markPaidInvoiceArtworksSold = useCallback((invoice: Invoice) => {
-        if (invoice.status !== 'Paid') return;
-        const invoicedArtIds = new Set(invoice.items.map(item => item.artworkId));
-        const toMark = artworks.filter(art => invoicedArtIds.has(art.id) && art.status !== 'Sold');
+    // ── Billing documents ─────────────────────────────────────────────────
+    // The server numbers, locks and totals them, so each change waits for its
+    // answer and the screen shows the document as the server saved it.
+
+    /** Puts pieces in a status: an issued invoice sells them, an approval challan reserves them, a return frees them. */
+    const setArtworksStatus = useCallback((ids: string[], status: ArtworkStatus) => {
+        const wanted = new Set(ids);
+        const toMark = artworks.filter(art => wanted.has(art.id) && art.status !== status);
         if (toMark.length === 0) return;
-        const soldIds = new Set(toMark.map(art => art.id));
         for (const art of toMark) {
-            const updatedArt = { ...art, status: 'Sold' as const };
-            artworkService.updateArtwork(updatedArt).catch(e => console.error('D1 sync failed (proforma artwork status):', e));
-            db.saveArtwork(updatedArt).catch(e => console.error('Local save failed (proforma artwork status):', e));
+            const updatedArt = { ...art, status };
+            artworkService.updateArtwork(updatedArt).catch(e => console.error('D1 sync failed (billing artwork status):', e));
+            db.saveArtwork(updatedArt).catch(e => console.error('Local save failed (billing artwork status):', e));
         }
-        setArtworks(prev => prev.map(art => (soldIds.has(art.id) ? { ...art, status: 'Sold' as const } : art)));
+        const marked = new Set(toMark.map(art => art.id));
+        setArtworks(prev => prev.map(art => (marked.has(art.id) ? { ...art, status } : art)));
     }, [artworks, setArtworks]);
 
-    /**
-     * Shown and kept on the device at once; then the server, so every device
-     * sees it. A proforma stays on the device if the server can't take it
-     * (it could always be made offline), with a message saying so.
-     */
-    const syncInvoice = useCallback(async (invoice: Invoice) => {
-        await stores.invoices.put(invoice);
-        invoiceService.saveInvoice(invoice).catch((err: unknown) => {
-            if (!isSyncUnavailable(err)) {
-                toast.error(`Saved on this device only — ${(err as Error).message || 'the server could not be reached'}`);
-            }
-        });
+    const handleSaveInvoice = useCallback(async (doc: Invoice): Promise<Invoice> => {
+        const saved = await invoiceService.saveInvoice(doc);
+        await stores.invoices.put(saved);
+        return saved;
     }, [stores]);
 
-    const handleAddInvoice = useCallback(async (newInv: Omit<Invoice, 'id' | 'date'>): Promise<Invoice> => {
-        const invoice: Invoice = { ...newInv, id: `inv_${Date.now()}`, date: Date.now() };
-        await syncInvoice(invoice);
-        markPaidInvoiceArtworksSold(invoice);
-        return invoice;
-    }, [markPaidInvoiceArtworksSold, syncInvoice]);
+    /** Numbers and locks a draft; the documents it changed (a converted proforma, an invoiced challan) come back too. */
+    const handleIssueInvoice = useCallback(async (id: string): Promise<Invoice[]> => {
+        const changed = await invoiceService.issueInvoice(id);
+        await Promise.all(changed.map(doc => stores.invoices.put(doc)));
+        return changed;
+    }, [stores]);
 
-    const handleUpdateInvoice = useCallback(async (updatedInv: Invoice) => {
-        await syncInvoice(updatedInv);
-        markPaidInvoiceArtworksSold(updatedInv);
-    }, [markPaidInvoiceArtworksSold, syncInvoice]);
+    const handleCancelInvoice = useCallback(async (id: string, reason: string): Promise<Invoice> => {
+        const cancelled = await invoiceService.cancelInvoice(id, reason);
+        await stores.invoices.put(cancelled);
+        return cancelled;
+    }, [stores]);
 
+    /** Drafts and proformas only (the server refuses the rest); archived for admin review. */
     const handleDeleteInvoice = useCallback(async (id: string) => {
-        const before = await stores.invoices.find(id);
+        await invoiceService.deleteInvoice(id);
         await stores.invoices.drop(id);
-        sendInBackground("Couldn't delete it on the server", async () => {
-            try {
-                await invoiceService.deleteInvoice(id);
-            } catch (err) {
-                // No server sync for invoices: deleting it here is enough.
-                if (!isSyncUnavailable(err)) throw err;
-            }
-        }, () => before && stores.invoices.put(before));
     }, [stores]);
 
     // ── Inquiries ─────────────────────────────────────────────────────────
@@ -598,7 +586,7 @@ export function useHandlers(args: HandlerArgs) {
         // Collections
         handleAddCollection, handleUpdateCollection, handleDeleteCollection,
         // Invoices
-        handleAddInvoice, handleUpdateInvoice, handleDeleteInvoice,
+        handleSaveInvoice, handleIssueInvoice, handleCancelInvoice, handleDeleteInvoice, setArtworksStatus,
         // Inquiries
         handleAddInquiry, handleUpdateInquiry, handleDeleteInquiry,
         // Calendar events

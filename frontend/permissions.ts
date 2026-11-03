@@ -30,7 +30,7 @@ export const SECTIONS: SectionDef[] = [
     { id: 'catalogs', label: 'Catalogs', description: 'Catalog PDFs and the catalog builder' },
     { id: 'contacts', label: 'Contacts', description: 'Client phone numbers and emails' },
     { id: 'inquiries', label: 'Inquiries', description: 'Customer inquiries and their chats' },
-    { id: 'invoices', label: 'Proforma invoices', description: 'Proforma invoices (stored on each device)' },
+    { id: 'invoices', label: 'Billing', description: 'Proformas, tax invoices, challans, credit notes and the billing setup' },
     { id: 'payments', label: 'Payments', description: 'Payment links' },
     {
         id: 'sales', label: 'Sales', description: 'Store sales paid offline, and the month’s figures on Home. Record adds, changes and deletes sales',

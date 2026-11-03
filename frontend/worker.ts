@@ -5,6 +5,7 @@ import {
 } from './permissions';
 import { staffRosterRoutes } from './staffRoster';
 import { salesRoutes } from './sales';
+import { ensureInvoicesTable, invoiceRoutes } from './invoices';
 import { paymentLinkRoutes, reconcileAllWorkspaces, routeOrgPaymentEvent } from './paymentLinks';
 import {
   CORS, json, err, normalizeRoute, rowToConversation, rowToMessage, rowToArtwork, editionColumn,
@@ -2107,8 +2108,9 @@ async function cleanupArchivedFiles(r2: R2Bucket, entity: string, payload: Recor
     } else if (entity === 'inquiry' && typeof payload.image_urls === 'string') {
       await deleteUploadedFiles(r2, JSON.parse(payload.image_urls || '[]'));
     } else if (entity === 'invoice' && typeof payload.data === 'string') {
-      // Photos of items not in the inventory belong to the proforma alone.
-      const items = (JSON.parse(payload.data || '{}') as { items?: { photoUrls?: unknown }[] }).items ?? [];
+      // Photos of items not in the inventory belong to the document alone (`items`: proformas from before Billing).
+      const saved = JSON.parse(payload.data || '{}') as { items?: { photoUrls?: unknown }[]; lines?: { photoUrls?: unknown }[] };
+      const items = [...(saved.items ?? []), ...(saved.lines ?? [])];
       await deleteUploadedFiles(r2, items.flatMap(i => (Array.isArray(i.photoUrls) ? i.photoUrls.filter((u): u is string => typeof u === 'string') : [])));
     }
   } catch (e) {
@@ -3607,93 +3609,6 @@ async function handleAttendanceRecordClose(ctx: Ctx): Promise<Response> {
   return json(rowToAttendance({ ...rec, check_out_at: checkOutAt, check_out_lat: null, check_out_lng: null, check_out_accuracy: null, status: 'checked-out' }));
 }
 
-// ── Proforma invoices ──────────────────────────────────────────────────────
-// Used to live only in each device's localStorage, so they never synced
-// between phones. The whole invoice is stored as JSON (its shape is owned by
-// the app), with a few columns alongside for ordering and the archive.
-
-function ensureInvoicesTable(db: D1Database): Promise<void> {
-  return runSetupOnce(db, 'invoicesTable', () => db.prepare(`
-      CREATE TABLE IF NOT EXISTS invoices (
-        id TEXT PRIMARY KEY,
-        invoice_number TEXT NOT NULL DEFAULT '',
-        customer_name TEXT NOT NULL DEFAULT '',
-        status TEXT NOT NULL DEFAULT 'Draft',
-        date INTEGER NOT NULL DEFAULT 0,
-        data TEXT NOT NULL DEFAULT '{}',
-        created_by TEXT,
-        created_by_name TEXT,
-        updated_at INTEGER NOT NULL DEFAULT 0
-      )
-    `).run());
-}
-
-async function handleInvoicesList(ctx: Ctx): Promise<Response> {
-  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
-  if (!session) return err('Unauthorized', 401);
-  await ensureInvoicesTable(ctx.env.VAYU_DB);
-  const results = await ctx.env.VAYU_DB.prepare('SELECT data FROM invoices ORDER BY date DESC').all();
-  const invoices = (results.results || []).map(row => {
-    try { return JSON.parse(row.data as string); } catch { return null; }
-  }).filter(Boolean);
-  return json(invoices);
-}
-
-/** PUT /invoices/:id — create or update (the app assigns ids). */
-async function handleInvoicesSave(ctx: Ctx): Promise<Response> {
-  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
-  if (!session) return err('Unauthorized', 401);
-  const invoiceId = decodeURIComponent(ctx.path.slice('/invoices/'.length));
-  const inv = await ctx.request.json() as Record<string, unknown>;
-  if (!invoiceId || inv.id !== invoiceId) return err('Invoice id mismatch', 400);
-  if (typeof inv.invoiceNumber !== 'string' || !Array.isArray(inv.items)) return err('Invalid invoice', 400);
-  await ensureInvoicesTable(ctx.env.VAYU_DB);
-  const existing = await ctx.env.VAYU_DB.prepare('SELECT created_by, created_by_name FROM invoices WHERE id = ?')
-    .bind(invoiceId).first<{ created_by: string | null; created_by_name: string | null }>();
-  await ensureChangeLogTable(ctx.env.VAYU_DB);
-  await ctx.env.VAYU_DB.batch([
-    ctx.env.VAYU_DB.prepare(
-      `INSERT OR REPLACE INTO invoices
-       (id, invoice_number, customer_name, status, date, data, created_by, created_by_name, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      invoiceId,
-      inv.invoiceNumber,
-      text(inv.customerName),
-      text(inv.status) || 'Draft',
-      Number(inv.date) || Date.now(),
-      JSON.stringify(inv),
-      existing ? existing.created_by : session.userId,
-      existing ? existing.created_by_name : session.name,
-      Date.now(),
-    ),
-    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'invoice', invoiceId, 'put', { actorId: session.userId }),
-  ]);
-  queueHubNotify(ctx, [{ entity: 'invoice', id: invoiceId, op: 'put' }]);
-  logEntityChange(ctx, session, existing ? 'updated' : 'created', 'invoice', invoiceId,
-    `${existing ? 'Updated' : 'Created'} proforma ${inv.invoiceNumber} (${text(inv.customerName)})`);
-  return json(inv, existing ? 200 : 201);
-}
-
-async function handleInvoicesDelete(ctx: Ctx): Promise<Response> {
-  const session = await getSession(ctx.request, ctx.env.VAYU_KV);
-  if (!session) return err('Unauthorized', 401);
-  const invoiceId = decodeURIComponent(ctx.path.slice('/invoices/'.length));
-  await ensureInvoicesTable(ctx.env.VAYU_DB);
-  const row = await ctx.env.VAYU_DB.prepare('SELECT * FROM invoices WHERE id = ?').bind(invoiceId).first();
-  await ensureChangeLogTable(ctx.env.VAYU_DB);
-  await ctx.env.VAYU_DB.batch([
-    ctx.env.VAYU_DB.prepare('DELETE FROM invoices WHERE id = ?').bind(invoiceId),
-    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'invoice', invoiceId, 'delete', { actorId: session.userId }),
-  ]);
-  queueHubNotify(ctx, [{ entity: 'invoice', id: invoiceId, op: 'delete' }]);
-  if (row) {
-    archiveDeletedAsync(ctx, session, 'invoice', invoiceId, `Proforma ${row.invoice_number as string}`, row);
-    logEntityChange(ctx, session, 'deleted', 'invoice', invoiceId, `Deleted proforma ${row.invoice_number as string}`);
-  }
-  return json({ success: true });
-}
-
 // ── Private viewing rooms ───────────────────────────────────────────────────
 // A curated set of artworks shared with one client on a secret link with a
 // passcode and an expiry (viewingRooms.ts has the security model). Staff
@@ -4175,9 +4090,8 @@ const routes: Route[] = [
   { method: 'DELETE', match: isPrefix('/events/'), handler: handleEventsDelete },
 
   // Contacts
-  { method: 'GET', match: isExact('/invoices'), handler: handleInvoicesList },
-  { method: 'PUT', match: isPrefix('/invoices/'), handler: handleInvoicesSave },
-  { method: 'DELETE', match: isPrefix('/invoices/'), handler: handleInvoicesDelete },
+  // Billing: proformas, tax invoices, challans, notes and the billing setup (invoices.ts).
+  ...invoiceRoutes({ logChange: logEntityChange, notify: queueHubNotify, archive: archiveDeletedAsync }),
   { method: 'GET', match: isExact('/contacts'), handler: handleContactsList },
   { method: 'POST', match: isExact('/contacts'), handler: handleContactsCreate },
   { method: 'POST', match: isExact('/contacts/import'), handler: handleContactsImport },
