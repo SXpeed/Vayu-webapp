@@ -7,6 +7,7 @@ import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { ZoomableImage } from '../components/ZoomableImage';
 import { PreviewOnlyNote } from '../components/PreviewOnlyNote';
 import { IfCan } from '../components/Layout';
+import { useBackClose } from '../hooks/useBackClose';
 
 /** Swaps the alpha channel of an `rgba(r, g, b, a)` color string. */
 const withAlpha = (rgba: string, alpha: number): string =>
@@ -66,6 +67,7 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
     const [activeImageIndex, setActiveImageIndex] = useState(0);
     const [isEditing, setIsEditing] = useState(false);
     const [isFullScreen, setIsFullScreen] = useState(false);
+    useBackClose(isFullScreen, () => setIsFullScreen(false));
     const [glowColor, setGlowColor] = useState<string>('rgba(0,0,0,0.05)');
 
     const mainCarouselRef = useRef<HTMLDivElement>(null);

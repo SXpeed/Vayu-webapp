@@ -12,6 +12,8 @@ import { contactWithKey, emailKey, phoneKey } from '../contactKeys';
 import { useInbox } from '../hooks/useInbox';
 import { realtimeService } from '../services/realtimeService';
 import { currentWorkspace } from '../services/workspace';
+import { saveBlobNow } from '../services/saveFile';
+import { useBackClose } from '../hooks/useBackClose';
 
 interface ContactsViewProps {
     contacts: Contact[];
@@ -258,12 +260,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
             SOURCE_LABELS[c.source], c.notes || '',
         ].map(csvEscape).join(','));
         const blob = new Blob(['﻿' + header + '\n' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `contacts_${new Date().toISOString().slice(0, 10)}.csv`;
-        a.click();
-        URL.revokeObjectURL(url);
+        saveBlobNow(blob, `contacts_${new Date().toISOString().slice(0, 10)}.csv`);
         toast.success(`Exported ${filtered.length} contact${filtered.length === 1 ? '' : 's'}`);
     };
 
@@ -445,15 +442,20 @@ const Popup = React.forwardRef<HTMLDivElement, { label: string; width: string; o
     ),
 );
 
-/** Closes on Escape; focuses the sheet's first control. */
+/** Closes on Escape and on phone Back; focuses the sheet's first control. */
 function useSheetKeys(onClose: () => void) {
     const ref = useRef<HTMLDivElement>(null);
+    const latest = useRef(onClose);
+    latest.current = onClose;
+    useBackClose(true, onClose);
+    // Once, on opening: onClose changes as soon as the form has edits, and re-running this
+    // moved focus to the close button after the first letter typed (a space then pressed it).
     useEffect(() => {
         ref.current?.querySelector<HTMLElement>('button, input')?.focus();
-        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') latest.current(); };
         document.addEventListener('keydown', onKey);
         return () => document.removeEventListener('keydown', onKey);
-    }, [onClose]);
+    }, []);
     return ref;
 }
 

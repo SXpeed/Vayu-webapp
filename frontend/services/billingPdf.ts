@@ -5,6 +5,7 @@
 import type { jsPDF } from 'jspdf';
 import type { Artwork } from '../types';
 import { getThumbUrl } from './storageService';
+import { saveBlob } from './saveFile';
 import { amountInWords, formatPaise, sgstLabel, stateLabel, type TaxMode, type Totals } from '../gstRules';
 import {
     docTotals, isBillOfSupply, KIND_LABEL, kindLabel, PURPOSE_LABEL, RETURNABLE, sellerOf, SUPPLY_LABEL, taxModeOf,
@@ -683,8 +684,8 @@ export async function exportDocPdf(doc: BillingDoc, s: BillingSettings, artworks
             return 'shared';
         }
     }
-    const url = URL.createObjectURL(blob);
     if (how === 'print') {
+        const url = URL.createObjectURL(blob);
         const frame = document.createElement('iframe');
         frame.style.cssText = 'position:fixed;width:0;height:0;border:0;';
         frame.src = url;
@@ -693,12 +694,5 @@ export async function exportDocPdf(doc: BillingDoc, s: BillingSettings, artworks
         setTimeout(() => { frame.remove(); URL.revokeObjectURL(url); }, 60_000);
         return 'printed';
     }
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = name;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
-    return 'downloaded';
+    return saveBlob(blob, name);
 }

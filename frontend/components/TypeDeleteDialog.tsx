@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useBackClose } from '../hooks/useBackClose';
 import { createPortal } from 'react-dom';
 import { TriangleAlert } from 'lucide-react';
 
@@ -30,6 +31,7 @@ export const TypeDeleteDialog: React.FC<TypeDeleteDialogProps> = ({
     onConfirm,
 }) => {
     const [typed, setTyped] = useState('');
+    useBackClose(isOpen, onClose);
     const canConfirm = typed.trim() === confirmWord;
 
     useEffect(() => {

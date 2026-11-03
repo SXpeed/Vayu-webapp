@@ -626,6 +626,7 @@ const InquiryDetailModal: React.FC<InquiryDetailModalProps> = ({ inquiry, contac
         try {
             await exportDocPdf(doc, billing.settings, artworks, 'download');
         } catch (e) {
+            if ((e as Error).name === 'AbortError') return; // closed the iPhone share sheet
             console.error('Proforma PDF failed:', e);
             toast.error('Could not create the PDF. Please try again.');
         }

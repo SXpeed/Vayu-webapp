@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useBackClose } from '../hooks/useBackClose';
 import { CalendarEvent, UserProfile } from '../types';
 import { apiCall } from '../services/apiClient';
 import { eventColor, eventTimeLabel } from '../services/eventService';
@@ -116,6 +117,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack, onUp
         setFloatClosing(true);
         window.setTimeout(() => { setOpenMonth(null); setFloatClosing(false); }, 220);
     };
+    // Closed once its closing animation starts, so Back runs the same animation as the ✕.
+    useBackClose(openMonth !== null && !floatClosing, closeFloat);
 
     // Esc closes the floating month.
     useEffect(() => {

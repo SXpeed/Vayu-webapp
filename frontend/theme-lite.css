@@ -3,8 +3,9 @@
  * <html class="dark" data-oled="on"> (appStyle.ts; both set before first
  * paint in index.html). Org app only, imported after theme-atelier.css.
  *
- * Lite is for phones: flat surfaces (no shadows, no blur) and no entrance
- * animations or transitions, so the GPU only scrolls. Like Atelier it changes
+ * Lite is for phones: flat surfaces (no shadows, no blur), no card entrances,
+ * and motion only where the GPU moves an already-drawn layer (opacity and
+ * transform): taps, the dock pill, toggles, sheets and a quick page fade. Like Atelier it changes
  * colours and depth only, never sizes or positions. Spinners keep spinning. */
 
 /* ── Lite tokens ──────────────────────────────────────────────────────── */
@@ -42,26 +43,52 @@ html[data-skin='lite'] :is(.neu-inset, .neu-field, .neu-search, .neu-toggle, .ne
 
 html[data-skin='lite'] .neu-dock-well {
     background: var(--lite-ink);
+    /* Its own "transform 0.45s, opacity 0.25s", in the order of the Lite
+     * property list below (opacity, then transform). */
+    transition-duration: 0.25s, 0.45s !important; /* NOSONAR: pairs with that !important list */
 }
 
 html[data-skin='lite'] .neu-dock-item[aria-current='page'] {
     color: var(--lite-on-ink);
 }
 
-/* ── Lite: no motion, no blur ─────────────────────────────────────────── */
+/* ── Lite: light motion, no blur ──────────────────────────────────────── */
 /* The entrance classes start at opacity 0 (index.css), so put it back. */
 html[data-skin='lite'] :is(.animate-fade-in-up, .animate-fade-in, .animate-scale-in) {
     animation: none !important; /* NOSONAR: beats index.css's !important delays */
     opacity: 1;
 }
 
+/* Transitions only move or fade; colour, shadow and size changes snap, since
+ * those repaint on every frame. Durations stay as each element set them (they
+ * pair with these two properties by position; the dock pill, the one place
+ * where that swaps them, is set back below). No duration is forced here:
+ * elements with none (the pinch-zoom box, moved every frame) must stay instant. */
 html[data-skin='lite'] *,
 html[data-skin='lite'] *::before,
 html[data-skin='lite'] *::after {
-    transition: none !important; /* NOSONAR: Lite has to beat every transition, inline ones included */
+    transition-property: opacity, transform !important; /* NOSONAR: Lite has to beat every transition, inline ones included */
     backdrop-filter: none !important; /* NOSONAR: same, for Tailwind's backdrop-blur-* */
     -webkit-backdrop-filter: none !important; /* NOSONAR: same */
 }
+
+@media (prefers-reduced-motion: reduce) {
+    html[data-skin='lite'] *,
+    html[data-skin='lite'] *::before,
+    html[data-skin='lite'] *::after {
+        transition: none !important; /* NOSONAR: reduced motion has to beat every transition */
+    }
+}
+
+/* Screen changes: a short cross-fade, nothing else (appStyle.ts starts it). */
+html[data-skin='lite']::view-transition-old(root),
+html[data-skin='lite']::view-transition-new(root) {
+    animation-duration: 0.16s;
+    animation-timing-function: ease-out;
+}
+
+html[data-skin='lite'] .neu-dock-scrim { view-transition-name: at-dock; }
+html[data-skin='lite'] [data-app-sidebar] { view-transition-name: at-sidebar; }
 
 /* Scrims lose their blur, so they get more cover instead. */
 html[data-skin='lite'] :is(.neu-scrim, .neu-portal-scrim) {

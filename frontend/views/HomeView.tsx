@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { useBackClose } from '../hooks/useBackClose';
 import { Artwork, CalendarEvent, Catalog, EventTodo, ViewState, UserProfile } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
@@ -126,6 +127,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, events, 
 
     // ── Upcoming events (calendar) ────────────────────────────────────────
     const [showEventModal, setShowEventModal] = useState(false);
+    useBackClose(showEventModal, () => setShowEventModal(false));
     const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
     const [eventForm, setEventForm] = useState({ ...EMPTY_EVENT_FORM });
     const [isSavingEvent, setIsSavingEvent] = useState(false);

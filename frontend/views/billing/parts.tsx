@@ -4,6 +4,7 @@ import React, { useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { ArrowLeft, X } from 'lucide-react';
 import { SectionTitle } from '../../components/ui';
+import { useBackClose } from '../../hooks/useBackClose';
 
 /** Full-screen sheet with the app's sheet header (back/close, title, right-side actions). */
 export function Sheet({ title, subtitle, onClose, close = 'back', actions, z = 'z-50', children }: Readonly<{
@@ -15,6 +16,7 @@ export function Sheet({ title, subtitle, onClose, close = 'back', actions, z = '
     z?: string;
     children?: React.ReactNode;
 }>) {
+    useBackClose(true, onClose);
     return (
         <dialog open className={`neu-sheet ${z} animate-fade-in-up`} aria-label={title}>
             <div className="flex justify-between items-center gap-2 p-3 pt-[calc(1.75rem+var(--safe-top))] lg:pt-4 z-10">
@@ -36,6 +38,7 @@ export function Sheet({ title, subtitle, onClose, close = 'back', actions, z = '
 
 /** Centred dialog for short forms (payment, cancel reason, returns). Escape closes it. */
 export function Modal({ title, onClose, children, footer }: Readonly<{ title: string; onClose: () => void; children?: React.ReactNode; footer?: React.ReactNode }>) {
+    useBackClose(true, onClose);
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
         globalThis.addEventListener('keydown', onKey);

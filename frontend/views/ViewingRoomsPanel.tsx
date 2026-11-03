@@ -2,6 +2,7 @@
 // a secret link and passcode, see views and inquiries, switch a room off.
 // The client's page is room/RoomPage.tsx; the rules are in viewingRooms.ts.
 import React, { useEffect, useState } from 'react';
+import { useBackClose } from '../hooks/useBackClose';
 import toast from 'react-hot-toast';
 import { Copy, Eye, Image as ImageIcon, KeyRound, Lock, MessageCircle, Pencil, Plus, Power, Share2, Trash2, X } from 'lucide-react';
 import { currentWorkspace } from '../services/workspace';
@@ -204,6 +205,7 @@ const RoomCard: React.FC<{
 
 /** The link, and the passcode when it was just made, ready to send. */
 const ShareCard: React.FC<{ room: StaffRoom; onClose: () => void }> = ({ room, onClose }) => {
+    useBackClose(true, onClose);
     const link = roomLink(room.token);
     const text = room.passcode ? shareText(room, room.passcode) : null;
     const share = async () => {
@@ -254,6 +256,7 @@ const ShareCard: React.FC<{ room: StaffRoom; onClose: () => void }> = ({ room, o
 };
 
 const RoomForm: React.FC<{ artworks: Artwork[]; initial: StaffRoom | null; onClose: () => void; onSaved: (room: StaffRoom) => void }> = ({ artworks, initial, onClose, onSaved }) => {
+    useBackClose(true, onClose);
     const [name, setName] = useState(initial?.name ?? '');
     const [clientName, setClientName] = useState(initial?.clientName ?? '');
     const [clientPhone, setClientPhone] = useState(initial?.clientPhone ?? '');

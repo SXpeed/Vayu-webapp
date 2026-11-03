@@ -13,6 +13,7 @@ import { createPortal } from 'react-dom';
 import { Check, ChevronDown, NotebookText, Plus, Trash2, X } from 'lucide-react';
 import type { CalendarEvent, EventTodo, TaskPriority, UserProfile } from '../../types';
 import { eventColor } from '../../services/eventService';
+import { useBackClose } from '../../hooks/useBackClose';
 import {
     buildBoard, dayHeading, dayKeyOf, eventsOnDay, newTask, shortDay, tasksOf, timeLabel, type TaskItem,
 } from './taskModel';
@@ -218,6 +219,7 @@ const TaskEditor: React.FC<{
         if (canEdit && changed && draft.text.trim()) onSave({ ...draft, text: draft.text.trim(), notes: draft.notes?.trim() || undefined });
         onClose();
     };
+    useBackClose(true, finish); // Back keeps the edits, as Escape does
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') finish(); };
         document.addEventListener('keydown', onKey);

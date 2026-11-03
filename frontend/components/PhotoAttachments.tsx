@@ -1,4 +1,5 @@
 import React, { useRef, useState } from 'react';
+import { useBackClose } from '../hooks/useBackClose';
 import { Camera, Image as ImageIcon, Loader2, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import storageService, { getThumbUrl } from '../services/storageService';
@@ -21,6 +22,7 @@ interface PhotoAttachmentsProps {
 export const PhotoAttachments: React.FC<PhotoAttachmentsProps> = ({ urls, onAdd, onRemove, onUploadingChange }) => {
     const [uploadingCount, setUploadingCount] = useState(0);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+    useBackClose(previewUrl !== null, () => setPreviewUrl(null));
     // Batches can overlap (snap a photo while the last one uploads), so the
     // in-flight count lives in a ref rather than a state updater.
     const pendingRef = useRef(0);

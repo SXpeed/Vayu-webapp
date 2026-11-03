@@ -1,4 +1,5 @@
 import { AttendanceRecord, StoreConfig } from '../../types';
+import { saveBlobNow } from '../../services/saveFile';
 
 /* Shared helpers for the attendance screens. Everything here works on real
  * server records only — no generated or sample data anywhere. */
@@ -143,12 +144,7 @@ export function detectConnectionType(): 'wifi' | 'mobile' | 'unknown' {
 export function downloadCsv(filename: string, rows: (string | number)[][]): void {
     const csv = rows.map(r => r.map(v => `"${String(v).replaceAll('"', '""')}"`).join(',')).join('\n');
     // The BOM tells Excel the file is UTF-8 (₹, accents).
-    const url = URL.createObjectURL(new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8' }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    saveBlobNow(new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8' }), filename);
 }
 
 /** Sunday-first grid of day numbers (null = padding) for a month. */

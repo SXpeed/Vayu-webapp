@@ -231,7 +231,7 @@ const MonthCalendar: React.FC<{ year: number; month: number; byDay: Map<number, 
     const todayDate = new Date();
     return (
         <div className="grid grid-cols-7 gap-1 mb-4">
-            {WEEKDAYS.map(d => <div key={d} className="text-center text-[10px] font-semibold text-[var(--neu-text-dim)] py-0.5">{d}</div>)}
+            {WEEKDAYS.map((d, i) => <div key={i} className="text-center text-[10px] font-semibold text-[var(--neu-text-dim)] py-0.5">{d}</div>)}
             {monthGrid(year, month).map((day, i) => {
                 if (!day) return <div key={`pad-${i}`} />; // NOSONAR: blank cells before the 1st; only their position tells them apart
                 const worked = byDay.has(day);

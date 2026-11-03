@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Camera, FileText, Headphones, Images, Loader2, Paperclip, Send, Tag, X } from 'lucide-react';
 import storageService, { getThumbUrl } from '../../services/storageService';
+import { openBlob } from '../../services/saveFile';
 import { usePhotoCapture } from '../../hooks/usePhotoCapture';
 import { pastedFiles, safeExtension } from '../../fileTypes';
 import type { Message, MessageAttachment, MessageReplyTo, MessageTag } from '../../types';
@@ -35,18 +36,11 @@ async function openFile(file: MessageAttachment) {
         const res = await fetch(file.url);
         if (!res.ok) throw new Error('Could not open the file');
         const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const viewable = blob.type === 'application/pdf' || blob.type.startsWith('text/plain');
-        if (!viewable || !globalThis.open(url, '_blank')) {
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = file.name;
-            a.click();
-        }
-        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        await openBlob(blob, file.name);
         toast.dismiss(toastId);
     } catch (e) {
-        toast.error((e as Error).message || 'Could not open the file', { id: toastId });
+        if ((e as Error).name === 'AbortError') toast.dismiss(toastId);
+        else toast.error((e as Error).message || 'Could not open the file', { id: toastId });
     }
 }
 

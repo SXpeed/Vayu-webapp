@@ -4,6 +4,7 @@
 // "Info" on your own message lists who has read it and who hasn't yet.
 
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useBackClose } from '../../hooks/useBackClose';
 import { createPortal } from 'react-dom';
 import { Check, CheckCheck, Copy, Info, Plus, Reply, X } from 'lucide-react';
 import type { Message } from '../../types';
@@ -124,6 +125,7 @@ export const ReactionChips: React.FC<{ reactions?: Record<string, string>; curre
 
 /** A layer over the whole window, outside any transformed parent. */
 const Layer: React.FC<{ onClose: () => void; children: React.ReactNode; label: string }> = ({ onClose, children, label }) => {
+    useBackClose(true, onClose);
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
         document.addEventListener('keydown', onKey);

@@ -11,6 +11,7 @@ import { staffRosterService, type ShiftInput, type StaffRosterData } from '../..
 import { dayLabel, rangeLabel } from './shared';
 import { Drawer, Msg } from './Panels';
 import { addable, readImport } from './planRules';
+import { saveBlobNow } from '../../services/saveFile';
 
 /** The server takes at most this many shifts in one save (staffRoster.ts). */
 const BATCH = 100;
@@ -171,13 +172,7 @@ export const ImportPanel: React.FC<{ data: StaffRosterData; onClose: () => void;
         }
     };
 
-    const template = () => {
-        const url = URL.createObjectURL(new Blob([`﻿${TEMPLATE}`], { type: 'text/csv;charset=utf-8' }));
-        const a = document.createElement('a');
-        a.href = url; a.download = 'roster-template.csv';
-        document.body.append(a); a.click(); a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-    };
+    const template = () => saveBlobNow(new Blob([`﻿${TEMPLATE}`], { type: 'text/csv;charset=utf-8' }), 'roster-template.csv');
 
     return (
         <Drawer title="Import roster" onClose={onClose} footer={

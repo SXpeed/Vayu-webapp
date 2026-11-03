@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Bell, X } from 'lucide-react';
 import { FullScreenPortal } from './FullScreenPortal';
 import { CountBadge, useInbox, type BellNotification } from '../hooks/useInbox';
+import { useBackClose } from '../hooks/useBackClose';
 
 /** Notifications about one source (one inquiry, one chat) shown as one row. */
 interface Group { key: string; newest: BellNotification; ids: string[] }
@@ -30,6 +31,7 @@ export const NotificationSheet: React.FC<{ onClose: () => void }> = ({ onClose }
     const { notifications, setNotificationsState, openLink } = useInbox();
     const groups = useMemo(() => groupNotifications(notifications), [notifications]);
     const closeRef = useRef<HTMLButtonElement>(null);
+    useBackClose(true, onClose);
 
     // Looking at the bell is seeing what's in it: the count drops to what comes after.
     useEffect(() => {

@@ -1,5 +1,6 @@
-// App style, chosen in Profile → App Settings: Classic (the soft-UI look) or
-// Atelier (flat warm surfaces, blur-in motion, page transitions). Like the UI
+// App style, chosen in Profile → App Settings: Classic (the soft-UI look),
+// Atelier (flat warm surfaces, rise-in motion, page transitions) or Lite (flat,
+// fades and slides only). Like the UI
 // size and theme it belongs to this device: saved in the browser and applied
 // before first paint (index.html) as <html data-skin="…">, which
 // theme-atelier.css keys on. Layout is the same in both.
@@ -58,17 +59,20 @@ export function syncThemeColor(): void {
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', colour);
 }
 
-/** True when the Atelier motion should run: that style, and the person hasn't asked for less motion. */
-export function atelierMotion(): boolean {
-    return document.documentElement.dataset.skin === 'atelier'
-        && !globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-}
+/** True when this style's motion should run: one of `skins`, and the person hasn't asked for less motion. */
+const motionIn = (...skins: string[]): boolean =>
+    skins.includes(document.documentElement.dataset.skin ?? '')
+    && !globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
-const canTransition = (): boolean => atelierMotion() && typeof document.startViewTransition === 'function';
+/** True when the Atelier motion should run. */
+export const atelierMotion = (): boolean => motionIn('atelier');
+
+/** Screen changes animate in Atelier and Lite (Lite only cross-fades: theme-lite.css). */
+const canTransition = (): boolean => motionIn('atelier', 'lite') && typeof document.startViewTransition === 'function';
 
 /**
- * Runs a screen change inside a view transition when Atelier motion is on
- * (the old screen blurs out, the new one in); otherwise just runs it.
+ * Runs a screen change inside a view transition when Atelier or Lite motion is
+ * on; otherwise just runs it.
  */
 export function withViewTransition(update: () => void): void {
     if (!canTransition()) { update(); return; }

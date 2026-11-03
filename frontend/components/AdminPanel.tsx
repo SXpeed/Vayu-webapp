@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { useBackClose } from '../hooks/useBackClose';
 import { FullScreenPortal } from './FullScreenPortal';
 import { TypeDeleteDialog } from './TypeDeleteDialog';
 import UserManagementPanel from './UserManagementPanel';
@@ -51,6 +52,7 @@ const PLAN_TAB = { id: 'plan' as const, label: 'Plan', Icon: Gauge };
 /** Admin hub — deleted-items archive, user management and activity logs
  *  behind a single shield button on the home header (admins only). */
 export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUserId, onClose }) => {
+    useBackClose(true, onClose);
     const [tab, setTab] = useState<AdminTab>('deleted');
     const [items, setItems] = useState<DeletedItem[]>([]);
     const [isLoading, setIsLoading] = useState(true);

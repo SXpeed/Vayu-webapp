@@ -68,13 +68,26 @@ html[data-skin='atelier'] .neu-dock-item[aria-current='page'] {
     }
 }
 
-/* ── Entrances: blur in, a short stagger between siblings ────────────── */
+/* ── Entrances: rise in, a short stagger between siblings ──────────────
+ * Phones animate opacity and transform only, which the GPU moves without
+ * repainting; a blur re-renders every animating card on every frame. The
+ * blur comes back on computers (mouse and hover), which have the headroom. */
 @keyframes at-blur-in {
-    from { opacity: 0; filter: blur(8px); transform: translateY(12px) scale(0.99); }
+    from { opacity: 0; transform: translateY(12px) scale(0.99); }
 }
 
 @keyframes at-blur-fade {
-    from { opacity: 0; filter: blur(6px); }
+    from { opacity: 0; }
+}
+
+@media (hover: hover) and (pointer: fine) {
+    @keyframes at-blur-in {
+        from { opacity: 0; filter: blur(8px); transform: translateY(12px) scale(0.99); }
+    }
+
+    @keyframes at-blur-fade {
+        from { opacity: 0; filter: blur(6px); }
+    }
 }
 
 /* `backwards`, not `forwards`: once it ends the element is back to its own
@@ -96,14 +109,27 @@ html[data-skin='atelier'] .animate-fade-in-up:not(.neu-sheet, .neu-sheet-wide, .
 html[data-skin='atelier'] .animate-fade-in-up:not(.neu-sheet, .neu-sheet-wide, .neu-modal):nth-child(4) { animation-delay: 120ms !important; } /* NOSONAR: same */
 html[data-skin='atelier'] .animate-fade-in-up:not(.neu-sheet, .neu-sheet-wide, .neu-modal):nth-child(5) { animation-delay: 160ms !important; } /* NOSONAR: same */
 html[data-skin='atelier'] .animate-fade-in-up:not(.neu-sheet, .neu-sheet-wide, .neu-modal):nth-child(n + 6) { animation-delay: 200ms !important; } /* NOSONAR: same */
+/* Only the first screenful animates; cards further down are simply there. */
+html[data-skin='atelier'] .animate-fade-in-up:not(.neu-sheet, .neu-sheet-wide, .neu-modal):nth-child(n + 9) { animation: none; }
 
-/* ── Page transitions (View Transitions; appStyle.ts starts them) ─────── */
+/* ── Page transitions (View Transitions; appStyle.ts starts them) ───────
+ * Phones: a fade with a slight settle, no full-screen blur. Computers keep the blur. */
 @keyframes at-page-out {
-    to { opacity: 0; filter: blur(8px); }
+    to { opacity: 0; transform: scale(0.99); }
 }
 
 @keyframes at-page-in {
-    from { opacity: 0; filter: blur(10px); }
+    from { opacity: 0; transform: scale(1.015); }
+}
+
+@media (hover: hover) and (pointer: fine) {
+    @keyframes at-page-out {
+        to { opacity: 0; filter: blur(8px); }
+    }
+
+    @keyframes at-page-in {
+        from { opacity: 0; filter: blur(10px); }
+    }
 }
 
 html[data-skin='atelier']::view-transition-old(root) {
@@ -117,6 +143,19 @@ html[data-skin='atelier']::view-transition-new(root) {
 /* The dock and sidebar stay put while the page changes behind them. */
 html[data-skin='atelier'] .neu-dock-scrim { view-transition-name: at-dock; }
 html[data-skin='atelier'] [data-app-sidebar] { view-transition-name: at-sidebar; }
+
+/* Phones: no live blur behind sheets and dialogs (it re-blurs the whole
+ * screen every frame a sheet moves); a denser scrim covers instead, as in Lite. */
+@media not ((hover: hover) and (pointer: fine)) {
+    html[data-skin='atelier'] :is(.neu-scrim, .neu-portal-scrim, [class*='backdrop-blur']) {
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+    }
+
+    html[data-skin='atelier'] :is(.neu-scrim, .neu-portal-scrim) {
+        background: color-mix(in srgb, var(--neu-bg) 85%, transparent);
+    }
+}
 
 /* An artwork's picture grows from its tile into the detail view. */
 html[data-skin='atelier']::view-transition-group(at-art) {

@@ -213,7 +213,8 @@ export function BillingView({ onCollectPayment }: { readonly onCollectPayment?: 
                 )}
             </PageBody>
 
-            {open && !editing && (
+            {/* Stays open under the editor: closing the editor with Back then needs no new Back step. */}
+            {open && (
                 <DocDetail doc={open} onClose={() => setOpenId(null)} onEdit={setEditing} onOpen={setOpenId} onSetup={openSetup} onCollectPayment={onCollectPayment} />
             )}
             {editing && (

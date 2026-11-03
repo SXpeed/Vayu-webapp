@@ -10,6 +10,8 @@ import {
 import { staffRosterService, type ShiftInput, type StaffRosterData } from '../../services/staffRosterService';
 import { DOW, dayLabel, dayOfMonth, hoursText, inWeek, rangeLabel, timeRange, type Derived } from './shared';
 import { assignable, candidateLabel, candidatesFor, withTitle, type Candidate } from './assign';
+import { saveBlobNow } from '../../services/saveFile';
+import { useBackClose } from '../../hooks/useBackClose';
 
 /** A panel on the right on desktop, the whole screen on a phone. Focus stays inside; Escape closes. */
 
@@ -27,6 +29,7 @@ const pickLabel = (open: boolean, leave: boolean): string => {
 const publishedNote = (n: number): string => `Published. ${n} ${n === 1 ? 'person was' : 'people were'} notified.`;
 export const Drawer: React.FC<{ title: string; onClose: () => void; footer?: React.ReactNode; children: React.ReactNode }> = ({ title, onClose, footer, children }) => {
     const box = useRef<HTMLDialogElement>(null);
+    useBackClose(true, onClose);
     useEffect(() => {
         const back = document.activeElement as HTMLElement | null;
         const first = box.current?.querySelector<HTMLElement>('[data-autofocus], select, input, textarea, button');
@@ -501,16 +504,7 @@ export const PublishDialog: React.FC<{ data: StaffRosterData; d: Derived; weekSt
 
 /** The week as a spreadsheet file, with the filters on screen. */
 export const ExportPanel: React.FC<{ csv: string; weekStart: string; onClose: () => void }> = ({ csv, weekStart, onClose }) => {
-    const download = () => {
-        const url = URL.createObjectURL(new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8' }));
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `roster-${weekStart}.csv`;
-        document.body.append(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-    };
+    const download = () => saveBlobNow(new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8' }), `roster-${weekStart}.csv`);
     const copy = async () => {
         try { await navigator.clipboard.writeText(csv); toast.success('Copied'); }
         catch { toast.error('Copying isn’t allowed here. Use Download instead.'); }

@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { useBackClose } from '../hooks/useBackClose';
 import { createPortal } from 'react-dom';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { Plus, X, Edit2, Trash2, Download, Loader2, Camera, Upload, FileText, FileDown, BookOpen, Lock } from 'lucide-react';
@@ -11,6 +12,7 @@ import { PageRoot, PageHeader, PageBody, PrimaryIconButton, GhostIconButton, Emp
 import { toast } from 'react-hot-toast';
 import { Catalog, Artwork, PdfOptions, CatalogTheme } from '../types';
 import storageService from '../services/storageService';
+import { openBlob, saveBlob } from '../services/saveFile';
 import { ArtworkFormModal } from './ArtworksView';
 
 interface CatalogsViewProps {
@@ -41,20 +43,6 @@ export const THEME_INFO: { id: CatalogTheme; name: string; desc: string; bg: str
 ];
 
 
-/** Hand the browser a file to save — what jsPDF's doc.save() did internally. */
-const downloadBlob = (blob: Blob, filename: string) => {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.rel = 'noopener';
-    document.body.append(a);
-    a.click();
-    a.remove();
-    // Give the browser time to start the download before releasing the blob.
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-};
-
 export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, onAddCatalog, onUpdateCatalog, onDeleteCatalog }) => {
     const isDesktop = useIsDesktop();
     const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
@@ -71,6 +59,9 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
     const pdfInputRef = useRef<HTMLInputElement>(null);
 
     const [showCatalogStudio, setShowCatalogStudio] = useState(false);
+    useBackClose(showForm, () => setShowForm(false));
+    useBackClose(showRooms, () => setShowRooms(false));
+    useBackClose(showCatalogStudio, () => setShowCatalogStudio(false));
     const [catalogToDownload, setCatalogToDownload] = useState<Catalog | null>(null);
 
     // The Catalogs tab lists only entries that actually hold a PDF
@@ -100,32 +91,20 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
         return res.blob();
     };
 
-    const saveBlobAsPdf = (blob: Blob, name: string) => {
-        const url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${name.trim().replaceAll(/\s+/g, '_') || 'catalog'}.pdf`;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    };
+    const pdfName = (name: string) => `${name.trim().replaceAll(/\s+/g, '_') || 'catalog'}.pdf`;
+    const asPdf = (blob: Blob) => new Blob([blob], { type: 'application/pdf' });
 
-    /** Opens the stored PDF in a new tab; falls back to a download when popups are blocked (installed PWAs). */
+    /** Opens the stored PDF in a new tab where the browser can show it, else saves it. */
     const handleOpenPdf = async (catalog: Catalog) => {
         if (!catalog.pdfUrl) return;
         const toastId = toast.loading('Opening PDF…');
         try {
-            const blob = await fetchPdfBlob(catalog);
-            const url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
-            const win = globalThis.open(url, '_blank');
-            if (!win) {
-                saveBlobAsPdf(blob, catalog.name);
-                toast.success('PDF ready — check your downloads');
-            }
+            const how = await openBlob(asPdf(await fetchPdfBlob(catalog)), pdfName(catalog.name));
             toast.dismiss(toastId);
-            setTimeout(() => URL.revokeObjectURL(url), 60_000);
+            if (how === 'downloaded') toast.success('PDF ready — check your downloads');
         } catch (e) {
             toast.dismiss(toastId);
-            toast.error((e as Error).message || 'Could not open the PDF');
+            if ((e as Error).name !== 'AbortError') toast.error((e as Error).message || 'Could not open the PDF');
         }
     };
 
@@ -133,13 +112,12 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
         if (!catalog.pdfUrl) return;
         const toastId = toast.loading('Preparing download…');
         try {
-            const blob = await fetchPdfBlob(catalog);
-            saveBlobAsPdf(blob, catalog.name);
+            const how = await saveBlob(asPdf(await fetchPdfBlob(catalog)), pdfName(catalog.name));
             toast.dismiss(toastId);
-            toast.success('PDF downloaded');
+            if (how === 'downloaded') toast.success('PDF downloaded');
         } catch (e) {
             toast.dismiss(toastId);
-            toast.error((e as Error).message || 'Download failed');
+            if ((e as Error).name !== 'AbortError') toast.error((e as Error).message || 'Download failed');
         }
     };
 
@@ -214,19 +192,27 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
 
             setPdfProgress({ stage: 'saving' });
             // Store the generated PDF so it lives in the Catalogs list.
+            let inCatalogs = false;
             try {
-                const pdfFile = new File([blob], `${catalogToDownload.name.trim().replaceAll(/\s+/g, '_')}.pdf`, { type: 'application/pdf' });
+                const pdfFile = new File([blob], pdfName(catalogToDownload.name), { type: 'application/pdf' });
                 const uploaded = await storageService.upload(pdfFile);
                 const updated: Catalog = { ...catalogToDownload, pdfUrl: uploaded.url, source: 'generated' };
                 onUpdateCatalog(updated);
                 setCatalogToDownload(updated);
+                inCatalogs = true;
                 toast.success('Catalog PDF saved to Catalogs');
             } catch (uploadError) {
                 console.error('Saving generated catalog PDF failed:', uploadError);
-                toast.error('Generated PDF downloaded, but saving to Catalogs failed');
+                toast.error('Saving to Catalogs failed. Keep the copy on this device, or generate it again.');
             }
 
-            downloadBlob(blob, `${catalogToDownload.name.replaceAll(/\s+/g, '_')}.pdf`);
+            await saveBlob(blob, pdfName(catalogToDownload.name)).catch((e: Error) => {
+                if (inCatalogs) {
+                    if (e.name !== 'AbortError') toast.error('Could not save a copy here. Open it from Catalogs.');
+                } else {
+                    toast.error('This PDF is not saved anywhere. Generate it again to keep it.');
+                }
+            });
         } catch (error) {
             console.error("Error generating PDF:", error);
             toast.error('Failed to generate PDF.');

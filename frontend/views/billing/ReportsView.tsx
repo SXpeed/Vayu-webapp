@@ -8,17 +8,9 @@ import type { BillingDoc } from '../../invoicing';
 import { rupeesText, formatPaise } from '../../gstRules';
 import { conversion, gstr1, hsnSummary, openChallans, PERIODS, periodRange, receivables, registerCsv, salesRegister, splits, sumRows, tallyXml, type Period } from '../../invoicingReports';
 import { CardSection, shortDate, StatusBadge } from './parts';
+import { saveBlobNow } from '../../services/saveFile';
 
-function downloadCsv(name: string, csv: string, type = 'text/csv;charset=utf-8'): void {
-    const url = URL.createObjectURL(new Blob([csv], { type }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    document.body.append(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
-}
+const downloadCsv = (name: string, csv: string, type = 'text/csv;charset=utf-8'): void => saveBlobNow(new Blob([csv], { type }), name);
 
 const GSTR1_SECTIONS: [string, string][] = [
     ['b2b', 'B2B'], ['b2cl', 'B2C large'], ['b2cs', 'B2C small'], ['cdnr', 'Notes (registered)'],

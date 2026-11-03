@@ -9,6 +9,7 @@ import { fileKeyOf } from '../services/workspace';
 import { IfCan } from '../components/Layout';
 import { downloadCsv } from './attendance/attendanceUtils';
 import { inventoryRows, planImport, readInventoryCsv, skippedNote } from './inventoryCsv';
+import { useBackClose } from '../hooks/useBackClose';
 
 
 interface ArtworksViewProps {
@@ -166,6 +167,7 @@ export interface ArtworkFormModalProps {
 }
 
 export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData, onClose, onSave, onDelete }) => {
+    useBackClose(true, onClose);
     const [formData, setFormData] = useState({
         title: initialData?.title || '',
         artist: initialData?.artist || '',
