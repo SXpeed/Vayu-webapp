@@ -39,17 +39,18 @@ export function takeStep(h: History): number {
 }
 
 const TAPS = ['pointerup', 'keydown'];
+const CAPTURE = { capture: true }; // not `true`: Node 22's EventTarget can't remove a listener added that way
 
 /** No step yet (opened by code): take it on the next tap or key press, which lets a step be added. Returns a cancel. */
 export function stepOnNextTap(h: History, got: (depth: number) => void): () => void {
-    const stop = () => { for (const t of TAPS) globalThis.removeEventListener(t, onTap, true); };
+    const stop = () => { for (const t of TAPS) globalThis.removeEventListener(t, onTap, CAPTURE); };
     const onTap = () => {
         const d = takeStep(h);
         if (!d) return;
         stop();
         got(d);
     };
-    for (const t of TAPS) globalThis.addEventListener(t, onTap, true);
+    for (const t of TAPS) globalThis.addEventListener(t, onTap, CAPTURE);
     return stop;
 }
 
