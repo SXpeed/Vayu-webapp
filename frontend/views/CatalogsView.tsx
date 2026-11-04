@@ -2,18 +2,16 @@ import React, { useState, useRef } from 'react';
 import { useBackClose } from '../hooks/useBackClose';
 import { createPortal } from 'react-dom';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
-import { Plus, X, Edit2, Trash2, Download, Loader2, Camera, Upload, FileText, FileDown, BookOpen, Lock } from 'lucide-react';
+import { Plus, X, Edit2, Trash2, Download, Loader2, Upload, FileText, FileDown, BookOpen, Lock } from 'lucide-react';
 import { OfflineToggle } from '../components/OfflineToggle';
 import { offlineAddresses } from '../services/photoStore';
 import { SearchBar } from '../components/SearchBar';
-import { ArtworkTile, ARTWORK_TILE_GRID } from '../components/ArtworkTile';
 import { ArtworkPicker } from '../components/ArtworkPicker';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton, GhostIconButton, EmptyState } from '../components/ui';
 import { toast } from 'react-hot-toast';
 import { Catalog, Artwork, PdfOptions, CatalogTheme } from '../types';
 import storageService from '../services/storageService';
 import { openBlob, saveBlob } from '../services/saveFile';
-import { ArtworkFormModal } from './ArtworksView';
 
 interface CatalogsViewProps {
     catalogs: Catalog[];
@@ -532,162 +530,6 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                 </FullScreenPortal>
             )}
         </PageRoot>
-    );
-};
-
-export interface CatalogDetailModalProps {
-    catalog: Catalog;
-    artworks: Artwork[];
-    onDownloadClick: () => void;
-    onArtworkClick: (artwork: Artwork) => void;
-    onUpdateCatalog: (catalog: Catalog) => void;
-    onDeleteCatalog: () => void;
-    isGeneratingPDF: boolean;
-    onAddArtwork: (artwork: Omit<Artwork, 'id' | 'createdAt'>) => Promise<Artwork>;
-}
-
-export const CatalogDetailModal: React.FC<CatalogDetailModalProps> = ({ catalog, artworks, onDownloadClick, onArtworkClick, onUpdateCatalog, onDeleteCatalog, isGeneratingPDF, onAddArtwork }) => {
-    const [isEditing, setIsEditing] = useState(false);
-    const [isAddingProduct, setIsAddingProduct] = useState(false);
-    const [isUploading, setIsUploading] = useState(false);
-    const fileInputRef = useRef<HTMLInputElement>(null);
-    const [detailSearchQuery, setDetailSearchQuery] = useState('');
-    const catalogArtworks = artworks.filter(a => catalog.artworkIds.includes(a.id));
-    const filteredCatalogArtworks = catalogArtworks.filter(a =>
-        a.title.toLowerCase().includes(detailSearchQuery.toLowerCase()) ||
-        a.customId?.toLowerCase().includes(detailSearchQuery.toLowerCase())
-    );
-
-    const handleUploadCoverImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        setIsUploading(true);
-        try {
-            const result = await storageService.upload(file);
-            onUpdateCatalog({ ...catalog, coverImageUrl: result.url });
-        } catch (error) {
-            console.error('Upload failed:', error);
-            toast.error('Failed to upload cover image.');
-        } finally {
-            setIsUploading(false);
-        }
-        e.target.value = '';
-    };
-
-    const handleSaveEdit = (updatedData: Omit<Catalog, 'id' | 'createdAt'>) => {
-        onUpdateCatalog({
-            ...updatedData,
-            id: catalog.id,
-            createdAt: catalog.createdAt
-        });
-        setIsEditing(false);
-    };
-
-    const [confirmOpen, setConfirmOpen] = useState(false);
-
-    const handleDelete = () => {
-        setConfirmOpen(true);
-    };
-
-    return (
-        <div className="neu-sheet z-50 animate-fade-in-up">
-            <div className="px-3 pb-2.5 z-10" style={{ paddingTop: 'calc(1.75rem + var(--safe-top))' }}>
-                <div className="flex justify-between items-center mb-3">
-                    <h2 className="text-xl font-serif text-gray-900 dark:text-white truncate px-1">{catalog.name}</h2>
-                    <div className="flex items-center gap-2">
-                        <IfCan section="catalogs">
-                            <button onClick={() => setIsEditing(true)} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale">
-                                <Edit2 size={18} />
-                            </button>
-                        </IfCan>
-                        <OfflineToggle
-                            setId={`catalog:${catalog.id}`}
-                            name={catalog.name}
-                            size={18}
-                            addresses={() => offlineAddresses(catalog.artworkIds, artworks, [catalog.pdfUrl, catalog.coverImageUrl])}
-                        />
-                        <button onClick={onDownloadClick} disabled={isGeneratingPDF} className={`neu-icon-btn text-gold-700 dark:text-gold-300 active-scale ${isGeneratingPDF ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                            <Download size={20} />
-                        </button>
-                        <IfCan section="catalogs">
-                            <button onClick={handleDelete} className="neu-icon-btn text-red-500 active-scale">
-                                <Trash2 size={18} />
-                            </button>
-                        </IfCan>
-                    </div>
-                </div>
-                <SearchBar value={detailSearchQuery} onChange={setDetailSearchQuery} placeholder="Search artworks..." />
-            </div>
-
-            <div className="flex-1 overflow-y-auto no-scrollbar pb-20 lg:pb-8">
-                <div className="w-full aspect-[21/9] relative animate-fade-in group">
-                    <CatalogCover catalog={catalog} artworks={artworks} />
-
-                    <button
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={isUploading}
-                        className="absolute top-3 right-4 p-2 bg-black/40 hover:bg-black/60 text-white rounded-full backdrop-blur-sm transition-colors z-10 disabled:opacity-50"
-                        title="Upload Cover Image"
-                    >
-                        {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Camera size={18} />}
-                    </button>
-                    <input type="file" accept="image/*" ref={fileInputRef} className="hidden" onChange={handleUploadCoverImage} />
-                </div>
-
-                <div className="p-4 bg-[var(--neu-bg)] relative z-20 min-h-[50dvh] flex flex-col gap-3">
-                    <div className="flex justify-between items-center mb-3">
-                        <h3 className="font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest text-[11px]">Artworks in Catalog ({catalogArtworks.length})</h3>
-                        <button
-                            onClick={() => setIsAddingProduct(true)}
-                            className="neu-raised-sm neu-btn text-gold-700 dark:text-gold-300 p-1.5 rounded-full shadow-md transition-colors active-scale"
-                            title="Add New Product to Catalog"
-                        >
-                            <Plus size={16} />
-                        </button>
-                    </div>
-                    <div className={ARTWORK_TILE_GRID}>
-                        {filteredCatalogArtworks.map((artwork, index) => (
-                            <ArtworkTile key={artwork.id} art={artwork} index={index} onOpen={() => onArtworkClick(artwork)} />
-                        ))}
-                    </div>
-                </div>
-            </div>
-
-            {isEditing && (
-                <CatalogFormModal
-                    initialData={catalog}
-                    artworks={artworks}
-                    onClose={() => setIsEditing(false)}
-                    onSave={handleSaveEdit}
-                />
-            )}
-
-            {isAddingProduct && (
-                <ArtworkFormModal
-                    onClose={() => setIsAddingProduct(false)}
-                    onSave={async (newArt) => {
-                        const savedArt = await onAddArtwork(newArt);
-                        onUpdateCatalog({
-                            ...catalog,
-                            artworkIds: [...catalog.artworkIds, savedArt.id]
-                        });
-                        setIsAddingProduct(false);
-                    }}
-                />
-            )}
-
-            <TypeDeleteDialog
-                isOpen={confirmOpen}
-                title="Delete catalog"
-                itemName={catalog.name}
-                message="it will be archived for admin review"
-                onClose={() => setConfirmOpen(false)}
-                onConfirm={() => {
-                    onDeleteCatalog();
-                    setConfirmOpen(false);
-                }}
-            />
-        </div>
     );
 };
 

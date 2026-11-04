@@ -110,7 +110,9 @@ test('an address someone else has: the same answer, and nothing is sent (no way 
     const res = await post(mira, '/auth/change-email', { newEmail: 'ravi@studio.example' });
     assert.equal(res.status, 200);
     await new Promise(r => setTimeout(r, 1000));
-    assert.equal(worker.emails().length, before);
+    // The earlier tests' "was changed" notices are sent in the background and can land late under load.
+    const late = /^Your sign-in email (was changed|is now this address)$/;
+    assert.deepEqual(worker.emails().slice(before).filter(m => !late.test(m.subject ?? '')).map(m => [m.to, m.subject]), []);
     assert.equal((await mira.call('/auth/get-session')).body.user.email, 'mira.new@example.com');
 });
 

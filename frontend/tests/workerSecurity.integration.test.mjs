@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { after, before, test } from 'node:test';
 import { withSessionToken } from './helpers/session.mjs';
-import { startDevWorker } from './helpers/devWorker.mjs';
+import { freshLimitWindow, startDevWorker } from './helpers/devWorker.mjs';
 
 const ADMIN = { name: 'Owner', email: 'owner@example.com', password: 'owner-password-1234' };
 const PASSWORD = 'staff-password-1234';
@@ -218,6 +218,7 @@ test('an unknown email and a wrong password get the same answer', async () => {
 
 test('password guessing is cut off, even when the right password comes next', async () => {
     const statuses = [];
+    await freshLimitWindow();
     for (let i = 0; i < 8; i++) {
         statuses.push((await api(null, '/auth/login', { method: 'POST', body: { email: 'alice@example.com', password: `guess-${i}-xxxx` } })).status);
     }

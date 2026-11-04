@@ -197,4 +197,14 @@ export async function startDevWorker({ port, inspectorPort, adminEmail = 'admin@
     };
 }
 
+/**
+ * Wait until a burst of requests fits inside one rate-limit minute. Wrangler's local
+ * limiter counts in fixed clock minutes and forgets every count when one ends, so a
+ * burst that crosses a minute boundary would never be refused.
+ */
+export async function freshLimitWindow(spareMs = 20_000) {
+    const left = 60_000 - (Date.now() % 60_000);
+    if (left < spareMs) await new Promise(r => setTimeout(r, left + 100));
+}
+
 export { frontend, readFileSync };

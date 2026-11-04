@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { load } from './helpers/load.mjs';
 
-const { takeStep, releaseStep } = await load('hooks/useBackClose.ts');
+const { takeStep, releaseStep, stepOnNextTap } = await load('hooks/useBackClose.ts');
 
 /** Just enough of window.history: a stack of states and a position in it. */
 function fakeHistory(state) {
@@ -75,4 +75,35 @@ test('closing an overlay with its own button takes its step off; others stay', (
     const h2 = fakeHistory({ view: 'home', overlay: 7 });
     release(h2, 9);
     assert.equal(h2.state.overlay, 7);
+});
+
+test('an overlay opened by code takes its step on the next tap', () => {
+    const real = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    const target = new EventTarget();
+    const [add, remove] = [globalThis.addEventListener, globalThis.removeEventListener];
+    globalThis.addEventListener = target.addEventListener.bind(target);
+    globalThis.removeEventListener = target.removeEventListener.bind(target);
+    const activation = { isActive: false };
+    Object.defineProperty(globalThis, 'navigator', { value: { userActivation: activation }, configurable: true });
+    try {
+        const h = fakeHistory({ view: 'contacts' });
+        assert.equal(takeStep(h), 0);
+        const got = [];
+        stepOnNextTap(h, d => got.push(d));
+        activation.isActive = true; // the browser marks the tap before handlers run
+        target.dispatchEvent(new Event('pointerup'));
+        target.dispatchEvent(new Event('keydown')); // only the first tap adds a step
+        assert.deepEqual(got, [1]);
+        assert.deepEqual(h.state, { view: 'contacts', overlay: 1 });
+        assert.equal(h.length, 2);
+        // Closed before any tap: nothing is added later.
+        const h2 = fakeHistory({ view: 'contacts' });
+        stepOnNextTap(h2, () => assert.fail('closed already'))();
+        target.dispatchEvent(new Event('pointerup'));
+        assert.equal(h2.length, 1);
+    } finally {
+        globalThis.addEventListener = add;
+        globalThis.removeEventListener = remove;
+        if (real) Object.defineProperty(globalThis, 'navigator', real);
+    }
 });

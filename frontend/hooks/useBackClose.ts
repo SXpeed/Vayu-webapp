@@ -31,11 +31,26 @@ export function takeStep(h: History): number {
         owned.add(top); // a stale step: reuse it rather than stack another
         return top;
     }
-    // Opened by code, not a tap: no step (see above); Back then leaves the screen as before.
+    // Opened by code, not a tap: no step yet (see above); useBackClose waits for the next tap.
     if (globalThis.navigator?.userActivation?.isActive === false) return 0;
     owned.add(top + 1);
     h.pushState({ ...h.state, overlay: top + 1 }, '');
     return top + 1;
+}
+
+const TAPS = ['pointerup', 'keydown'];
+
+/** No step yet (opened by code): take it on the next tap or key press, which lets a step be added. Returns a cancel. */
+export function stepOnNextTap(h: History, got: (depth: number) => void): () => void {
+    const stop = () => { for (const t of TAPS) globalThis.removeEventListener(t, onTap, true); };
+    const onTap = () => {
+        const d = takeStep(h);
+        if (!d) return;
+        stop();
+        got(d);
+    };
+    for (const t of TAPS) globalThis.addEventListener(t, onTap, true);
+    return stop;
 }
 
 /** The overlay at `depth` closed by itself: take its step back off, if it's still on top and no one took it over. */
@@ -54,8 +69,9 @@ export function useBackClose(open: boolean, close: () => void): void {
         const h = globalThis.history;
         if (depth.current) owned.add(depth.current); // React's dev double-run: keep the same step
         else depth.current = takeStep(h);
-        const mine = depth.current;
+        let mine = depth.current;
         let active = true;
+        const stopWaiting = mine ? undefined : stepOnNextTap(h, d => { depth.current = mine = d; });
         const onPop = (e: PopStateEvent) => {
             if ((e.state?.overlay ?? 0) >= mine) return;
             depth.current = 0;
@@ -72,6 +88,7 @@ export function useBackClose(open: boolean, close: () => void): void {
         globalThis.addEventListener('popstate', onPop);
         return () => {
             active = false;
+            stopWaiting?.();
             globalThis.removeEventListener('popstate', onPop);
             owned.delete(mine);
             // Deferred, so an overlay opening in the same moment can take the step over

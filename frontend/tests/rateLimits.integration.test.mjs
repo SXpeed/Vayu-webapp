@@ -9,7 +9,7 @@ import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { after, before, test } from 'node:test';
 import { sessionTokenFrom } from './helpers/session.mjs';
-import { startDevWorker } from './helpers/devWorker.mjs';
+import { freshLimitWindow, startDevWorker } from './helpers/devWorker.mjs';
 import { load } from './helpers/load.mjs';
 
 const WEBHOOK_SECRET = 'shared-webhook-secret-for-tests';
@@ -37,6 +37,7 @@ after(async () => { await worker?.stop(); worker?.cleanup(); });
 test('costly routes are limited per person, with a 429, Retry-After and a code', async () => {
     const statuses = [];
     let limited;
+    await freshLimitWindow();
     for (let i = 0; i < 40; i++) {
         const res = await call('/payments/links/refresh', ownerToken, { method: 'POST' });
         statuses.push(res.status);

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { after, before, test } from 'node:test';
 import { withSessionToken } from './helpers/session.mjs';
-import { startDevWorker } from './helpers/devWorker.mjs';
+import { freshLimitWindow, startDevWorker } from './helpers/devWorker.mjs';
 
 const OWNER = { name: 'Owner', email: 'owner@example.com', password: 'owner-password-1234' };
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]);
@@ -161,6 +161,7 @@ test('a new passcode cancels old passes; switching off or expiring closes the ro
 test('passcode guessing is rate limited', async () => {
     const res = await api(owner, '/viewing-rooms', { method: 'POST', body: { name: 'Guess me', artworkIds: [art.id], expiresInDays: 7 } });
     const statuses = [];
+    await freshLimitWindow();
     for (let i = 0; i < 7; i++) statuses.push((await open(res.body.passcode === '111111' ? '222222' : '111111', res.body.token)).status);
     assert.ok(statuses.includes(429), `expected a 429 among ${statuses}`);
 });

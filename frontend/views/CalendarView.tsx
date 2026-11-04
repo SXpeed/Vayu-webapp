@@ -406,8 +406,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack, onUp
                 select the date (the right-hand day panel updates behind it). */}
             {openMonth !== null && (
                 <dialog open
-                    className={`fixed inset-0 z-[70] flex items-center justify-center p-4 lg:p-8 ${floatClosing ? 'cal-scrim-out' : 'cal-scrim-in'}`}
-                    style={{ backgroundColor: 'rgba(15, 17, 22, 0.45)', backdropFilter: 'blur(5px)', WebkitBackdropFilter: 'blur(5px)' }}
+                    className={`fixed inset-0 z-[70] flex items-center justify-center p-4 lg:p-8 backdrop-blur-[5px] ${floatClosing ? 'cal-scrim-out' : 'cal-scrim-in'}`}
+                    style={{ backgroundColor: 'rgba(15, 17, 22, 0.45)' }}
                     aria-modal="true"
                     aria-label={`${MONTHS[openMonth]} ${viewYear}`}
                 >

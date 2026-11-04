@@ -6,27 +6,19 @@ photo viewer, Atelier/Lite motion). Everything below shipped except where it say
 
 ## Not tested yet (needs a real device)
 
-- [ ] **iPhone, installed app: saving files.** Billing PDF, catalog PDF, chat photo,
-      CSV exports. Expected: the share sheet opens ("Save to Files" / "Save Image").
-      If Safari refuses the sheet after a slow build or fetch, a "Tap to save …"
-      toast appears and tapping it opens the sheet. Check the toast actually shows.
-- [ ] **iPhone: full-screen photo size.** Chat photo and artwork photo at the
-      Default UI size. Expected: centred, same gap left and right, not cropped.
-      The fix measures the page zoom the way the browser reports sizes; Safari
-      may report them differently from Chrome. Tested in Chrome only.
-- [ ] **iPhone: "Discard your changes?" on Back** in Contacts (iOS swipe-back).
-- [ ] **Android, installed app: hardware Back** closes sheets and dialogs one at a
-      time, then leaves the screen. Tested with desktop Chrome's Back button (same
-      rules), not on a phone.
-- [ ] **Android: PDFs.** Chat file PDF and catalog "open PDF" should download
-      (phones have no built-in PDF viewer), not open a blank tab.
-- [ ] **Phone performance.** Page changes in Atelier and Lite on a mid-range
-      Android phone: no dropped frames when changing screens or opening sheets.
-      Atelier on phones no longer blurs; check it still looks right.
-- [ ] **Lite on a phone:** taps, the dock pill and sheets animate; colour and
-      shadow changes snap.
+What a desktop browser could stand in for was checked on 2026-11-04 (below). What
+only a real phone shows:
 
-## Tested (local copy, Chrome desktop + headless phone size)
+- [ ] **iPhone, installed app: the real share sheet.** Safari really opening it
+      ("Save to Files" / "Save Image") and really refusing it after a slow build.
+      The toast and the second tap were checked with a stand-in share sheet.
+- [ ] **iPhone: swipe-back** in Contacts. Back was checked; the swipe gesture can't be simulated.
+- [ ] **Android, installed app: the hardware Back button** (Chrome's Back follows the same rules).
+- [ ] **Phone performance** on a real mid-range Android phone (see the numbers below).
+
+## Tested
+
+Local copy, Chrome desktop + headless phone size (2026-11-03):
 
 - Back closes overlays: Billing document and editor, Contacts (with keep
   editing / discard), notification sheet, artwork form, full-screen artwork
@@ -39,18 +31,40 @@ photo viewer, Atelier/Lite motion). Everything below shipped except where it say
 - Sweep of all main screens in Classic, Atelier, Lite, light and dark: no errors,
   nothing wider than the screen.
 
+Local copy, Safari's engine (Playwright WebKit 26.6, iPhone 13 size) and Chrome
+at Pixel 7 size (2026-11-04):
+
+- iPhone: full-screen artwork photo centred (11.7 px left, 10.7 px right at UI
+  size 95%), not cropped. Chat photos use the same viewer.
+- iPhone app: when the share sheet is refused, "Tap to save inventory-….csv"
+  shows at the top, nothing covers it, and tapping it asks for the sheet again
+  with a fresh tap. Checked with a stand-in for Safari's share sheet.
+- iPhone: Back in Contacts with unsaved changes asks "Discard your changes?";
+  keep editing keeps the text, discard closes and stays on Contacts. Dark mode fine.
+- Android: with no PDF viewer (as phones report), a PDF downloads under its
+  name with no blank tab and the app stays put; with a viewer it opens a tab.
+- A sheet opened by code gets its Back step on the next tap; Back then closes
+  it. If that tap is the sheet's own ✕, the step is taken off again.
+- Speed, production build, Chrome slowed 4×: opening and closing sheets
+  is smooth in all three styles (0–1 long frames). Each screen change has
+  1–3 long frames (worst 100–225 ms) in every style, Classic included, with
+  Atelier and Lite a little heavier than Classic. A real phone has to confirm.
+- Atelier on phones: Contacts and calendar sheets still blurred the screen
+  behind them (an inline style beat the phone rule). Fixed; Classic unchanged.
+- Local only: this WebKit build won't send the Secure file cookie to
+  http://localhost, so photos 401 there. Production is https; not an app bug.
+
 ## Not fixed yet
 
-- [ ] **Delete `CatalogDetailModal`** in `frontend/views/CatalogsView.tsx`: unused,
-      about 150 lines. Waiting for an OK.
 - [ ] **Atelier hover lift** (computers only) still animates a large shadow.
       Cheap on desktop; making it cheaper means changing how every card is
       positioned. Left on purpose.
-- [ ] **Back step left behind** when a sheet opens with no tap (code-opened): it
-      gets no Back step, so Back leaves the screen instead of closing it. Rare.
-- [ ] **One server test is flaky** under a full run: "costly routes are limited per
-      person" (tests/rateLimits.integration.test.mjs) timed out once at 5 s and
-      passed twice alone.
+
+Done 2026-11-04: `CatalogDetailModal` deleted; code-opened sheets get a Back
+step on the next tap; flaky rate-limit tests fixed (wrangler's local limiter
+resets every clock minute, so a burst crossing one was never refused; the
+tests now start a burst early in a minute); the account email test ignores
+the earlier tests' late "email was changed" notices.
 
 ## How to test locally
 

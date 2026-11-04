@@ -427,8 +427,8 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ contacts, inquiries,
 const Popup = React.forwardRef<HTMLDivElement, { label: string; width: string; onClose: () => void; children: React.ReactNode }>(
     ({ label, width, onClose, children }, ref) => (
         <dialog open aria-modal="true" aria-label={label}
-            className="absolute inset-0 flex items-center justify-center p-4 pt-[calc(1rem+var(--safe-top))] pb-[calc(1rem+var(--safe-bottom-ui,0px))]"
-            style={{ backgroundColor: 'rgba(15, 17, 22, 0.45)', backdropFilter: 'blur(5px)', WebkitBackdropFilter: 'blur(5px)' }}
+            className="absolute inset-0 flex items-center justify-center p-4 pt-[calc(1rem+var(--safe-top))] pb-[calc(1rem+var(--safe-bottom-ui,0px))] backdrop-blur-[5px]"
+            style={{ backgroundColor: 'rgba(15, 17, 22, 0.45)' }}
         >
             <button type="button" tabIndex={-1} aria-label="Close" onClick={onClose} className="absolute inset-0 w-full h-full cursor-default" />
             <div
