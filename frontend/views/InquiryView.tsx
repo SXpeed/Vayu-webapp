@@ -13,6 +13,7 @@ import { currentWorkspace } from '../services/workspace';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { useStickToBottom } from '../hooks/useStickToBottom';
+import { useBackClose } from '../hooks/useBackClose';
 import { useMemberNames } from '../hooks/useMemberNames';
 import { PhotoAttachments } from '../components/PhotoAttachments';
 import { makeDocumentNumber } from '../services/documentNumber';
@@ -176,6 +177,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
     const activeCount = useMemo(() => inquiries.filter(i => i.status !== 'Closed').length, [inquiries]);
     const closedCount = useMemo(() => inquiries.filter(i => i.status === 'Closed').length, [inquiries]);
     const sharedCount = useMemo(() => inquiries.filter(i => i.catalogShared).length, [inquiries]);
+    const withMessages = useMemo(() => new Set(inquiryMessages.map(m => m.inquiryId)), [inquiryMessages]);
 
     return (
         <PageRoot>
@@ -275,8 +277,8 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                                         <button
                                             type="button"
                                             onClick={() => setChatInquiry(inquiry)}
-                                            aria-label={`Open chat for ${inquiry.customerName}`}
-                                            className="pointer-events-auto neu-icon-btn text-gray-600 dark:text-gray-300 active-scale"
+                                            aria-label={`Open chat for ${inquiry.customerName}${withMessages.has(inquiry.id) ? ' (has messages)' : ''}`}
+                                            className={`pointer-events-auto neu-icon-btn active-scale ${withMessages.has(inquiry.id) ? 'text-gold-600 dark:text-gold-400' : 'text-gray-600 dark:text-gray-300'}`}
                                         >
                                             <MessageCircle size={18} />
                                         </button>
@@ -418,6 +420,8 @@ interface InquiryChatModalProps {
 }
 
 const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, resolveName, currentUserId, onClose, onSendMessage, onReact }) => {
+    // Phone Back closes the chat onto the inquiry list, not the screen before it.
+    useBackClose(true, onClose);
     // Hold a message, as in Messages: react, reply or copy.
     const [menu, setMenu] = useState<{ msg: InquiryMessage; anchor: DOMRect } | null>(null);
     const [reactionsOf, setReactionsOf] = useState<string | null>(null);
