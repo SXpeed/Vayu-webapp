@@ -715,6 +715,11 @@ const ContactSheet: React.FC<{
                             </div>
                             <TagPicker tags={tags} selected={draft.tags} onChange={next => setDraft(d => ({ ...d, tags: next }))} />
                             {dirty && <ProblemList problems={problems} onOpenOther={onOpenOther} />}
+                            {contact && canEdit && (
+                                <button type="button" onClick={() => setConfirmDelete(true)} className="neu-button neu-button-danger w-full">
+                                    <Trash2 size={14} /> Delete contact
+                                </button>
+                            )}
                         </>
                     ) : contact && (
                         <ContactDetails contact={contact} tags={tags} related={related} canEdit={canEdit}

@@ -99,7 +99,7 @@ const PhoneRow: React.FC<{ sale: Sale; canRecord: boolean; onOpen: (s: Sale) => 
             className="w-full px-3 py-2.5 flex items-center gap-3 text-left active-scale disabled:cursor-default">
             <ItemThumb sale={s} />
             <span className="min-w-0 flex-1">
-                <span className="block truncate font-medium text-[14px] text-[var(--neu-text)]">{s.itemTitle}</span>
+                <span className="block truncate font-medium text-[14px] text-[var(--neu-text)]">{s.itemTitle}{s.qty > 1 ? ` × ${s.qty}` : ''}</span>
                 <span className="block truncate text-[12px] text-[var(--neu-text-dim)]">{s.buyerName} · {s.paymentMode}</span>
                 {(s.tags.length > 0 || !s.artworkId || !s.inInventory) && <MetaLine sale={s} number={false} />}
             </span>
@@ -120,8 +120,8 @@ const TableRow: React.FC<{ sale: Sale; canRecord: boolean; onOpen: (s: Sale) => 
                 <ItemThumb sale={s} size="w-10 h-10" />
                 <span className="min-w-0">
                     {canRecord
-                        ? <button type="button" onClick={(e) => { e.stopPropagation(); onOpen(s); }} className="block max-w-full truncate font-medium text-left hover:underline">{s.itemTitle}</button>
-                        : <span className="block truncate font-medium">{s.itemTitle}</span>}
+                        ? <button type="button" onClick={(e) => { e.stopPropagation(); onOpen(s); }} className="block max-w-full truncate font-medium text-left hover:underline">{s.itemTitle}{s.qty > 1 ? ` × ${s.qty}` : ''}</button>
+                        : <span className="block truncate font-medium">{s.itemTitle}{s.qty > 1 ? ` × ${s.qty}` : ''}</span>}
                     <MetaLine sale={s} />
                 </span>
             </span>

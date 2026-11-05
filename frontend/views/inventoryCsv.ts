@@ -2,12 +2,12 @@
 // it back. A row whose Inventory ID matches an artwork updates it (photos kept);
 // any other row adds a new artwork. Photos are not part of the file.
 
-import type { Artwork, ArtworkStatus } from '../types';
+import { stockOf, type Artwork, type ArtworkStatus } from '../types';
 import { parseCsv } from './staffRoster/planRules';
 
 export const INVENTORY_COLUMNS = [
     'Inventory ID', 'Title', 'Artist', 'Year', 'Medium', 'Dimensions', 'Price', 'Plus GST', 'Status', 'Location',
-    'Edition size', 'Artist proofs', 'Edition number', 'Description title', 'Description',
+    'Edition size', 'Artist proofs', 'Edition number', 'Description title', 'Description', 'Quantity',
 ] as const;
 
 const STATUSES: ArtworkStatus[] = ['Available', 'Sold', 'Reserved'];
@@ -16,7 +16,7 @@ const STATUSES: ArtworkStatus[] = ['Available', 'Sold', 'Reserved'];
 export function inventoryRows(artworks: Artwork[]): (string | number)[][] {
     return [[...INVENTORY_COLUMNS], ...artworks.map(a => [
         a.customId, a.title, a.artist ?? '', a.artworkYear ?? '', a.medium, a.dimensions, a.price, a.plusGst ? 'Yes' : '', a.status, a.location,
-        a.edition?.size ?? '', a.edition?.proofs ?? '', a.edition?.number ?? '', a.descriptionTitle ?? '', a.description,
+        a.edition?.size ?? '', a.edition?.proofs ?? '', a.edition?.number ?? '', a.descriptionTitle ?? '', a.description, stockOf(a),
     ])];
 }
 
@@ -61,7 +61,8 @@ export function readInventoryCsv(text: string): { artworks: ImportedArtwork[]; s
         const price = priceText === '' ? 0 : Number(priceText);
         const status = STATUSES.find(s => s.toLowerCase() === cell('Status').toLowerCase()) ?? (cell('Status') ? null : 'Available');
         const size = cell('Edition size');
-        if (!cell('Title') || !Number.isFinite(price) || price < 0 || !status || (size && !/^\d+$/.test(size))) {
+        const quantity = cell('Quantity');
+        if (!cell('Title') || !Number.isFinite(price) || price < 0 || !status || (size && !/^\d+$/.test(size)) || (quantity && !/^\d+$/.test(quantity))) {
             skipped.push(i + 2);
             return;
         }
@@ -69,6 +70,8 @@ export function readInventoryCsv(text: string): { artworks: ImportedArtwork[]; s
             customId: cell('Inventory ID'), title: cell('Title'), artist: cell('Artist'), artworkYear: cell('Year'),
             medium: cell('Medium'), dimensions: cell('Dimensions'), price, plusGst: /^(yes|y|true|1)$/i.test(cell('Plus GST')),
             status, location: cell('Location'), descriptionTitle: cell('Description title'), description: cell('Description'),
+            // No Quantity column (an older file): keep stock as it is.
+            ...(quantity && { quantity: Number(quantity) }),
             edition: size ? { size, ...(cell('Artist proofs') && { proofs: cell('Artist proofs') }), ...(cell('Edition number') && { number: cell('Edition number') }) } : undefined,
         });
     });

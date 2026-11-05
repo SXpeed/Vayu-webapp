@@ -25,6 +25,7 @@ import { IfCan } from '../components/Layout';
 import { useInbox } from '../hooks/useInbox';
 import { chatDayLabel, withDayDividers } from './chat/DayDivider';
 import { ImageViewer, type ViewedImage } from './chat/ImageViewer';
+import { MediaSheet } from './chat/MediaSheet';
 import { ChatComposer, MessageBubble, messagePreview, messageTime } from './chat/MessageParts';
 import { Holdable, MessageActionMenu, ReactionChips, ReactionsSheet } from './chat/MessageReactions';
 
@@ -437,6 +438,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
     const [chatSearchQuery, setChatSearchQuery] = useState('');
     /** A photo opened full screen from a message. */
     const [viewing, setViewing] = useState<ViewedImage | null>(null);
+    const [showMedia, setShowMedia] = useState(false);
     // Opens on the latest message and stays there through late photos, syncing
     // messages and the keyboard — unless the reader scrolls up into history.
     const { scrollerRef, contentRef, scrollToLatest } = useStickToBottom(inquiry.id);
@@ -474,6 +476,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                 <button onClick={onClose} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale" aria-label="Back">
                     <ArrowLeft size={20} />
                 </button>
+                <button type="button" onClick={() => setShowMedia(true)} aria-label="Media and docs in this chat" className="flex-1 min-w-0 flex items-center gap-3 text-left active-scale">
                 <div className="w-9 h-9 rounded-full neu-inset flex items-center justify-center text-brand-900 dark:text-gold-400 shrink-0">
                     <User size={16} strokeWidth={1.5} />
                 </div>
@@ -481,6 +484,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                     <h2 className="text-sm font-serif text-gray-900 dark:text-white truncate">{inquiry.customerName}</h2>
                     <p className="text-[11px] uppercase tracking-widest font-medium text-gray-600 dark:text-gray-300">{inquiry.inquiryNumber} • Inquiry Chat</p>
                 </div>
+                </button>
                 <button
                     onClick={() => { setShowSearch(s => !s); setChatSearchQuery(''); }}
                     aria-label="Search in this chat"
@@ -573,6 +577,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                     onClose={() => setReactionsOf(null)}
                 />
             )}
+            {showMedia && <MediaSheet messages={messages} currentUserId={currentUserId} resolveName={resolveName} onOpenImage={setViewing} onClose={() => setShowMedia(false)} />}
             {viewing && <ImageViewer image={viewing} onClose={() => setViewing(null)} />}
         </div>
     );

@@ -101,6 +101,8 @@ export function rowToArtwork(row: Record<string, unknown>): any {
     descriptionTitle: (row.description_title as string) || undefined,
     plusGst: !!row.plus_gst,
     edition: row.edition ? JSON.parse(row.edition as string) : undefined,
+    // A database not yet given the column: one piece, none once sold.
+    quantity: row.quantity == null ? Number(row.status !== 'Sold') : Number(row.quantity),
   };
 }
 

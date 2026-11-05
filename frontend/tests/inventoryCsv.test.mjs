@@ -13,7 +13,7 @@ const csv = (rows) => rows.map(r => r.map(v => `"${String(v).replaceAll('"', '""
 const art = {
     id: 'art_1', customId: 'VD-001', title: 'Monsoon, "I"', artist: 'R. Rao', artworkYear: '2024', medium: 'Oil', dimensions: '36 x 48 in',
     price: 250000, plusGst: true, status: 'Reserved', location: 'Store B', descriptionTitle: 'Provenance', description: 'Line one\nline two',
-    edition: { size: '10', proofs: '2', number: '3' }, imageUrls: ['/api/files/x.png'], createdAt: 1,
+    edition: { size: '10', proofs: '2', number: '3' }, quantity: 4, imageUrls: ['/api/files/x.png'], createdAt: 1,
 };
 
 test('an export reads back as the same artwork, photos aside', () => {
@@ -29,6 +29,7 @@ test('columns are found by name, in any order, and Excel-style values are unders
     assert.equal(artworks[0].price, 120000);
     assert.equal(artworks[0].status, 'Sold');
     assert.equal(artworks[0].plusGst, true);
+    assert.equal('quantity' in artworks[0], false, 'no Quantity column: stock is left as it is');
     assert.deepEqual([artworks[1].price, artworks[1].status, artworks[1].edition], [0, 'Available', undefined]);
 });
 

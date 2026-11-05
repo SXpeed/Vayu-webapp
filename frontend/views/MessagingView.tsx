@@ -13,6 +13,7 @@ import { IfCan } from '../components/Layout';
 import { CountBadge, useInbox } from '../hooks/useInbox';
 import { chatDayLabel, withDayDividers } from './chat/DayDivider';
 import { ImageViewer, type ViewedImage } from './chat/ImageViewer';
+import { MediaSheet } from './chat/MediaSheet';
 import { Holdable, MessageActionMenu, MessageInfoSheet, ReactionChips, ReactionsSheet, ReadTicks } from './chat/MessageReactions';
 import { ChatComposer, MessageBubble, messagePreview, messageTime } from './chat/MessageParts';
 
@@ -570,6 +571,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
     const [infoOf, setInfoOf] = useState<string | null>(null);
     /** A photo opened full screen from a message. */
     const [viewing, setViewing] = useState<ViewedImage | null>(null);
+    const [showMedia, setShowMedia] = useState(false);
     const isMember = conversation.participantIds.includes(currentUserId);
 
     // Seen: while this chat is on screen, tell the server which messages from
@@ -808,6 +810,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                         <ArrowLeft size={20} />
                     </button>
                 )}
+                <button type="button" onClick={() => setShowMedia(true)} aria-label="Media and docs in this chat" className="flex-1 min-w-0 flex items-center gap-3 text-left active-scale">
                 <div className="relative">
                     <div className={`w-9 h-9 rounded-full flex items-center justify-center ${conversation.isGroup ? 'bg-gold-500/10 dark:bg-gold-900/20 text-gold-700 dark:text-gold-300' : 'neu-inset text-brand-900 dark:text-gold-400'
                         }`}>
@@ -817,12 +820,13 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                         <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 rounded-full border-2 border-white dark:border-[#1a1a1a]"></div>
                     )}
                 </div>
-                <div className="flex-1">
-                    <h2 className="text-sm font-serif text-gray-900 dark:text-white">{otherParticipant.name}</h2>
+                <div className="flex-1 min-w-0">
+                    <h2 className="text-sm font-serif text-gray-900 dark:text-white truncate">{otherParticipant.name}</h2>
                     <p className={`text-[11px] uppercase tracking-widest font-medium ${statusTextColor}`}>
                         {statusText}
                     </p>
                 </div>
+                </button>
                 <button
                     onClick={() => { setShowSearch(s => !s); setChatSearchQuery(''); }}
                     className={`p-2 rounded-full transition-colors active-scale shrink-0 ${showSearch ? 'neu-raised-sm neu-btn text-gold-700 dark:text-gold-300' : 'text-gray-700 dark:text-gray-300'}`}
@@ -886,6 +890,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                     onClose={() => setReactionsOf(null)}
                 />
             )}
+            {showMedia && <MediaSheet messages={messages} currentUserId={currentUserId} resolveName={resolveName} onOpenImage={setViewing} onClose={() => setShowMedia(false)} />}
             {viewing && <ImageViewer image={viewing} onClose={() => setViewing(null)} />}
             {infoMsg && (
                 <MessageInfoSheet msg={infoMsg} participantIds={participantIds} resolveName={resolveName} onClose={() => setInfoOf(null)} />

@@ -1965,6 +1965,7 @@ const COLUMN_MIGRATIONS = {
     description_title: "TEXT DEFAULT ''",
     plus_gst: 'INTEGER DEFAULT 0',
     edition: "TEXT DEFAULT ''",
+    quantity: 'INTEGER DEFAULT 1',
   },
   collections: {
     cover_image_url: "TEXT DEFAULT ''",
@@ -2000,6 +2001,8 @@ async function addMissingColumns(db: D1Database, table: MigratedTable): Promise<
     if (existing.has(column)) continue;
     try {
       await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run(); // NOSONAR: schema steps run one at a time
+      // Stock arrives as 1 per piece; one already sold has none left.
+      if (table === 'artworks' && column === 'quantity') await db.prepare("UPDATE artworks SET quantity = 0 WHERE status = 'Sold'").run(); // NOSONAR
     } catch (e) {
       // Another isolate may have added it concurrently.
       if (!/duplicate column/i.test((e as Error).message)) throw e;
@@ -2245,6 +2248,9 @@ function artworkValues(art: any): unknown[] {
   ];
 }
 
+/** Units in stock as sent, or null to keep what is stored (older apps don't send it). */
+const stockSent = (v: unknown): number | null => (Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 1_000_000 ? v as number : null);
+
 const artworkLabel = (art: { title?: string; customId?: string; id?: string }) =>
   `"${art.title || art.customId || art.id}"`;
 
@@ -2264,9 +2270,9 @@ async function handleArtworksCreate(ctx: Ctx): Promise<Response> {
     ctx.env.VAYU_DB.prepare(
       `INSERT OR REPLACE INTO artworks
        (id, custom_id, title, artist, artwork_year, description_title, description,
-        dimensions, medium, status, location, price, plus_gst, edition, image_urls, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(art.id, ...artworkValues(art), art.createdAt || Date.now()),
+        dimensions, medium, status, location, price, plus_gst, edition, image_urls, created_at, quantity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, (SELECT quantity FROM artworks WHERE id = ?), 1))`
+    ).bind(art.id, ...artworkValues(art), art.createdAt || Date.now(), stockSent(art.quantity), art.id),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'artwork', art.id, 'put', { actorId: session.userId }),
   ]);
   queueHubNotify(ctx, [{ entity: 'artwork', id: art.id, op: 'put' }]);
@@ -2289,9 +2295,9 @@ async function handleArtworksUpdate(ctx: Ctx): Promise<Response> {
       `UPDATE artworks SET
          custom_id = ?, title = ?, artist = ?, artwork_year = ?, description_title = ?,
          description = ?, dimensions = ?, medium = ?, status = ?, location = ?,
-         price = ?, plus_gst = ?, edition = ?, image_urls = ?
+         price = ?, plus_gst = ?, edition = ?, image_urls = ?, quantity = COALESCE(?, quantity)
        WHERE id = ?`
-    ).bind(...artworkValues(art), artId),
+    ).bind(...artworkValues(art), stockSent(art.quantity), artId),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'artwork', artId, 'put', { actorId: session.userId }),
   ]);
   queueHubNotify(ctx, [{ entity: 'artwork', id: artId, op: 'put' }]);
@@ -3991,7 +3997,7 @@ const routes: Route[] = [
   }),
 
   // Sales ledger (sales.ts)
-  ...salesRoutes({ logChange: logEntityChange, notify: queueHubNotify }),
+  ...salesRoutes({ logChange: logEntityChange, notify: queueHubNotify, ensureArtworks: db => ensureColumns(db, 'artworks') }),
 
   { method: 'GET', match: isExact('/viewing-rooms'), handler: handleViewingRoomsList },
   { method: 'POST', match: isExact('/viewing-rooms'), handler: handleViewingRoomsCreate },
@@ -4091,7 +4097,7 @@ const routes: Route[] = [
 
   // Contacts
   // Billing: proformas, tax invoices, challans, notes and the billing setup (invoices.ts).
-  ...invoiceRoutes({ logChange: logEntityChange, notify: queueHubNotify, archive: archiveDeletedAsync }),
+  ...invoiceRoutes({ logChange: logEntityChange, notify: queueHubNotify, archive: archiveDeletedAsync, ensureArtworks: db => ensureColumns(db, 'artworks') }),
   { method: 'GET', match: isExact('/contacts'), handler: handleContactsList },
   { method: 'POST', match: isExact('/contacts'), handler: handleContactsCreate },
   { method: 'POST', match: isExact('/contacts/import'), handler: handleContactsImport },

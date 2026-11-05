@@ -30,7 +30,7 @@ export const messagePreview = (msg: { text?: string; attachment?: MessageAttachm
 
 /** Open a sent file: a PDF or text in a new tab, anything else downloads under
  *  its own name. Fetched as a blob, like catalog PDFs: installed apps block popups. */
-async function openFile(file: MessageAttachment) {
+export async function openFile(file: MessageAttachment) {
     const toastId = toast.loading('Opening…');
     try {
         const res = await fetch(file.url);

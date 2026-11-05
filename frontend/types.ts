@@ -20,7 +20,12 @@ export interface Artwork {
     edition?: Edition;
     imageUrls: string[]; // Changed from imageUrl to imageUrls array
     createdAt: number;
+    /** Units in stock (1 for a unique piece). Sales and tax invoices take from it; at 0 it is Sold. */
+    quantity?: number;
 }
+
+/** Units in stock; a record from before stock counts is one piece, none once sold. */
+export const stockOf = (a: Pick<Artwork, 'quantity' | 'status'>): number => a.quantity ?? Number(a.status !== 'Sold');
 
 /** A numbered edition (prints, casts, photographs). */
 export interface Edition {

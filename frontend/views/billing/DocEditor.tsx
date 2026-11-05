@@ -8,7 +8,7 @@ import { Field, Input, Select, Textarea, ToggleRow, Button, Pill } from '../../c
 import { ArtworkPicker } from '../../components/ArtworkPicker';
 import { ContactSuggest } from '../../components/ContactSuggest';
 import { TypeDeleteDialog } from '../../components/TypeDeleteDialog';
-import { editionLabel, type Artwork, type Contact } from '../../types';
+import { editionLabel, stockOf, type Artwork, type Contact } from '../../types';
 import { useBilling, type BillingApi } from './billingContext';
 import {
     currentSeller, docTotals, isLocked, ISSUED_KINDS, issueProblems, kindLabel, PURPOSE_LABEL, RETURNABLE, stateOfGstin,
@@ -155,7 +155,7 @@ function useDocEditor({ initial, onClose, onSaved, onSetup }: EditorProps) {
         gstinErr: d.party.gstin ? gstinProblem(d.party.gstin) : null,
         pickContact: (c: Contact) => setParty(partyFromContact(c, b.docs, d.id)),
         // Available pieces, plus any already on this document.
-        pickable: b.artworks.filter(a => a.status === 'Available' || selectedArt.has(a.id)),
+        pickable: b.artworks.filter(a => (a.status === 'Available' && stockOf(a) > 0) || selectedArt.has(a.id)),
     };
 }
 

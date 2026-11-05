@@ -44,6 +44,7 @@ export function ensureSalesTable(db: D1Database): Promise<void> {
             artwork_id      TEXT,
             item_title      TEXT NOT NULL DEFAULT '',
             item_price      REAL NOT NULL DEFAULT 0,
+            qty             INTEGER NOT NULL DEFAULT 1,
             contact_id      TEXT,
             buyer_name      TEXT NOT NULL DEFAULT '',
             buyer_phone     TEXT NOT NULL DEFAULT '',
@@ -76,13 +77,14 @@ export function ensureSalesTable(db: D1Database): Promise<void> {
                 if (!/duplicate column/i.test((e as Error).message)) throw e;
             }
         }
-    });
+    }, JSON.stringify(ADDED_COLUMNS));
 }
 
 /** Columns added after the table first shipped (2026-09-29), with their definitions. */
 const ADDED_COLUMNS: Record<string, string> = {
     tags: "TEXT NOT NULL DEFAULT '[]'",
     photo_urls: "TEXT NOT NULL DEFAULT '[]'",
+    qty: 'INTEGER NOT NULL DEFAULT 1',
 };
 
 // ── Rows ────────────────────────────────────────────────────────────────────
@@ -110,6 +112,7 @@ function rowToSale(r: Record<string, unknown>): Sale {
         tags: stringList(r.tags),
         itemTitle: text(r.item_title),
         itemPrice: Number(r.item_price) || 0,
+        qty: Number(r.qty) || 1,
         contactId: text(r.contact_id) || null,
         buyerName: text(r.buyer_name),
         buyerPhone: text(r.buyer_phone),
@@ -151,6 +154,8 @@ export interface SalesRoute { method: string; match: (path: string) => boolean; 
 export interface SalesDeps {
     logChange: (ctx: Ctx, session: SessionData, action: string, entity: string, id: string, details: string) => void;
     notify: (ctx: Ctx, events: ChangeEvent[]) => void;
+    /** Adds the artworks table's newer columns (quantity) before stock is counted. */
+    ensureArtworks: (db: D1Database) => Promise<void>;
 }
 
 const SALE_PATH = /^\/sales\/([A-Za-z0-9_-]{1,64})$/;
@@ -171,6 +176,8 @@ function readInput(raw: Record<string, unknown>): SaleInput {
         artworkId: typeof raw.artworkId === 'string' && raw.artworkId ? raw.artworkId.slice(0, 128) : null,
         itemTitle: cleanText(raw.itemTitle, 200),
         itemPrice: raw.itemPrice === undefined || raw.itemPrice === null || raw.itemPrice === '' ? 0 : Number(raw.itemPrice),
+        // Older apps send none: one piece.
+        qty: raw.qty === undefined ? 1 : Number(raw.qty),
         contactId: typeof raw.contactId === 'string' && raw.contactId ? raw.contactId.slice(0, 128) : null,
         buyerName: cleanText(raw.buyerName, 120),
         buyerPhone: cleanText(raw.buyerPhone, 40),
@@ -222,13 +229,15 @@ async function pieceSnapshot(db: D1Database, artworkId: string): Promise<{ title
     return { title: String(art.title || art.custom_id || 'Untitled'), price: Number(art.price) || 0 };
 }
 
-/** Why a piece couldn't be sold: it went, or someone reserved or sold it first. */
+/** Why a piece couldn't be sold: it went, someone reserved or sold it first, or fewer are in stock. */
 async function notForSale(db: D1Database, artworkId: string): Promise<Response> {
-    const now = await db.prepare('SELECT status FROM artworks WHERE id = ?').bind(artworkId).first<{ status: string }>();
+    const now = await db.prepare('SELECT status, quantity FROM artworks WHERE id = ?').bind(artworkId).first<{ status: string; quantity: number }>();
     if (!now) return err('That piece is no longer in the inventory.', 404);
-    return json(now.status === 'Reserved'
-        ? { error: 'That piece is reserved. Mark it available first.', code: 'reserved' }
-        : { error: 'That piece is already sold', code: 'already_sold' }, 409);
+    if (now.status === 'Reserved') return json({ error: 'That piece is reserved. Mark it available first.', code: 'reserved' }, 409);
+    if (now.status === 'Available') {
+        return json({ error: now.quantity > 0 ? `Only ${now.quantity} left in stock.` : 'None left in stock. Set its quantity in the inventory first.', code: 'low_stock' }, 409);
+    }
+    return json({ error: 'That piece is already sold', code: 'already_sold' }, 409);
 }
 
 /**
@@ -246,15 +255,17 @@ async function insertSale(ctx: Ctx, session: SessionData, id: string, input: Sal
     const photoUrls = input.artworkId ? [] : input.photoUrls;
     await ensureChangeLogTable(db);
     const stmts: D1PreparedStatement[] = [];
-    if (input.artworkId) stmts.push(db.prepare("UPDATE artworks SET status = 'Sold' WHERE id = ? AND status = 'Available'").bind(input.artworkId));
+    // Takes the units out of stock, only while enough are Available; the last one makes it Sold.
+    if (input.artworkId) stmts.push(db.prepare(`UPDATE artworks SET quantity = quantity - ?1, status = CASE WHEN quantity - ?1 <= 0 THEN 'Sold' ELSE status END
+        WHERE id = ?2 AND status = 'Available' AND quantity >= ?1`).bind(input.qty, input.artworkId));
     stmts.push(db.prepare(
         `INSERT INTO sales (id, seq, sale_number, artwork_id, item_title, item_price, contact_id, buyer_name, buyer_phone,
-            sale_date, recorded_at, amount, payment_mode, reference_no, notes, tags, photo_urls, created_by, created_by_name, updated_at, updated_by)
-         SELECT ?, n, printf('SAL-%03d', n), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            sale_date, recorded_at, amount, payment_mode, reference_no, notes, tags, photo_urls, created_by, created_by_name, updated_at, updated_by, qty)
+         SELECT ?, n, printf('SAL-%03d', n), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
          FROM (SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM sales)${input.artworkId ? ' WHERE changes() = 1' : ''}`,
     ).bind(id, input.artworkId, item.title, item.price, input.contactId, input.buyerName, input.buyerPhone,
         input.saleDate, now, input.amount, input.paymentMode, input.referenceNo, input.notes,
-        JSON.stringify(input.tags), JSON.stringify(photoUrls), session.userId, session.name, now, session.userId));
+        JSON.stringify(input.tags), JSON.stringify(photoUrls), session.userId, session.name, now, session.userId, input.qty));
     if (input.artworkId) stmts.push(changeLogStmt(db, ctx.env, 'artwork', input.artworkId, 'put', { actorId: session.userId }));
     const results = await db.batch(stmts);
     return results[input.artworkId ? 1 : 0].meta.changes === 1;
@@ -317,6 +328,7 @@ export function salesRoutes(deps: SalesDeps): SalesRoute[] {
 
         let item = { title: input.itemTitle, price: input.itemPrice };
         if (input.artworkId) {
+            await deps.ensureArtworks(db);
             const piece = await pieceSnapshot(db, input.artworkId);
             if (piece instanceof Response) return piece;
             item = piece;
@@ -347,6 +359,7 @@ export function salesRoutes(deps: SalesDeps): SalesRoute[] {
         if (!raw) return err('Invalid request body');
         const input = readInput(raw);
         input.artworkId = existing.artworkId;
+        input.qty = existing.qty; // like the piece: delete and record again to change it
         // A piece's title and price are its snapshot; a free-text item's can be corrected, and its photos changed.
         if (existing.artworkId) { input.itemTitle = existing.itemTitle; input.itemPrice = existing.itemPrice; input.photoUrls = []; }
         const errors = saleFieldErrors(input);
@@ -378,16 +391,17 @@ export function salesRoutes(deps: SalesDeps): SalesRoute[] {
                 .bind(Date.now(), session.userId, session.name, id),
         ];
         if (existing.artworkId) {
-            // Only a piece this sale sold: not one reserved or sold again since.
+            await deps.ensureArtworks(db);
+            // Its units go back into stock; a Sold piece is Available again, a reserved one stays reserved.
             stmts.push(
-                db.prepare(`UPDATE artworks SET status = 'Available' WHERE id = ? AND status = 'Sold'
-                    AND NOT EXISTS (SELECT 1 FROM sales WHERE artwork_id = ? AND deleted_at IS NULL)`).bind(existing.artworkId, existing.artworkId),
+                db.prepare(`UPDATE artworks SET quantity = quantity + ?1, status = CASE WHEN status = 'Sold' THEN 'Available' ELSE status END
+                    WHERE id = ?2`).bind(existing.qty, existing.artworkId),
                 changeLogStmt(db, ctx.env, 'artwork', existing.artworkId, 'put', { actorId: session.userId }),
             );
         }
         await db.batch(stmts);
         deps.logChange(ctx, session, 'deleted', 'sale', id,
-            `Deleted sale ${existing.saleNumber} ("${existing.itemTitle}", ${rupees(existing.amount)})${existing.inInventory ? '; the piece is available again' : ''}`);
+            `Deleted sale ${existing.saleNumber} ("${existing.itemTitle}", ${rupees(existing.amount)})${existing.inInventory ? '; ' + existing.qty + ' back in stock' : ''}`);
         signal(ctx, id, existing.artworkId);
         return json({ success: true });
     };

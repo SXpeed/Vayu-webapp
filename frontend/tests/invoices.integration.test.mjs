@@ -270,4 +270,18 @@ test('issuing, cancelling and returns move inventory on the server', async () =>
     const back = await save({ ...out, status: 'Returned', lines: out.lines.map(l => ({ ...l, returnedQty: l.qty })) });
     assert.equal(back.status, 200, back.text);
     assert.equal(await statusOf('art_out'), 'Available', 'back in stock once returned');
+
+    // Stock: a tax invoice takes each line's quantity out, and cancelling puts it back.
+    assert.equal((await api(owner, '/artworks', { method: 'POST', body: { id: 'art_run', customId: 'art_run', title: 'Prints', price: 1000, status: 'Available', quantity: 5, imageUrls: [], createdAt: Date.now() } })).status, 201);
+    const stock = async () => { const a = (await api(owner, '/artworks')).body.find(x => x.id === 'art_run'); return [a.status, a.quantity]; };
+    const three = draft('tax', { lines: [line(1000, { artworkId: 'art_run', qty: 2 }), line(1000, { artworkId: 'art_run', qty: 1 })] });
+    await save(three);
+    await issue(three.id);
+    assert.deepEqual(await stock(), ['Available', 2]);
+    const rest = draft('tax', { lines: [line(1000, { artworkId: 'art_run', qty: 2 })] });
+    await save(rest);
+    await issue(rest.id);
+    assert.deepEqual(await stock(), ['Sold', 0], 'the last units make it Sold');
+    assert.equal((await api(owner, `/invoices/${three.id}/cancel`, { method: 'POST', body: { reason: 'Returned' } })).status, 200);
+    assert.deepEqual(await stock(), ['Available', 3]);
 });

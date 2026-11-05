@@ -25,6 +25,8 @@ export interface Sale {
     /** Snapshots taken when the sale was recorded: they outlive the piece. */
     itemTitle: string;
     itemPrice: number;
+    /** Units sold; taken out of the piece's stock. */
+    qty: number;
     contactId: string | null;
     buyerName: string;
     buyerPhone: string;
@@ -45,6 +47,8 @@ export interface SaleInput {
     /** Used only when artworkId is null (the server snapshots the piece itself). */
     itemTitle: string;
     itemPrice: number;
+    /** Units sold, a whole number from 1. */
+    qty: number;
     contactId: string | null;
     buyerName: string;
     buyerPhone: string;
@@ -147,6 +151,7 @@ export function saleFieldErrors(s: SaleInput): string[] {
     if (!isAmount(s.amount) || s.amount <= 0) errors.push('Enter the amount received.');
     if (!isPaymentMode(s.paymentMode)) errors.push('Choose how it was paid.');
     if (!isAmount(s.itemPrice)) errors.push('Enter a valid price for the item.');
+    if (!Number.isInteger(s.qty) || s.qty < 1 || s.qty > 1_000_000) errors.push('Enter how many were sold (a whole number from 1).');
     if (s.photoUrls.length > MAX_PHOTOS) errors.push(`Add at most ${MAX_PHOTOS} photos.`);
     else if (!s.photoUrls.every(isFileUrl)) errors.push('A photo didn’t upload properly. Remove it and add it again.');
     return errors;

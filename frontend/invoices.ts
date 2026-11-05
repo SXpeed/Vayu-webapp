@@ -77,6 +77,8 @@ export interface InvoiceDeps {
     logChange: (ctx: Ctx, session: SessionData, action: string, entity: string, id: string, details: string) => void;
     notify: (ctx: Ctx, events: ChangeEvent[]) => void;
     archive: (ctx: Ctx, session: SessionData, entity: string, id: string, summary: string, payload: unknown) => void;
+    /** Adds the artworks table's newer columns (quantity) before stock is counted. */
+    ensureArtworks: (db: D1Database) => Promise<void>;
 }
 
 const DOC_PATH = /^\/invoices\/([\w.-]{1,80})$/;
@@ -128,12 +130,37 @@ function moveStatements(ctx: Ctx, session: SessionData, ids: string[], to: Piece
     ]);
 }
 
+/** Each piece's units on a document (a piece can be on several lines). */
+function unitsByPiece(doc: BillingDoc): Map<string, number> {
+    const units = new Map<string, number>();
+    for (const l of doc.lines) if (l.artworkId) units.set(l.artworkId, (units.get(l.artworkId) ?? 0) + l.qty);
+    return units;
+}
+
+/**
+ * A tax invoice counts stock: issuing takes its units out (the last one makes the
+ * piece Sold), cancelling puts them back (a Sold piece is Available again).
+ */
+function stockStatements(ctx: Ctx, session: SessionData, doc: BillingDoc, sign: 1 | -1): D1PreparedStatement[] {
+    const db = ctx.env.VAYU_DB;
+    return [...unitsByPiece(doc)].flatMap(([id, units]) => [
+        sign < 0
+            ? db.prepare(`UPDATE artworks SET quantity = MAX(quantity - ?1, 0), status = CASE WHEN quantity - ?1 <= 0 THEN 'Sold' ELSE 'Available' END
+                WHERE id = ?2 AND status IN ('Available', 'Reserved')`).bind(units, id)
+            : db.prepare(`UPDATE artworks SET quantity = quantity + ?1, status = CASE WHEN status = 'Sold' THEN 'Available' ELSE status END
+                WHERE id = ?2`).bind(units, id),
+        changeLogStmt(db, ctx.env, 'artwork', id, 'put', { actorId: session.userId }),
+    ]);
+}
+
+type InventoryMove = { to: PieceStatus; from: PieceStatus[]; ids: string[]; stock?: { doc: BillingDoc; sign: 1 | -1 } };
+
 /** What happens to inventory when a document is issued, cancelled, or its goods come back (Billing setup → Update inventory). */
-function inventoryMoves(event: 'issue' | 'cancel' | 'return', doc: BillingDoc, returnedIds: string[] = []): { to: PieceStatus; from: PieceStatus[]; ids: string[] } | null {
+function inventoryMoves(event: 'issue' | 'cancel' | 'return', doc: BillingDoc, returnedIds: string[] = []): InventoryMove | null {
     const returnable = doc.kind === 'challan' && !!doc.challanPurpose && RETURNABLE.has(doc.challanPurpose);
-    if (event === 'issue' && doc.kind === 'tax') return { to: 'Sold', from: ['Available', 'Reserved'], ids: pieces(doc) };
+    if (event === 'issue' && doc.kind === 'tax') return { to: 'Sold', from: ['Available', 'Reserved'], ids: pieces(doc), stock: { doc, sign: -1 } };
     if (event === 'issue' && returnable) return { to: 'Reserved', from: ['Available'], ids: pieces(doc) };
-    if (event === 'cancel' && doc.kind === 'tax') return { to: 'Available', from: ['Sold'], ids: pieces(doc) };
+    if (event === 'cancel' && doc.kind === 'tax') return { to: 'Available', from: ['Sold'], ids: pieces(doc), stock: { doc, sign: 1 } };
     if (event === 'cancel' && returnable) return { to: 'Available', from: ['Reserved'], ids: pieces(doc) };
     if (event === 'return' && returnable) return { to: 'Available', from: ['Reserved'], ids: returnedIds };
     return null;
@@ -199,10 +226,12 @@ function sourceAfterIssue(source: BillingDoc, issued: BillingDoc, session: Sessi
 export function invoiceRoutes(deps: InvoiceDeps): InvoiceRoute[] {
     /** Writes documents, and the inventory they move, in one batch (a transaction). */
     const writeDocs = async (ctx: Ctx, session: SessionData, docs: { doc: BillingDoc; createdBy: string | null; createdByName: string | null }[],
-        move: ReturnType<typeof inventoryMoves> = null, s: BillingSettings | null = null) => {
+        move: InventoryMove | null = null, s: BillingSettings | null = null) => {
         const db = ctx.env.VAYU_DB;
         await ensureChangeLogTable(db);
         const moved = move && s?.inventoryEffects && move.ids.length ? move : null;
+        if (moved?.stock) await deps.ensureArtworks(db);
+        const inventory = moved?.stock ? stockStatements(ctx, session, moved.stock.doc, moved.stock.sign) : moved && moveStatements(ctx, session, moved.ids, moved.to, moved.from);
         await db.batch([...docs.flatMap(({ doc, createdBy, createdByName }) => [
             db.prepare(`INSERT INTO invoices (id, invoice_number, customer_name, status, date, data, created_by, created_by_name, updated_at, kind, series_key, seq)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -210,7 +239,7 @@ export function invoiceRoutes(deps: InvoiceDeps): InvoiceRoute[] {
                     date = excluded.date, data = excluded.data, updated_at = excluded.updated_at, kind = excluded.kind`)
                 .bind(doc.id, doc.number, doc.party.name, doc.status, doc.date, JSON.stringify(doc), createdBy, createdByName, Date.now(), doc.kind, doc.seriesKey ?? null, doc.seq ?? null),
             changeLogStmt(db, ctx.env, 'invoice', doc.id, 'put', { actorId: session.userId }),
-        ]), ...(moved ? moveStatements(ctx, session, moved.ids, moved.to, moved.from) : [])]);
+        ]), ...(inventory ?? [])]);
         deps.notify(ctx, [
             ...docs.map(({ doc }) => ({ entity: 'invoice', id: doc.id, op: 'put' as const })),
             ...(moved?.ids ?? []).map(id => ({ entity: 'artwork', id, op: 'put' as const })),

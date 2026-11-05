@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { Plus, Image as ImageIcon, X, Trash2, Loader2, Camera, Folder, Download, Upload } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton, GhostIconButton, EmptyState, Pill } from '../components/ui';
-import { Artwork, Edition } from '../types';
+import { Artwork, Edition, stockOf } from '../types';
 import toast from 'react-hot-toast';
 import storageService, { getThumbUrl } from '../services/storageService';
 import { fileKeyOf } from '../services/workspace';
@@ -67,6 +67,7 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
         <PageRoot>
             <PageHeader
                 title="Inventory"
+                subtitle={`${filteredArtworks.reduce((n, a) => n + stockOf(a), 0)} in stock · ${filteredArtworks.length} ${filteredArtworks.length === 1 ? 'piece' : 'pieces'}`}
                 actions={<>
                     <GhostIconButton onClick={handleExport} label="Export these artworks as CSV" icon={<Download size={16} />} disabled={filteredArtworks.length === 0} />
                     <IfCan section="inventory">
@@ -115,6 +116,7 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
                                     <span className="w-1.5 h-1.5 rounded-full bg-current" />
                                     {artwork.status}
                                 </span>
+                                <span className="neu-chip-float bottom-2 left-2 text-[var(--neu-text)] tracking-normal tabular-nums">Qty {stockOf(artwork)}</span>
                                 {imageCount > 1 && (
                                     <span className="neu-chip-float bottom-2 right-2 text-[var(--neu-text)] tracking-normal">
                                         <ImageIcon size={11} /> {imageCount}
@@ -181,6 +183,7 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
         location: initialData?.location || '',
         price: initialData?.price?.toString() || '',
         plusGst: initialData?.plusGst || false,
+        quantity: String(initialData ? stockOf(initialData) : 1),
         imageUrls: initialData?.imageUrls ?? []
     });
     const [isEdition, setIsEdition] = useState(!!initialData?.edition);
@@ -200,6 +203,7 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
         onSave({
             ...formData,
             price: Number(formData.price) || 0,
+            quantity: Math.max(0, Math.floor(Number(formData.quantity) || 0)),
             edition: isEdition ? edition : undefined,
         });
     };
@@ -376,13 +380,19 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
                             </div>
                         </div>
 
-                        <div>
-                            <label htmlFor="artwork-status" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Status</label>
-                            <select id="artwork-status" name="status" value={formData.status} onChange={handleChange} className="neu-field">
-                                <option value="Available" className="dark:bg-gray-800">Available</option>
-                                <option value="Sold" className="dark:bg-gray-800">Sold</option>
-                                <option value="Reserved" className="dark:bg-gray-800">Reserved</option>
-                            </select>
+                        <div className="flex gap-3">
+                            <div className="flex-1">
+                                <label htmlFor="artwork-status" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Status</label>
+                                <select id="artwork-status" name="status" value={formData.status} onChange={handleChange} className="neu-field">
+                                    <option value="Available" className="dark:bg-gray-800">Available</option>
+                                    <option value="Sold" className="dark:bg-gray-800">Sold</option>
+                                    <option value="Reserved" className="dark:bg-gray-800">Reserved</option>
+                                </select>
+                            </div>
+                            <div className="flex-1">
+                                <label htmlFor="artwork-quantity" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Quantity in stock</label>
+                                <input id="artwork-quantity" name="quantity" type="number" min="0" step="1" inputMode="numeric" value={formData.quantity} onChange={handleChange} className="neu-field" />
+                            </div>
                         </div>
 
                         <div className="flex gap-3">

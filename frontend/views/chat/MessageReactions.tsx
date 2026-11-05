@@ -236,7 +236,7 @@ export const MessageActionMenu: React.FC<MenuProps> = ({ anchor, isMe, myReactio
 };
 
 /** A sheet from the bottom on phones, a small centred dialog on a computer. */
-const Sheet: React.FC<{ title: string; onClose: () => void; children: React.ReactNode }> = ({ title, onClose, children }) => (
+export const Sheet: React.FC<{ title: string; onClose: () => void; children: React.ReactNode }> = ({ title, onClose, children }) => (
     <Layer onClose={onClose} label={title}>
         <div className="absolute inset-x-0 bottom-0 lg:inset-auto lg:top-1/2 lg:left-1/2 lg:-translate-x-1/2 lg:-translate-y-1/2 lg:w-[26rem]
                         neu-modal rounded-t-3xl lg:rounded-3xl max-h-[75dvh] flex flex-col animate-fade-in-up pb-[var(--safe-bottom,0px)]">

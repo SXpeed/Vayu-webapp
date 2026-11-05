@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { ArrowLeft, Edit2, X, Image as ImageIcon, Share2 } from 'lucide-react';
-import { Artwork, editionLabel } from '../types';
+import { Artwork, editionLabel, stockOf } from '../types';
 import { ArtworkFormModal } from './ArtworksView';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { ZoomableImage } from '../components/ZoomableImage';
@@ -272,6 +272,7 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                                     <span className="w-1.5 h-1.5 rounded-full bg-current" aria-hidden="true" />
                                     {artwork.status}
                                 </span>
+                                <span aria-hidden="true">·</span><span className="tabular-nums">{stockOf(artwork)} in stock</span>
                                 {artwork.customId && <><span aria-hidden="true">·</span><span className="uppercase tracking-[0.14em]">{artwork.customId}</span></>}
                                 {artwork.location && <><span aria-hidden="true">·</span><span>{artwork.location}</span></>}
                             </p>

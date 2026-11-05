@@ -30,7 +30,10 @@ VALUES ('sale_from_before_tags', 1, 'SAL-001', 'Recorded before tags', 'Early bu
 -- A month with more sales than the list holds. Negative seqs leave MAX(seq), so new sale numbers stay SAL-00n.
 WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2001)
 INSERT INTO sales (id, seq, sale_number, item_title, buyer_name, sale_date, recorded_at, amount, payment_mode, updated_at)
-SELECT 'sale_bulk_' || i, -i, 'BULK-' || i, 'Print', 'Bulk buyer', '2024-03-15', 1, 10.1, 'Cash', 1 FROM n;`;
+SELECT 'sale_bulk_' || i, -i, 'BULK-' || i, 'Print', 'Bulk buyer', '2024-03-15', 1, 10.1, 'Cash', 1 FROM n;
+-- Artworks from before stock counts: the column comes on first write, and a sold piece gets 0.
+ALTER TABLE artworks DROP COLUMN quantity;
+INSERT INTO artworks (id, title, status, created_at) VALUES ('art_sold_before_stock', 'Old sale', 'Sold', 1), ('art_open_before_stock', 'Old stock', 'Available', 1);`;
 const MONTH = { from: '2026-09-01', to: '2026-09-30' };
 
 let worker;
@@ -189,6 +192,31 @@ test('deleting a sale puts the piece back on sale; numbers are never reused', as
     assert.equal(n(resold.body.saleNumber), n(made.body.saleNumber) + 1, 'the deleted number stays taken');
 });
 
+test('sales count stock: each takes its quantity, the last unit makes it Sold, deleting puts them back', async () => {
+    const id = `art_test_${++artSeq}`;
+    assert.equal((await api(owner, '/artworks', { method: 'POST', body: { id, customId: `VS-${artSeq}`, title: 'Print run', price: 5000, status: 'Available', quantity: 3, imageUrls: [], createdAt: Date.now() } })).status, 201);
+    const stock = async () => { const a = (await api(owner, '/artworks')).body.find(x => x.id === id); return [a.status, a.quantity]; };
+
+    const two = await api(accounts, '/sales', { method: 'POST', body: sale({ artworkId: id, qty: 2, amount: 10_000 }) });
+    assert.equal(two.status, 201, two.text);
+    assert.equal(two.body.qty, 2);
+    assert.deepEqual(await stock(), ['Available', 1]);
+    const tooMany = await api(accounts, '/sales', { method: 'POST', body: sale({ artworkId: id, qty: 2 }) });
+    assert.equal(tooMany.status, 409);
+    assert.equal(tooMany.body.code, 'low_stock');
+    assert.deepEqual(await stock(), ['Available', 1], 'a refused sale takes nothing');
+    assert.equal((await api(accounts, '/sales', { method: 'POST', body: sale({ artworkId: id, qty: 0 }) })).status, 400);
+
+    assert.equal((await api(accounts, '/sales', { method: 'POST', body: sale({ artworkId: id }) })).status, 201, 'no qty: one');
+    assert.deepEqual(await stock(), ['Sold', 0]);
+    assert.equal((await api(accounts, `/sales/${two.body.id}`, { method: 'DELETE' })).status, 200);
+    assert.deepEqual(await stock(), ['Available', 2]);
+
+    // An app without stock counts saves the piece without quantity: the count stays.
+    assert.equal((await api(owner, `/artworks/${id}`, { method: 'PUT', body: { id, customId: `VS-${artSeq}`, title: 'Print run, renamed', price: 5000, status: 'Available', imageUrls: [] } })).status, 200);
+    assert.deepEqual(await stock(), ['Available', 2]);
+});
+
 test('editing changes the payment, not the piece', async () => {
     const art = await artwork('Quiet Courtyard', 45_000);
     const made = (await api(accounts, '/sales', { method: 'POST', body: sale({ artworkId: art, amount: 45_000, paymentMode: 'Cash' }) })).body;
@@ -301,4 +329,15 @@ test('in an organization’s own database too', async () => {
     assert.equal(listed.body.sales[0].inInventory, true);
     assert.equal((await orgOwner.call(app(`/sales/${first.body.id}`), { method: 'DELETE' })).status, 200);
     assert.equal((await orgOwner.call(app('/artworks'))).body.find(a => a.id === art).status, 'Available');
+});
+
+test('pieces from before stock counts: one each, none once sold', async () => {
+    await artwork('Any write adds the column', 1000);
+    const all = (await api(owner, '/artworks')).body;
+    assert.equal(all.find(a => a.id === 'art_sold_before_stock').quantity, 0);
+    assert.equal(all.find(a => a.id === 'art_open_before_stock').quantity, 1);
+    // Stored, not just read that way: put back on sale without a count, it still has none to sell.
+    assert.equal((await api(owner, '/artworks/art_sold_before_stock', { method: 'PUT', body: { id: 'art_sold_before_stock', title: 'Old sale', status: 'Available', imageUrls: [] } })).status, 200);
+    assert.equal((await api(accounts, '/sales', { method: 'POST', body: sale({ artworkId: 'art_sold_before_stock' }) })).body.code, 'low_stock');
+    assert.equal((await api(accounts, '/sales', { method: 'POST', body: sale({ artworkId: 'art_open_before_stock' }) })).status, 201);
 });

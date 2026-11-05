@@ -59,7 +59,8 @@ CREATE TABLE IF NOT EXISTS artworks (
   plus_gst INTEGER DEFAULT 0,         -- 1 when price is shown as "+ GST"
   edition TEXT DEFAULT '',            -- JSON {size, proofs, number}; '' = unique work
   image_urls TEXT DEFAULT '[]',       -- JSON array of R2 URLs
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  quantity INTEGER DEFAULT 1          -- units in stock; sales and tax invoices take from it
 );
 
 CREATE INDEX IF NOT EXISTS idx_artworks_created ON artworks(created_at DESC);

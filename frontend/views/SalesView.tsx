@@ -17,7 +17,7 @@ import {
     type PaymentMode, type Sale, type SaleInput, type SalesSummary,
 } from '../salesRules';
 import { addDays, mondayOf } from '../staffRosterRules';
-import type { Artwork, Contact } from '../types';
+import { stockOf, type Artwork, type Contact } from '../types';
 import { Drawer, Msg } from './staffRoster/Panels';
 import { itemsText, rupees, saleDayLabel as dayLabel } from '../components/SalesSummary';
 import { ItemNote, ItemThumb, SalesFigures, SalesList, TagChips, TagFilterBar, sameTag } from './sales/SalesParts';
@@ -222,7 +222,7 @@ const PieceChooser: React.FC<{ available: Artwork[]; picked: Artwork | null; pic
             onToggle={onPick}
             statusFilters={false}
             scroll
-            detail={a => [a.customId, rupees(a.price)].filter(Boolean).join(' · ')}
+            detail={a => [a.customId, rupees(a.price), `${stockOf(a)} in stock`].filter(Boolean).join(' · ')}
             searchPlaceholder="Search available pieces…"
         />
         <button type="button" onClick={onNotListed} className="text-[12px] font-semibold text-gold-700 dark:text-gold-300 underline underline-offset-2">Item not in the list?</button>
@@ -432,13 +432,13 @@ export const SalesView: React.FC<SalesViewProps> = ({ artworks, contacts }) => {
 };
 
 const inputOf = (s: Sale): SaleInput => ({
-    artworkId: s.artworkId, itemTitle: s.itemTitle, itemPrice: s.itemPrice, contactId: s.contactId, buyerName: s.buyerName,
+    artworkId: s.artworkId, itemTitle: s.itemTitle, itemPrice: s.itemPrice, qty: s.qty, contactId: s.contactId, buyerName: s.buyerName,
     buyerPhone: s.buyerPhone, saleDate: s.saleDate, amount: s.amount, paymentMode: s.paymentMode, referenceNo: s.referenceNo, notes: s.notes,
     tags: s.tags, photoUrls: s.photoUrls,
 });
 
 const EMPTY: SaleInput = {
-    artworkId: null, itemTitle: '', itemPrice: 0, contactId: null, buyerName: '', buyerPhone: '',
+    artworkId: null, itemTitle: '', itemPrice: 0, qty: 1, contactId: null, buyerName: '', buyerPhone: '',
     saleDate: '', amount: 0, paymentMode: 'Cash', referenceNo: '', notes: '', tags: [], photoUrls: [],
 };
 
@@ -623,7 +623,7 @@ const SaleEditor: React.FC<{
     const [uploading, setUploading] = useState(false);
     const [amountText, setAmountText] = useState(numberText(sale?.amount ?? 0));
     const [priceText, setPriceText] = useState(numberText(sale && !sale.artworkId ? sale.itemPrice : 0));
-    const available = useMemo(() => artworks.filter(a => a.status === 'Available' && !reserved.has(a.id)), [artworks, reserved]);
+    const available = useMemo(() => artworks.filter(a => a.status === 'Available' && stockOf(a) > 0 && !reserved.has(a.id)), [artworks, reserved]);
     const [freeText, setFreeText] = useState(() => (sale ? !sale.artworkId : available.length === 0));
     const [tried, setTried] = useState(false);
     const [busy, setBusy] = useState(false);
@@ -634,13 +634,19 @@ const SaleEditor: React.FC<{
     const set = (patch: Partial<SaleInput>) => setS(prev => ({ ...prev, ...patch }));
     const picked = artworks.find(a => a.id === s.artworkId) ?? null;
     const input = buildInput(s, freeText, priceText, amountText);
-    const errors = saleFieldErrors(input);
+    const inStock = picked ? stockOf(picked) : 0;
+    const errors = [...saleFieldErrors(input), ...(isNew && picked && input.qty > inStock ? [`Only ${inStock} in stock.`] : [])];
 
     const pick = (id: string) => {
         if (s.artworkId === id) { set({ artworkId: null }); return; }
         const art = artworks.find(a => a.id === id);
         set({ artworkId: id, itemTitle: '', itemPrice: art?.price ?? 0 });
-        if (art && !amountTouched.current) setAmountText(numberText(art.price));
+        if (art && !amountTouched.current) setAmountText(numberText(art.price * s.qty));
+    };
+    const setQty = (text: string) => {
+        const qty = Number(text);
+        set({ qty });
+        if (picked && !amountTouched.current) setAmountText(numberText(picked.price * qty));
     };
     const addPhotos = (urls: string[]) => setS(prev => {
         const next = [...prev.photoUrls, ...urls];
@@ -670,7 +676,7 @@ const SaleEditor: React.FC<{
         setBusy(true);
         try {
             await salesService.remove(sale.id);
-            toast.success(piecesBack(sale) ? 'Sale deleted. The piece is available again.' : 'Sale deleted');
+            toast.success(piecesBack(sale) ? 'Sale deleted. The piece is back in stock.' : 'Sale deleted');
             onSaved();
         } catch (e) {
             toast.error((e as Error).message || 'Could not delete the sale');
@@ -701,6 +707,11 @@ const SaleEditor: React.FC<{
             <section aria-label="Item" className="space-y-2">
                 <h3 className="neu-label">Item sold</h3>
                 {item}
+                {isNew ? (
+                    <Field label="Quantity" htmlFor="sale-qty" hint={picked ? `${inStock} in stock` : undefined}>
+                        <Input id="sale-qty" type="number" inputMode="numeric" min={1} max={picked ? inStock : undefined} step={1} value={s.qty || ''} onChange={e => setQty(e.target.value)} />
+                    </Field>
+                ) : s.qty > 1 && <p className="text-[12.5px]">Quantity: <strong className="font-medium">{s.qty}</strong></p>}
                 {sale?.artworkId && <p className="text-[11.5px] text-[var(--neu-text-dim)]">To change the piece, delete this sale (the piece goes back on sale) and record it again.</p>}
             </section>
 
@@ -721,7 +732,7 @@ const SaleEditor: React.FC<{
                 onClose={() => setConfirmDelete(false)}
                 title="Delete this sale?"
                 itemName={`${sale?.saleNumber ?? ''} · ${sale?.itemTitle ?? ''}`}
-                message={piecesBack(sale) ? 'The piece goes back to Available in the inventory. The sale is archived and its number isn’t reused.' : 'The sale is archived and its number isn’t reused.'}
+                message={piecesBack(sale) ? 'The piece goes back into stock in the inventory. The sale is archived and its number isn’t reused.' : 'The sale is archived and its number isn’t reused.'}
                 onConfirm={() => { void remove(); }}
             />
         </Drawer>
