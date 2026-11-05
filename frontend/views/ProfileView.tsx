@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { UserProfile } from '../types';
-import { Moon, Sun, LogOut, Check, Bell, BellOff, Pencil, X, Type, Image as ImageIcon, Palette, Contrast } from 'lucide-react';
+import { Moon, Sun, LogOut, Loader2, Check, Bell, BellOff, Pencil, X, Type, Image as ImageIcon, Palette, Contrast } from 'lucide-react';
 import { pushService } from '../services/pushService';
 import { MyDevicesCard } from '../components/MyDevicesCard';
 import { EmailCard, PasswordCard, WorkspaceCard } from '../components/AccountCards';
@@ -18,12 +18,17 @@ interface ProfileViewProps {
     onUpdateProfile: (profile: UserProfile) => void;
     theme: 'light' | 'dark';
     onToggleTheme: () => void;
-    onLogout: () => void;
+    onLogout: () => Promise<void>;
 }
 
 export const ProfileView: React.FC<ProfileViewProps> = ({ profile, onUpdateProfile, theme, onToggleTheme, onLogout }) => {
     const [formData, setFormData] = useState<UserProfile>(profile);
     const [isEditing, setIsEditing] = useState(false);
+    const [signingOut, setSigningOut] = useState(false);
+    const signOut = async () => {
+        setSigningOut(true);
+        try { await onLogout(); } finally { setSigningOut(false); }
+    };
 
     // ── Push notifications ──────────────────────────────────────────────
     const pushSupported = pushService.isSupported();
@@ -176,11 +181,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ profile, onUpdateProfi
                 <Button
                     variant="danger"
                     block
-                    onClick={onLogout}
-                    icon={<LogOut size={16} />}
+                    onClick={signOut}
+                    disabled={signingOut}
+                    aria-busy={signingOut}
+                    icon={signingOut ? <Loader2 size={16} className="animate-spin" /> : <LogOut size={16} />}
                     className="uppercase tracking-wider animate-fade-in-up"
                 >
-                    Sign Out
+                    {signingOut ? 'Signing out…' : 'Sign Out'}
                 </Button>
             </PageBody>
         </PageRoot>
