@@ -11,7 +11,8 @@ import { PageRoot, PageHeader, PageBody, PrimaryIconButton, GhostIconButton, Emp
 import { toast } from 'react-hot-toast';
 import { Catalog, Artwork, PdfOptions, CatalogTheme } from '../types';
 import storageService from '../services/storageService';
-import { openBlob, saveBlob } from '../services/saveFile';
+import { saveBlob } from '../services/saveFile';
+import { PdfViewer } from '../components/PdfViewer';
 
 interface CatalogsViewProps {
     catalogs: Catalog[];
@@ -50,6 +51,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
     const [isUploadingPdf, setIsUploadingPdf] = useState(false);
     const [deletePdfTarget, setDeletePdfTarget] = useState<Catalog | null>(null);
     const [renameTarget, setRenameTarget] = useState<Catalog | null>(null);
+    const [viewing, setViewing] = useState<Catalog | null>(null);
     const [renameValue, setRenameValue] = useState('');
     const [formCatalog, setFormCatalog] = useState<Catalog | null>(null);
     const [showForm, setShowForm] = useState(false);
@@ -91,20 +93,6 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
 
     const pdfName = (name: string) => `${name.trim().replaceAll(/\s+/g, '_') || 'catalog'}.pdf`;
     const asPdf = (blob: Blob) => new Blob([blob], { type: 'application/pdf' });
-
-    /** Opens the stored PDF in a new tab where the browser can show it, else saves it. */
-    const handleOpenPdf = async (catalog: Catalog) => {
-        if (!catalog.pdfUrl) return;
-        const toastId = toast.loading('Opening PDF…');
-        try {
-            const how = await openBlob(asPdf(await fetchPdfBlob(catalog)), pdfName(catalog.name));
-            toast.dismiss(toastId);
-            if (how === 'downloaded') toast.success('PDF ready — check your downloads');
-        } catch (e) {
-            toast.dismiss(toastId);
-            if ((e as Error).name !== 'AbortError') toast.error((e as Error).message || 'Could not open the PDF');
-        }
-    };
 
     const handleDownloadPdf = async (catalog: Catalog) => {
         if (!catalog.pdfUrl) return;
@@ -345,7 +333,7 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                         {/* Card tap target; the action buttons sit above it (z-[2]). */}
                         <button
                             type="button"
-                            onClick={() => handleOpenPdf(catalog)}
+                            onClick={() => setViewing(catalog)}
                             aria-label={`Open catalog PDF ${catalog.name}`}
                             className="absolute inset-0 z-[1] w-full h-full rounded-[1.4rem] cursor-pointer"
                         />
@@ -524,6 +512,9 @@ export const CatalogsView: React.FC<CatalogsViewProps> = ({ catalogs, artworks, 
                     toast.success('Catalog PDF deleted');
                 }}
             />
+            {viewing?.pdfUrl && (
+                <PdfViewer url={viewing.pdfUrl} name={viewing.name} onClose={() => setViewing(null)} onDownload={() => void handleDownloadPdf(viewing)} />
+            )}
             {showRooms && (
                 <FullScreenPortal>
                     <ViewingRoomsPanel artworks={artworks} onClose={() => setShowRooms(false)} />

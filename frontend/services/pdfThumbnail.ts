@@ -27,7 +27,7 @@ const oneAtATime = <T>(task: () => Promise<T>): Promise<T> => {
 const inFlight = new Map<string, Promise<Blob | null>>();
 
 let pdfjsReady: Promise<typeof import('pdfjs-dist')> | null = null;
-const loadPdfjs = () => {
+export const loadPdfjs = () => {
     pdfjsReady ??= (async () => {
         const pdfjs = await import('pdfjs-dist');
         const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
