@@ -1,7 +1,8 @@
 /* Lite app style (Profile → App Settings → App style), keyed on
  * <html data-skin="lite">, and the OLED pure-black dark mode, keyed on
  * <html class="dark" data-oled="on"> (appStyle.ts; both set before first
- * paint in index.html). Org app only, imported after theme-atelier.css.
+ * paint in index.html; the other pages set data-skin="lite" in their HTML).
+ * Imported after theme-atelier.css.
  *
  * Lite is for phones: flat surfaces (no shadows, no blur), no card entrances,
  * and motion only where the GPU moves an already-drawn layer (opacity and
@@ -111,11 +112,6 @@ html.dark[data-oled='on'] {
 }
 
 html.dark[data-oled='on'] :is(.neu-inset, .neu-field, .neu-search, .neu-toggle, .neu-pill-active, .neu-button-active, .neu-picture-well:not(.tile-backdrop)) {
-    background: var(--oled-well);
-}
-
-/* Classic's active dock tab was only an inset shadow. */
-html.dark[data-oled='on'][data-skin='classic'] .neu-dock-well {
     background: var(--oled-well);
 }
 

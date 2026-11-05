@@ -228,3 +228,9 @@
     max-width: min(420px, calc(100vw - 32px)) !important; /* NOSONAR: react-hot-toast sets inline styles */
   }
 }
+
+/* Lite (theme-lite.css) has no shadows, so pressed-in pieces show as a flat
+   well instead, and raised ones get Lite's hairline. */
+html[data-skin='lite'] :is(.ac-kbd, .ac-check .box, .ac-meter) { background-color: var(--lite-well); }
+html[data-skin='lite'] :is(.ac-check, .ac-current) { box-shadow: 0 0 0 1px var(--neu-line); }
+html[data-skin='lite'] .ac-current { box-shadow: 0 0 0 2px var(--ac-ring) !important; } /* NOSONAR: beats the card's own !important ring */

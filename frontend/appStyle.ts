@@ -1,18 +1,17 @@
-// App style, chosen in Profile → App Settings: Classic (the soft-UI look),
-// Atelier (flat warm surfaces, rise-in motion, page transitions) or Lite (flat,
-// fades and slides only). Like the UI
+// App style, chosen in Profile → App Settings: Lite (flat, fades and slides
+// only; the default) or Atelier (flat warm surfaces, rise-in motion, page
+// transitions). The soft-UI Classic look is retired. Like the UI
 // size and theme it belongs to this device: saved in the browser and applied
 // before first paint (index.html) as <html data-skin="…">, which
 // theme-atelier.css keys on. Layout is the same in both.
 
 import { flushSync } from 'react-dom';
 
-export type AppStyle = 'classic' | 'atelier' | 'lite';
+export type AppStyle = 'atelier' | 'lite';
 
 export const APP_STYLES: { value: AppStyle; label: string }[] = [
-    { value: 'classic', label: 'Classic' },
-    { value: 'atelier', label: 'Atelier' },
     { value: 'lite', label: 'Lite' },
+    { value: 'atelier', label: 'Atelier' },
 ];
 
 const KEY = 'vayu_app_style';
@@ -21,9 +20,9 @@ const OLED_KEY = 'vayu_oled';
 export function getAppStyle(): AppStyle {
     try {
         const saved = localStorage.getItem(KEY);
-        return saved === 'atelier' || saved === 'lite' ? saved : 'classic';
+        return saved === 'atelier' ? saved : 'lite'; // a saved 'classic' becomes Lite
     } catch {
-        return 'classic';
+        return 'lite';
     }
 }
 
@@ -46,14 +45,13 @@ export function setAppStyle(value: AppStyle): void {
 
 /** The browser bar colour: the page colour of the current style and light/dark mode. */
 const PAGE_COLOUR = {
-    classic: { light: '#e9edf4', dark: '#22252b' },
     atelier: { light: '#ecebe6', dark: '#0e0e0f' },
     lite: { light: '#f2f2f4', dark: '#141416' },
 };
 
 export function syncThemeColor(): void {
     const html = document.documentElement;
-    const style = html.dataset.skin === 'atelier' || html.dataset.skin === 'lite' ? html.dataset.skin : 'classic';
+    const style = html.dataset.skin === 'atelier' ? 'atelier' : 'lite';
     const mode = html.classList.contains('dark') ? 'dark' : 'light';
     const colour = mode === 'dark' && html.dataset.oled === 'on' ? '#000000' : PAGE_COLOUR[style][mode];
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', colour);

@@ -1,4 +1,5 @@
 import '../index.css';
+import '../theme-lite.css';
 import './admin.css';
 import React from 'react';
 import ReactDOM from 'react-dom/client';

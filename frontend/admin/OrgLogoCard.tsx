@@ -14,8 +14,8 @@ import { analyzeLogo, prepareLogo, type LogoAnalysis, type ProcessedLogo } from 
 
 /** The app's page colours (--neu-bg), light and dark. */
 const SURFACES = [
-    { label: 'Light', bg: '#e9edf4', fg: '#4b5563' },
-    { label: 'Dark', bg: '#22252b', fg: '#9ca3af' },
+    { label: 'Light', bg: '#f2f2f4', fg: '#4b5563' },
+    { label: 'Dark', bg: '#141416', fg: '#9ca3af' },
 ] as const;
 
 interface Draft {

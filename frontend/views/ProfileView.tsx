@@ -248,7 +248,7 @@ const OledRow: React.FC = () => {
     );
 };
 
-/** Classic (soft UI), Atelier (flat warm surfaces and motion) or Lite (flat, no motion: lightest on phones) — this device only, like the theme. */
+/** Lite (flat, light motion: the default) or Atelier (flat warm surfaces and motion) — this device only, like the theme. */
 const AppStyleRow: React.FC = () => {
     const [style, setStyle] = useState<AppStyle>(getAppStyle);
     const choose = (next: AppStyle) => {

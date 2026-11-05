@@ -1,6 +1,7 @@
 // Entry for the public pages. Which page renders is chosen by the HTML file
 // that loaded this script (welcome.html, signup.html, legal.html).
 import '../index.css';
+import '../theme-lite.css';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { Toaster } from 'react-hot-toast';

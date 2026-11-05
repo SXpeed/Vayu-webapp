@@ -418,7 +418,7 @@ const AppearanceCard: React.FC = () => {
     const toggle = () => {
         const next = theme === 'dark' ? 'light' : 'dark';
         document.documentElement.classList.toggle('dark', next === 'dark');
-        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', next === 'dark' ? '#22252b' : '#e9edf4');
+        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', next === 'dark' ? '#141416' : '#f2f2f4');
         try { localStorage.setItem(THEME_KEY, next); } catch { /* private mode */ }
         setTheme(next);
     };

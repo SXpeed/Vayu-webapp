@@ -1,6 +1,7 @@
 // Entry for the client's private viewing room (room.html, served at
 // app.ateliersupport.com/room/:token). No account and none of the app's code.
 import '../index.css';
+import '../theme-lite.css';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { Toaster } from 'react-hot-toast';

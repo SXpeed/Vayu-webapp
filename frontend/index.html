@@ -7,7 +7,7 @@
         content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <!-- Single theme-color; the inline theme script below keeps it in sync
          with the user's app-level theme preference (from localStorage). -->
-    <meta name="theme-color" content="#e9edf4">
+    <meta name="theme-color" content="#f2f2f4">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <!-- `default`, not `black-translucent`: with the translucent bar, iOS drew
          the installed app from the very top of the screen but sized it as if
@@ -36,9 +36,9 @@
             const savedTheme = localStorage.getItem('vayu_theme') || 'light';
             if (savedTheme === 'dark') {
                 document.documentElement.classList.add('dark');
-                document.querySelector('meta[name="theme-color"]').setAttribute('content', '#22252b');
+                document.querySelector('meta[name="theme-color"]').setAttribute('content', '#141416');
             } else {
-                document.querySelector('meta[name="theme-color"]').setAttribute('content', '#e9edf4');
+                document.querySelector('meta[name="theme-color"]').setAttribute('content', '#f2f2f4');
             }
         } catch (e) {
             console.warn('Failed to apply theme', e);
@@ -57,12 +57,11 @@
             document.documentElement.dataset.tileBg = bg;
         })();
         // App style and OLED black, before first paint (appStyle.ts, theme-atelier.css, theme-lite.css).
-        // Classic unless Atelier or Lite was chosen; page colours match PAGE_COLOUR in appStyle.ts.
+        // Lite unless Atelier was chosen; page colours match PAGE_COLOUR in appStyle.ts.
         (function () {
-            let skin = 'classic', oled = 'off';
+            let skin = 'lite', oled = 'off';
             try {
-                const saved = localStorage.getItem('vayu_app_style');
-                if (saved === 'atelier' || saved === 'lite') skin = saved;
+                if (localStorage.getItem('vayu_app_style') === 'atelier') skin = 'atelier';
                 if (localStorage.getItem('vayu_oled') === 'on') oled = 'on';
             } catch { /* private mode */ }
             const html = document.documentElement;
@@ -105,7 +104,7 @@
 
         body {
             /* Same as --neu-bg, so nothing behind the shell ever reads as a band */
-            background-color: #e9edf4;
+            background-color: #f2f2f4;
             margin: 0;
             font-family: 'Inter', sans-serif;
             -webkit-tap-highlight-color: transparent;
@@ -136,7 +135,7 @@
 
         /* Dark mode fallback for body before React loads */
         html.dark body {
-            background-color: #22252b;
+            background-color: #141416;
         }
 
         /* Prevent double-tap-to-zoom completely on the app
