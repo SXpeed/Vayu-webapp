@@ -22,6 +22,8 @@ export interface Artwork {
     createdAt: number;
     /** Units in stock (1 for a unique piece). Sales and tax invoices take from it; at 0 it is Sold. */
     quantity?: number;
+    /** Sent with an edit only: the status and stock the form opened with (a sale since then wins). */
+    stockSeen?: { status: ArtworkStatus; quantity: number };
 }
 
 /** Units in stock; a record from before stock counts is one piece, none once sold. */

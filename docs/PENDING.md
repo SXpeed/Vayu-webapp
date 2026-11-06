@@ -210,7 +210,7 @@ Seats and inventory items are enforced. Still to wire up (each is labelled
 Security review of 2026-09-23 — fixed locally, **not yet deployed** (commits a55c9ac … 4c630d2):
 - [x] Private chats: only members may read, update or delete a conversation; no take-over by re-creating an id
 - [x] Uploads can never run as the app (type from the file's bytes; only images, PDFs, text shown; the rest downloads, sandboxed, nosniff)
-- [x] Files: remove only your own / as admin / as an inventory editor; nothing outside `uploads/`; file list limited to your own
+- [x] Files: remove only your own / as admin / as an inventory editor (artwork photos only, since 2026-11-06); nothing outside `uploads/`; file list limited to your own
 - [x] Sign-in limited per IP (10/min) and per email (5/min); 600 API calls/min per device; no account-existence timing; 10-character passwords
 - [x] Security headers on every page and asset (`public/_headers`); nosniff on both APIs; old `/api` error handler no longer returns internal messages
 - [x] Manual activity-history entries admin-only; dev server bound to this computer
@@ -229,6 +229,12 @@ Still open:
 - [ ] Before opening public sign-up: Turnstile on sign-up and applications, email verification, `ADMIN_HOST`, Cloudflare Access in front of `/admin`
 - [ ] Split the old worker's KV user lists, which stop at 1,000 and break the team list
 - [ ] Concurrency review of the remaining inventory paths as they move over
+
+### 3.15 App to-dos (moved from `IMPROVEMENTS.txt`, 2026-11-06)
+- [ ] Background removal (`services/imageCutoutService.ts`): downscale to ~1536–2048 px before inference; `device: 'gpu'` with CPU fallback; keep cutouts in IndexedDB; self-host and warm up the model files; try `model: 'small'`
+- [ ] Server-side cutout with Workers AI: `POST /api/cutout` reads the R2 original, caches `key__cutout`, falls back to on-device on any failure; add `__cutout` to `deleteUploadedFiles()`. Check model id, cost and input size limit first
+- [ ] Native app feel: serve `/.well-known/assetlinks.json` (no URL bar in the Android TWA), rebuild the APK; iOS stays a home-screen PWA, Capacitor later
+- [ ] CI: actions checkout/setup-node Node 20 → 24 deprecation warning
 
 ## 4. Verification still to do
 

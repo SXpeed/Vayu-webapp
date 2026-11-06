@@ -59,4 +59,3 @@ builds the three sites, deploys them, then the API. The order matters; see
 - `docs/PLANS.md`: plans, versions, limits, subscriptions and overrides
 - `docs/ONBOARDING.md`: the public website, sign-up and approval flow, and the control centre
 - `docs/PENDING.md`: everything still to build, and what is waiting on a decision
-- `IMPROVEMENTS.txt`: open TODO list

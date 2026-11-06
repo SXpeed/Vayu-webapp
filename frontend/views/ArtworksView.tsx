@@ -186,6 +186,8 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
         quantity: String(initialData ? stockOf(initialData) : 1),
         imageUrls: initialData?.imageUrls ?? []
     });
+    // initialData follows sync while the form is open; this keeps what it opened with.
+    const [stockSeen] = useState(() => initialData && { status: initialData.status, quantity: stockOf(initialData) });
     const [isEdition, setIsEdition] = useState(!!initialData?.edition);
     const [edition, setEdition] = useState<Edition>(initialData?.edition ?? { size: '' });
     const editionField = (key: keyof Edition) => (e: React.ChangeEvent<HTMLInputElement>) =>
@@ -205,6 +207,7 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
             price: Number(formData.price) || 0,
             quantity: Math.max(0, Math.floor(Number(formData.quantity) || 0)),
             edition: isEdition ? edition : undefined,
+            stockSeen,
         });
     };
 

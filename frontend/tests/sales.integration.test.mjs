@@ -217,6 +217,22 @@ test('sales count stock: each takes its quantity, the last unit makes it Sold, d
     assert.deepEqual(await stock(), ['Available', 2]);
 });
 
+test('an artwork edit opened before a sale keeps the sale: Sold stays Sold, other fields save', async () => {
+    const art = await artwork('Edited While Selling', 20_000);
+    const opened = (await api(owner, '/artworks')).body.find(a => a.id === art);
+    const seen = { status: 'Available', quantity: 1 };
+    assert.equal((await api(accounts, '/sales', { method: 'POST', body: sale({ artworkId: art, amount: 20_000 }) })).status, 201);
+    const stale = { ...opened, title: 'Typo fixed', status: 'Available', quantity: 1, stockSeen: seen };
+    assert.equal((await api(owner, `/artworks/${art}`, { method: 'PUT', body: stale })).status, 200);
+    let now = (await api(owner, '/artworks')).body.find(a => a.id === art);
+    assert.deepEqual([now.title, now.status, now.quantity], ['Typo fixed', 'Sold', 0]);
+    // Nothing changed since it opened: the edit's status and stock apply.
+    const fresh = { ...now, status: 'Reserved', quantity: 2, stockSeen: { status: 'Sold', quantity: 0 } };
+    assert.equal((await api(owner, `/artworks/${art}`, { method: 'PUT', body: fresh })).status, 200);
+    now = (await api(owner, '/artworks')).body.find(a => a.id === art);
+    assert.deepEqual([now.status, now.quantity], ['Reserved', 2]);
+});
+
 test('editing changes the payment, not the piece', async () => {
     const art = await artwork('Quiet Courtyard', 45_000);
     const made = (await api(accounts, '/sales', { method: 'POST', body: sale({ artworkId: art, amount: 45_000, paymentMode: 'Cash' }) })).body;

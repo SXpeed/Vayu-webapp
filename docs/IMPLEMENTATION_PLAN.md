@@ -117,7 +117,7 @@ After a few stable weeks, with the owner's OK:
       6 HMAC set-ups, 3 money formatters, 5 client fetch wrappers
 - [ ] One set of colour and spacing tokens and one component kit for the app
       and the control centre
-- [ ] Merge `HANDOFF.md`, `CHANGES.md`, `IMPROVEMENTS.txt` into `docs/`
+- [ ] Merge `CHANGES.md` into `docs/` (`HANDOFF.md` removed and `IMPROVEMENTS.txt` moved to `PENDING.md` §3.15 on 2026-11-06)
 - [ ] Optional: serve the three sites from the API Worker (one deploy, not four)
 
 ## Step 6 — SaaS features

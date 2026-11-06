@@ -147,6 +147,20 @@ test('tags: unique per name ignoring case, on many contacts at once, removed eve
     assert.deepEqual((await api('/contact-tags')).body.map(t => t.name), ['Architect']);
 });
 
+test('an import at the 500 limit saves in one go; one more is refused', async () => {
+    // Two phones and an email each: about 2,000 statements in one batch (D1 counts a batch as one query).
+    const list = Array.from({ length: 500 }, (_, i) => ({
+        id: `cont_bulk_${i}`, name: `Bulk ${i}`,
+        phones: [`98${String(i).padStart(8, '0')}`, `97${String(i).padStart(8, '0')}`], emails: [`bulk${i}@example.com`],
+    }));
+    const res = await api('/contacts/import', { method: 'POST', body: { contacts: list } });
+    assert.equal(res.status, 201, res.text);
+    assert.equal(res.body.imported, 500);
+    assert.equal((await contacts()).filter(c => c.id.startsWith('cont_bulk_')).length, 500);
+    const tooMany = await api('/contacts/import', { method: 'POST', body: { contacts: [...list, { id: 'cont_bulk_x', name: 'One more' }] } });
+    assert.equal(tooMany.status, 400);
+});
+
 test('deleting a contact frees its numbers and does not bring it back', async () => {
     const c = (await contacts()).find(x => x.name === 'Rush');
     assert.equal((await api(`/contacts/${c.id}`, { method: 'DELETE' })).status, 200);

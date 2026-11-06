@@ -155,7 +155,7 @@ test('a thumbnail must be an image', async () => {
 
 /* ── Who may change files ──────────────────────────────────────────────── */
 
-test('files can only be removed by their uploader, an admin or an inventory editor', async () => {
+test('files can only be removed by their uploader, an admin or (artwork photos) an inventory editor', async () => {
     // A role that can look at the inventory but not change it.
     const role = await api(admin.token, '/auth/roles', { method: 'POST', body: { name: 'Viewer', permissions: { inventory: 'view', messages: 'edit' } } });
     assert.ok(role.status === 200 || role.status === 201, role.text);
@@ -174,7 +174,10 @@ test('files can only be removed by their uploader, an admin or an inventory edit
     assert.equal((await api(vera.token, '/files-thumbs', { method: 'POST', form })).status, 403);
     // …but can remove their own.
     assert.equal((await api(vera.token, `/files/${encodeURIComponent(verasFile)}`, { method: 'DELETE' })).status, 200);
-    // An inventory editor may remove a colleague's artwork photo.
+    // An inventory editor may remove a colleague's artwork photo, but not a file no artwork shows (a chat attachment, a PDF).
+    assert.equal((await api(bob.token, `/files/${encodeURIComponent(alicesFile)}`, { method: 'DELETE' })).status, 403);
+    const art = await api(admin.token, '/artworks', { method: 'POST', body: { id: 'art_shared_photo', title: 'Shared', imageUrls: [`/api/files/${alicesFile}`], createdAt: Date.now() } });
+    assert.equal(art.status, 201, art.text);
     assert.equal((await api(bob.token, `/files/${encodeURIComponent(alicesFile)}`, { method: 'DELETE' })).status, 200);
 
     // Nothing outside uploads/ (the platform logo, say) can be removed this way, even by an admin.
@@ -206,6 +209,18 @@ test('shared settings need a sign-in to read and Catalogs "edit" to change', asy
     assert.equal((await api(cato.token, '/settings')).status, 200);
     assert.equal((await api(cato.token, '/settings', { method: 'POST', body: { endPageDesigns: [] } })).status, 403);
     assert.equal((await api(admin.token, '/settings', { method: 'POST', body: { endPageDesigns: [] } })).status, 200);
+});
+
+test('saving one shared setting keeps the others; unknown settings are refused', async () => {
+    const save = (body) => api(admin.token, '/settings', { method: 'POST', body });
+    // Two saves built from the same old copy: before, the second wiped the first.
+    await Promise.all([save({ customLogo1: '/api/files/uploads/logo.png' }), save({ endPageDesigns: ['/api/files/uploads/end.png'] })]);
+    const now = (await api(admin.token, '/settings')).body;
+    assert.equal(now.customLogo1, '/api/files/uploads/logo.png');
+    assert.deepEqual(now.endPageDesigns, ['/api/files/uploads/end.png']);
+    for (const bad of [{ anything: 1 }, { constructor: 'x' }, { endPageDesigns: 'not a list' }, {}]) {
+        assert.equal((await save(bad)).status, 400, JSON.stringify(bad));
+    }
 });
 
 test('an unknown email and a wrong password get the same answer', async () => {

@@ -127,8 +127,10 @@ export function useHandlers(args: HandlerArgs) {
 
     const handleUpdateArtwork = useCallback(async (updatedArt: Artwork) => {
         const before = artworks.find(a => a.id === updatedArt.id) ?? await stores.artworks.find(updatedArt.id);
-        await stores.artworks.put(updatedArt);
-        setSelectedArtwork(prev => prev?.id === updatedArt.id ? updatedArt : prev);
+        // stockSeen belongs to this one request, not to the saved copy.
+        const shown = { ...updatedArt, stockSeen: undefined };
+        await stores.artworks.put(shown);
+        setSelectedArtwork(prev => prev?.id === shown.id ? shown : prev);
         sendInBackground('Artwork changes not saved', () => artworkService.updateArtwork(updatedArt), async () => {
             if (!before) return;
             await stores.artworks.put(before);

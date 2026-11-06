@@ -1402,14 +1402,16 @@ const isUploadKey = (key: string) => key.startsWith(UPLOADS_PREFIX) && !key.incl
 const ownsUpload = (session: SessionData, key: string) => key.startsWith(`${UPLOADS_PREFIX}${session.userId}/`);
 
 /**
- * Removing an upload: its uploader, an admin, or anyone who may edit the
- * inventory (artwork photos are shared work: removing one from an artwork
- * someone else photographed is part of editing it).
+ * Removing an upload: its uploader, an admin, or, for a photo an artwork
+ * shows, anyone who may edit the inventory (artwork photos are shared work:
+ * removing one from an artwork someone else photographed is part of editing it).
  */
 async function mayRemoveUpload(ctx: Ctx, session: SessionData, key: string): Promise<boolean> {
   if (!isUploadKey(key)) return false;
   if (session.role === ADMIN_ROLE_ID || ownsUpload(session, key)) return true;
-  return sessionCan(ctx, session, 'inventory', 'edit');
+  if (!(await sessionCan(ctx, session, 'inventory', 'edit'))) return false;
+  // Only a photo an artwork shows, not someone's chat attachment or PDF. Either address form: /api/files/ or /api/o/<id>/files/.
+  return !!(await ctx.env.VAYU_DB.prepare('SELECT 1 FROM artworks WHERE instr(image_urls, ?) > 0 LIMIT 1').bind(`/files/${key}"`).first());
 }
 
 // Backfill support: originals uploaded before thumbnails existed. Each person
@@ -2288,16 +2290,23 @@ async function handleArtworksUpdate(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json();
   const art = body as any;
   const artId = ctx.path.slice('/artworks/'.length);
+  // What the edit form opened with: if a sale or invoice has changed status or
+  // stock since, those stay as stored and only the other fields are saved.
+  const seenStatus = typeof art.stockSeen?.status === 'string' ? art.stockSeen.status : null;
+  const seenQty = seenStatus === null ? null : stockSent(art.stockSeen.quantity);
+  const unchanged = `(?16 IS NULL OR (status = ?16 AND COALESCE(quantity, status <> 'Sold') = ?17))`;
   await ensureColumns(ctx.env.VAYU_DB, 'artworks');
   await ensureChangeLogTable(ctx.env.VAYU_DB);
   await ctx.env.VAYU_DB.batch([
     ctx.env.VAYU_DB.prepare(
       `UPDATE artworks SET
-         custom_id = ?, title = ?, artist = ?, artwork_year = ?, description_title = ?,
-         description = ?, dimensions = ?, medium = ?, status = ?, location = ?,
-         price = ?, plus_gst = ?, edition = ?, image_urls = ?, quantity = COALESCE(?, quantity)
-       WHERE id = ?`
-    ).bind(...artworkValues(art), stockSent(art.quantity), artId),
+         custom_id = ?1, title = ?2, artist = ?3, artwork_year = ?4, description_title = ?5,
+         description = ?6, dimensions = ?7, medium = ?8, location = ?10,
+         price = ?11, plus_gst = ?12, edition = ?13, image_urls = ?14,
+         status = CASE WHEN ${unchanged} THEN ?9 ELSE status END,
+         quantity = CASE WHEN ${unchanged} THEN COALESCE(?15, quantity) ELSE quantity END
+       WHERE id = ?18`
+    ).bind(...artworkValues(art), stockSent(art.quantity), seenStatus, seenQty, artId),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'artwork', artId, 'put', { actorId: session.userId }),
   ]);
   queueHubNotify(ctx, [{ entity: 'artwork', id: artId, op: 'put' }]);
@@ -4165,23 +4174,39 @@ const orgAppRoutes: Route[] = [
 
 // ── App Settings ──────────────────────────────────────────────────────────
 
+/**
+ * Catalog Studio's shared designs, one KV entry per setting, so saving one
+ * can't overwrite another saved at the same time. 'global_settings' held
+ * them all in one entry before; it is still read underneath.
+ */
+const SETTING_CHECKS: Record<string, (v: unknown) => boolean> = {
+  customLogo1: v => typeof v === 'string' && v.length <= 2000,
+  customLogo2: v => typeof v === 'string' && v.length <= 2000,
+  endPageDesigns: v => Array.isArray(v) && v.length <= 50 && v.every(d => typeof d === 'string' && d.length <= 2000),
+};
+
+async function readSettings(kv: KVNamespace): Promise<Record<string, unknown>> {
+  const names = Object.keys(SETTING_CHECKS);
+  const [legacy, ...values] = await Promise.all([kv.get('global_settings'), ...names.map(n => kv.get(`global_settings:${n}`))]);
+  const settings: Record<string, unknown> = legacy ? JSON.parse(legacy) : {};
+  names.forEach((n, i) => { if (values[i] !== null) settings[n] = JSON.parse(values[i] as string); });
+  return settings;
+}
+
 async function handleSettingsGet(ctx: Ctx) {
   if (!(await getSession(ctx.request, ctx.env.VAYU_KV))) return err('Unauthorized', 401);
-  const raw = await ctx.env.VAYU_KV.get('global_settings');
-  const settings = raw ? JSON.parse(raw) : {};
-  return json(settings);
+  return json(await readSettings(ctx.env.VAYU_KV));
 }
 
 async function handleSettingsUpdate(ctx: Ctx) {
   // Signed in with Catalogs "edit" (ACCESS_TABLE): they are the catalog designs.
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
-  const body: Record<string, any> = await ctx.request.json();
-  const raw = await ctx.env.VAYU_KV.get('global_settings');
-  const existing = raw ? JSON.parse(raw) : {};
-  const updated = { ...existing, ...body };
-  await ctx.env.VAYU_KV.put('global_settings', JSON.stringify(updated));
-  return json(updated);
+  const body = await ctx.request.json().catch(() => null);
+  const entries = body && typeof body === 'object' && !Array.isArray(body) ? Object.entries(body) : [];
+  if (entries.length === 0 || !entries.every(([k, v]) => Object.hasOwn(SETTING_CHECKS, k) && SETTING_CHECKS[k](v))) return err('Unknown or invalid setting');
+  await Promise.all(entries.map(([k, v]) => ctx.env.VAYU_KV.put(`global_settings:${k}`, JSON.stringify(v))));
+  return json(await readSettings(ctx.env.VAYU_KV));
 }
 
 

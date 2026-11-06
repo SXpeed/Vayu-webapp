@@ -115,12 +115,10 @@ git stash pop  stash@{0}    # re-apply and drop the stash
 Stash `stash@{0}` contains all 5 modified files plus the untracked
 `frontend/services/refreshScheduler.ts` and `frontend/tests/`.
 
-## 7. Delta sync + realtime (implemented, not deployed)
+## 7. Delta sync + realtime (live since 2026-09-22)
 
-The follow-up described in §5 is now implemented behind three flags
-(`DELTA_SYNC_ENABLED`, `REALTIME_ENABLED`, `FILE_AUTH`), all `off` by default.
-While a realtime socket is connected, the scheduler above runs a 10-minute
-safety sync; when the socket is down it remains the fallback. See
-`HANDOFF.md` for status and verification, `docs/ARCHITECTURE.md` for the
-design, and `docs/DEPLOYMENT.md` for rollout, rollback and how to measure the
-real invocation change. No savings have been measured yet.
+The follow-up described in §5 runs behind three flags (`DELTA_SYNC_ENABLED`,
+`REALTIME_ENABLED`, `FILE_AUTH`), all on in production. While a realtime
+socket is connected, the scheduler above runs a 10-minute safety sync; when
+the socket is down it remains the fallback. See `docs/ARCHITECTURE.md` for the
+design and `docs/DEPLOYMENT.md` for rollout, rollback and the measured numbers.
