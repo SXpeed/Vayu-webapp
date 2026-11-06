@@ -577,7 +577,7 @@ const App: React.FC = () => {
             case 'sales':
                 return <SalesView artworks={artworks} contacts={contacts} />;
             case 'myspace':
-                return <MySpaceView events={events} teamMembers={teamMembers} currentUserId={userProfile?.id || authUser?.id || ''} onUpdateEvent={handlers.handleUpdateEvent} />;
+                return <MySpaceView events={events} teamMembers={teamMembers} currentUserId={userProfile?.id || authUser?.id || ''} userName={userProfile?.name || authUser?.name || ''} onUpdateEvent={handlers.handleUpdateEvent} />;
             case 'social':
                 return <SocialView />;
             case 'profile':

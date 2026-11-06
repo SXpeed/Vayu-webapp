@@ -4,6 +4,7 @@ import {
   type AccessLevel, type Permissions, type RoleDef, type SectionId,
 } from './permissions';
 import { staffRosterRoutes } from './staffRoster';
+import { expenseRoutes } from './expenses';
 import { salesRoutes } from './sales';
 import { ensureInvoicesTable, invoiceRoutes } from './invoices';
 import { paymentLinkRoutes, reconcileAllWorkspaces, routeOrgPaymentEvent } from './paymentLinks';
@@ -4004,6 +4005,9 @@ const routes: Route[] = [
     logChange: logEntityChange,
     notify: queueHubNotify,
   }),
+
+  // Expenses, private to each person (expenses.ts)
+  ...expenseRoutes,
 
   // Sales ledger (sales.ts)
   ...salesRoutes({ logChange: logEntityChange, notify: queueHubNotify, ensureArtworks: db => ensureColumns(db, 'artworks') }),

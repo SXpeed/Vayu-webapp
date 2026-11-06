@@ -7,6 +7,9 @@ import { PageRoot, PageHeader, PageBody, Badge } from '../components/ui';
 import { useAppChrome } from '../components/Layout';
 import { TaskBoard } from './tasks/TaskList';
 import { StaffRosterView } from './StaffRosterView';
+import { ExpensesView } from './ExpensesView';
+import { currentWorkspace } from '../services/workspace';
+import { useBranding } from '../useBranding';
 import type { CalendarEvent, UserProfile } from '../types';
 
 interface Item { title: string; line: string; Icon: React.ElementType; onOpen?: () => void }
@@ -42,13 +45,15 @@ const Hub: React.FC<{ title: string; subtitle: string; items: (Item | false)[] }
 };
 
 export const MySpaceView: React.FC<{
-    events: CalendarEvent[]; teamMembers: UserProfile[]; currentUserId: string; onUpdateEvent: (ev: CalendarEvent) => void;
-}> = ({ events, teamMembers, currentUserId, onUpdateEvent }) => {
+    events: CalendarEvent[]; teamMembers: UserProfile[]; currentUserId: string; userName: string; onUpdateEvent: (ev: CalendarEvent) => void;
+}> = ({ events, teamMembers, currentUserId, userName, onUpdateEvent }) => {
     const { can } = useAppChrome();
-    const [open, setOpen] = useState<'tasks' | 'leave' | null>(null);
+    const branding = useBranding();
+    const [open, setOpen] = useState<'expenses' | 'tasks' | 'leave' | null>(null);
     const close = () => setOpen(null);
     useBackClose(open !== null, close);
 
+    if (open === 'expenses') return <ExpensesView person={userName} workspace={currentWorkspace()?.name ?? branding.appName} onBack={close} />;
     if (open === 'leave') return <StaffRosterView initialView="requests" onBack={close} />;
     if (open === 'tasks') {
         return (
@@ -64,7 +69,7 @@ export const MySpaceView: React.FC<{
     // Tasks live on calendar events and leave in the Staff roster, so each follows that section's access.
     return (
         <Hub title="My Space" subtitle="Your own work, claims and notes" items={[
-            { title: 'Expenses', line: 'Claims with receipts', Icon: Wallet },
+            { title: 'Expenses', line: 'Record with receipts, share as a PDF', Icon: Wallet, onOpen: () => setOpen('expenses') },
             can('calendar') && { title: 'Tasks', line: 'Your to-do list from the calendar', Icon: ClipboardList, onOpen: () => setOpen('tasks') },
             can('schedule') && { title: 'Leave request', line: 'Ask for leave and see the decision', Icon: Leaf, onOpen: () => setOpen('leave') },
             { title: 'My Notes', line: 'Private notes only you can see', Icon: NotebookPen },

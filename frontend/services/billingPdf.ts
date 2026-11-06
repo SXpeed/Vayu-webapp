@@ -61,7 +61,7 @@ function copyLabels(doc: BillingDoc, s: BillingSettings): string[] {
     return picked.length ? picked : [names[0]];
 }
 
-async function loadImage(url: string, maxPx: number): Promise<Img | null> {
+export async function loadImage(url: string, maxPx: number): Promise<Img | null> {
     try {
         const res = await fetch(url);
         if (!res.ok) return null;
@@ -82,7 +82,7 @@ async function loadImage(url: string, maxPx: number): Promise<Img | null> {
     }
 }
 
-function drawContained(pdf: jsPDF, img: Img, x: number, y: number, bw: number, bh: number): void {
+export function drawContained(pdf: jsPDF, img: Img, x: number, y: number, bw: number, bh: number): void {
     const k = Math.min(bw / img.w, bh / img.h);
     pdf.addImage(img.data, 'JPEG', x + (bw - img.w * k) / 2, y + (bh - img.h * k) / 2, img.w * k, img.h * k);
 }

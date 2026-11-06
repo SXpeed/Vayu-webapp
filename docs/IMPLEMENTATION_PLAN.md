@@ -176,13 +176,10 @@ to their author (not even admins see them). The dummy-data look is in
 - [ ] Limits: 20 000 characters a note, 500 notes a person
 - [ ] Test: another member, an admin included, can't read, change or delete someone's note
 
-**8.3 Expenses**
-- [ ] Permission section `expenses`: view = submit and see your own claims; edit = see everyone's, approve, decline, mark reimbursed. Staff default view, owner and admins edit
-- [ ] Table `expenses` (person, date, amount in paise, category, note, receipt files, status pending / approved / declined / reimbursed, who decided and when)
-- [ ] Receipts through the existing photo attachments and private files (FILE_AUTH)
-- [ ] Screens: your claims plus a new-claim form; managers get a Pending list, a month total and a CSV export
-- [ ] Bell and push to the person when a claim is decided
-- [ ] Tests: amount checks; staff can't approve their own claim or see others'
+**8.3 Expenses** — built 2026-11-06 as the owner asked: record, then share
+- [x] Each person records their own (date, amount, category, note, up to 6 receipt photos), private to them, admins included (`expenses.ts`, `expenseRules.ts`, `views/ExpensesView.tsx`, `tests/expenses.integration.test.mjs`)
+- [x] Share a month as a PDF (table, total, each receipt) through the phone's share sheet, or download it on a computer (`services/expensePdf.ts`)
+- [ ] Later, once the owner decides where they go: send to the accounts team in the app, approve / decline / reimbursed with an `expenses` permission, CSV export
 
 **8.4 Email invites**
 - [ ] Permission section `social`: view = see invites and results, edit = write and send

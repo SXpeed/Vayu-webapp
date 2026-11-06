@@ -31,6 +31,7 @@
     "viewingRooms.ts",
     "staffRoster.ts",
     "sales.ts",
+    "expenses.ts",
     "invoices.ts",
     "paymentLinks.ts",
     "sessionCookies.ts",
