@@ -278,22 +278,21 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, events, teamMember
                 {(QUICK_ACTIONS.some(a => can(a.section)) || can('schedule')) && (
                 <section className="animate-fade-in-up space-y-3" style={{ animationDelay: '150ms' }}>
                     <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest px-3">Quick Actions</h2>
-                    {/* Five across when there is room; otherwise two by two, icon
-                        beside the label (an odd last one takes the whole row), so
-                        no label spills out. */}
+                    {/* Square tiles, icon over the label: three a row on phones
+                        (five wouldn't fit their labels), five across when there is room. */}
                     {QUICK_ACTIONS.some(a => can(a.section)) && (
                     <div className="@container">
-                    <div className="grid grid-cols-2 @[30rem]:grid-cols-5 gap-3">
+                    <div className="grid grid-cols-3 @[30rem]:grid-cols-5 gap-3">
                         {QUICK_ACTIONS.filter(a => can(a.section)).map(({ section, view, label, Icon }) => (
                         <button
                             key={section}
                             onClick={() => onNavigate(view)}
-                            className="neu-card min-w-0 px-2.5 py-3 @[30rem]:px-1 odd:last:col-span-2 @[30rem]:odd:last:col-span-1 flex @[30rem]:flex-col items-center justify-start @[30rem]:justify-center gap-2 hover:border-gold-500 dark:hover:border-gold-500 transition-colors active-scale"
+                            className="neu-card min-w-0 aspect-square px-1 py-3 flex flex-col items-center justify-center gap-2 hover:border-gold-500 dark:hover:border-gold-500 transition-colors active-scale"
                         >
                             <div className="shrink-0 text-brand-900 dark:text-gold-400">
                                 <Icon size={22} strokeWidth={1.5} />
                             </div>
-                            <span className="min-w-0 max-w-full text-[11px] @[30rem]:text-[10px] @[34rem]:text-[11px] font-medium text-gray-600 dark:text-gray-300 uppercase tracking-normal @[34rem]:tracking-wider text-left @[30rem]:text-center leading-tight [overflow-wrap:anywhere]">{label}</span>
+                            <span className="min-w-0 max-w-full text-[10px] @[34rem]:text-[11px] font-medium text-gray-600 dark:text-gray-300 uppercase tracking-normal @[34rem]:tracking-wider text-center leading-tight [overflow-wrap:anywhere]">{label}</span>
                         </button>
                         ))}
                     </div>
