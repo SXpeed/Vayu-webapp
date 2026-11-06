@@ -550,9 +550,9 @@ const ContactRow: React.FC<{ icon: React.ReactNode; value: string; href: string;
 
 /** A saved contact as read: ways to reach them, tags, notes and their inquiries. */
 const ContactDetails: React.FC<{
-    contact: Contact; tags: ContactTag[]; related: Inquiry[]; canEdit: boolean;
-    onOpenInquiry: (id: string) => void; onDelete: () => void;
-}> = ({ contact, tags, related, canEdit, onOpenInquiry, onDelete }) => {
+    contact: Contact; tags: ContactTag[]; related: Inquiry[];
+    onOpenInquiry: (id: string) => void;
+}> = ({ contact, tags, related, onOpenInquiry }) => {
     const tagById = new Map(tags.map(t => [t.id, t]));
     const shownTags = (contact.tags ?? []).map(t => tagById.get(t)).filter((t): t is ContactTag => !!t);
     return (
@@ -588,11 +588,6 @@ const ContactDetails: React.FC<{
                     ))}
                 </ul>
             </section>
-            {canEdit && (
-                <button type="button" onClick={onDelete} className="neu-button neu-button-danger w-full">
-                    <Trash2 size={14} /> Delete contact
-                </button>
-            )}
         </>
     );
 };
@@ -722,8 +717,8 @@ const ContactSheet: React.FC<{
                             )}
                         </>
                     ) : contact && (
-                        <ContactDetails contact={contact} tags={tags} related={related} canEdit={canEdit}
-                            onOpenInquiry={id => { onClose(); openLink({ view: 'inquiry', inquiryId: id }); }} onDelete={() => setConfirmDelete(true)} />
+                        <ContactDetails contact={contact} tags={tags} related={related}
+                            onOpenInquiry={id => { onClose(); openLink({ view: 'inquiry', inquiryId: id }); }} />
                     )}
                 </div>
             </Popup>

@@ -79,6 +79,15 @@ const STATUS_COLORS: Record<Inquiry['status'], string> = {
     'Closed': 'neu-status text-gray-700 dark:text-gray-400',
 };
 
+/** List tabs, in display order. Active leaves out the finished ones. */
+const TAB_FILTERS = {
+    active: (i: Inquiry) => i.status !== 'Closed' && i.status !== 'Converted',
+    converted: (i: Inquiry) => i.status === 'Converted',
+    shared: (i: Inquiry) => i.catalogShared,
+    closed: (i: Inquiry) => i.status === 'Closed',
+};
+const TAB_KEYS = Object.keys(TAB_FILTERS) as (keyof typeof TAB_FILTERS)[];
+
 const SOURCE_COLORS: Record<Inquiry['source'], string> = {
     'Walk-in': 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400',
     'Phone': 'bg-sky-50 dark:bg-sky-900/20 text-sky-700 dark:text-sky-400',
@@ -104,7 +113,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
     const [selectedInquiry, setSelectedInquiry] = useState<Inquiry | null>(null);
     const [chatInquiry, setChatInquiry] = useState<Inquiry | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
-    const [filterTab, setFilterTab] = useState<'active' | 'closed' | 'shared'>('active');
+    const [filterTab, setFilterTab] = useState<keyof typeof TAB_FILTERS>('active');
 
     useEffect(() => {
         const handlePopState = (e: PopStateEvent) => {
@@ -150,16 +159,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
     };
 
     const filteredInquiries = useMemo(() => {
-        let list = inquiries;
-
-        // Filter by tab
-        if (filterTab === 'active') {
-            list = list.filter(i => i.status !== 'Closed');
-        } else if (filterTab === 'closed') {
-            list = list.filter(i => i.status === 'Closed');
-        } else {
-            list = list.filter(i => i.catalogShared);
-        }
+        let list = inquiries.filter(i => TAB_FILTERS[filterTab](i));
 
         // Filter by search query
         if (searchQuery.trim()) {
@@ -174,9 +174,10 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
         return list;
     }, [inquiries, filterTab, searchQuery]);
 
-    const activeCount = useMemo(() => inquiries.filter(i => i.status !== 'Closed').length, [inquiries]);
-    const closedCount = useMemo(() => inquiries.filter(i => i.status === 'Closed').length, [inquiries]);
-    const sharedCount = useMemo(() => inquiries.filter(i => i.catalogShared).length, [inquiries]);
+    const tabCounts = useMemo(
+        () => Object.fromEntries(TAB_KEYS.map(t => [t, inquiries.filter(i => TAB_FILTERS[t](i)).length])),
+        [inquiries],
+    );
     const withMessages = useMemo(() => new Set(inquiryMessages.map(m => m.inquiryId)), [inquiryMessages]);
 
     return (
@@ -190,34 +191,19 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
 
             <PageBody space="md">
                 {/* Filter Buttons */}
-                <div className="flex gap-2 lg:w-fit animate-fade-in-up" style={{ animationDelay: '50ms' }}>
-                    <button
-                        onClick={() => setFilterTab('active')}
-                        className={`flex-1 lg:flex-none lg:px-6 py-2 rounded-full text-[11px] font-bold uppercase tracking-widest transition-colors active-scale ${filterTab === 'active'
-                            ? 'neu-inset text-gold-700 dark:text-gold-300'
-                            : 'neu-raised-sm neu-btn text-gray-700 dark:text-gray-300'
-                            }`}
-                    >
-                        Active ({activeCount})
-                    </button>
-                    <button
-                        onClick={() => setFilterTab('closed')}
-                        className={`flex-1 lg:flex-none lg:px-6 py-2 rounded-full text-[11px] font-bold uppercase tracking-widest transition-colors active-scale ${filterTab === 'closed'
-                            ? 'neu-inset text-gold-700 dark:text-gold-300'
-                            : 'neu-raised-sm neu-btn text-gray-700 dark:text-gray-300'
-                            }`}
-                    >
-                        Closed ({closedCount})
-                    </button>
-                    <button
-                        onClick={() => setFilterTab('shared')}
-                        className={`flex-1 lg:flex-none lg:px-6 py-2 rounded-full text-[11px] font-bold uppercase tracking-widest transition-colors active-scale ${filterTab === 'shared'
-                            ? 'neu-inset text-gold-700 dark:text-gold-300'
-                            : 'neu-raised-sm neu-btn text-gray-700 dark:text-gray-300'
-                            }`}
-                    >
-                        Shared ({sharedCount})
-                    </button>
+                <div className="flex gap-2 lg:w-fit overflow-x-auto no-scrollbar -mx-1 px-1 py-1 animate-fade-in-up" style={{ animationDelay: '50ms' }}>
+                    {TAB_KEYS.map(t => (
+                        <button
+                            key={t}
+                            onClick={() => setFilterTab(t)}
+                            className={`flex-1 lg:flex-none px-3 lg:px-6 py-2 rounded-full text-[11px] font-bold uppercase tracking-widest whitespace-nowrap transition-colors active-scale ${filterTab === t
+                                ? 'neu-inset text-gold-700 dark:text-gold-300'
+                                : 'neu-raised-sm neu-btn text-gray-700 dark:text-gray-300'
+                                }`}
+                        >
+                            {t} ({tabCounts[t]})
+                        </button>
+                    ))}
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2 md:space-y-0">
@@ -336,7 +322,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                     })}
                     {filteredInquiries.length === 0 && (
                         <div className="text-center text-gray-600 dark:text-gray-300 mt-10 font-light text-sm">
-                            {filterTab === 'active' ? 'No active inquiries.' : 'No closed inquiries.'}
+                            No {filterTab} inquiries.
                         </div>
                     )}
                 </div>
