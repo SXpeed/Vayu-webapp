@@ -77,6 +77,19 @@ export const MySpaceView: React.FC<{
     );
 };
 
+/** Admin: things managers decide. Opens for Staff roster "Manage" (the Home tile checks it). */
+export const AdminHubView: React.FC = () => {
+    const [open, setOpen] = useState<'leave' | null>(null);
+    const close = () => setOpen(null);
+    useBackClose(open !== null, close);
+    if (open === 'leave') return <StaffRosterView initialView="requests" onBack={close} />;
+    return (
+        <Hub title="Admin" subtitle="Decisions waiting on you" items={[
+            { title: 'Leave requests', line: 'Approve or decline your team’s leave', Icon: Leaf, onOpen: () => setOpen('leave') },
+        ]} />
+    );
+};
+
 export const SocialView: React.FC = () => (
     <Hub title="Social" subtitle="Invites to your contacts" items={[
         { title: 'WhatsApp invites', line: 'Send event invites on WhatsApp', Icon: MessageCircle },

@@ -9,7 +9,7 @@ import { PageRoot, PageHeader, PageBody, GhostIconButton } from '../components/u
 import { BellButton } from '../components/NotificationBell';
 import { useAppChrome } from '../components/Layout';
 import { useBranding } from '../useBranding';
-import type { SectionId } from '../permissions';
+import type { AccessLevel, SectionId } from '../permissions';
 import { HIDDEN_AMOUNT, currentMonth, itemsText, rupees, useMonthSales, type MonthSales } from '../components/SalesSummary';
 import { shiftMonth } from '../salesRules';
 import { TaskBoard } from './tasks/TaskList';
@@ -83,7 +83,7 @@ interface HomeViewProps {
 }
 
 /** No section: open to everyone (My Space is the person's own). */
-const QUICK_ACTIONS: { section?: SectionId; view: ViewState; label: string; Icon: React.ElementType }[] = [
+const QUICK_ACTIONS: { section?: SectionId; level?: AccessLevel; view: ViewState; label: string; Icon: React.ElementType }[] = [
     { section: 'payments', view: 'payments', label: 'Payments', Icon: IndianRupee },
     { section: 'contacts', view: 'contacts', label: 'Contacts', Icon: Users },
     { section: 'invoices', view: 'invoice', label: 'Billing', Icon: Receipt },
@@ -92,6 +92,8 @@ const QUICK_ACTIONS: { section?: SectionId; view: ViewState; label: string; Icon
     { section: 'schedule', view: 'schedule', label: 'Staff roster', Icon: CalendarClock },
     { view: 'myspace', label: 'My Space', Icon: UserRound },
     { section: 'contacts', view: 'social', label: 'Social', Icon: Megaphone },
+    // Admin holds leave decisions, so it shows to whoever manages the Staff roster.
+    { section: 'schedule', level: 'edit', view: 'admin', label: 'Admin', Icon: ShieldCheck },
 ];
 
 const MONTHS_SHORT = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
@@ -281,11 +283,11 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, events, teamMember
                 {/* Quick Actions */}
                 <section className="animate-fade-in-up space-y-3" style={{ animationDelay: '150ms' }}>
                     <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest px-3">Quick Actions</h2>
-                    {/* Compact tiles, icon over the label: three a row on phones
-                        (more wouldn't fit their labels), four, then all eight across as room allows. */}
+                    {/* Compact tiles, icon over the label: three a row (an even 3×3 for
+                        nine; more wouldn't fit their labels on phones), all nine across when there is room. */}
                     <div className="@container">
-                    <div className="grid grid-cols-3 @[36rem]:grid-cols-4 @[56rem]:grid-cols-8 gap-2.5">
-                        {QUICK_ACTIONS.filter(a => !a.section || can(a.section)).map(({ view, label, Icon }) => (
+                    <div className="grid grid-cols-3 @[56rem]:grid-cols-9 gap-2.5">
+                        {QUICK_ACTIONS.filter(a => !a.section || can(a.section, a.level)).map(({ view, label, Icon }) => (
                         <button
                             key={view}
                             onClick={() => onNavigate(view)}

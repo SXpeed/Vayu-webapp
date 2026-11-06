@@ -22,6 +22,7 @@ export const VIEW_SECTION: Partial<Record<ViewState, SectionId>> = {
     activity: 'activity',
     // shortcut: invites go to contacts, so Contacts access opens Social; its own `social` permission comes with Email invites (IMPLEMENTATION_PLAN 8.4).
     social: 'contacts',
+    admin: 'schedule', // the Requests tab itself shows approve / decline only to managers (server-checked)
 };
 
 /**
