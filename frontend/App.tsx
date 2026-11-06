@@ -497,7 +497,7 @@ const App: React.FC = () => {
             case 'login':
                 return <LoginView onLogin={handleLogin} />;
             case 'home':
-                return userProfile ? <HomeView artworks={artworks} catalogs={catalogs} events={events} teamMembers={teamMembers} onNavigate={navigateTo} userProfile={userProfile} onAddEvent={handlers.handleAddEvent} onUpdateEvent={handlers.handleUpdateEvent} onDeleteEvent={handlers.handleDeleteEvent} /> : null;
+                return userProfile ? <HomeView artworks={artworks} events={events} teamMembers={teamMembers} onNavigate={navigateTo} userProfile={userProfile} onAddEvent={handlers.handleAddEvent} onUpdateEvent={handlers.handleUpdateEvent} onDeleteEvent={handlers.handleDeleteEvent} /> : null;
             case 'artworks':
                 return <ArtworksView artworks={artworks} onAddArtwork={handlers.handleAddArtwork} onUpdateArtwork={handlers.handleUpdateArtwork} onArtworkClick={handleArtworkClick} />;
             case 'collections':

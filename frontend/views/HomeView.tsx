@@ -1,10 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import { useBackClose } from '../hooks/useBackClose';
-import { Artwork, CalendarEvent, Catalog, EventTodo, ViewState, UserProfile } from '../types';
+import { Artwork, CalendarEvent, EventTodo, ViewState, UserProfile } from '../types';
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { EVENT_COLORS, eventColor, eventTimeLabel } from '../services/eventService';
-import { Clock, Receipt, HandCoins, Eye, EyeOff, ChevronLeft, Palette, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronRight, BookOpen, ShieldCheck, User, CalendarClock } from 'lucide-react';
+import { Clock, Receipt, HandCoins, Eye, EyeOff, ChevronLeft, Palette, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronRight, ShieldCheck, User, CalendarClock } from 'lucide-react';
 import { PageRoot, PageHeader, PageBody, GhostIconButton } from '../components/ui';
 import { BellButton } from '../components/NotificationBell';
 import { useAppChrome } from '../components/Layout';
@@ -73,7 +73,6 @@ const SalesTile: React.FC<{
 
 interface HomeViewProps {
     artworks: Artwork[];
-    catalogs: Catalog[];
     events: CalendarEvent[];
     teamMembers: UserProfile[];
     userProfile: UserProfile;
@@ -88,7 +87,7 @@ const QUICK_ACTIONS: { section: SectionId; view: ViewState; label: string; Icon:
     { section: 'contacts', view: 'contacts', label: 'Contacts', Icon: Users },
     { section: 'invoices', view: 'invoice', label: 'Billing', Icon: Receipt },
     { section: 'attendance', view: 'attendance', label: 'Attendance', Icon: Clock },
-    { section: 'schedule', view: 'schedule', label: 'Staff roster', Icon: CalendarClock },
+    { section: 'calendar', view: 'calendar', label: 'Calendar', Icon: CalendarDays },
 ];
 
 const MONTHS_SHORT = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
@@ -110,7 +109,7 @@ const toInputValue = (ms?: number): string => {
 
 const EMPTY_EVENT_FORM = { title: '', dateTime: '', endDateTime: '', notes: '', color: '', todos: [] as EventTodo[] };
 
-export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, events, teamMembers, userProfile, onNavigate, onAddEvent, onUpdateEvent, onDeleteEvent }) => {
+export const HomeView: React.FC<HomeViewProps> = ({ artworks, events, teamMembers, userProfile, onNavigate, onAddEvent, onUpdateEvent, onDeleteEvent }) => {
     // Admin entry + role come from the shell; on desktop the sidebar shows them
     // instead, so the header only renders these buttons on phones.
     const { isAdmin, openAdmin, can } = useAppChrome();
@@ -262,7 +261,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, events, 
 
             <PageBody space="none">
                 {/* Top Stats */}
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-5 animate-fade-in-up">
+                <div className="grid grid-cols-2 gap-3 lg:gap-5 animate-fade-in-up">
                     {can('sales') && (
                         <SalesTile month={salesMonth} onMonth={setSalesMonth} sales={monthSales}
                             hidden={amountsHidden} onToggleHidden={() => setAmountsHidden(h => !h)} onOpen={() => onNavigate('sales')} />
@@ -272,26 +271,17 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, events, 
                             <CountUp value={availableArtworks} /> <span className="text-xs font-sans text-gray-500 dark:text-gray-400">/ {artworks.length}</span>
                         </StatTile>
                     )}
-                    {can('catalogs') && (
-                        <StatTile icon={<BookOpen size={14} className="text-gold-500" />} label="Catalogs">
-                            <CountUp value={catalogs.length} />
-                        </StatTile>
-                    )}
-                    {can('calendar') && (
-                        <StatTile icon={<CalendarDays size={14} className="text-gold-500" />} label="Upcoming">
-                            <CountUp value={upcomingEvents.length} />
-                        </StatTile>
-                    )}
                 </div>
 
             <div className="mt-6 lg:mt-8 space-y-8 w-full lg:grid lg:grid-cols-2 2xl:grid-cols-3 lg:gap-x-6 lg:gap-y-8 lg:space-y-0 lg:items-start">
                 {/* Quick Actions */}
-                {QUICK_ACTIONS.some(a => can(a.section)) && (
-                <section className="animate-fade-in-up" style={{ animationDelay: '150ms' }}>
-                    <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-3">Quick Actions</h2>
+                {(QUICK_ACTIONS.some(a => can(a.section)) || can('schedule')) && (
+                <section className="animate-fade-in-up space-y-3" style={{ animationDelay: '150ms' }}>
+                    <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest px-3">Quick Actions</h2>
                     {/* Five across when there is room; otherwise two by two, icon
                         beside the label (an odd last one takes the whole row), so
                         no label spills out. */}
+                    {QUICK_ACTIONS.some(a => can(a.section)) && (
                     <div className="@container">
                     <div className="grid grid-cols-2 @[30rem]:grid-cols-5 gap-3">
                         {QUICK_ACTIONS.filter(a => can(a.section)).map(({ section, view, label, Icon }) => (
@@ -308,6 +298,26 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, catalogs, events, 
                         ))}
                     </div>
                     </div>
+                    )}
+                    {/* Staff roster: this week's shifts, for everyone who can see it */}
+                    {can('schedule') && (
+                    <button
+                        type="button"
+                        onClick={() => onNavigate('schedule')}
+                        className="neu-card-interactive w-full p-3 flex items-center gap-3.5 text-left active-scale"
+                    >
+                        <span className="neu-inset shrink-0 w-14 h-14 rounded-2xl flex items-center justify-center">
+                            <CalendarClock size={24} strokeWidth={1.5} className="text-brand-900 dark:text-gold-400" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                            <span className="block font-serif text-[17px] leading-tight text-gray-900 dark:text-white">Staff roster</span>
+                            <span className="block mt-0.5 text-[11.5px] text-gray-600 dark:text-gray-400 leading-snug">
+                                {can('schedule', 'edit') ? 'Plan shifts, approve leave and publish the week' : 'Your shifts this week, and leave requests'}
+                            </span>
+                        </span>
+                        <ChevronRight size={18} className="shrink-0 text-gold-700 dark:text-gold-300" />
+                    </button>
+                    )}
                 </section>
                 )}
 
