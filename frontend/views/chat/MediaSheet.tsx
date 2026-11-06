@@ -8,7 +8,7 @@ import { getThumbUrl } from '../../services/storageService';
 import { safeExtension } from '../../fileTypes';
 import type { MessageAttachment } from '../../types';
 import { Sheet } from './MessageReactions';
-import { openFile, messageTime } from './MessageParts';
+import { useOpenFile, messageTime } from './MessageParts';
 import { chatDayLabel } from './DayDivider';
 import type { ViewedImage } from './ImageViewer';
 
@@ -22,6 +22,7 @@ export const MediaSheet: React.FC<{
     onClose: () => void;
 }> = ({ messages, currentUserId, resolveName, onOpenImage, onClose }) => {
     const [tab, setTab] = useState<'image' | 'file'>('image');
+    const file = useOpenFile();
     // Newest first; a failed send never reached anyone.
     const items = useMemo(() => messages.filter(m => m.attachment && m.status !== 'failed').sort((a, b) => b.timestamp - a.timestamp), [messages]);
     const shown = items.filter(m => m.attachment!.type === tab);
@@ -30,6 +31,7 @@ export const MediaSheet: React.FC<{
 
     return (
         <Sheet title="Media & docs" onClose={onClose}>
+            {file.viewer}
             <div className="flex gap-2 mb-4" role="tablist" aria-label="Media or docs">
                 <button type="button" role="tab" aria-selected={tab === 'image'} onClick={() => setTab('image')} className={tabClass(tab === 'image')}>
                     Media · {items.filter(m => m.attachment!.type === 'image').length}
@@ -53,7 +55,7 @@ export const MediaSheet: React.FC<{
                 <ul className="space-y-1.5">
                     {shown.map(m => (
                         <li key={m.id}>
-                            <button type="button" onClick={() => void openFile(m.attachment!)} aria-label={`Open ${m.attachment!.name}`}
+                            <button type="button" onClick={() => file.open(m.attachment!)} aria-label={`Open ${m.attachment!.name}`}
                                 className="w-full neu-raised-sm neu-btn rounded-xl px-3 py-2.5 flex items-center gap-3 text-left">
                                 <FileText size={18} className="shrink-0 text-gold-600 dark:text-gold-400" />
                                 <span className="min-w-0 flex-1">

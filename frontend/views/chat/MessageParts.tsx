@@ -2,7 +2,9 @@ import React, { useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Camera, FileText, Headphones, Images, Loader2, Paperclip, Send, Tag, X } from 'lucide-react';
 import storageService, { getThumbUrl } from '../../services/storageService';
-import { openBlob } from '../../services/saveFile';
+import { openBlob, saveBlob } from '../../services/saveFile';
+import { PdfViewer } from '../../components/PdfViewer';
+import { usePdfFirstPage } from '../../components/CatalogCover';
 import { usePhotoCapture } from '../../hooks/usePhotoCapture';
 import { pastedFiles, safeExtension } from '../../fileTypes';
 import type { Message, MessageAttachment, MessageReplyTo, MessageTag } from '../../types';
@@ -28,20 +30,30 @@ export const messagePreview = (msg: { text?: string; attachment?: MessageAttachm
     return msg.attachment.type === 'image' ? '📷 Photo' : `📎 ${msg.attachment.name}`;
 };
 
-/** Open a sent file: a PDF or text in a new tab, anything else downloads under
- *  its own name. Fetched as a blob, like catalog PDFs: installed apps block popups. */
-export async function openFile(file: MessageAttachment) {
-    const toastId = toast.loading('Opening…');
+/** Open a sent file (text in a new tab, anything else downloads under its own
+ *  name), or `save` it. Fetched as a blob, like catalog PDFs: installed apps block popups. */
+async function openFile(file: MessageAttachment, save = false) {
+    const toastId = toast.loading(save ? 'Preparing download…' : 'Opening…');
     try {
         const res = await fetch(file.url);
         if (!res.ok) throw new Error('Could not open the file');
         const blob = await res.blob();
-        await openBlob(blob, file.name);
+        await (save ? saveBlob : openBlob)(blob, file.name);
         toast.dismiss(toastId);
     } catch (e) {
         if ((e as Error).name === 'AbortError') toast.dismiss(toastId);
         else toast.error((e as Error).message || 'Could not open the file', { id: toastId });
     }
+}
+
+/** Tapping a sent file: a PDF opens in the app's own viewer, as in Catalogs (phones have
+ *  none); other files open or download. Render `viewer` wherever the hook is used. */
+export function useOpenFile(): { open: (file: MessageAttachment) => void; viewer: React.ReactNode } {
+    const [pdf, setPdf] = useState<MessageAttachment | null>(null);
+    return {
+        open: file => (safeExtension(file.name) === 'pdf' ? setPdf(file) : void openFile(file)),
+        viewer: pdf && <PdfViewer url={pdf.url} name={pdf.name} onClose={() => setPdf(null)} onDownload={() => void openFile(pdf, true)} />,
+    };
 }
 
 /** Tapping a quoted reply: scroll to the original (each row carries data-msg-id) and flash it, as on WhatsApp. */
@@ -60,6 +72,31 @@ export function jumpToMessage(id: string, from: HTMLElement): void {
 
 export const messageTime = (timestamp: number) => new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+/** A sent file in its bubble. A PDF shows its first page above its name, as on WhatsApp;
+ *  the box keeps its height while the page is drawn, so the chat doesn't jump. */
+const FileCard: React.FC<{ file: MessageAttachment; onOpen: () => void }> = ({ file, onOpen }) => {
+    const holder = useRef<HTMLButtonElement>(null);
+    const ext = safeExtension(file.name);
+    const page = usePdfFirstPage(ext === 'pdf' ? file.url : undefined, holder);
+    return (
+        <button ref={holder} type="button" onClick={onOpen} aria-label={`Open ${file.name}`}
+            className={`block mb-2 neu-inset rounded-xl overflow-hidden text-left active-scale ${ext === 'pdf' ? 'w-56 max-w-full' : 'w-full'}`}>
+            {ext === 'pdf' && (
+                page?.objectUrl
+                    ? <img src={page.objectUrl} alt="" className="block w-full h-32 object-cover object-top bg-white" />
+                    : <span className={`flex w-full h-32 items-center justify-center text-[var(--neu-text-dim)] ${page ? '' : 'animate-pulse'}`}><FileText size={28} strokeWidth={1.25} /></span>
+            )}
+            <span className="flex items-center gap-2 p-2">
+                <FileText size={18} className="text-gold-700 dark:text-gold-300 shrink-0" />
+                <span className="min-w-0">
+                    <span className="block text-[11px] truncate">{file.name}</span>
+                    <span className="block text-[10px] uppercase tracking-wider text-[var(--neu-text-dim)]">{ext || 'File'}</span>
+                </span>
+            </span>
+        </button>
+    );
+};
+
 type ChatMessage = Pick<Message, 'senderId' | 'text' | 'tags' | 'replyTo' | 'attachment'>;
 
 export const MessageBubble: React.FC<{
@@ -70,8 +107,11 @@ export const MessageBubble: React.FC<{
     onOpenImage: () => void;
     /** Bottom-right corner: the time and ticks, or a retry button. */
     meta: React.ReactNode;
-}> = ({ msg, isMe, senderName, replySenderName, onOpenImage, meta }) => (
+}> = ({ msg, isMe, senderName, replySenderName, onOpenImage, meta }) => {
+    const file = useOpenFile();
+    return (
     <div className={`px-3.5 py-2.5 ${isMe ? 'neu-bubble-out' : 'neu-bubble-in'}`}>
+        {file.viewer}
         {!isMe && (
             <p className="text-[11px] font-bold uppercase tracking-widest mb-1 text-gold-700 dark:text-gold-300">{senderName}</p>
         )}
@@ -97,18 +137,7 @@ export const MessageBubble: React.FC<{
                     <img loading="lazy" decoding="async" src={getThumbUrl(msg.attachment.url)} alt={msg.attachment.name} className="rounded-xl max-w-full max-h-48 object-cover" />
                 </button>
             ) : (
-                <button
-                    type="button"
-                    onClick={() => msg.attachment && void openFile(msg.attachment)}
-                    aria-label={`Open ${msg.attachment.name}`}
-                    className="flex items-center gap-2 mb-2 p-2 neu-inset rounded-xl w-full text-left active-scale"
-                >
-                    <FileText size={18} className="text-gold-700 dark:text-gold-300 shrink-0" />
-                    <span className="min-w-0">
-                        <span className="block text-[11px] truncate">{msg.attachment.name}</span>
-                        <span className="block text-[10px] uppercase tracking-wider text-[var(--neu-text-dim)]">{safeExtension(msg.attachment.name) || 'File'}</span>
-                    </span>
-                </button>
+                <FileCard file={msg.attachment} onOpen={() => msg.attachment && file.open(msg.attachment)} />
             )
         )}
         {msg.text && <p className="text-[13px] leading-relaxed">{msg.text}</p>}
@@ -123,7 +152,8 @@ export const MessageBubble: React.FC<{
             {meta}
         </div>
     </div>
-);
+    );
+};
 
 /** The bar under a chat: tags, reply preview, photos/files and the text box.
  *  Give it `key={chat id}` so switching chats starts with an empty bar. */

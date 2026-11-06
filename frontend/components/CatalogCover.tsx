@@ -25,21 +25,16 @@ const firstArtworkPhoto = (catalog: Catalog, artworks: Artwork[]): string | unde
 };
 
 /**
- * The picture on a catalog tile: its uploaded cover; otherwise the first page
- * of its PDF; otherwise its first artwork's photo; otherwise an icon. The PDF
- * page is drawn once the tile scrolls into view, and kept on the device.
+ * The first page of a PDF, drawn once `holder` is (nearly) on screen and kept
+ * on the device. Undefined while waiting; `objectUrl` is null when it couldn't
+ * be drawn (too large, offline). Pass no URL to skip.
  */
-export const CatalogCover: React.FC<{ catalog: Catalog; artworks: Artwork[]; className?: string }> = ({ catalog, artworks, className = '' }) => {
-    const cover = uploadedCover(catalog);
-    const photo = firstArtworkPhoto(catalog, artworks);
-    const wantsPdfPage = !cover && !!catalog.pdfUrl;
-
-    const holder = useRef<HTMLDivElement>(null);
+export function usePdfFirstPage(wanted: string | undefined, holder: React.RefObject<HTMLElement | null>): { objectUrl: string | null } | undefined {
     const [pdfPage, setPdfPage] = useState<{ pdfUrl: string; objectUrl: string | null } | null>(null);
 
     useEffect(() => {
-        if (!wantsPdfPage || !catalog.pdfUrl) return;
-        const pdfUrl = catalog.pdfUrl;
+        if (!wanted) return;
+        const pdfUrl = wanted;
         let alive = true;
         let objectUrl: string | null = null;
         const load = () => {
@@ -71,9 +66,23 @@ export const CatalogCover: React.FC<{ catalog: Catalog; artworks: Artwork[]; cla
             alive = false;
             if (objectUrl) URL.revokeObjectURL(objectUrl);
         };
-    }, [wantsPdfPage, catalog.pdfUrl]);
+    }, [wanted, holder]);
 
-    const drawn = pdfPage?.pdfUrl === catalog.pdfUrl ? pdfPage : null;
+    return wanted && pdfPage?.pdfUrl === wanted ? pdfPage : undefined;
+}
+
+/**
+ * The picture on a catalog tile: its uploaded cover; otherwise the first page
+ * of its PDF; otherwise its first artwork's photo; otherwise an icon. The PDF
+ * page is drawn once the tile scrolls into view, and kept on the device.
+ */
+export const CatalogCover: React.FC<{ catalog: Catalog; artworks: Artwork[]; className?: string }> = ({ catalog, artworks, className = '' }) => {
+    const cover = uploadedCover(catalog);
+    const photo = firstArtworkPhoto(catalog, artworks);
+    const wantsPdfPage = !cover && !!catalog.pdfUrl;
+
+    const holder = useRef<HTMLDivElement>(null);
+    const drawn = usePdfFirstPage(wantsPdfPage ? catalog.pdfUrl : undefined, holder);
     let src: string | undefined;
     // The PDF page is shown from its top, where the photo is, not its middle.
     let position = 'center';
