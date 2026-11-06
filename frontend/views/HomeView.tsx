@@ -279,15 +279,15 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, events, teamMember
                 {QUICK_ACTIONS.some(a => can(a.section)) && (
                 <section className="animate-fade-in-up space-y-3" style={{ animationDelay: '150ms' }}>
                     <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest px-3">Quick Actions</h2>
-                    {/* Square tiles, icon over the label: three a row on phones
+                    {/* Compact tiles, icon over the label: three a row on phones
                         (six wouldn't fit their labels), all six across when there is room. */}
                     <div className="@container">
-                    <div className="grid grid-cols-3 @[36rem]:grid-cols-6 gap-3">
+                    <div className="grid grid-cols-3 @[36rem]:grid-cols-6 gap-2.5">
                         {QUICK_ACTIONS.filter(a => can(a.section)).map(({ section, view, label, Icon }) => (
                         <button
                             key={section}
                             onClick={() => onNavigate(view)}
-                            className="neu-card min-w-0 aspect-square px-1 py-3 flex flex-col items-center justify-center gap-2 hover:border-gold-500 dark:hover:border-gold-500 transition-colors active-scale"
+                            className="neu-card min-w-0 px-1 py-2.5 flex flex-col items-center justify-center gap-1.5 hover:border-gold-500 dark:hover:border-gold-500 transition-colors active-scale"
                         >
                             <div className="shrink-0 text-brand-900 dark:text-gold-400">
                                 <Icon size={18} strokeWidth={1.5} />
