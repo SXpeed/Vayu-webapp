@@ -454,6 +454,7 @@ export function useEntityData(
             catalogs: ['catalogs', 'artworks'],
             contacts: ['contacts', 'inquiries'],
             calendar: ['events'],
+            myspace: ['events'],
             invoice: ['invoices', 'artworks'],
             inquiry: ['inquiries', 'inquiryMessages', 'artworks', 'invoices'],
             messaging: ['conversations', 'messages'],

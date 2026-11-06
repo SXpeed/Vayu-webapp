@@ -4,7 +4,7 @@ import { Artwork, CalendarEvent, EventTodo, ViewState, UserProfile } from '../ty
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { EVENT_COLORS, eventColor, eventTimeLabel } from '../services/eventService';
-import { Clock, Receipt, HandCoins, Eye, EyeOff, ChevronLeft, Palette, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronRight, ShieldCheck, User, CalendarClock } from 'lucide-react';
+import { Clock, Receipt, HandCoins, Eye, EyeOff, ChevronLeft, Palette, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronRight, ShieldCheck, User, CalendarClock, UserRound, Megaphone } from 'lucide-react';
 import { PageRoot, PageHeader, PageBody, GhostIconButton } from '../components/ui';
 import { BellButton } from '../components/NotificationBell';
 import { useAppChrome } from '../components/Layout';
@@ -82,13 +82,16 @@ interface HomeViewProps {
     onDeleteEvent: (id: string) => void;
 }
 
-const QUICK_ACTIONS: { section: SectionId; view: ViewState; label: string; Icon: React.ElementType }[] = [
+/** No section: open to everyone (My Space is the person's own). */
+const QUICK_ACTIONS: { section?: SectionId; view: ViewState; label: string; Icon: React.ElementType }[] = [
     { section: 'payments', view: 'payments', label: 'Payments', Icon: IndianRupee },
     { section: 'contacts', view: 'contacts', label: 'Contacts', Icon: Users },
     { section: 'invoices', view: 'invoice', label: 'Billing', Icon: Receipt },
     { section: 'attendance', view: 'attendance', label: 'Attendance', Icon: Clock },
     { section: 'calendar', view: 'calendar', label: 'Calendar', Icon: CalendarDays },
     { section: 'schedule', view: 'schedule', label: 'Staff roster', Icon: CalendarClock },
+    { view: 'myspace', label: 'My Space', Icon: UserRound },
+    { section: 'contacts', view: 'social', label: 'Social', Icon: Megaphone },
 ];
 
 const MONTHS_SHORT = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
@@ -276,16 +279,15 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, events, teamMember
 
             <div className="mt-6 lg:mt-8 space-y-8 w-full lg:grid lg:grid-cols-2 2xl:grid-cols-3 lg:gap-x-6 lg:gap-y-8 lg:space-y-0 lg:items-start">
                 {/* Quick Actions */}
-                {QUICK_ACTIONS.some(a => can(a.section)) && (
                 <section className="animate-fade-in-up space-y-3" style={{ animationDelay: '150ms' }}>
                     <h2 className="text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest px-3">Quick Actions</h2>
                     {/* Compact tiles, icon over the label: three a row on phones
-                        (six wouldn't fit their labels), all six across when there is room. */}
+                        (more wouldn't fit their labels), four, then all eight across as room allows. */}
                     <div className="@container">
-                    <div className="grid grid-cols-3 @[36rem]:grid-cols-6 gap-2.5">
-                        {QUICK_ACTIONS.filter(a => can(a.section)).map(({ section, view, label, Icon }) => (
+                    <div className="grid grid-cols-3 @[36rem]:grid-cols-4 @[56rem]:grid-cols-8 gap-2.5">
+                        {QUICK_ACTIONS.filter(a => !a.section || can(a.section)).map(({ view, label, Icon }) => (
                         <button
-                            key={section}
+                            key={view}
                             onClick={() => onNavigate(view)}
                             className="neu-card min-w-0 px-1 py-2.5 flex flex-col items-center justify-center gap-1.5 hover:border-gold-500 dark:hover:border-gold-500 transition-colors active-scale"
                         >
@@ -298,7 +300,6 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, events, teamMember
                     </div>
                     </div>
                 </section>
-                )}
 
                 {/* Upcoming Events (calendar) */}
                 {can('calendar') && (

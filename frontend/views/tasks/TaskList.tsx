@@ -393,9 +393,9 @@ const COMPLETED_WINDOW_DAYS = 14;
 
 export const TaskBoard: React.FC<{
     events: CalendarEvent[]; teamMembers: UserProfile[]; currentUserId: string; canEdit: boolean;
-    onUpdateEvent: (ev: CalendarEvent) => void;
-}> = ({ events, teamMembers, currentUserId, canEdit, onUpdateEvent }) => {
-    const [filter, setFilter] = useState<Filter>('all');
+    onUpdateEvent: (ev: CalendarEvent) => void; initialFilter?: Filter;
+}> = ({ events, teamMembers, currentUserId, canEdit, onUpdateEvent, initialFilter = 'all' }) => {
+    const [filter, setFilter] = useState<Filter>(initialFilter);
     const [allDays, setAllDays] = useState(false);
     const [allOverdue, setAllOverdue] = useState(false);
     const today = dayKeyOf(new Date());

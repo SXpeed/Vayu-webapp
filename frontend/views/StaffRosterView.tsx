@@ -349,11 +349,12 @@ const RosterOverlay: React.FC<{
     }
 };
 
-export const StaffRosterView: React.FC = () => {
+/** `initialView` + `onBack`: My Space opens it straight on leave Requests. */
+export const StaffRosterView: React.FC<{ initialView?: View; onBack?: () => void }> = ({ initialView = 'week', onBack }) => {
     const { can, navigate } = useAppChrome();
     const isPhone = useMediaQuery('(max-width: 767px)');
     const [weekStart, setWeekStart] = useState(() => mondayOf(todayIso()));
-    const [view, setView] = useState<View>('week');
+    const [view, setView] = useState<View>(initialView);
     const [layout, setLayout] = useState<'grid' | 'day'>('grid');
     const [dayIdx, setDayIdx] = useState(() => weekdayIdx(todayIso()));
     const [filters, setFilters] = useState<Filters>({ storeId: 'all', title: 'all', q: '' });
@@ -417,6 +418,7 @@ export const StaffRosterView: React.FC = () => {
             <PageHeader
                 title="Staff roster"
                 subtitle={subtitle}
+                onBack={onBack}
                 actions={manage ? (
                     <>
                         <output className={`hidden sm:inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-semibold ${STATUS_CLS[status]}`}>

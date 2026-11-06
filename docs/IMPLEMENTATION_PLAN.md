@@ -156,6 +156,45 @@ After a few stable weeks, with the owner's OK:
 - [ ] Cross-organization isolation re-checked on staging with real data volumes
 - [ ] Production smoke test after each deploy
 
+## Step 8 — My Space and Social on Home (asked 2026-11-06)
+
+Two new Quick Action tiles. **My Space**: Expenses, Tasks, Leave request,
+My Notes. **Social**: WhatsApp invites, Email invites. Decided: Expenses get
+their own permission; Email invites first, WhatsApp later; notes are private
+to their author (not even admins see them). The dummy-data look is in
+`frontend/prototype/social/`.
+
+**8.1 Tiles and hubs** (frontend only; reuses what exists)
+- [ ] `myspace` and `social` views, each a short list of its items
+- [ ] Tasks → the Home `TaskBoard`, on "Mine"
+- [ ] Leave request → the Staff roster's Requests panel (`views/staffRoster/OtherViews.tsx`); shown with `schedule` view access
+- [ ] My Space shows to everyone; Social needs the new `social` permission (8.4). Items not built yet read "Coming soon"
+
+**8.2 My Notes**
+- [ ] Table `notes` (id, owner_id, title, body, pinned, timestamps) in the workspace database, created on first use like `staffRoster.ts`
+- [ ] `/api/notes` list / save / delete, always filtered by the signed-in person; no admin or sync path (private, refetched on open)
+- [ ] Limits: 20 000 characters a note, 500 notes a person
+- [ ] Test: another member, an admin included, can't read, change or delete someone's note
+
+**8.3 Expenses**
+- [ ] Permission section `expenses`: view = submit and see your own claims; edit = see everyone's, approve, decline, mark reimbursed. Staff default view, owner and admins edit
+- [ ] Table `expenses` (person, date, amount in paise, category, note, receipt files, status pending / approved / declined / reimbursed, who decided and when)
+- [ ] Receipts through the existing photo attachments and private files (FILE_AUTH)
+- [ ] Screens: your claims plus a new-claim form; managers get a Pending list, a month total and a CSV export
+- [ ] Bell and push to the person when a claim is decided
+- [ ] Tests: amount checks; staff can't approve their own claim or see others'
+
+**8.4 Email invites**
+- [ ] Permission section `social`: view = see invites and results, edit = write and send
+- [ ] Table `campaigns` (name, audience = contact tags, subject, body, event and RSVP link, send time, status, counts) and one row per recipient
+- [ ] Sent in batches from the cron through an outbox like `platform/notify.ts`; sender name = the workspace, reply-to = its email
+- [ ] Must-haves: an unsubscribe link in every email, honoured on the contact; per-send and daily caps (a plan limit); RSVP by tokened link. Counts: sent, failed, clicked, RSVP (open tracking skipped, it's unreliable)
+- [ ] **Check before building:** whether Cloudflare Email Service allows bulk marketing email and at what volume; it needs the ateliersupport.com SPF/DKIM/DMARC below
+
+**8.5 WhatsApp invites — later.** Tile reads "Coming soon". Needs a sending
+provider (MSG91 per workspace was the prototype's idea), a WhatsApp opt-in on
+contacts, and Meta-approved templates.
+
 ## Waiting on the owner
 
 - [ ] Real privacy policy, terms, About text, contact email and address
