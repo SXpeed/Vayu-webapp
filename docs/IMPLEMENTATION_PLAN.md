@@ -203,13 +203,22 @@ bill); WhatsApp before email; the contact tag is the consent list.
 - [x] Connect asks MSG91 which WhatsApp numbers the key's account has (`/whatsapp-activation/`) and uses that; a typed number not on the account is refused with the right one named
 - [x] Templates already on the MSG91 account (made in its own panel) are brought in when the list opens, with their numbered fields; `{{name}}` typed in a field is each person's first name. Ones needing a video, document or a filled-in link or button are counted, not listed
 - [x] Confirmed against a live account 2026-11-11: the number list, the template list and its shape
-- [ ] **Still to confirm with a real send:** the picture header on send (`header_1`) and on create (`header_handle`), and the delivery-report field names
+- [x] Template builder with everything MSG91's own builder offers for an invite (seen in its panel 2026-11-11): Marketing / Utility; header none, text (one field), image, video, PDF, location; bold / italic / strikethrough / monospace; your own fields with examples for review; small print; buttons: quick replies (RSVP preset), 2 website links (fixed, or ending in a field), 1 phone number, 1 offer code; more languages
+- [x] Panel templates with any of those parts are brought in too; Authentication, carousel and limited-time-offer ones are counted, not listed
+- [ ] **Still to confirm with a real send:** the header file on send (`header_1`) and on create (`header_handle`), location and button values, and the delivery-report field names
 - [ ] Each workspace: Meta business verification in MSG91, "IP security" off on the auth key, the delivery-updates address pasted into MSG91 → WhatsApp → Webhook (New)
 - [ ] Later: send again to failed, CSV export, per-plan and daily caps (one invite is capped at 2,000 people), a per-contact opt-in field, deleting a template at MSG91 too
 
-**8.6 Email invites — next.** Same screens and tables with a subject line and
-no approval step. Open choice: MSG91 email (one provider, delivery and bounce
-reports) or Cloudflare Email Service (8.4's open question on bulk mail).
+**8.6 Email invites** (built 2026-11-11 through MSG91 email, not deployed)
+
+- [x] Sender: a domain verified in MSG91, a from address on it, a name, a reply-to (`PUT /social/email`)
+- [x] Templates: subject, message, optional picture, RSVP buttons; saved to MSG91 as HTML (handlebars) and checked by MSG91 (status 1 pending, 2 verified, 5 rejected)
+- [x] Invites to tagged contacts with an email address; each person gets their own name and their own signed RSVP and unsubscribe links (`/api/v2/social/rsvp|unsub/...`); unsubscribed addresses are left out
+- [x] Reports (delivered, opened, failed, unsubscribed) arrive at the same address as WhatsApp's
+- [ ] **Before the first real send:** verify a domain in MSG91 (on 2026-11-11 only MSG91's dummy domain was verified; vayuindia.com, galleryvayu.com, steamsale.in were added but not verified); confirm the email report fields and whether `crqid` can be sent (reports are matched by address until then)
+- [ ] Later: email templates made in MSG91's panel, a richer email editor
+
+**8.7 Social as one space** (redesigned 2026-11-11, not deployed): tabs Overview (figures across both channels, setup checklist, channel cards, coming up, recent), Invites (search, channel and state filters), Templates (both channels, search), Audience (each tag's WhatsApp / email reach, opt-outs, "Invite" a tag) and Settings. A new invite is four steps (message, people, details, review) with the preview beside it. An invite's page: search, filters, CSV export, "Use again", resend to those who failed (`POST /social/invites/:id/retry`), cancel while scheduled (`DELETE /social/invites/:id`). Reach: `GET /social/reach`.
 
 ## Waiting on the owner
 

@@ -1,14 +1,15 @@
-// My Space and Social: two Home tiles, each a short list of its items. Items
-// not built yet read "Coming soon" (docs/IMPLEMENTATION_PLAN.md Step 8).
+// My Space and Admin: Home tiles, each a short list of its items (items not
+// built yet read "Coming soon", docs/IMPLEMENTATION_PLAN.md Step 8); Social
+// opens its own space.
 import React, { useState } from 'react';
-import { ChevronRight, ClipboardList, Leaf, Mail, MessageCircle, NotebookPen, Wallet } from 'lucide-react';
+import { ChevronRight, ClipboardList, Leaf, NotebookPen, Wallet } from 'lucide-react';
 import { useBackClose } from '../hooks/useBackClose';
 import { PageRoot, PageHeader, PageBody, Badge } from '../components/ui';
 import { useAppChrome } from '../components/Layout';
 import { TaskBoard } from './tasks/TaskList';
 import { StaffRosterView } from './StaffRosterView';
 import { ExpensesView } from './ExpensesView';
-import { SocialInvitesView } from './SocialInvitesView';
+import { SocialSpace } from './SocialInvitesView';
 import { currentWorkspace } from '../services/workspace';
 import { useBranding } from '../useBranding';
 import type { CalendarEvent, UserProfile } from '../types';
@@ -91,15 +92,8 @@ export const AdminHubView: React.FC = () => {
     );
 };
 
+/** Social: WhatsApp and email invites in one place (SocialInvitesView). */
 export const SocialView: React.FC = () => {
-    const [open, setOpen] = useState<'whatsapp' | null>(null);
-    const close = () => setOpen(null);
-    useBackClose(open !== null, close);
-    if (open === 'whatsapp') return <SocialInvitesView onBack={close} />;
-    return (
-        <Hub title="Social" subtitle="Invites to your contacts" items={[
-            { title: 'WhatsApp invites', line: 'Send event invites on WhatsApp, and see who they reached', Icon: MessageCircle, onOpen: () => setOpen('whatsapp') },
-            { title: 'Email invites', line: 'Event invites with RSVP', Icon: Mail },
-        ]} />
-    );
+    const { navigate } = useAppChrome();
+    return <SocialSpace onBack={() => navigate('home')} onContacts={() => navigate('contacts')} />;
 };

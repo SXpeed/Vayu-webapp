@@ -1,8 +1,9 @@
-// Social → WhatsApp invites against a real local Worker and a stand-in for
-// MSG91: connecting a workspace's own account, templates and their review,
-// sending to tagged contacts with each person's name, delivery reports,
-// RSVP and STOP replies, the invite picture, and that none of it crosses
-// workspaces or reaches people without the Social permission.
+// Social → WhatsApp and email invites against a real local Worker and a
+// stand-in for MSG91: connecting a workspace's own account, templates (every
+// header and button kind) and their review, sending to tagged contacts with
+// each person's name, delivery reports, RSVP, STOP and unsubscribe, the
+// invite's file, and that none of it crosses workspaces or reaches people
+// without the Social permission.
 //
 //   node --test frontend/tests/social.integration.test.mjs
 import assert from 'node:assert/strict';
@@ -35,8 +36,15 @@ const panelLanguage = (name, extra = {}) => ({
 });
 const panelTemplates = [
     { name: 'order_confirmed', namespace: 'ns_1', languages: [panelLanguage('order_confirmed')] },
-    { name: 'video_promo', namespace: 'ns_1', languages: [panelLanguage('video_promo', { variable_type: { header_1: { type: 'video' } } })] },
+    { name: 'video_promo', namespace: 'ns_1', languages: [panelLanguage('video_promo', {
+        variables: ['header_1', 'body_1', 'body_2', 'button_2'], variable_type: { header_1: { type: 'video' } },
+        code: [{ type: 'HEADER', format: 'VIDEO' }, { type: 'BODY', text: 'Hi {{1}}, watch {{2}}.' },
+            { type: 'BUTTONS', buttons: [{ type: 'PHONE_NUMBER', text: 'Call', phone_number: '+911234567890' }, { type: 'URL', text: 'Watch', url: 'https://x.example/v/{{1}}' }] }],
+    })] },
+    { name: 'login_code', category: 'AUTHENTICATION', namespace: 'ns_1', languages: [panelLanguage('login_code')] },
 ];
+/** Email templates MSG91 holds, by slug. */
+const emailTemplates = new Map();
 
 const app = (org, path) => `/api/o/${org.id}${path}`;
 const post = (b, path, body = {}) => b.call(path, { method: 'POST', body });
@@ -79,6 +87,15 @@ before(async () => {
                 return answer(200, { status: 'success', hasError: false, data: [...panelTemplates, ...[...review].map(([name, status]) => ({ name, namespace: 'ns_1', languages: [{ language: 'en', status, rejection_reason: 'NONE' }] }))] });
             }
             if (req.url.endsWith('/client-panel-template/')) { review.set(body.template_name, 'PENDING'); return answer(200, { status: 'success', hasError: false, data: { template_id: '1' } }); }
+            if (req.method === 'POST' && req.url.endsWith('/email/templates')) {
+                const slug = `${body.slug}_7`;
+                emailTemplates.set(slug, 1);
+                return answer(200, { status: 'success', hasError: false, data: { id: 1, slug, versions: [{ slug, status_id: 1 }] } });
+            }
+            if (req.url.startsWith('/api/v5/email/templates')) {
+                return answer(200, { status: 'success', hasError: false, data: { data: [...emailTemplates].map(([slug, status]) => ({ slug, versions: [{ is_active: true, status_id: status }] })) } });
+            }
+            if (req.url.endsWith('/email/send')) return answer(200, { status: 'success', hasError: false, data: { unique_id: `u_${calls.length}` }, message: 'queued' });
             return answer(200, { status: 'success', hasError: false, request_id: `req_${calls.length}` });
         });
     });
@@ -100,7 +117,10 @@ before(async () => {
 
 after(async () => { await worker?.stop(); worker?.cleanup(); msg91?.close(); });
 
-const template = { name: 'opening_invite', language: 'en', body: 'Hello {{name}}, you are invited to {{event}} on {{date}}. We hope to see you.', footer: 'Reply STOP to opt out', image: false, rsvp: true };
+const template = {
+    channel: 'whatsapp', name: 'opening_invite', language: 'en', category: 'MARKETING', header: 'none', headerText: '',
+    body: 'Hello {{name}}, you are invited to {{event}} on {{date}}. We hope to see you.', footer: 'Reply STOP to opt out', buttons: rules.RSVP_BUTTONS, samples: {},
+};
 
 test('the rules: templates, names, what MSG91 is sent and what its reports mean', () => {
     assert.deepEqual(rules.parseTemplate(template), template);
@@ -110,18 +130,42 @@ test('the rules: templates, names, what MSG91 is sent and what its reports mean'
     for (const bad of [
         { name: 'Opening Invite' }, { name: 'ab' }, { language: 'xx' }, { body: 'short' }, { body: '{{name}}, you are invited to the show.' },
         { body: 'You are invited to the show, {{name}}' }, { body: 'Hello {{name}}{{event}} is on, do come.' }, { body: 'Hello {{surname}}, do come to the show.' },
-        { body: `Hello ${'x'.repeat(1030)}` }, { footer: 'x'.repeat(61) }, { footer: 'For {{name}}' },
+        { body: `Hello ${'x'.repeat(1030)}` }, { footer: 'x'.repeat(61) }, { footer: 'For {{name}}' }, { header: 'text', headerText: '' },
+        { header: 'text', headerText: '{{event}} and {{date}}' }, { buttons: [{ kind: 'url', text: 'A', url: 'https://a.in/{{x}}/b' }] },
+        { buttons: [1, 2, 3].map(() => ({ kind: 'url', text: 'Site', url: 'https://a.in' })) }, { buttons: [{ kind: 'phone', text: 'Call', phone: '98765' }] },
+        { buttons: [{ kind: 'quick_reply', text: 'x'.repeat(26) }] }, { buttons: [{ kind: 'copy_code', text: 'TOO LONG CODE!!!' }] },
     ]) assert.ok('problem' in rules.parseTemplate({ ...template, ...bad }), JSON.stringify(bad).slice(0, 80));
+    // Your own fields, with an example for each; quick replies are put before the other buttons.
+    const rich = rules.parseTemplate({
+        ...template, category: 'UTILITY', header: 'text', headerText: 'Invite: {{event}}', body: 'Hello {{name}}, use *{{offer}}* at {{venue}}.',
+        buttons: [{ kind: 'url', text: 'RSVP', url: 'https://vayu.in/r/{{guest_code}}' }, { kind: 'quick_reply', text: 'Yes' }, { kind: 'phone', text: 'Call', phone: '+91 98765 43210' }, { kind: 'copy_code', text: 'VAYU20' }],
+        samples: { offer: '20% off', guest_code: 'AB12', stray: 'dropped' },
+    });
+    assert.deepEqual(rich.samples, { offer: '20% off', guest_code: 'AB12' });
+    assert.deepEqual(rich.buttons.map(b => b.kind), ['quick_reply', 'url', 'phone', 'copy_code']);
+    assert.ok('problem' in rules.parseTemplate({ ...rich, samples: {} }));
+    const richPayload = rules.createTemplatePayload('91', rich, '');
+    assert.deepEqual(richPayload.category, 'UTILITY');
+    assert.deepEqual(richPayload.components[0], { type: 'HEADER', format: 'TEXT', text: 'Invite: {{1}}', example: { header_text: ['Monsoon Show'] } });
+    assert.deepEqual(richPayload.components.at(-1).buttons, [
+        { type: 'QUICK_REPLY', text: 'Yes' }, { type: 'URL', text: 'RSVP', url: 'https://vayu.in/r/{{1}}', example: ['https://vayu.in/r/AB12'] },
+        { type: 'PHONE_NUMBER', text: 'Call', phone_number: '+919876543210' }, { type: 'COPY_CODE', example: 'VAYU20' },
+    ]);
+    assert.deepEqual(rules.sendSlots(rich).map(s => s.key), ['event', 'offer', 'venue', 'button_2', 'button_4']);
+    const richSent = rules.sendPayload({ number: '91', template: rich, namespace: '', imageUrl: '', recipients: [{ id: 'r', phone: '91', name: 'Anjali' }],
+        values: { event: 'Show', offer: '10%', venue: 'Vayu', button_2: 'AN1', button_4: 'CODE9' } }).payload.template.to_and_components[0].components;
+    assert.deepEqual([richSent.header_1, richSent.button_2, richSent.button_4.value], [{ type: 'text', value: 'Show' }, { subtype: 'url', type: 'text', value: 'AN1' }, 'CODE9']);
+    assert.match(rules.inviteProblem({ ...template, header: 'location' }, { event: 'x', date: 'y', location_name: 'G', location_address: 'A', location_lat: 'north', location_lng: '72' }, ''), /latitude/);
 
     assert.deepEqual(['Anjali Mehta', ' dr. Mehta ', 'Mrs Rao', '', 'Kabir'].map(rules.firstName), ['Anjali', 'dr. Mehta', 'Mrs Rao', 'there', 'Kabir']);
 
-    const created = rules.createTemplatePayload('919800000001', { ...template, image: true }, 'https://x.example/p.png');
+    const created = rules.createTemplatePayload('919800000001', { ...template, header: 'image' }, 'https://x.example/p.png');
     assert.deepEqual(created.components.map(c => c.type), ['HEADER', 'BODY', 'FOOTER', 'BUTTONS']);
     assert.equal(created.components[1].text, 'Hello {{1}}, you are invited to {{2}} on {{3}}. We hope to see you.');
     assert.deepEqual(created.components[1].example.body_text, [['Anjali', 'Monsoon Show', '14 Nov, 6 pm']]);
 
     const sent = rules.sendPayload({
-        number: '919800000001', template: { ...template, image: true }, namespace: 'ns_1', values: { event: 'Monsoon Show', date: '14 Nov' }, imageUrl: 'https://x.example/p.png',
+        number: '919800000001', template: { ...template, header: 'image' }, namespace: 'ns_1', values: { event: 'Monsoon Show', date: '14 Nov' }, imageUrl: 'https://x.example/p.png',
         recipients: [{ id: 'r_1', phone: '919811111111', name: 'Anjali Mehta' }, { id: 'r_2', phone: '919822222222', name: '' }],
     });
     const [one, two] = sent.payload.template.to_and_components;
@@ -129,15 +173,15 @@ test('the rules: templates, names, what MSG91 is sent and what its reports mean'
     assert.equal(two.components.body_1.value, 'there');
     // A template from MSG91's panel: its own numbers, and {{name}} in a typed value is each person's name.
     const numbered = rules.sendPayload({
-        number: '1', template: { name: 'order', language: 'en', body: 'Order {{2}} for {{1}}, thank you {{1}}.', image: false }, namespace: '', values: { 1: 'Dear {{name}}', 2: '#1072' }, imageUrl: '',
+        number: '1', template: { name: 'order', language: 'en', body: 'Order {{2}} for {{1}}, thank you {{1}}.', header: 'none', headerText: '', buttons: [] }, namespace: '', values: { 1: 'Dear {{name}}', 2: '#1072' }, imageUrl: '',
         recipients: [{ id: 'r', phone: '919811111111', name: 'Anjali Mehta' }],
     }).payload.template.to_and_components[0].components;
     assert.deepEqual([numbered.body_1.value, numbered.body_2.value], ['Dear Anjali', '#1072']);
     assert.equal(rules.filledBody('Order {{2}} for {{1}}.', { 1: '{{name}}', name: 'Anjali' }), 'Order {{2}} for Anjali.');
-    assert.equal(rules.inviteProblem({ body: 'Order {{2}} for {{1}}.', image: false }, { 1: '{{name}}' }, ''), 'Fill in "field 2".');
+    assert.equal(rules.inviteProblem({ ...template, body: 'Order {{2}} for {{1}}.', buttons: [] }, { 1: '{{name}}' }, ''), 'Fill in "field 2".');
     assert.ok('problem' in rules.parseTemplate({ ...template, body: 'Hello {{1}}, do come to the show.' })); // numbers are MSG91's, not typed here
     assert.equal(rules.inviteProblem(template, { event: 'Show' }, ''), 'Fill in "date".');
-    assert.match(rules.inviteProblem({ ...template, image: true }, { event: 'Show', date: 'x' }, ''), /picture/);
+    assert.match(rules.inviteProblem({ ...template, header: 'image' }, { event: 'Show', date: 'x' }, ''), /picture/);
 
     // Reports only move a person forward, whatever order they arrive in.
     assert.equal(rules.nextStatus('read', 'delivered'), 'read');
@@ -154,6 +198,12 @@ test('the rules: templates, names, what MSG91 is sent and what its reports mean'
     assert.deepEqual(['Yes, I’ll come', "Can't make it", 'YES please', 'maybe'].map(rules.rsvpOf), ['yes', 'no', 'yes', '']);
     assert.ok(rules.isStop(' Stop ') && !rules.isStop('Do not stop'));
     assert.equal(rules.reached({ ...rules.emptyCounts(), sent: 1, delivered: 2, read: 3 }, 'delivered'), 5);
+    // Email reports: by the address; unsubscribes stop further email.
+    assert.deepEqual(rules.parseWebhook({ eventName: 'Opened', recipient: 'A@x.in', requestId: 'u_1', crqid: '' }), { kind: 'status', phone: 'a@x.in', status: 'read', id: '', requestId: 'u_1', reason: '' });
+    assert.deepEqual(rules.parseWebhook({ eventName: 'Unsubscribed', recipient: 'a@x.in' }), { kind: 'stop', phone: 'a@x.in' });
+    assert.equal(rules.parseWebhook({ eventName: 'Failed', recipient: 'a@x.in', reason: '550 no such user' }).reason, '550 no such user');
+    const html = rules.emailHtml({ header: 'image', body: 'Hello {{name}},\n\nSee <you>.', buttons: rules.RSVP_BUTTONS }, 'Vayu & Co');
+    assert.ok(html.includes('{{image_url}}') && html.includes('{{rsvp_yes_url}}') && html.includes('{{unsubscribe_url}}') && html.includes('See &lt;you&gt;.') && html.includes('Vayu &amp; Co'));
 });
 
 test('an admin connects the workspace’s own MSG91 account; the key is never shown again', async () => {
@@ -210,10 +260,12 @@ test('a template is sent for review, and can be used once Meta approves it', asy
     const mine = list.body.templates.find(t => t.id === templateId);
     assert.deepEqual([list.body.checked, mine.status], [true, 'approved']);
 
-    // Templates made in MSG91's own panel come in too; one this app can't send (a video on top) is counted, not listed.
+    // Templates made in MSG91's own panel come in too (any header, buttons with a field); a one-time-password one is counted, not listed.
     const panel = list.body.templates.find(t => t.name === 'order_confirmed');
-    assert.deepEqual([panel.status, panel.image, panel.footer, panel.body, list.body.skipped], ['approved', true, 'Vayu', 'Warm greetings, {{1}}.\n\nYour order {{2}} is confirmed.', 1]);
-    assert.ok(!list.body.templates.some(t => t.name === 'video_promo'));
+    assert.deepEqual([panel.status, panel.header, panel.footer, panel.body, list.body.skipped], ['approved', 'image', 'Vayu', 'Warm greetings, {{1}}.\n\nYour order {{2}} is confirmed.', 1]);
+    const video = list.body.templates.find(t => t.name === 'video_promo');
+    assert.deepEqual([video.header, video.buttons.map(b => b.kind), rules.sendSlots(video).map(s => s.key)], ['video', ['phone', 'url'], ['1', '2', 'button_2']]);
+    assert.ok(!list.body.templates.some(t => t.name === 'login_code'));
     assert.equal((await ownerA.call(app(orgA, '/social/templates?refresh=1'))).body.templates.length, list.body.templates.length); // not brought in twice
 });
 
@@ -272,7 +324,7 @@ test('someone who replies STOP is left out from then on', async () => {
 
 test('a test goes to one number; an invite’s picture is public only with its signature', async () => {
     const image = await upload(ownerA, orgA);
-    const withPicture = { ...template, name: 'poster_invite', image: true };
+    const withPicture = { ...template, name: 'poster_invite', header: 'image' };
     assert.equal((await post(ownerA, app(orgA, '/social/templates'), withPicture)).status, 400); // no sample picture
     const made = await post(ownerA, app(orgA, '/social/templates'), { ...withPicture, sampleImageUrl: image });
     assert.equal(made.status, 201, made.text);
@@ -317,4 +369,103 @@ test('an invite with a send time waits, then the scheduled job sends it', async 
     await cron(); // nothing left: it is not sent twice
     await new Promise(r => setTimeout(r, 500));
     assert.equal(bulk(), before + 1);
+});
+
+let emailTemplateId;
+
+test('email: the sender is set, a template made, and its review checked', async () => {
+    const sender = body => ownerA.call(app(orgA, '/social/email'), { method: 'PUT', body });
+    assert.equal((await staffA.call(app(orgA, '/social/email'), { method: 'PUT', body: {} })).status, 403);
+    assert.equal((await sender({ domain: 'galleryvayu.com', from: 'invites@other.com', fromName: 'Vayu' })).status, 400);
+    assert.equal((await sender({ domain: 'galleryvayu.com', from: 'invites@galleryvayu.com', fromName: '' })).status, 400);
+    const ok = await sender({ domain: 'GalleryVayu.com', from: 'Invites@galleryvayu.com', fromName: 'Vayu Gallery', replyTo: 'hello@galleryvayu.com' });
+    assert.equal(ok.status, 200, ok.text);
+    assert.deepEqual(ok.body.email, { domain: 'galleryvayu.com', from: 'invites@galleryvayu.com', fromName: 'Vayu Gallery', replyTo: 'hello@galleryvayu.com' });
+
+    const email = { channel: 'email', name: 'email_opening', language: 'en', header: 'none', headerText: 'You’re invited, {{name}}', body: 'Hello {{name}},\n\nJoin us for {{event}}.', buttons: rules.RSVP_BUTTONS };
+    assert.equal((await post(ownerA, app(orgA, '/social/templates'), { ...email, headerText: '' })).status, 400); // no subject
+    const made = await post(ownerA, app(orgA, '/social/templates'), email);
+    assert.equal(made.status, 201, made.text);
+    emailTemplateId = made.body.id;
+    const toMsg91 = calls.findLast(c => c.path.endsWith('/email/templates')).body;
+    assert.equal(toMsg91.subject, 'You’re invited, {{name}}');
+    assert.ok(toMsg91.body.includes('{{rsvp_yes_url}}') && toMsg91.body.includes('Vayu Gallery'));
+
+    // Lists are per channel; the review result comes from MSG91 by slug.
+    assert.ok(!(await ownerA.call(app(orgA, '/social/templates?channel=whatsapp'))).body.templates.some(t => t.id === emailTemplateId));
+    emailTemplates.set('email_opening_7', 2);
+    const list = await ownerA.call(app(orgA, '/social/templates?channel=email&refresh=1'));
+    assert.deepEqual([list.body.checked, list.body.templates.map(t => [t.id, t.status])], [true, [[emailTemplateId, 'approved']]]);
+});
+
+test('email: an invite goes to tagged contacts with an address, with their own links; reports, RSVP and unsubscribe work', async () => {
+    const tag = (await post(ownerA, app(orgA, '/contact-tags'), { name: 'Email OK', color: '' })).body.id;
+    for (const [id, name, emails] of [['e1', 'Meera Iyer', ['Meera@Example.com']], ['e2', 'Kabir', ['kabir@example.com']], ['e3', 'No Email', []]]) {
+        const res = await post(ownerA, app(orgA, '/contacts'), { id, name, phones: [], emails, tags: [tag], notes: '' });
+        assert.ok(res.status < 300, res.text);
+    }
+    const reach = await ownerA.call(app(orgA, `/social/audience?channel=email&tags=${tag}`));
+    assert.deepEqual([reach.body.total, reach.body.reachable], [3, 2]);
+
+    const made = await post(ownerA, app(orgA, '/social/invites'), { channel: 'email', name: 'Email opening', templateId: emailTemplateId, tagIds: [tag], values: { event: 'Monsoon Show' } });
+    assert.equal(made.status, 201, made.text);
+    assert.equal(made.body.channel, 'email');
+    const detail = () => ownerA.call(app(orgA, `/social/invites/${made.body.id}`));
+    const sent = await until(async () => { const d = await detail(); return d.body.invite.status === 'sent' && d; }, 'the email invite to be sent');
+    assert.deepEqual(sent.body.recipients.map(r => r.phone), ['kabir@example.com', 'meera@example.com']);
+    const request = calls.findLast(c => c.path.endsWith('/email/send')).body;
+    assert.deepEqual([request.template_id, request.domain, request.from, request.reply_to], ['email_opening_7', 'galleryvayu.com', { name: 'Vayu Gallery', email: 'invites@galleryvayu.com' }, [{ email: 'hello@galleryvayu.com' }]]);
+    const meera = request.recipients.find(r => r.to[0].email === 'meera@example.com');
+    assert.deepEqual([meera.variables.name, meera.variables.event], ['Meera', 'Monsoon Show']);
+    assert.ok(!(await ownerA.call(app(orgA, '/social/invites?channel=whatsapp'))).body.invites.some(i => i.id === made.body.id));
+
+    // Reports find the person by address; their RSVP and unsubscribe links work without a sign-in, and only as given.
+    const requestId = `u_${calls.findLastIndex(c => c.path.endsWith('/email/send')) + 1}`;
+    assert.equal(await report(hookUrl, { eventName: 'Delivered', recipient: 'meera@example.com', requestId }), 200);
+    assert.equal(await report(hookUrl, { eventName: 'Opened', recipient: 'Meera@example.com', requestId }), 200);
+    assert.equal(await report(hookUrl, { eventName: 'Failed', recipient: 'kabir@example.com', reason: '550 mailbox not found' }), 200);
+    const yes = new URL(meera.variables.rsvp_yes_url);
+    assert.equal((await fetch(`${worker.origin}${yes.pathname.replace(/\/[a-f0-9]{32}\//, `/${'1'.repeat(32)}/`)}`)).status, 404);
+    const page = await fetch(`${worker.origin}${yes.pathname}`);
+    assert.equal(page.status, 200);
+    assert.match(await page.text(), /coming/);
+    const after = (await detail()).body;
+    assert.deepEqual(after.recipients.map(r => [r.phone, r.status, r.rsvp]), [['kabir@example.com', 'failed', ''], ['meera@example.com', 'read', 'yes']]);
+
+    assert.equal((await fetch(`${worker.origin}${new URL(meera.variables.unsubscribe_url).pathname}`)).status, 200);
+    const later = await ownerA.call(app(orgA, `/social/audience?channel=email&tags=${tag}`));
+    assert.deepEqual([later.body.reachable, later.body.optedOut], [1, 1]);
+});
+
+test('a scheduled invite can be cancelled; a sent one can be resent to those it failed to reach', async () => {
+    const tag = (await ownerA.call(app(orgA, '/contact-tags'))).body.find(t => t.name === 'WhatsApp OK').id;
+    const scheduled = await post(ownerA, app(orgA, '/social/invites'), { name: 'Later', templateId, tagIds: [tag], values: { event: 'Show', date: 'Fri' }, sendAt: Date.now() + 86_400_000 });
+    assert.equal(scheduled.status, 201, scheduled.text);
+    assert.equal((await staffA.call(app(orgA, `/social/invites/${scheduled.body.id}`), { method: 'DELETE' })).status, 403);
+    assert.equal((await ownerA.call(app(orgA, `/social/invites/${scheduled.body.id}`), { method: 'DELETE' })).status, 200);
+    assert.equal((await ownerA.call(app(orgA, `/social/invites/${scheduled.body.id}`))).status, 404);
+
+    // The first WhatsApp invite: Dr. Rao failed (not on WhatsApp); Anjali read it but has since replied STOP.
+    const first = (await ownerA.call(app(orgA, '/social/invites?channel=whatsapp'))).body.invites.find(i => i.name === 'Opening');
+    assert.equal((await ownerA.call(app(orgA, `/social/invites/${first.id}`), { method: 'DELETE' })).status, 409); // already sent
+    const before = calls.filter(c => c.path.endsWith('/whatsapp-outbound-message/bulk/')).length;
+    const again = await post(ownerA, app(orgA, `/social/invites/${first.id}/retry`));
+    assert.equal(again.status, 201, again.text);
+    assert.deepEqual([again.body.name, again.body.counts.total, again.body.templateId], ['Opening (again)', 1, templateId]);
+    const sent = await until(async () => { const d = await ownerA.call(app(orgA, `/social/invites/${again.body.id}`)); return d.body.invite.status === 'sent' && d; }, 'the resend');
+    assert.deepEqual(sent.body.recipients.map(r => r.name), ['Dr. Rao']);
+    assert.equal(calls.filter(c => c.path.endsWith('/whatsapp-outbound-message/bulk/')).length, before + 1);
+    assert.equal((await post(ownerA, app(orgA, `/social/invites/${again.body.id}/retry`))).status, 409); // nobody failed on it
+});
+
+test('reach: each tag’s contacts on WhatsApp and by email, without those who opted out', async () => {
+    const reach = await ownerA.call(app(orgA, '/social/reach'));
+    assert.equal(reach.status, 200, reach.text);
+    const wa = reach.body.tags.find(t => t.name === 'WhatsApp OK');
+    const em = reach.body.tags.find(t => t.name === 'Email OK');
+    assert.deepEqual([wa.contacts, wa.whatsapp, wa.email], [3, 1, 0]); // Anjali replied STOP; one has no phone
+    assert.deepEqual([em.contacts, em.whatsapp, em.email], [3, 0, 1]); // Meera unsubscribed
+    assert.ok(reach.body.optouts.some(o => o.address === '919811111111') && reach.body.optouts.some(o => o.address === 'meera@example.com'));
+    assert.equal(reach.body.totals.optedOut, 2);
+    assert.equal((await ownerB.call(app(orgA, '/social/reach'))).status, 404);
 });

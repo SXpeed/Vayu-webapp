@@ -596,14 +596,15 @@ export const Field: React.FC<FieldProps> = ({ label, htmlFor, hint, children, cl
     </div>
 );
 
-type InputProps = React.InputHTMLAttributes<HTMLInputElement>;
+// ComponentProps, not the attributes alone: they carry `ref` (a plain prop in React 19), for callers that place the cursor.
+type InputProps = React.ComponentProps<'input'>;
 
 /** Inset well input. */
 export const Input: React.FC<InputProps> = ({ className = '', ...rest }) => (
     <input {...rest} className={`neu-field ${className}`} />
 );
 
-type TextareaProps = React.TextareaHTMLAttributes<HTMLTextAreaElement>;
+type TextareaProps = React.ComponentProps<'textarea'>;
 
 export const Textarea: React.FC<TextareaProps> = ({ className = '', ...rest }) => (
     <textarea {...rest} className={`neu-field ${className}`} />
