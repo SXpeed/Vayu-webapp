@@ -91,7 +91,7 @@ const QUICK_ACTIONS: { section?: SectionId; level?: AccessLevel; view: ViewState
     { section: 'calendar', view: 'calendar', label: 'Calendar', Icon: CalendarDays },
     { section: 'schedule', view: 'schedule', label: 'Staff roster', Icon: CalendarClock },
     { view: 'myspace', label: 'My Space', Icon: UserRound },
-    { section: 'contacts', view: 'social', label: 'Social', Icon: Megaphone },
+    { section: 'social', view: 'social', label: 'Social', Icon: Megaphone },
     // Admin holds leave decisions, so it shows to whoever manages the Staff roster.
     { section: 'schedule', level: 'edit', view: 'admin', label: 'Admin', Icon: ShieldCheck },
 ];

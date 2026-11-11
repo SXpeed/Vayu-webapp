@@ -5,6 +5,7 @@ import {
 } from './permissions';
 import { staffRosterRoutes } from './staffRoster';
 import { expenseRoutes } from './expenses';
+import { deliverDueInvites, handleSocialPublic, socialRoutes } from './social';
 import { salesRoutes } from './sales';
 import { ensureInvoicesTable, invoiceRoutes } from './invoices';
 import { paymentLinkRoutes, reconcileAllWorkspaces, routeOrgPaymentEvent } from './paymentLinks';
@@ -327,6 +328,7 @@ const ACCESS_TABLE: AccessEntry[] = [
   { prefixes: ['/payments/webhook'], rule: () => null }, // Razorpay calls this, no session
   { prefixes: ['/payments'], section: 'payments' },
   { prefixes: ['/sales'], section: 'sales' },
+  { prefixes: ['/social'], section: 'social' },
   { prefixes: ['/events', '/holidays'], section: 'calendar' },
   { prefixes: ['/conversations', '/messages'], section: 'messages' },
   { prefixes: ['/activity-logs'], rule: (_path, method) => (method === 'GET' ? { section: 'activity', level: 'view' } : null) },
@@ -4009,6 +4011,9 @@ const routes: Route[] = [
   // Expenses, private to each person (expenses.ts)
   ...expenseRoutes,
 
+  // Social: WhatsApp invites through the workspace's MSG91 account (social.ts)
+  ...socialRoutes,
+
   // Sales ledger (sales.ts)
   ...salesRoutes({ logChange: logEntityChange, notify: queueHubNotify, ensureArtworks: db => ensureColumns(db, 'artworks') }),
 
@@ -4475,6 +4480,9 @@ export default {
     const accessChange = changesAccess(request);
     const ingress = await webhookIngressLimit(request, env);
     if (ingress) return ingress;
+    // MSG91's delivery reports and WhatsApp fetching an invite's picture: no sign-in (social.ts).
+    const social = await handleSocialPublic(request, env);
+    if (social) return social;
     // Platform (SaaS) API. Handled first so the legacy wildcard CORS below
     // never applies to cookie-authenticated routes.
     const early = pageVisit(request) ?? await handlePlatformRequest(request, env, {
@@ -4559,5 +4567,6 @@ export default {
       execCtx.waitUntil(runJob(db, 'key-rotation', () => runRotationBatch(env, db, null)));
     }
     execCtx.waitUntil(runJob(db, 'payment-reconciliation', () => reconcileAllWorkspaces(env, execCtx)));
+    execCtx.waitUntil(runJob(db, 'invites', () => deliverDueInvites(env)));
   },
 };

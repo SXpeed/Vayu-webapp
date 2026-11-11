@@ -73,6 +73,9 @@ export interface Env {
   // Tests only, honoured only with PLATFORM_ENV=development: a local
   // stand-in for https://api.razorpay.com (platform/payments.ts).
   RAZORPAY_API_BASE?: string;
+  // Tests only, honoured only with PLATFORM_ENV=development: a local
+  // stand-in for https://control.msg91.com (social.ts).
+  MSG91_API_BASE?: string;
   // The API's own address (https://api.ateliersupport.com), for addresses
   // given to outside callers such as the Razorpay webhook. Unset, those use
   // the address the request came in on.

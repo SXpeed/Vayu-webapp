@@ -8,6 +8,7 @@ import { useAppChrome } from '../components/Layout';
 import { TaskBoard } from './tasks/TaskList';
 import { StaffRosterView } from './StaffRosterView';
 import { ExpensesView } from './ExpensesView';
+import { SocialInvitesView } from './SocialInvitesView';
 import { currentWorkspace } from '../services/workspace';
 import { useBranding } from '../useBranding';
 import type { CalendarEvent, UserProfile } from '../types';
@@ -90,9 +91,15 @@ export const AdminHubView: React.FC = () => {
     );
 };
 
-export const SocialView: React.FC = () => (
-    <Hub title="Social" subtitle="Invites to your contacts" items={[
-        { title: 'WhatsApp invites', line: 'Send event invites on WhatsApp', Icon: MessageCircle },
-        { title: 'Email invites', line: 'Event invites with RSVP', Icon: Mail },
-    ]} />
-);
+export const SocialView: React.FC = () => {
+    const [open, setOpen] = useState<'whatsapp' | null>(null);
+    const close = () => setOpen(null);
+    useBackClose(open !== null, close);
+    if (open === 'whatsapp') return <SocialInvitesView onBack={close} />;
+    return (
+        <Hub title="Social" subtitle="Invites to your contacts" items={[
+            { title: 'WhatsApp invites', line: 'Send event invites on WhatsApp, and see who they reached', Icon: MessageCircle, onOpen: () => setOpen('whatsapp') },
+            { title: 'Email invites', line: 'Event invites with RSVP', Icon: Mail },
+        ]} />
+    );
+};

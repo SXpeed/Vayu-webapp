@@ -41,6 +41,7 @@
     "staffRoster.ts",
     "sales.ts",
     "expenses.ts",
+    "social.ts",
     "invoices.ts",
     "paymentLinks.ts",
     "sessionCookies.ts",

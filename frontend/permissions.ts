@@ -14,7 +14,7 @@ export type AccessLevel = 'none' | 'view' | 'edit';
 
 export type SectionId =
     | 'inventory' | 'collections' | 'catalogs' | 'contacts' | 'inquiries' | 'invoices'
-    | 'payments' | 'sales' | 'calendar' | 'messages' | 'attendance' | 'schedule' | 'activity';
+    | 'payments' | 'sales' | 'calendar' | 'messages' | 'attendance' | 'schedule' | 'activity' | 'social';
 
 export interface SectionDef {
     id: SectionId;
@@ -47,6 +47,10 @@ export const SECTIONS: SectionDef[] = [
         levelLabels: { view: 'View', edit: 'Manage' },
     },
     { id: 'activity', label: 'Activity log', description: 'Who changed what (read-only)' },
+    {
+        id: 'social', label: 'Social', description: 'WhatsApp invites to contacts. Send writes templates and sends invites, which your MSG91 account is charged for',
+        levelLabels: { view: 'See results', edit: 'Send' },
+    },
 ];
 
 export const SECTION_IDS: SectionId[] = SECTIONS.map(s => s.id);
@@ -75,8 +79,9 @@ export const ADMIN_PERMISSIONS: Permissions = all('edit');
  * data section, their own attendance, no activity log. Sections added later
  * start at "view" for staff: the staff roster (planning it is given by role)
  * and Sales (recording sales is given by role, to the accounts team).
+ * Social starts closed: sending invites costs money, so it is given by role.
  */
-export const STAFF_DEFAULT_PERMISSIONS: Permissions = { ...all('edit'), attendance: 'view', schedule: 'view', sales: 'view', activity: 'none' };
+export const STAFF_DEFAULT_PERMISSIONS: Permissions = { ...all('edit'), attendance: 'view', schedule: 'view', sales: 'view', activity: 'none', social: 'none' };
 
 export const BUILT_IN_ROLES: RoleDef[] = [
     { id: ADMIN_ROLE_ID, name: 'Admin', builtIn: true, permissions: ADMIN_PERMISSIONS },

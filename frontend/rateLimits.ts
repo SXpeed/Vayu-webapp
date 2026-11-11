@@ -26,6 +26,8 @@ const COSTLY: CostlyRoute[] = [
   { method: 'POST', match: exact('/contacts/import'), group: 'import' },
   { method: 'POST', match: p => p === '/team/invitations' || p === '/auth/users', group: 'invite' },
   { method: 'POST', match: exact('/viewing-rooms'), group: 'room' },
+  // Each sends real WhatsApp messages, charged to the workspace's MSG91 account.
+  { method: 'POST', match: p => p === '/social/invites' || p === '/social/test' || p === '/social/templates', group: 'invite' },
 ];
 
 /** The costly group a request belongs to, or null for ordinary routes. */

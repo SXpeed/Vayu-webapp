@@ -188,9 +188,28 @@ to their author (not even admins see them). The dummy-data look is in
 - [ ] Must-haves: an unsubscribe link in every email, honoured on the contact; per-send and daily caps (a plan limit); RSVP by tokened link. Counts: sent, failed, clicked, RSVP (open tracking skipped, it's unreliable)
 - [ ] **Check before building:** whether Cloudflare Email Service allows bulk marketing email and at what volume; it needs the ateliersupport.com SPF/DKIM/DMARC below
 
-**8.5 WhatsApp invites — later.** Tile reads "Coming soon". Needs a sending
-provider (MSG91 per workspace was the prototype's idea), a WhatsApp opt-in on
-contacts, and Meta-approved templates.
+**8.5 WhatsApp invites** (asked 2026-11-11; built, not deployed)
+
+Decided: each workspace connects its own MSG91 account (its number, its
+bill); WhatsApp before email; the contact tag is the consent list.
+
+- [x] Permission section `social`: view = see invites and results, edit = write templates and send. Staff start without it (`permissions.ts`, `access.ts`)
+- [x] Connect: an admin pastes the MSG91 auth key and number; the key is stored encrypted and never shown again (`social.ts`, `platform/secrets.ts`)
+- [x] Templates: three starters, named fields (`{{name}}`, `{{event}}`, `{{date}}`, `{{venue}}`) turned into WhatsApp's numbers, RSVP buttons, optional picture, Meta's rules checked before sending for review, live preview (`socialRules.ts`, `views/SocialInvitesView.tsx`)
+- [x] Invites: to contacts by tag, each with their own first name, a picture chosen at send time (JPG/PNG, 5 MB), send now or at a time, a test to one number first
+- [x] Sending: in chunks of 50 from the request and then the 10-minute job; people are claimed before MSG91 is called, so nobody is messaged twice; a failed call is marked failed, never retried
+- [x] Tracking: MSG91's delivery reports arrive at `/api/v2/webhooks/msg91/<org>/<secret>`; per person Queued → Sending → Sent → Delivered → Read, or Failed with the reason; RSVP from the buttons; a STOP reply leaves that number out from then on
+- [x] Tests: `tests/social.integration.test.mjs` (against a stand-in MSG91)
+- [x] Connect asks MSG91 which WhatsApp numbers the key's account has (`/whatsapp-activation/`) and uses that; a typed number not on the account is refused with the right one named
+- [x] Templates already on the MSG91 account (made in its own panel) are brought in when the list opens, with their numbered fields; `{{name}}` typed in a field is each person's first name. Ones needing a video, document or a filled-in link or button are counted, not listed
+- [x] Confirmed against a live account 2026-11-11: the number list, the template list and its shape
+- [ ] **Still to confirm with a real send:** the picture header on send (`header_1`) and on create (`header_handle`), and the delivery-report field names
+- [ ] Each workspace: Meta business verification in MSG91, "IP security" off on the auth key, the delivery-updates address pasted into MSG91 → WhatsApp → Webhook (New)
+- [ ] Later: send again to failed, CSV export, per-plan and daily caps (one invite is capped at 2,000 people), a per-contact opt-in field, deleting a template at MSG91 too
+
+**8.6 Email invites — next.** Same screens and tables with a subject line and
+no approval step. Open choice: MSG91 email (one provider, delivery and bounce
+reports) or Cloudflare Email Service (8.4's open question on bulk mail).
 
 ## Waiting on the owner
 
