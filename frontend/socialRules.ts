@@ -618,21 +618,17 @@ export interface ReplyThread { phone: string; name: string; inviteName: string; 
 /** One line of a conversation: their message, the team's answer, or an invite that went to them. */
 export interface ReplyMessage { id: string; dir: 'in' | 'out' | 'invite'; body: string; template: string; byName: string; at: number; status?: RecipientStatus }
 
-// ── Analytics: Instagram, Facebook Page, YouTube ────────────────────────────
+// ── Analytics: Instagram, YouTube ───────────────────────────────────────────
 
 export interface AnalyticsStatus {
-    meta: { available: boolean; connected: boolean; pageName: string; igUsername: string; connectedAt: number };
-    google: { available: boolean; connected: boolean; channelTitle: string; connectedAt: number };
+    instagram: { available: boolean; connected: boolean; username: string; connectedAt: number };
+    youtube: { available: boolean; connected: boolean; channelTitle: string; connectedAt: number };
 }
 export interface DayValue { date: string; value: number }
-/** `problems`: parts Meta or Google didn't give (a retired metric, a missing permission), in their words. */
+/** `problems`: parts Instagram or Google didn't give (a retired metric, a missing permission), in their words. */
 export interface InstagramReport {
     username: string; followers: number; reachDaily: DayValue[]; problems: string[]; fetchedAt?: number;
     posts: { id: string; kind: string; caption: string; at: number; image: string; permalink: string; views: number; reach: number; likes: number; comments: number; shares: number; saves: number; avgWatchSec?: number }[];
-}
-export interface FacebookReport {
-    name: string; followers: number; link: string; viewsDaily: DayValue[]; engagementDaily: DayValue[]; problems: string[]; fetchedAt?: number;
-    posts: { id: string; caption: string; at: number; image: string; permalink: string; reactions: number; comments: number; shares: number }[];
 }
 export interface YoutubeReport {
     title: string; subscribers: number; totalViews: number; videoCount: number; problems: string[]; fetchedAt?: number;

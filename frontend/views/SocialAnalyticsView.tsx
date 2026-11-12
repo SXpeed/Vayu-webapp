@@ -1,18 +1,17 @@
-// Social → Analytics: the workspace's own Instagram, Facebook Page and YouTube
-// figures, read live through the accounts an admin connects under Setup and
-// keys (Meta's and Google's sign-in). Server: socialAnalytics.ts.
+// Social → Analytics: the workspace's own Instagram and YouTube figures, read
+// live through the accounts an admin connects under Setup and keys (Instagram's
+// own login, Google's sign-in). Server: socialAnalytics.ts.
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { AlertCircle, Clapperboard, Clock, ExternalLink, Eye, Heart, Loader2, MessageSquare, PlugZap, RefreshCw, Settings, Share2, ThumbsUp, Timer, Trash2, UserPlus } from 'lucide-react';
+import { AlertCircle, Clapperboard, Clock, Eye, Heart, Loader2, MessageSquare, PlugZap, RefreshCw, Share2, Timer, Trash2, UserPlus } from 'lucide-react';
 import { Badge, Button, Card, EmptyState, GhostIconButton, SectionTitle } from '../components/ui';
 import { StatStrip } from '../components/StatStrip';
 import { socialService } from '../services/socialService';
-import type { AnalyticsStatus, DayValue, FacebookReport, InstagramReport, YoutubeReport } from '../socialRules';
+import type { AnalyticsStatus, DayValue, InstagramReport, YoutubeReport } from '../socialRules';
 import { TONE, message, spinner } from './SocialTemplatesView';
 
-export type Kind = 'instagram' | 'facebook' | 'youtube';
-type Provider = 'meta' | 'google';
-const providerOf = (k: Kind): Provider => (k === 'youtube' ? 'google' : 'meta');
+/** A connected account: each has its own login, page and figures. */
+export type Kind = 'instagram' | 'youtube';
 const fmt = (n: number) => n.toLocaleString('en-IN');
 const compact = (n: number) => new Intl.NumberFormat('en-IN', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 const pct = (a: number, b: number) => (b ? `${((a / b) * 100).toFixed(1)}%` : '–');
@@ -28,7 +27,7 @@ export const InstaGlyph: React.FC<{ size?: number; className?: string }> = ({ si
     </svg>
 );
 
-export const NAMES: Record<Kind, string> = { instagram: 'Instagram', facebook: 'Facebook Page', youtube: 'YouTube' };
+export const NAMES: Record<Kind, string> = { instagram: 'Instagram', youtube: 'YouTube' };
 const SOURCES: Record<string, string> = {
     YT_SEARCH: 'YouTube search', RELATED_VIDEO: 'Suggested videos', SHORTS: 'Shorts feed', EXT_URL: 'Other websites and apps', SUBSCRIBER: 'Subscribers’ feeds',
     BROWSE: 'Home and browse', PLAYLIST: 'Playlists', NO_LINK_OTHER: 'Direct or unknown', CHANNEL: 'Your channel page', NOTIFICATION: 'Notifications',
@@ -110,38 +109,6 @@ const InstagramView: React.FC<{ r: InstagramReport }> = ({ r }) => {
     );
 };
 
-const FacebookView: React.FC<{ r: FacebookReport }> = ({ r }) => (
-    <div className="space-y-4">
-        <StatStrip label={r.name} stats={[
-            { label: 'Followers', value: compact(r.followers), Icon: UserPlus },
-            { label: 'Views', value: compact(sum(r.viewsDaily)), sub: 'Last 28 days', Icon: Eye },
-            { label: 'Engagement', value: compact(sum(r.engagementDaily)), sub: 'Last 28 days', Icon: Heart },
-            { label: 'Reactions', value: compact(r.posts.reduce((s, p) => s + p.reactions, 0)), sub: `Last ${r.posts.length} posts`, Icon: ThumbsUp },
-        ]} />
-        <Card><SectionTitle>Views, each day</SectionTitle><DayBars days={r.viewsDaily} label="Page views each day" /></Card>
-        <section>
-            <SectionTitle className="px-3" actions={r.link ? <a href={r.link} target="_blank" rel="noreferrer" className="neu-button inline-flex items-center gap-1.5"><ExternalLink size={14} />Open Page</a> : undefined}>Latest posts</SectionTitle>
-            {r.posts.length ? (
-                <ul className="neu-card px-2 py-1">
-                    {r.posts.map(p => (
-                        <li key={p.id} className="task-row">
-                            <a href={p.permalink || undefined} target="_blank" rel="noreferrer" className="flex items-center gap-3 px-2 py-2.5 rounded-xl">
-                                <Thumb src={p.image} className="w-12 h-12 shrink-0 rounded-lg" />
-                                <span className="flex-1 min-w-0">
-                                    <span className="block text-[13.5px] truncate text-gray-900 dark:text-white">{p.caption || '(no text)'}</span>
-                                    <span className="block text-[11.5px] text-[var(--neu-text-dim)] truncate">{date(p.at)} · {fmt(p.comments)} comments · {fmt(p.shares)} shares</span>
-                                </span>
-                                <span className="text-right text-[12px] tabular-nums shrink-0"><ThumbsUp size={12} className="inline -mt-0.5 mr-1" aria-label="Reactions" />{compact(p.reactions)}</span>
-                            </a>
-                        </li>
-                    ))}
-                </ul>
-            ) : <EmptyState icon={<ThumbsUp size={22} strokeWidth={1.5} />} title="No posts yet" message="Page posts show here once there are some." />}
-        </section>
-        <Problems problems={r.problems} />
-    </div>
-);
-
 const YoutubeView: React.FC<{ r: YoutubeReport }> = ({ r }) => {
     const views = r.daily.reduce((s, d) => s + d.views, 0);
     const minutes = r.daily.reduce((s, d) => s + d.minutes, 0);
@@ -198,7 +165,7 @@ const YoutubeView: React.FC<{ r: YoutubeReport }> = ({ r }) => {
     );
 };
 
-type AnyReport = InstagramReport | FacebookReport | YoutubeReport;
+type AnyReport = InstagramReport | YoutubeReport;
 
 const Report: React.FC<{ kind: Kind }> = ({ kind }) => {
     const [report, setReport] = useState<AnyReport | null>(null);
@@ -219,75 +186,61 @@ const Report: React.FC<{ kind: Kind }> = ({ kind }) => {
             </div>
             {problem && <p role="alert" className="text-[12.5px] text-red-700 dark:text-red-400">{problem}</p>}
             {kind === 'instagram' && <InstagramView r={report as InstagramReport} />}
-            {kind === 'facebook' && <FacebookView r={report as FacebookReport} />}
             {kind === 'youtube' && <YoutubeView r={report as YoutubeReport} />}
         </div>
     );
 };
 
-/** Sends the browser to Meta's or Google's sign-in; it comes back to Social. */
-async function connect(p: Provider) {
-    try { globalThis.location.href = await socialService.connectAnalytics(p); } catch (e) { toast.error(message(e)); }
+/** Sends the browser to Instagram's or Google's login; it comes back to Social. */
+async function connect(kind: Kind) {
+    try { globalThis.location.href = await socialService.connectAnalytics(kind); } catch (e) { toast.error(message(e)); }
 }
 
-const KIND_ICON: Record<Kind, React.ReactNode> = {
-    instagram: <InstaGlyph size={22} />, facebook: <ThumbsUp size={22} strokeWidth={1.5} />, youtube: <Clapperboard size={22} strokeWidth={1.5} />,
-};
+const KIND_ICON: Record<Kind, React.ReactNode> = { instagram: <InstaGlyph size={22} />, youtube: <Clapperboard size={22} strokeWidth={1.5} /> };
 
 /** Not connected yet: how to connect it (admins), or who to ask. */
 const NotConnected: React.FC<{ kind: Kind; isAdmin: boolean }> = ({ kind, isAdmin }) => {
-    const youtube = kind === 'youtube';
-    const message = youtube
+    const message = kind === 'youtube'
         ? 'Sign in with the Google account that owns your channel. It only reads your figures.'
-        : 'Sign in with Facebook and pick your Page (with your Instagram business account linked to it). It only reads your figures.';
+        : 'Log in with your Instagram Business or Creator account, on Instagram’s own page. It only reads your figures.';
     const action = isAdmin
-        ? <Button variant="primary" className="mt-4" icon={<PlugZap size={15} />} onClick={() => { void connect(providerOf(kind)); }}>Connect {youtube ? 'YouTube' : 'with Facebook'}</Button>
+        ? <Button variant="primary" className="mt-4" icon={<PlugZap size={15} />} onClick={() => { void connect(kind); }}>Connect {NAMES[kind]}</Button>
         : <p className="mt-3 text-[12.5px] text-[var(--neu-text-dim)]">Ask an admin to connect it.</p>;
     return <EmptyState icon={KIND_ICON[kind]} title={`${NAMES[kind]} isn’t connected`} message={message} action={action} />;
 };
 
 /** One account's page: its figures, or why there are none yet (not switched on, not connected). */
-export const AnalyticsTab: React.FC<{ kind: Kind; isAdmin: boolean; onSetup: () => void }> = ({ kind, isAdmin, onSetup }) => {
+export const AnalyticsTab: React.FC<{ kind: Kind; isAdmin: boolean }> = ({ kind, isAdmin }) => {
     const [status, setStatus] = useState<AnalyticsStatus | null>(null);
     const [failed, setFailed] = useState(false);
     useEffect(() => { socialService.analytics().then(setStatus).catch(() => setFailed(true)); }, []);
     if (failed) return <EmptyState title="Analytics didn’t load" message="Check your connection and try again." />;
     if (!status) return spinner;
-    const s = status[providerOf(kind)];
+    const s = status[kind];
     if (!s.available) {
-        const app = kind === 'youtube' ? 'Google' : 'Meta';
+        const app = kind === 'youtube' ? 'Google' : 'Instagram';
         return <EmptyState icon={<PlugZap size={22} strokeWidth={1.5} />} title="Not switched on yet" message={`${NAMES[kind]} analytics need the platform’s ${app} app, which isn’t set up on this server yet.`} />;
     }
     if (!s.connected) return <NotConnected kind={kind} isAdmin={isAdmin} />;
-    if (kind === 'instagram' && !status.meta.igUsername) {
-        return <EmptyState icon={<InstaGlyph size={22} />} title="No Instagram account on this Page" message="Link your Instagram business or creator account to the Facebook Page, then connect again under Setup and keys."
-            action={isAdmin ? <Button className="mt-4" icon={<Settings size={15} />} onClick={onSetup}>Setup and keys</Button> : undefined} />;
-    }
     return <Report key={kind} kind={kind} />;
 };
 
-/** The Meta connection's line in Setup and keys. */
-function metaLine(meta: AnalyticsStatus['meta']): string {
-    if (!meta.connected) return 'Facebook sign-in: your Page and its Instagram business account';
-    return meta.igUsername ? `${meta.pageName} · @${meta.igUsername}` : `${meta.pageName} · no Instagram linked`;
-}
-
-/** For Setup and keys: the Meta and Google connections, with connect and disconnect (admins). */
+/** For Setup and keys: the Instagram and YouTube connections, with connect and disconnect (admins). */
 export const AnalyticsConnections: React.FC<{ isAdmin: boolean }> = ({ isAdmin }) => {
     const [status, setStatus] = useState<AnalyticsStatus | null>(null);
-    const [confirm, setConfirm] = useState<Provider | ''>('');
+    const [confirm, setConfirm] = useState<Kind | ''>('');
     const load = useCallback(() => { socialService.analytics().then(setStatus).catch(() => setStatus(null)); }, []);
     useEffect(() => { load(); }, [load]);
-    const off = async (p: Provider) => {
+    const off = async (p: Kind) => {
         if (confirm !== p) { setConfirm(p); return; }
         try { await socialService.disconnectAnalytics(p); toast.success('Disconnected'); load(); } catch (e) { toast.error(message(e)); } finally { setConfirm(''); }
     };
     if (!status) return null;
-    const rows: { p: Provider; title: string; Icon: React.ElementType; line: string; connected: boolean; available: boolean }[] = [
-        { p: 'meta', title: 'Instagram and Facebook', Icon: InstaGlyph, connected: status.meta.connected, available: status.meta.available,
-            line: metaLine(status.meta) },
-        { p: 'google', title: 'YouTube', Icon: Clapperboard, connected: status.google.connected, available: status.google.available,
-            line: status.google.connected ? status.google.channelTitle : 'Google sign-in with the account that owns the channel' },
+    const rows: { p: Kind; title: string; Icon: React.ElementType; line: string; connected: boolean; available: boolean }[] = [
+        { p: 'instagram', title: 'Instagram', Icon: InstaGlyph, connected: status.instagram.connected, available: status.instagram.available,
+            line: status.instagram.connected ? `@${status.instagram.username}` : 'Instagram login with your Business or Creator account' },
+        { p: 'youtube', title: 'YouTube', Icon: Clapperboard, connected: status.youtube.connected, available: status.youtube.available,
+            line: status.youtube.connected ? status.youtube.channelTitle : 'Google sign-in with the account that owns the channel' },
     ];
     return (
         <Card className="space-y-2 text-[var(--neu-text)]">

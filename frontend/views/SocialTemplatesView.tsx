@@ -240,7 +240,7 @@ export const SlotInputs: React.FC<{ template: SocialTemplate; values: FieldValue
 
 export type ChannelFilter = 'all' | Channel;
 
-/** Two or three big tabs (WhatsApp | Email, Instagram | Facebook | YouTube): one never mixes with the other. */
+/** Big side-by-side tabs (WhatsApp | Email): one never mixes with the other. */
 export function Segmented<K extends string>({ value, onChange, options, label }: Readonly<{
     value: K; onChange: (k: K) => void; label: string; options: { key: K; label: string; Icon: React.ElementType; count?: number }[];
 }>) {

@@ -1,15 +1,15 @@
 // Social: invites on WhatsApp and by email through the workspace's own MSG91
-// account, and its Instagram, Facebook and YouTube figures. The home page has
-// the headline figures and two lists — Invites (WhatsApp, Email, Replies,
-// Templates, Who got the invites, Audience) and Analytics (Instagram, YouTube,
-// Facebook Page) — each row opening its own page; Setup and keys is behind
+// account, and its Instagram and YouTube figures. The home page has the
+// headline figures and two lists — Invites (WhatsApp, Email, Replies,
+// Templates, Who got the invites, Audience) and Analytics (Instagram,
+// YouTube) — each row opening its own page; Setup and keys is behind
 // the header's gear. A new invite is four steps; an invite's page shows each
 // person, with search, export, resend-to-failed and cancel.
 // Server: social.ts, socialInbox.ts, socialAnalytics.ts.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
-    AlertCircle, AtSign, BarChart3, CalendarCheck, Clapperboard, Eye, ThumbsUp, UserPlus, CalendarClock, Check, CheckCheck, ChevronLeft, ChevronRight, CircleDashed, Copy, Download, FileText,
+    AlertCircle, AtSign, BarChart3, CalendarCheck, Clapperboard, Eye, UserPlus, CalendarClock, Check, CheckCheck, ChevronLeft, ChevronRight, CircleDashed, Copy, Download, FileText,
     Loader2, Mail, MailOpen, Megaphone, MessageCircle, MessagesSquare, PlugZap, Plus, RefreshCw, Repeat, RotateCcw, Search, Send, Settings, Tags, Trash2, UserCheck, UserX, Users, X,
 } from 'lucide-react';
 import { useBackClose } from '../hooks/useBackClose';
@@ -46,8 +46,8 @@ const WORDS = {
 } as const;
 
 /** The Social home, and the page each of its rows opens (Setup and keys from the header's gear). */
-type Page = 'home' | 'whatsapp' | 'email' | 'replies' | 'templates' | 'people' | 'audience' | 'instagram' | 'facebook' | 'youtube' | 'settings';
-const PAGES = new Set<Page>(['home', 'whatsapp', 'email', 'replies', 'templates', 'people', 'audience', 'instagram', 'facebook', 'youtube', 'settings']);
+type Page = 'home' | 'whatsapp' | 'email' | 'replies' | 'templates' | 'people' | 'audience' | 'instagram' | 'youtube' | 'settings';
+const PAGES = new Set<Page>(['home', 'whatsapp', 'email', 'replies', 'templates', 'people', 'audience', 'instagram', 'youtube', 'settings']);
 const PAGE_KEY = 'social-page';
 /** The page last open on this device (it survives Meta's and Google's sign-in, which leaves the app and comes back). */
 function savedPage(): Page {
@@ -195,22 +195,17 @@ function connectionLine(available: boolean | undefined, connected: boolean | und
 }
 
 function instagramLine(analytics: AnalyticsStatus | null, ig: InstagramReport | null): string {
-    let what = 'No Instagram account on the Page';
-    if (ig) what = `@${ig.username} · ${compactNum(ig.followers)} followers`;
-    else if (analytics?.meta.igUsername) what = `@${analytics.meta.igUsername}`;
-    return connectionLine(analytics?.meta.available, analytics?.meta.connected, what);
+    const what = ig ? `@${ig.username} · ${compactNum(ig.followers)} followers` : `@${analytics?.instagram.username ?? ''}`;
+    return connectionLine(analytics?.instagram.available, analytics?.instagram.connected, what);
 }
 
 const AnalyticsRows: React.FC<{ analytics: AnalyticsStatus | null; ig: InstagramReport | null; go: (p: Page) => void }> = ({ analytics, ig, go }) => (
     <ul className="neu-card px-2 py-1">
         <HubRow icon={<InstaGlyph size={18} />} title="Instagram" onClick={() => go('instagram')} line={instagramLine(analytics, ig)}
-            status={analytics?.meta.connected ? undefined : notConnected()} />
+            status={analytics?.instagram.connected ? undefined : notConnected()} />
         <HubRow icon={<Clapperboard size={18} strokeWidth={1.5} />} title="YouTube" onClick={() => go('youtube')}
-            line={connectionLine(analytics?.google.available, analytics?.google.connected, analytics?.google.channelTitle ?? '')}
-            status={analytics?.google.connected ? undefined : notConnected()} />
-        <HubRow icon={<ThumbsUp size={18} strokeWidth={1.5} />} title="Facebook Page" onClick={() => go('facebook')}
-            line={connectionLine(analytics?.meta.available, analytics?.meta.connected, analytics?.meta.pageName ?? '')}
-            status={analytics?.meta.connected ? undefined : notConnected()} />
+            line={connectionLine(analytics?.youtube.available, analytics?.youtube.connected, analytics?.youtube.channelTitle ?? '')}
+            status={analytics?.youtube.connected ? undefined : notConnected()} />
     </ul>
 );
 
@@ -476,7 +471,7 @@ const AccountForm: React.FC<{ conn: Msg91Connection | null; onChange: (c: Msg91C
 };
 
 const SettingsTab: React.FC<{ conn: Msg91Connection | null; isAdmin: boolean; onChange: (c: Msg91Connection) => void }> = ({ conn, isAdmin, onChange }) => {
-    if (!isAdmin) return <EmptyState icon={<Settings size={22} strokeWidth={1.5} />} title="Only an admin can change this" message="Ask an admin to connect MSG91, set the email sender, or connect Instagram, Facebook and YouTube." />;
+    if (!isAdmin) return <EmptyState icon={<Settings size={22} strokeWidth={1.5} />} title="Only an admin can change this" message="Ask an admin to connect MSG91, set the email sender, or connect Instagram and YouTube." />;
     const connected = conn?.connected ? conn : null;
     return (
         <div className="space-y-4">
@@ -918,7 +913,7 @@ async function loadAnalytics(setAnalytics: (a: AnalyticsStatus | null) => void, 
     try {
         const a = await socialService.analytics();
         setAnalytics(a);
-        setIg(a.meta.connected && a.meta.igUsername ? await socialService.instagram().catch(() => null) : null);
+        setIg(a.instagram.connected ? await socialService.instagram().catch(() => null) : null);
     } catch {
         setAnalytics(null);
     }
@@ -928,7 +923,7 @@ async function loadAnalytics(setAnalytics: (a: AnalyticsStatus | null) => void, 
 function subtitleOf(page: Page, conn: Msg91Connection | null, sender: string): string {
     if (page === 'whatsapp') return conn?.connected && conn.number ? `Sent from +${conn.number}` : '';
     if (page === 'email') return sender ? `Sent from ${sender}` : 'Email sender not set yet';
-    if (page === 'settings') return 'MSG91, Instagram, Facebook and YouTube';
+    if (page === 'settings') return 'MSG91, Instagram and YouTube';
     if (page !== 'home') return '';
     return conn && !conn.connected ? 'Not connected to MSG91 yet' : 'Invites, replies and how your channels are doing';
 }
@@ -953,7 +948,7 @@ const TemplatesPage: React.FC<{
 
 const TITLES: Record<Page, string> = {
     home: 'Social', whatsapp: 'WhatsApp invites', email: 'Email invites', replies: 'Replies', templates: 'Templates', people: 'Who got the invites',
-    audience: 'Audience', instagram: 'Instagram', facebook: 'Facebook Page', youtube: 'YouTube', settings: 'Setup and keys',
+    audience: 'Audience', instagram: 'Instagram', youtube: 'YouTube', settings: 'Setup and keys',
 };
 
 export const SocialSpace: React.FC<{ onBack: () => void; onContacts: () => void }> = ({ onBack, onContacts }) => {
@@ -1029,7 +1024,7 @@ export const SocialSpace: React.FC<{ onBack: () => void; onContacts: () => void 
                 break;
             case 'audience': body = <AudienceTab canSend={canSend} ready={ready} compose={compose} onContacts={onContacts} />; break;
             case 'settings': body = <SettingsTab conn={conn} isAdmin={isAdmin} onChange={setConn} />; break;
-            default: body = <AnalyticsTab key={page} kind={page} isAdmin={isAdmin} onSetup={onSetup} />;
+            default: body = <AnalyticsTab key={page} kind={page} isAdmin={isAdmin} />;
         }
     }
 

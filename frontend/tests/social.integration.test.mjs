@@ -59,26 +59,30 @@ async function upload(b, org) {
     return (await res.json()).url;
 }
 
-/** Meta's Graph API and Google's token, YouTube and YouTube Analytics APIs, as far as Social → Analytics uses them: [status, body] or null. */
+/** Instagram's login and API, and Google's token, YouTube and YouTube Analytics APIs, as far as Social → Analytics uses them: [status, body] or null. */
 function standInAnalytics(req, body) {
     const url = new URL(req.url, 'http://x');
     const q = url.searchParams;
     const path = url.pathname;
-    if (path === '/graph/oauth/access_token') {
-        if (q.get('fb_exchange_token') === 'short') return [200, { access_token: 'long' }];
-        return q.get('code') === 'good' && q.get('client_secret') === 'meta-secret' ? [200, { access_token: 'short' }] : [400, { error: { message: 'Invalid verification code' } }];
+    if (path === '/ig-token') {
+        if (body?.client_id !== 'ig-app' || body?.client_secret !== 'ig-secret' || body?.grant_type !== 'authorization_code') return [400, { error_type: 'OAuthException', code: 400, error_message: 'Invalid client' }];
+        const short = { good: 'short', personal: 'short-p' }[body.code];
+        return short ? [200, { data: [{ access_token: short, user_id: '17841', permissions: 'instagram_business_basic,instagram_business_manage_insights' }] }]
+            : [400, { error_type: 'OAuthException', code: 400, error_message: 'Invalid authorization code' }];
     }
-    if (path === '/graph/me/accounts') return q.get('access_token') === 'long' ? [200, { data: [{ id: 'p0', name: 'Other Page', access_token: 'other' }, { id: 'p1', name: 'Vayu Design', access_token: 'page-token', instagram_business_account: { id: 'ig1', username: 'vayu.design' } }] }] : [401, { error: { message: 'bad token' } }];
-    if (path.startsWith('/graph/') && q.get('access_token') !== 'page-token') return [401, { error: { message: 'Invalid OAuth access token' } }];
-    if (path === '/graph/ig1') return [200, { username: 'vayu.design', followers_count: 12480 }];
-    if (path === '/graph/ig1/media') return [200, { data: [{ id: 'm1', caption: 'Studio walk-through\nmore', media_type: 'VIDEO', media_product_type: 'REELS', timestamp: '2026-11-10T10:00:00+0000', thumbnail_url: 'https://x.example/t.jpg', permalink: 'https://instagram.example/p/1', like_count: 10, comments_count: 2 }] }];
-    if (path === '/graph/m1/insights') return [200, { data: [{ name: 'views', values: [{ value: 100 }] }, { name: 'reach', total_value: { value: 80 } }, { name: 'saved', values: [{ value: 4 }] }, { name: 'ig_reels_avg_watch_time', values: [{ value: 11400 }] }] }];
-    if (path === '/graph/ig1/insights') return [200, { data: [{ name: 'reach', values: [{ value: 5, end_time: '2026-11-10T08:00:00+0000' }, { value: 7, end_time: '2026-11-11T08:00:00+0000' }] }] }];
-    if (path === '/graph/p1') return [200, { name: 'Vayu Design', followers_count: 8930, link: 'https://facebook.example/vayu' }];
-    if (path === '/graph/p1/insights') {
-        return q.get('metric') === 'page_media_view' ? [200, { data: [{ name: 'page_media_view', values: [{ value: 40, end_time: '2026-11-11T08:00:00+0000' }] }] }] : [400, { error: { message: '(#100) The value must be a valid insights metric' } }];
+    if (path === '/ig/access_token') {
+        const long = { short: 'long', 'short-p': 'long-p' }[q.get('access_token')];
+        return q.get('grant_type') === 'ig_exchange_token' && q.get('client_secret') === 'ig-secret' && long ? [200, { access_token: long, token_type: 'bearer', expires_in: 5183944 }] : [400, { error: { message: 'Invalid token' } }];
     }
-    if (path === '/graph/p1/posts') return [200, { data: [{ id: 'f1', message: 'Show opens Friday', created_time: '2026-11-08T10:00:00+0000', reactions: { summary: { total_count: 41 } }, comments: { summary: { total_count: 3 } }, shares: { count: 5 } }] }];
+    if (path.startsWith('/ig/v23.0/')) {
+        const token = q.get('access_token');
+        if (token === 'long-p' && path === '/ig/v23.0/me') return [200, { user_id: '1', username: 'just.me', account_type: 'PERSONAL' }];
+        if (token !== 'long') return [400, { error: { message: 'Error validating access token', type: 'OAuthException', code: 190 } }];
+        if (path === '/ig/v23.0/me') return [200, { user_id: '17841', username: 'vayu.design', account_type: 'BUSINESS', followers_count: 12480 }];
+        if (path === '/ig/v23.0/me/media') return [200, { data: [{ id: 'm1', caption: 'Studio walk-through\nmore', media_type: 'VIDEO', media_product_type: 'REELS', timestamp: '2026-11-10T10:00:00+0000', thumbnail_url: 'https://x.example/t.jpg', permalink: 'https://instagram.example/p/1', like_count: 10, comments_count: 2 }] }];
+        if (path === '/ig/v23.0/m1/insights') return [200, { data: [{ name: 'views', values: [{ value: 100 }] }, { name: 'reach', total_value: { value: 80 } }, { name: 'saved', values: [{ value: 4 }] }, { name: 'ig_reels_avg_watch_time', values: [{ value: 11400 }] }] }];
+        if (path === '/ig/v23.0/17841/insights') return [200, { data: [{ name: 'reach', values: [{ value: 5, end_time: '2026-11-10T08:00:00+0000' }, { value: 7, end_time: '2026-11-11T08:00:00+0000' }] }] }];
+    }
     if (path === '/google-token') {
         if (body?.grant_type === 'authorization_code') return body.code === 'good' ? [200, { access_token: 'g-access', refresh_token: 'g-refresh' }] : [400, { error: 'invalid_grant' }];
         return body?.refresh_token === 'g-refresh' ? [200, { access_token: 'g-access2' }] : [400, { error: 'invalid_grant' }];
@@ -142,7 +146,7 @@ before(async () => {
     const base = `http://127.0.0.1:${msg91.address().port}`;
     worker = await startDevWorker({ vars: {
         MSG91_API_BASE: base, ANALYTICS_API_BASE: base, SOCIAL_HOUR_MS: '50',
-        META_APP_ID: 'meta-app', META_APP_SECRET: 'meta-secret', YOUTUBE_CLIENT_ID: 'yt-client', YOUTUBE_CLIENT_SECRET: 'yt-secret',
+        INSTAGRAM_APP_ID: 'ig-app', INSTAGRAM_APP_SECRET: 'ig-secret', YOUTUBE_CLIENT_ID: 'yt-client', YOUTUBE_CLIENT_SECRET: 'yt-secret',
     } });
     const admin = worker.browser();
     assert.equal((await admin.signIn('admin@example.com', 'provider-admin-password')).status, 200);
@@ -586,41 +590,46 @@ test('WhatsApp replies: kept as a conversation, answered freely for 24 hours, th
     assert.equal((await ownerB.call(app(orgB, '/social/replies'))).body.threads.length, 0);
 });
 
-test('analytics: an admin connects Meta and Google; the figures come back; nothing crosses workspaces', async () => {
+test('analytics: an admin connects Instagram (its own login) and YouTube; the figures come back; nothing crosses workspaces', async () => {
     const status = await ownerA.call(app(orgA, '/social/analytics'));
-    assert.deepEqual([status.body.meta.available, status.body.meta.connected, status.body.google.connected], [true, false, false]);
+    assert.deepEqual([status.body.instagram.available, status.body.instagram.connected, status.body.youtube.connected], [true, false, false]);
     assert.equal((await ownerA.call(app(orgA, '/social/analytics/instagram'))).status, 409); // not connected
 
-    const start = await post(ownerA, app(orgA, '/social/analytics/meta/start'));
+    const start = await post(ownerA, app(orgA, '/social/analytics/instagram/start'));
     assert.equal(start.status, 200, start.text);
-    const dialog = new URL(start.body.url);
-    assert.equal(dialog.searchParams.get('client_id'), 'meta-app');
-    const state = dialog.searchParams.get('state');
+    const login = new URL(start.body.url);
+    assert.equal(login.origin + login.pathname, 'https://www.instagram.com/oauth/authorize'); // Instagram's own login page
+    assert.deepEqual([login.searchParams.get('client_id'), login.searchParams.get('enable_fb_login'), login.searchParams.get('scope')], ['ig-app', '0', 'instagram_business_basic,instagram_business_manage_insights']);
+    assert.ok(login.searchParams.get('redirect_uri').endsWith('/api/v2/social/oauth/instagram'));
+    const state = login.searchParams.get('state');
     const callback = (p, q) => fetch(`${worker.origin}/api/v2/social/oauth/${p}?${new URLSearchParams(q)}`).then(r => r.text());
-    assert.match(await callback('meta', { code: 'good', state: 'f'.repeat(32) }), /expired/);
-    assert.match(await callback('meta', { code: 'good', state }), /connected/);
-    assert.match(await callback('meta', { code: 'good', state }), /expired/); // once only
-    const connected = (await ownerA.call(app(orgA, '/social/analytics'))).body.meta;
-    assert.deepEqual([connected.connected, connected.pageName, connected.igUsername], [true, 'Vayu Design', 'vayu.design']);
+    assert.match(await callback('instagram', { code: 'good', state: 'f'.repeat(32) }), /expired/);
+    assert.match(await callback('instagram', { code: 'good#_', state }), /Instagram connected/); // the "#_" Instagram sometimes adds is not part of the code
+    assert.match(await callback('instagram', { code: 'good', state }), /expired/); // once only
+    assert.equal((await ownerA.call(app(orgA, '/social/analytics'))).body.instagram.username, 'vayu.design');
 
     const ig = (await ownerA.call(app(orgA, '/social/analytics/instagram'))).body;
-    assert.deepEqual([ig.username, ig.followers, ig.reachDaily.length], ['vayu.design', 12480, 2]);
+    assert.deepEqual([ig.username, ig.followers, ig.reachDaily.length, ig.problems], ['vayu.design', 12480, 2, []]);
     assert.deepEqual(ig.posts.map(p => [p.kind, p.caption, p.views, p.reach, p.saves, p.avgWatchSec]), [['Reel', 'Studio walk-through', 100, 80, 4, 11.4]]);
-    const fb = (await ownerA.call(app(orgA, '/social/analytics/facebook'))).body;
-    assert.deepEqual([fb.followers, fb.viewsDaily[0].value, fb.posts[0].reactions, fb.engagementDaily.length], [8930, 40, 41, 0]);
-    assert.ok(fb.problems.some(p => p.startsWith('Daily engagement'))); // a retired metric is reported, not fatal
 
-    const g = await post(ownerA, app(orgA, '/social/analytics/google/start'));
-    assert.match(await callback('google', { code: 'bad', state: new URL(g.body.url).searchParams.get('state') }), /not connected/);
-    const g2 = await post(ownerA, app(orgA, '/social/analytics/google/start'));
-    assert.match(await callback('google', { code: 'good', state: new URL(g2.body.url).searchParams.get('state') }), /connected/);
+    // A personal account is turned away with what to do; a refused code changes nothing.
+    const again = async () => new URL((await post(ownerA, app(orgA, '/social/analytics/instagram/start'))).body.url).searchParams.get('state');
+    assert.match(await callback('instagram', { code: 'personal', state: await again() }), /personal Instagram account/);
+    assert.match(await callback('instagram', { code: 'bad', state: await again() }), /Invalid authorization code/);
+    assert.equal((await ownerA.call(app(orgA, '/social/analytics'))).body.instagram.username, 'vayu.design');
+
+    const g = await post(ownerA, app(orgA, '/social/analytics/youtube/start'));
+    assert.match(await callback('youtube', { code: 'bad', state: new URL(g.body.url).searchParams.get('state') }), /not connected/);
+    const g2 = await post(ownerA, app(orgA, '/social/analytics/youtube/start'));
+    assert.match(await callback('youtube', { code: 'good', state: new URL(g2.body.url).searchParams.get('state') }), /YouTube connected/);
     const yt = (await ownerA.call(app(orgA, '/social/analytics/youtube'))).body;
     assert.deepEqual([yt.title, yt.subscribers, yt.daily.length, yt.sources[0].name, yt.top[0].title, yt.top[0].views], ['Vayu Studio', 4820, 2, 'YT_SEARCH', 'Inside the show', 900]);
 
-    assert.equal((await post(staffA, app(orgA, '/social/analytics/meta/start'))).status, 403);
-    assert.equal((await ownerB.call(app(orgB, '/social/analytics'))).body.meta.connected, false);
-    assert.equal((await ownerA.call(app(orgA, '/social/analytics/meta'), { method: 'DELETE' })).status, 200);
-    assert.equal((await ownerA.call(app(orgA, '/social/analytics'))).body.meta.connected, false);
+    assert.equal((await post(ownerA, app(orgA, '/social/analytics/facebook/start'))).status, 404); // no Facebook any more
+    assert.equal((await post(staffA, app(orgA, '/social/analytics/instagram/start'))).status, 403);
+    assert.equal((await ownerB.call(app(orgB, '/social/analytics'))).body.instagram.connected, false);
+    assert.equal((await ownerA.call(app(orgA, '/social/analytics/instagram'), { method: 'DELETE' })).status, 200);
+    assert.equal((await ownerA.call(app(orgA, '/social/analytics'))).body.instagram.connected, false);
 });
 
 test('automatic resend: after the chosen time, once, only where reports show it didn’t arrive', async () => {

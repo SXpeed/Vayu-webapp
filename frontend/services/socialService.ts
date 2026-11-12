@@ -1,5 +1,5 @@
 import type {
-    AnalyticsStatus, Channel, FacebookReport, FieldValues, InstagramReport, Invite, InviteInput, PersonTrack, Recipient, ReplyMessage, ReplyThread, ResendSettings,
+    AnalyticsStatus, Channel, FieldValues, InstagramReport, Invite, InviteInput, PersonTrack, Recipient, ReplyMessage, ReplyThread, ResendSettings,
     SocialTemplate, TemplateInput, TrackHistory, YoutubeReport,
 } from '../socialRules';
 import { apiCall as call } from './apiClient';
@@ -65,10 +65,9 @@ export const socialService = {
     },
 
     analytics: () => call<AnalyticsStatus>('/social/analytics'),
-    /** The address of Meta's or Google's sign-in (admins only). */
-    async connectAnalytics(provider: 'meta' | 'google'): Promise<string> { return (await call<{ url: string }>(`/social/analytics/${provider}/start`, { method: 'POST' })).url; },
-    async disconnectAnalytics(provider: 'meta' | 'google'): Promise<void> { await call(`/social/analytics/${provider}`, { method: 'DELETE' }); },
+    /** The address of Instagram's or Google's login (admins only). */
+    async connectAnalytics(account: 'instagram' | 'youtube'): Promise<string> { return (await call<{ url: string }>(`/social/analytics/${account}/start`, { method: 'POST' })).url; },
+    async disconnectAnalytics(account: 'instagram' | 'youtube'): Promise<void> { await call(`/social/analytics/${account}`, { method: 'DELETE' }); },
     instagram: (refresh = false) => call<InstagramReport>(`/social/analytics/instagram${refresh ? '?refresh=1' : ''}`),
-    facebook: (refresh = false) => call<FacebookReport>(`/social/analytics/facebook${refresh ? '?refresh=1' : ''}`),
     youtube: (refresh = false) => call<YoutubeReport>(`/social/analytics/youtube${refresh ? '?refresh=1' : ''}`),
 };

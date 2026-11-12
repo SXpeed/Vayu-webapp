@@ -288,7 +288,7 @@ const LITERAL_SEGMENTS = new Set([
   'ticket', 'ws', 'sales',
   'staff-roster', 'shifts', 'publish', 'leaves', 'titles', 'expenses', 'notes',
   'social', 'whatsapp', 'email', 'templates', 'audience', 'test', 'invites', 'retry', 'reach',
-  'people', 'resend', 'resend-settings', 'replies', 'analytics', 'meta', 'google', 'start', 'instagram', 'facebook', 'youtube',
+  'people', 'resend', 'resend-settings', 'replies', 'analytics', 'start', 'instagram', 'youtube',
 ]);
 
 export function normalizeRoute(path: string): string {
