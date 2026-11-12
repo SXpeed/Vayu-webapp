@@ -76,7 +76,8 @@ export interface InvoiceRoute { method: string; match: (path: string) => boolean
 export interface InvoiceDeps {
     logChange: (ctx: Ctx, session: SessionData, action: string, entity: string, id: string, details: string) => void;
     notify: (ctx: Ctx, events: ChangeEvent[]) => void;
-    archive: (ctx: Ctx, session: SessionData, entity: string, id: string, summary: string, payload: unknown) => void;
+    /** The undo snapshot of a record, as statements for the delete's own batch (empty when there is no record). */
+    archive: (db: D1Database, session: SessionData, entity: string, id: string, summary: string, payload: unknown) => Promise<D1PreparedStatement[]>;
     /** Adds the artworks table's newer columns (quantity) before stock is counted. */
     ensureArtworks: (db: D1Database) => Promise<void>;
 }
@@ -376,14 +377,12 @@ export function invoiceRoutes(deps: InvoiceDeps): InvoiceRoute[] {
         if (doc && doc.kind !== 'proforma' && doc.status !== 'Draft') return err('Issued documents can’t be deleted. Cancel it instead.', 409);
         await ensureChangeLogTable(db);
         await db.batch([
+            ...await deps.archive(db, session, 'invoice', id, doc ? describe(doc) : '', doc ? row : null),
             db.prepare('DELETE FROM invoices WHERE id = ?').bind(id),
             changeLogStmt(db, ctx.env, 'invoice', id, 'delete', { actorId: session.userId }),
         ]);
         deps.notify(ctx, [{ entity: 'invoice', id, op: 'delete' }]);
-        if (row && doc) {
-            deps.archive(ctx, session, 'invoice', id, describe(doc), row);
-            deps.logChange(ctx, session, 'deleted', 'invoice', id, `Deleted ${describe(doc)}`);
-        }
+        if (row && doc) deps.logChange(ctx, session, 'deleted', 'invoice', id, `Deleted ${describe(doc)}`);
         return json({ success: true });
     };
 

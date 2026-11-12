@@ -170,11 +170,11 @@ to their author (not even admins see them). The dummy-data look is in
 - [ ] Leave request → the Staff roster's Requests panel (`views/staffRoster/OtherViews.tsx`); shown with `schedule` view access
 - [ ] My Space shows to everyone; Social needs the new `social` permission (8.4). Items not built yet read "Coming soon"
 
-**8.2 My Notes**
-- [ ] Table `notes` (id, owner_id, title, body, pinned, timestamps) in the workspace database, created on first use like `staffRoster.ts`
-- [ ] `/api/notes` list / save / delete, always filtered by the signed-in person; no admin or sync path (private, refetched on open)
-- [ ] Limits: 20 000 characters a note, 500 notes a person
-- [ ] Test: another member, an admin included, can't read, change or delete someone's note
+**8.2 My Notes** — built 2026-11-12 (`notes.ts`, `views/NotesView.tsx`); pin to top, Back saves what was typed
+- [x] Table `notes` (id, owner_id, title, body, pinned, timestamps) in the workspace database, created on first use like `staffRoster.ts`
+- [x] `/api/notes` list / save / delete, always filtered by the signed-in person; no admin or sync path (private, refetched on open)
+- [x] Limits: 20 000 characters a note, 500 notes a person
+- [x] Test: another member, an admin included, can't read, change or delete someone's note
 
 **8.3 Expenses** — built 2026-11-06 as the owner asked: record, then share
 - [x] Each person records their own (date, amount, category, note, up to 6 receipt photos), private to them, admins included (`expenses.ts`, `expenseRules.ts`, `views/ExpensesView.tsx`, `tests/expenses.integration.test.mjs`)

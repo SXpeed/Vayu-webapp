@@ -5,7 +5,10 @@ import {
 } from './permissions';
 import { staffRosterRoutes } from './staffRoster';
 import { expenseRoutes } from './expenses';
+import { noteRoutes } from './notes';
 import { deliverDueInvites, handleSocialPublic, socialRoutes } from './social';
+import { autoResendDue, socialInboxRoutes } from './socialInbox';
+import { handleAnalyticsCallback, socialAnalyticsRoutes } from './socialAnalytics';
 import { salesRoutes } from './sales';
 import { ensureInvoicesTable, invoiceRoutes } from './invoices';
 import { paymentLinkRoutes, reconcileAllWorkspaces, routeOrgPaymentEvent } from './paymentLinks';
@@ -24,6 +27,7 @@ import {
   type StoredUser,
 } from './workerRoles';
 import { originalSignInOpen } from './platform/originalSignIn';
+import { verifyLegacyPbkdf2 } from './platform/auth';
 import { ORG_PATH, forgetOrgAccess, forgetPlanActive, openOrgRequest, orgMemberDevices, orgMemberRecords, signOutOrgMemberDevices } from './orgApp';
 import { orgAccountRoutes } from './orgTeam';
 import { orgKvPrefix } from './orgStorage';
@@ -154,10 +158,6 @@ function b64(arr: Uint8Array): string {
   return btoa(String.fromCodePoint(...arr));
 }
 
-function fromB64(s: string): Uint8Array {
-  return Uint8Array.from(atob(s), c => c.codePointAt(0) ?? 0);
-}
-
 async function hashPassword(password: string): Promise<string> {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
@@ -166,22 +166,6 @@ async function hashPassword(password: string): Promise<string> {
     key, 256
   );
   return `${b64(salt)}.${b64(new Uint8Array(bits))}`;
-}
-
-async function verifyPassword(password: string, stored: string): Promise<boolean> {
-  const [saltB64, hashB64] = stored.split('.');
-  const salt = fromB64(saltB64);
-  const expected = fromB64(hashB64);
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 100_000 },
-    key, 256
-  );
-  const actual = new Uint8Array(bits);
-  if (actual.length !== expected.length) return false;
-  let diff = 0;
-  for (let i = 0; i < actual.length; i++) diff |= actual[i] ^ expected[i];
-  return diff === 0;
 }
 
 /** New and changed passwords; existing ones keep working until changed. */
@@ -389,10 +373,7 @@ function stripPassword(user: StoredUser): PublicUser {
  * own (idempotent) setup until one finishes.
  */
 function ensureCatalogsColumns(db: D1Database): Promise<void> {
-  return runSetupOnce(db, 'catalogsColumns', () => (async () => {
-    try { await db.prepare('ALTER TABLE catalogs ADD COLUMN pdf_url TEXT').run(); } catch { /* already exists */ }
-    try { await db.prepare(`ALTER TABLE catalogs ADD COLUMN source TEXT NOT NULL DEFAULT 'generated'`).run(); } catch { /* already exists */ }
-  })());
+  return ensureColumns(db, 'catalogs');
 }
 
 
@@ -761,11 +742,11 @@ async function handleAuthLogin(ctx: Ctx): Promise<Response> {
   const userId = await ctx.env.VAYU_KV.get(`auth:email:${emailKey}`);
   const raw = userId ? await ctx.env.VAYU_KV.get(`auth:user:${userId}`) : null;
   if (!raw) {
-    await verifyPassword(password, NO_ACCOUNT_HASH);
+    await verifyLegacyPbkdf2(password, NO_ACCOUNT_HASH);
     return err('Invalid email or password', 401);
   }
   const user: StoredUser = JSON.parse(raw);
-  if (!await verifyPassword(password, user.hashedPassword)) return err('Invalid email or password', 401);
+  if (!await verifyLegacyPbkdf2(password, user.hashedPassword)) return err('Invalid email or password', 401);
   const token = generateToken();
   const session: SessionData = {
     userId: user.id, email: user.email, name: user.name,
@@ -1098,6 +1079,10 @@ async function handleAuthUsersDelete(ctx: Ctx): Promise<Response> {
   const raw = await ctx.env.VAYU_KV.get(`auth:user:${userId}`);
   if (!raw) return err('User not found', 404);
   const user: StoredUser = JSON.parse(raw);
+  // Users live in KV, which can't share a database batch: the snapshot is saved
+  // first, so a delete never happens without it. Full user (incl. password hash)
+  // so an admin undo fully restores the login.
+  await ctx.env.VAYU_DB.batch(await archiveStmts(ctx.env.VAYU_DB, session, 'user', userId, `User "${user.name}" (${user.email})`, user));
   await ctx.env.VAYU_KV.delete(`auth:user:${userId}`);
   await ctx.env.VAYU_KV.delete(`auth:email:${user.email}`);
   const countRaw = await ctx.env.VAYU_KV.get('auth:count');
@@ -1107,8 +1092,6 @@ async function handleAuthUsersDelete(ctx: Ctx): Promise<Response> {
   // connections close immediately.
   await forgetAllDevices(ctx.env.VAYU_KV, userId);
   revokeHubAsync(ctx, userId);
-  // Full user (incl. password hash) so an admin undo fully restores the login.
-  archiveDeletedAsync(ctx, session, 'user', userId, `User "${user.name}" (${user.email})`, user);
   return json({ success: true });
 }
 
@@ -1671,8 +1654,14 @@ async function handleConversationsDelete(ctx: Ctx): Promise<Response> {
   let participants: string[] = [];
   try { participants = conv ? JSON.parse((conv as Record<string, unknown>).participant_ids as string) : []; } catch { /* malformed row */ }
   await ensureChangeLogTable(ctx.env.VAYU_DB);
-  // Conversation delete, its messages, and every tombstone commit atomically.
+  const label = conv ? text(conv.group_name) || text(conv.title) || 'conversation' : '';
+  // The archive is for admins, who must not see into a private room: nothing of it is kept.
+  const snapshot = conv && !isPrivate
+    ? await archiveStmts(ctx.env.VAYU_DB, session, 'conversation', convId, `Conversation "${label}" (${msgCount.n} messages)`, { conversation: conv, messageCount: msgCount.n })
+    : [];
+  // Conversation delete, its messages, its undo snapshot and every tombstone commit atomically.
   await ctx.env.VAYU_DB.batch([
+    ...snapshot,
     ctx.env.VAYU_DB.prepare('DELETE FROM messages WHERE conversation_id = ?').bind(convId),
     ctx.env.VAYU_DB.prepare('DELETE FROM conversations WHERE id = ?').bind(convId),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'conversation', convId, 'delete',
@@ -1685,16 +1674,10 @@ async function handleConversationsDelete(ctx: Ctx): Promise<Response> {
     ...messageIds.map(id => ({ entity: 'message', id, op: 'delete' as const, conversationId: convId })),
   ]);
   if (conv && isPrivate) {
-    // The archive and activity log are for admins, who must not see into a
-    // private room: nothing of it is kept, and the log names no room.
+    // The activity log is for admins too: it names no private room.
     logEntityChange(ctx, session, 'deleted', 'conversation', convId, 'Deleted a private room');
   } else if (conv) {
-    const raw = conv as Record<string, unknown>;
-    const label = text(raw.group_name) || text(raw.title) || 'conversation';
-    archiveDeletedAsync(ctx, session, 'conversation', convId,
-      `Conversation "${label}" (${msgCount?.n || 0} messages)`,
-      { conversation: conv, messageCount: msgCount?.n || 0 });
-    logEntityChange(ctx, session, 'deleted', 'conversation', convId, `Deleted conversation "${label}" (${msgCount?.n || 0} messages)`);
+    logEntityChange(ctx, session, 'deleted', 'conversation', convId, `Deleted conversation "${label}" (${msgCount.n} messages)`);
   }
   return json({ success: true });
 }
@@ -1978,6 +1961,15 @@ const COLUMN_MIGRATIONS = {
   inquiry_messages: {
     reactions: 'TEXT',
   },
+  catalogs: {
+    pdf_url: 'TEXT',
+    source: "TEXT NOT NULL DEFAULT 'generated'",
+  },
+  events: {
+    end_date: 'INTEGER',
+    todos: "TEXT NOT NULL DEFAULT '[]'",
+    color: 'TEXT',
+  },
   inquiries: {
     customer_address: "TEXT DEFAULT ''",
     created_by: "TEXT DEFAULT ''",
@@ -2055,29 +2047,17 @@ function ensureDeletedItemsTable(db: D1Database): Promise<void> {
     `).run().then(() => undefined));
 }
 
-/** Archives a snapshot of a just-deleted record. Fire-and-forget — never blocks the response. */
-function archiveDeletedAsync(ctx: Ctx, session: SessionData, entity: string, entityId: string, summary: string, payload: unknown): void {
-  ctx.execCtx.waitUntil(archiveDeleted(ctx.env.VAYU_DB, session, entity, entityId, summary, payload));
-}
-
-async function archiveDeleted(db: D1Database, session: SessionData, entity: string, entityId: string, summary: string, payload: unknown): Promise<void> {
-  try {
-    await ensureDeletedItemsTable(db);
-    await db.prepare(
-      'INSERT INTO deleted_items (id, entity, entity_id, summary, payload, deleted_at, deleted_by, deleted_by_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).bind(
-      crypto.randomUUID(),
-      entity,
-      entityId,
-      summary,
-      payload ? JSON.stringify(payload) : null,
-      Date.now(),
-      session.userId,
-      session.name
-    ).run();
-  } catch (e) {
-    console.error('Failed to archive deleted item:', e);
-  }
+/**
+ * The snapshot of a record about to be deleted, as statements for the delete's
+ * own batch: both commit or neither, so an admin's undo is never lost. Empty
+ * when there is nothing to snapshot (the record was already gone).
+ */
+async function archiveStmts(db: D1Database, session: SessionData, entity: string, entityId: string, summary: string, payload: unknown): Promise<D1PreparedStatement[]> {
+  if (!payload) return [];
+  await ensureDeletedItemsTable(db);
+  return [db.prepare(
+    'INSERT INTO deleted_items (id, entity, entity_id, summary, payload, deleted_at, deleted_by, deleted_by_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).bind(crypto.randomUUID(), entity, entityId, summary, JSON.stringify(payload), Date.now(), session.userId, session.name)];
 }
 
 async function handleDeletedItemsList(ctx: Ctx): Promise<Response> {
@@ -2329,18 +2309,14 @@ async function handleArtworksDelete(ctx: Ctx): Promise<Response> {
   ).bind(artId).first();
 
   await ensureChangeLogTable(ctx.env.VAYU_DB);
+  const label = result ? artworkLabel({ title: (result as any).title, customId: (result as any).custom_id, id: artId }) : '';
   await ctx.env.VAYU_DB.batch([
+    ...await archiveStmts(ctx.env.VAYU_DB, session, 'artwork', artId, `Artwork ${label}`, result),
     ctx.env.VAYU_DB.prepare('DELETE FROM artworks WHERE id = ?').bind(artId),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'artwork', artId, 'delete', { actorId: session.userId }),
   ]);
   queueHubNotify(ctx, [{ entity: 'artwork', id: artId, op: 'delete' }]);
-  if (result) {
-    archiveDeletedAsync(ctx, session, 'artwork', artId,
-      `Artwork ${artworkLabel({ title: (result as any).title, customId: (result as any).custom_id, id: artId })}`,
-      result);
-    logEntityChange(ctx, session, 'deleted', 'artwork', artId,
-      `Deleted artwork ${artworkLabel({ title: (result as any).title, customId: (result as any).custom_id, id: artId })}`);
-  }
+  if (result) logEntityChange(ctx, session, 'deleted', 'artwork', artId, `Deleted artwork ${label}`);
   return json({ success: true });
 }
 
@@ -2425,12 +2401,12 @@ async function handleCollectionsDelete(ctx: Ctx): Promise<Response> {
   ).bind(colId).first();
   await ensureChangeLogTable(ctx.env.VAYU_DB);
   await ctx.env.VAYU_DB.batch([
+    ...await archiveStmts(ctx.env.VAYU_DB, session, 'collection', colId, `Collection "${(result as any)?.name || colId}"`, result),
     ctx.env.VAYU_DB.prepare('DELETE FROM collections WHERE id = ?').bind(colId),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'collection', colId, 'delete', { actorId: session.userId }),
   ]);
   queueHubNotify(ctx, [{ entity: 'collection', id: colId, op: 'delete' }]);
   if (result) {
-    archiveDeletedAsync(ctx, session, 'collection', colId, `Collection "${(result as any).name || colId}"`, result);
     logEntityChange(ctx, session, 'deleted', 'collection', colId, `Deleted collection "${(result as any).name || colId}"`);
   }
   return json({ success: true });
@@ -2525,12 +2501,12 @@ async function handleCatalogsDelete(ctx: Ctx): Promise<Response> {
 
   await ensureChangeLogTable(ctx.env.VAYU_DB);
   await ctx.env.VAYU_DB.batch([
+    ...await archiveStmts(ctx.env.VAYU_DB, session, 'catalog', catId, `Catalog "${(result as any)?.name || catId}"`, result),
     ctx.env.VAYU_DB.prepare('DELETE FROM catalogs WHERE id = ?').bind(catId),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'catalog', catId, 'delete', { actorId: session.userId }),
   ]);
   queueHubNotify(ctx, [{ entity: 'catalog', id: catId, op: 'delete' }]);
   if (result) {
-    archiveDeletedAsync(ctx, session, 'catalog', catId, `Catalog "${(result as any).name || catId}"`, result);
     logEntityChange(ctx, session, 'deleted', 'catalog', catId, `Deleted catalog "${(result as any).name || catId}"`);
   }
   return json({ success: true });
@@ -2668,6 +2644,7 @@ async function handleInquiriesDelete(ctx: Ctx): Promise<Response> {
   ).bind(inqId).all<{ id: string }>()).results?.map(r => r.id) ?? [];
   await ensureChangeLogTable(ctx.env.VAYU_DB);
   await ctx.env.VAYU_DB.batch([
+    ...await archiveStmts(ctx.env.VAYU_DB, session, 'inquiry', inqId, result ? `Inquiry ${inquiryLabel(rowToInquiry(result))}` : '', result),
     ctx.env.VAYU_DB.prepare('DELETE FROM inquiry_messages WHERE inquiry_id = ?').bind(inqId),
     ctx.env.VAYU_DB.prepare('DELETE FROM inquiries WHERE id = ?').bind(inqId),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'inquiry', inqId, 'delete', { actorId: session.userId }),
@@ -2680,7 +2657,6 @@ async function handleInquiriesDelete(ctx: Ctx): Promise<Response> {
   ]);
   if (result) {
     const inq = rowToInquiry(result);
-    archiveDeletedAsync(ctx, session, 'inquiry', inqId, `Inquiry ${inquiryLabel(inq)}`, result);
     logEntityChange(ctx, session, 'deleted', 'inquiry', inqId, `Deleted inquiry ${inquiryLabel(inq)}`);
   }
   return json({ success: true });
@@ -2835,13 +2811,10 @@ function ensureEventsTable(db: D1Database): Promise<void> {
         created_by TEXT,
         created_by_name TEXT
       )
-    `).run().then(async () => {
-      // Migration for tables created before end_date/todos/color were added —
-      // ALTER fails harmlessly when the column already exists.
-      try { await db.prepare('ALTER TABLE events ADD COLUMN end_date INTEGER').run(); } catch { /* already exists */ }
-      try { await db.prepare(`ALTER TABLE events ADD COLUMN todos TEXT NOT NULL DEFAULT '[]'`).run(); } catch { /* already exists */ }
-      try { await db.prepare('ALTER TABLE events ADD COLUMN color TEXT').run(); } catch { /* already exists */ }
-    }));
+    `).run()
+    // Tables created before end_date/todos/color existed. A failure here is not
+    // remembered as done: the next request tries again.
+    .then(() => addMissingColumns(db, 'events')));
 }
 
 async function handleEventsList(ctx: Ctx): Promise<Response> {
@@ -2938,13 +2911,13 @@ async function handleEventsDelete(ctx: Ctx): Promise<Response> {
   ).bind(evId).first();
   await ensureChangeLogTable(ctx.env.VAYU_DB);
   await ctx.env.VAYU_DB.batch([
+    ...await archiveStmts(ctx.env.VAYU_DB, session, 'event', evId, result ? `Event "${rowToEvent(result).title}"` : '', result),
     ctx.env.VAYU_DB.prepare('DELETE FROM events WHERE id = ?').bind(evId),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'event', evId, 'delete', { actorId: session.userId }),
   ]);
   queueHubNotify(ctx, [{ entity: 'event', id: evId, op: 'delete' }]);
   if (result) {
     const ev = rowToEvent(result);
-    archiveDeletedAsync(ctx, session, 'event', evId, `Event "${ev.title}"`, result);
     logEntityChange(ctx, session, 'deleted', 'event', evId, `Deleted event "${ev.title}"`);
   }
   return json({ success: true });
@@ -3092,6 +3065,7 @@ async function handleContactsDelete(ctx: Ctx): Promise<Response> {
   const result = await db.prepare('SELECT * FROM contacts WHERE id = ?').bind(contactId).first();
   await ensureChangeLogTable(db);
   await db.batch([
+    ...await archiveStmts(db, session, 'contact', contactId, result ? `Contact "${rowToContact(result).name}"` : '', result),
     db.prepare('DELETE FROM contacts WHERE id = ?').bind(contactId),
     db.prepare('DELETE FROM contact_keys WHERE contact_id = ?').bind(contactId),
     // '' (not NULL): its inquiries don't bring the contact straight back.
@@ -3101,7 +3075,6 @@ async function handleContactsDelete(ctx: Ctx): Promise<Response> {
   queueHubNotify(ctx, [{ entity: 'contact', id: contactId, op: 'delete' }]);
   if (result) {
     const c = rowToContact(result);
-    archiveDeletedAsync(ctx, session, 'contact', contactId, `Contact "${c.name}"`, result);
     logEntityChange(ctx, session, 'deleted', 'contact', contactId, `Deleted contact "${c.name}"`);
   }
   return json({ success: true });
@@ -4011,8 +3984,13 @@ const routes: Route[] = [
   // Expenses, private to each person (expenses.ts)
   ...expenseRoutes,
 
+  // My Notes, private to each person (notes.ts)
+  ...noteRoutes,
+
   // Social: WhatsApp invites through the workspace's MSG91 account (social.ts)
   ...socialRoutes,
+  ...socialInboxRoutes,
+  ...socialAnalyticsRoutes,
 
   // Sales ledger (sales.ts)
   ...salesRoutes({ logChange: logEntityChange, notify: queueHubNotify, ensureArtworks: db => ensureColumns(db, 'artworks') }),
@@ -4115,7 +4093,7 @@ const routes: Route[] = [
 
   // Contacts
   // Billing: proformas, tax invoices, challans, notes and the billing setup (invoices.ts).
-  ...invoiceRoutes({ logChange: logEntityChange, notify: queueHubNotify, archive: archiveDeletedAsync, ensureArtworks: db => ensureColumns(db, 'artworks') }),
+  ...invoiceRoutes({ logChange: logEntityChange, notify: queueHubNotify, archive: archiveStmts, ensureArtworks: db => ensureColumns(db, 'artworks') }),
   { method: 'GET', match: isExact('/contacts'), handler: handleContactsList },
   { method: 'POST', match: isExact('/contacts'), handler: handleContactsCreate },
   { method: 'POST', match: isExact('/contacts/import'), handler: handleContactsImport },
@@ -4481,7 +4459,7 @@ export default {
     const ingress = await webhookIngressLimit(request, env);
     if (ingress) return ingress;
     // MSG91's delivery reports and WhatsApp fetching an invite's picture: no sign-in (social.ts).
-    const social = await handleSocialPublic(request, env);
+    const social = await handleSocialPublic(request, env) ?? await handleAnalyticsCallback(request, env);
     if (social) return social;
     // Platform (SaaS) API. Handled first so the legacy wildcard CORS below
     // never applies to cookie-authenticated routes.
@@ -4568,5 +4546,6 @@ export default {
     }
     execCtx.waitUntil(runJob(db, 'payment-reconciliation', () => reconcileAllWorkspaces(env, execCtx)));
     execCtx.waitUntil(runJob(db, 'invites', () => deliverDueInvites(env)));
+    execCtx.waitUntil(runJob(db, 'invite-resend', () => autoResendDue(env)));
   },
 };

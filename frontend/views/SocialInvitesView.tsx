@@ -1,13 +1,16 @@
-// Social: one place for invites on WhatsApp and by email, through the
-// workspace's own MSG91 account. Tabs: Overview (figures, setup, what's
-// coming), Invites, Templates, Audience (who each tag reaches, opt-outs) and
-// Settings. A new invite is four steps; an invite's page shows each person,
-// with search, export, resend-to-failed and cancel. Server: social.ts.
+// Social: invites on WhatsApp and by email through the workspace's own MSG91
+// account, and its Instagram, Facebook and YouTube figures. The home page has
+// the headline figures and two lists — Invites (WhatsApp, Email, Replies,
+// Templates, Who got the invites, Audience) and Analytics (Instagram, YouTube,
+// Facebook Page) — each row opening its own page; Setup and keys is behind
+// the header's gear. A new invite is four steps; an invite's page shows each
+// person, with search, export, resend-to-failed and cancel.
+// Server: social.ts, socialInbox.ts, socialAnalytics.ts.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
-    AlertCircle, AtSign, CalendarCheck, CalendarClock, Check, CheckCheck, ChevronLeft, ChevronRight, CircleDashed, Copy, Download, FileText, LayoutDashboard,
-    Loader2, MailOpen, Megaphone, PlugZap, Plus, RefreshCw, Repeat, RotateCcw, Search, Send, Settings, Tags, Trash2, UserX, Users, X,
+    AlertCircle, AtSign, BarChart3, CalendarCheck, Clapperboard, Eye, ThumbsUp, UserPlus, CalendarClock, Check, CheckCheck, ChevronLeft, ChevronRight, CircleDashed, Copy, Download, FileText,
+    Loader2, Mail, MailOpen, Megaphone, MessageCircle, MessagesSquare, PlugZap, Plus, RefreshCw, Repeat, RotateCcw, Search, Send, Settings, Tags, Trash2, UserCheck, UserX, Users, X,
 } from 'lucide-react';
 import { useBackClose } from '../hooks/useBackClose';
 import { useIsDesktop } from '../hooks/useMediaQuery';
@@ -20,14 +23,18 @@ import { socialService, type Audience, type EmailSender, type Msg91Connection, t
 import { toCsv } from '../invoicingReports';
 import {
     MEDIA_HEADERS, MEDIA_RULES, NAME_TOKEN, SAMPLE, STATUS_LABEL, filledBody, firstName, inviteProblem, readLabel, reached, sendSlots, templateTitle,
-    type Channel, type FieldValues, type Invite, type Recipient, type RecipientStatus, type SocialTemplate,
+    type AnalyticsStatus, type Channel, type FieldValues, type InstagramReport, type Invite, type Recipient, type RecipientStatus, type SocialTemplate,
 } from '../socialRules';
 import type { ContactTag } from '../types';
 import {
-    CHANNEL_ICON, CHANNEL_NAME, MediaPicker, Problem, TONE, TemplateForm, TemplatePage, TemplatePreview, TemplatesPanel, message, spinner, type ChannelFilter,
+    CHANNEL_ICON, CHANNEL_NAME, MediaPicker, Problem, Segmented, SlotInputs, TONE, TemplateForm, TemplatePage, TemplatePreview, TemplatesPanel, message, spinner,
 } from './SocialTemplatesView';
+import { PeopleTab } from './SocialPeopleView';
+import { RepliesTab, ThreadPage } from './SocialRepliesView';
+import { AnalyticsConnections, AnalyticsTab, DayBars, InstaGlyph } from './SocialAnalyticsView';
 
 const fmt = (n: number) => n.toLocaleString('en-IN');
+const compactNum = (n: number) => new Intl.NumberFormat('en-IN', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 const pct = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : '–');
 const when = (ms: number) => new Date(ms).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
 const INVITE_LABEL = { scheduled: 'Scheduled', sending: 'Sending', sent: 'Sent' };
@@ -38,11 +45,17 @@ const WORDS = {
     email: { word: 'emails', audience: 'emails', address: 'email address', anAddress: 'an email address', addressInput: 'email', billing: 'MSG91 bills your account for each email.' },
 } as const;
 
-type Tab = 'overview' | 'invites' | 'templates' | 'audience' | 'settings';
-const TABS: { key: Tab; label: string; Icon: React.ElementType }[] = [
-    { key: 'overview', label: 'Overview', Icon: LayoutDashboard }, { key: 'invites', label: 'Invites', Icon: Send },
-    { key: 'templates', label: 'Templates', Icon: FileText }, { key: 'audience', label: 'Audience', Icon: Users }, { key: 'settings', label: 'Settings', Icon: Settings },
-];
+/** The Social home, and the page each of its rows opens (Setup and keys from the header's gear). */
+type Page = 'home' | 'whatsapp' | 'email' | 'replies' | 'templates' | 'people' | 'audience' | 'instagram' | 'facebook' | 'youtube' | 'settings';
+const PAGES = new Set<Page>(['home', 'whatsapp', 'email', 'replies', 'templates', 'people', 'audience', 'instagram', 'facebook', 'youtube', 'settings']);
+const PAGE_KEY = 'social-page';
+/** The page last open on this device (it survives Meta's and Google's sign-in, which leaves the app and comes back). */
+function savedPage(): Page {
+    try {
+        const p = sessionStorage.getItem(PAGE_KEY) as Page | null;
+        return p && PAGES.has(p) ? p : 'home';
+    } catch { return 'home'; }
+}
 
 /** Where a new invite starts: a channel, template, tags and inputs already chosen ("Use again", "Invite this tag"). */
 export interface Preset { channel?: Channel; templateId?: string; tagIds?: string[]; values?: FieldValues; imageUrl?: string; name?: string }
@@ -51,7 +64,8 @@ type Overlay =
     | { kind: 'compose'; preset: Preset }
     | { kind: 'invite'; id: string }
     | { kind: 'newTemplate'; channel: Channel }
-    | { kind: 'template'; t: SocialTemplate };
+    | { kind: 'template'; t: SocialTemplate }
+    | { kind: 'thread'; phone: string };
 
 /** What a channel still needs before invites can go: the MSG91 account, a WhatsApp number, or the email sender. */
 function setupNeeded(channel: Channel, conn: Msg91Connection | null): string | null {
@@ -74,29 +88,6 @@ function totalsOf(invites: Invite[]) {
 /* ------------------------------- Pieces ------------------------------- */
 
 const ChannelIcon: React.FC<{ channel: Channel; size?: number }> = ({ channel, size = 15 }) => React.createElement(CHANNEL_ICON[channel], { size, strokeWidth: 1.6, 'aria-label': CHANNEL_NAME[channel] });
-
-/** All / WhatsApp / Email. */
-const ChannelSwitch: React.FC<{ value: ChannelFilter; onChange: (c: ChannelFilter) => void }> = ({ value, onChange }) => (
-    <div className="flex gap-2">
-        {(['all', ...CHANNELS] as ChannelFilter[]).map(c => (
-            <Pill key={c} active={value === c} onClick={() => onChange(c)}>{c === 'all' ? 'All' : CHANNEL_NAME[c]}</Pill>
-        ))}
-    </div>
-);
-
-/** The tab row: scrolls sideways on a narrow phone rather than wrapping. */
-const TabBar: React.FC<{ tab: Tab; onTab: (t: Tab) => void; badges: Partial<Record<Tab, number>> }> = ({ tab, onTab, badges }) => (
-    <nav aria-label="Social sections" className="-mx-4 px-4 overflow-x-auto [scrollbar-width:none]">
-        <div className="flex gap-2 w-max pb-0.5">
-            {TABS.map(t => (
-                <Pill key={t.key} active={tab === t.key} onClick={() => onTab(t.key)}>
-                    <t.Icon size={14} className="inline -mt-0.5 mr-1.5" aria-hidden />{t.label}
-                    {!!badges[t.key] && <span className="ml-1.5 text-[11px] tabular-nums opacity-70">{badges[t.key]}</span>}
-                </Pill>
-            ))}
-        </div>
-    </nav>
-);
 
 const inviteLine = (i: Invite): string => (i.status === 'scheduled'
     ? `Goes out ${when(i.sendAt)} · ${fmt(i.counts.total)} people`
@@ -121,7 +112,7 @@ const InviteRows: React.FC<{ invites: Invite[]; onOpen: (id: string) => void }> 
     </ul>
 );
 
-/* ------------------------------- Overview ------------------------------- */
+/* ------------------------------- Home ------------------------------- */
 
 interface Step { done: boolean; title: string; line: string }
 
@@ -157,63 +148,123 @@ const SetupCard: React.FC<{ steps: Step[]; onSettings: () => void; isAdmin: bool
     );
 };
 
-const ChannelCard: React.FC<{ channel: Channel; conn: Msg91Connection | null; invites: Invite[]; canSend: boolean; onNew: () => void; onSetup: () => void }> = ({ channel, conn, invites, canSend, onNew, onSetup }) => {
-    const need = setupNeeded(channel, conn);
-    const t = totalsOf(invites.filter(i => i.channel === channel));
-    let from = 'Not set up';
-    if (!need && conn?.connected) from = channel === 'email' ? conn.email?.from ?? '' : `+${conn.number}`;
-    return (
-        <Card className="space-y-3 text-[var(--neu-text)]">
-            <div className="flex items-center gap-3">
-                <span className="w-10 h-10 shrink-0 rounded-full neu-inset flex items-center justify-center text-brand-900 dark:text-gold-400"><ChannelIcon channel={channel} size={18} /></span>
-                <span className="flex-1 min-w-0">
-                    <span className="block font-serif text-[16px] text-gray-900 dark:text-white">{CHANNEL_NAME[channel]} invites</span>
-                    <span className="block text-[11.5px] text-[var(--neu-text-dim)] truncate">{from}</span>
-                </span>
-                <Badge className={need ? '' : TONE.approved}>{need ? 'Needs setup' : 'Ready'}</Badge>
-            </div>
-            <div className="grid grid-cols-3 gap-2 text-center">
-                {[['Invites', fmt(t.invites)], ['Delivered', pct(t.delivered, t.people)], ['Coming', fmt(t.yes)]].map(([label, value]) => (
-                    <div key={label} className="neu-inset rounded-xl py-2">
-                        <p className="font-serif text-[17px] tabular-nums text-gray-900 dark:text-white">{value}</p>
-                        <p className="text-[10.5px] uppercase tracking-wider text-[var(--neu-text-dim)]">{label}</p>
-                    </div>
-                ))}
-            </div>
-            {need
-                ? <Button block onClick={onSetup} icon={<PlugZap size={15} />}>{need}</Button>
-                : canSend && <Button block variant="primary" onClick={onNew} icon={<Plus size={15} />}>New {CHANNEL_NAME[channel]} invite</Button>}
-        </Card>
-    );
-};
+/** A row on the home page: opens that page. */
+const HubRow: React.FC<{ icon: React.ReactNode; title: string; line: string; status?: React.ReactNode; onClick: () => void }> = ({ icon, title, line, status, onClick }) => (
+    <li className="task-row">
+        <button type="button" onClick={onClick} className="w-full flex items-center gap-3 px-2 py-3 text-left rounded-xl active-scale">
+            <span className="w-10 h-10 shrink-0 rounded-full neu-inset flex items-center justify-center text-brand-900 dark:text-gold-400">{icon}</span>
+            <span className="flex-1 min-w-0">
+                <span className="block font-serif text-[15.5px] leading-snug truncate text-gray-900 dark:text-white">{title}</span>
+                <span className="block mt-0.5 text-[11.5px] text-[var(--neu-text-dim)] truncate">{line}</span>
+            </span>
+            {status}
+            <ChevronRight size={16} className="shrink-0 text-[var(--neu-text-dim)]" aria-hidden />
+        </button>
+    </li>
+);
 
-const Overview: React.FC<{
-    conn: Msg91Connection | null; invites: Invite[]; approved: Record<Channel, number>; isAdmin: boolean; canSend: boolean;
-    go: (t: Tab) => void; compose: (p: Preset) => void; openInvite: (id: string) => void;
-}> = ({ conn, invites, approved, isAdmin, canSend, go, compose, openInvite }) => {
+const countBadge = (n: number, label: string) => (n > 0
+    ? <span className="min-w-5 h-5 px-1.5 rounded-full bg-gold-500 text-white text-[11px] font-semibold flex items-center justify-center" aria-label={`${n} ${label}`}>{n}</span>
+    : null);
+const notConnected = (words = 'Not connected') => <Badge className="hidden sm:inline-flex">{words}</Badge>;
+
+const SECTION_TITLE = 'text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-3';
+
+/** The home page's figures: Instagram's when it is connected, else how invites were delivered. */
+function hubStats(t: ReturnType<typeof totalsOf>, ig: InstagramReport | null) {
+    const first = ig
+        ? [
+            { label: 'Reach', value: fmt(ig.reachDaily.reduce((s, d) => s + d.value, 0)), sub: 'Instagram, 28 days', Icon: Eye },
+            { label: 'Followers', value: fmt(ig.followers), sub: `@${ig.username}`, Icon: UserPlus },
+        ]
+        : [
+            { label: 'Delivered', value: pct(t.delivered, t.people), sub: t.failed ? `${fmt(t.failed)} failed` : fmt(t.delivered), Icon: CheckCheck },
+            { label: 'Read / opened', value: pct(t.read, t.people), sub: fmt(t.read), Icon: MailOpen },
+        ];
+    return [
+        ...first,
+        { label: 'Invited', value: fmt(t.people), sub: t.invites === 1 ? '1 invite' : `${fmt(t.invites)} invites`, Icon: Send },
+        { label: 'Coming', value: fmt(t.yes), sub: 'RSVP yes, WhatsApp and email', Icon: CalendarCheck },
+    ];
+}
+
+/** A connection's line on the home page: not available on this server, not connected, or what is connected. */
+function connectionLine(available: boolean | undefined, connected: boolean | undefined, what: string): string {
+    if (!available) return 'Not switched on yet';
+    return connected ? what : 'Connect under Setup and keys';
+}
+
+function instagramLine(analytics: AnalyticsStatus | null, ig: InstagramReport | null): string {
+    let what = 'No Instagram account on the Page';
+    if (ig) what = `@${ig.username} · ${compactNum(ig.followers)} followers`;
+    else if (analytics?.meta.igUsername) what = `@${analytics.meta.igUsername}`;
+    return connectionLine(analytics?.meta.available, analytics?.meta.connected, what);
+}
+
+const AnalyticsRows: React.FC<{ analytics: AnalyticsStatus | null; ig: InstagramReport | null; go: (p: Page) => void }> = ({ analytics, ig, go }) => (
+    <ul className="neu-card px-2 py-1">
+        <HubRow icon={<InstaGlyph size={18} />} title="Instagram" onClick={() => go('instagram')} line={instagramLine(analytics, ig)}
+            status={analytics?.meta.connected ? undefined : notConnected()} />
+        <HubRow icon={<Clapperboard size={18} strokeWidth={1.5} />} title="YouTube" onClick={() => go('youtube')}
+            line={connectionLine(analytics?.google.available, analytics?.google.connected, analytics?.google.channelTitle ?? '')}
+            status={analytics?.google.connected ? undefined : notConnected()} />
+        <HubRow icon={<ThumbsUp size={18} strokeWidth={1.5} />} title="Facebook Page" onClick={() => go('facebook')}
+            line={connectionLine(analytics?.meta.available, analytics?.meta.connected, analytics?.meta.pageName ?? '')}
+            status={analytics?.meta.connected ? undefined : notConnected()} />
+    </ul>
+);
+
+const Hub: React.FC<{
+    conn: Msg91Connection; invites: Invite[]; approved: Record<Channel, number>; isAdmin: boolean; unread: number;
+    analytics: AnalyticsStatus | null; ig: InstagramReport | null; go: (p: Page) => void; openInvite: (id: string) => void;
+}> = ({ conn, invites, approved, isAdmin, unread, analytics, ig, go, openInvite }) => {
     const t = totalsOf(invites);
     const upcoming = invites.filter(i => i.status === 'scheduled').sort((a, b) => a.sendAt - b.sendAt);
     const recent = invites.filter(i => i.status !== 'scheduled').slice(0, 5);
+    const channelLine = (c: Channel) => {
+        const need = setupNeeded(c, conn);
+        if (need) return need;
+        const ct = totalsOf(invites.filter(i => i.channel === c));
+        return `${fmt(ct.invites)} sent · ${pct(ct.delivered, ct.people)} delivered · ${pct(ct.read, ct.people)} ${readLabel(c).toLowerCase()}`;
+    };
+
     return (
-        <div className="space-y-4">
+        <div className="space-y-5">
             <SetupCard steps={setupSteps(conn, approved)} onSettings={() => go('settings')} isAdmin={isAdmin} />
-            <StatStrip label="All invites" stats={[
-                { label: 'Invited', value: fmt(t.people), sub: t.invites === 1 ? '1 invite' : `${fmt(t.invites)} invites`, Icon: Send },
-                { label: 'Delivered', value: pct(t.delivered, t.people), sub: t.failed ? `${fmt(t.failed)} failed` : fmt(t.delivered), Icon: CheckCheck },
-                { label: 'Read / opened', value: pct(t.read, t.people), sub: fmt(t.read), Icon: MailOpen },
-                { label: 'Coming', value: fmt(t.yes), sub: 'RSVP yes', Icon: CalendarCheck },
-            ]} />
-            <div className="grid md:grid-cols-2 gap-4">
-                {CHANNELS.map(c => <ChannelCard key={c} channel={c} conn={conn} invites={invites} canSend={canSend} onNew={() => compose({ channel: c })} onSetup={() => go('settings')} />)}
-            </div>
-            {upcoming.length > 0 && (
-                <section>
-                    <SectionTitle className="px-3"><CalendarClock size={13} className="inline -mt-0.5 mr-1.5" aria-hidden />Coming up</SectionTitle>
-                    <InviteRows invites={upcoming} onOpen={openInvite} />
-                </section>
+            <StatStrip label="At a glance" stats={hubStats(t, ig)} />
+            {ig && ig.reachDaily.length > 1 && (
+                <Card><SectionTitle>Instagram reach, last 28 days</SectionTitle><DayBars days={ig.reachDaily} label="Instagram accounts reached each day" /></Card>
             )}
+            <div className="grid lg:grid-cols-2 gap-5 lg:items-start">
+                <section className="min-w-0">
+                    <h2 className={SECTION_TITLE}>Invites</h2>
+                    <ul className="neu-card px-2 py-1">
+                        <HubRow icon={<MessageCircle size={18} strokeWidth={1.5} />} title="WhatsApp invites" line={channelLine('whatsapp')} onClick={() => go('whatsapp')}
+                            status={setupNeeded('whatsapp', conn) ? notConnected('Needs setup') : undefined} />
+                        <HubRow icon={<Mail size={18} strokeWidth={1.5} />} title="Email invites" line={channelLine('email')} onClick={() => go('email')}
+                            status={setupNeeded('email', conn) ? notConnected('Needs setup') : undefined} />
+                        <HubRow icon={<MessagesSquare size={18} strokeWidth={1.5} />} title="Replies" onClick={() => go('replies')}
+                            line={unread ? `${fmt(unread)} unread on WhatsApp` : 'WhatsApp conversations; email replies go to your mailbox'} status={countBadge(unread, 'unread')} />
+                        <HubRow icon={<FileText size={18} strokeWidth={1.5} />} title="Templates" onClick={() => go('templates')}
+                            line={`${fmt(approved.whatsapp)} WhatsApp · ${fmt(approved.email)} email approved`} />
+                        <HubRow icon={<UserCheck size={18} strokeWidth={1.5} />} title="Who got the invites" onClick={() => go('people')}
+                            line={t.failed ? `${fmt(t.failed)} failed · send again by hand or automatically` : 'Each person’s delivery, and sending again'} />
+                        <HubRow icon={<Users size={18} strokeWidth={1.5} />} title="Audience" onClick={() => go('audience')} line="Who each tag reaches, and who opted out" />
+                    </ul>
+                </section>
+                <section className="min-w-0">
+                    <h2 className={SECTION_TITLE}>Analytics</h2>
+                    <AnalyticsRows analytics={analytics} ig={ig} go={go} />
+                    {upcoming.length > 0 && (
+                        <div className="mt-5">
+                            <h2 className={SECTION_TITLE}><CalendarClock size={13} className="inline -mt-0.5 mr-1.5" aria-hidden />Coming up</h2>
+                            <InviteRows invites={upcoming} onOpen={openInvite} />
+                        </div>
+                    )}
+                </section>
+            </div>
             <section>
-                <SectionTitle className="px-3" actions={invites.length > 0 ? <Button onClick={() => go('invites')} icon={<ChevronRight size={15} />}>All invites</Button> : undefined}>Recent</SectionTitle>
+                <h2 className={SECTION_TITLE}>Recent invites</h2>
                 {recent.length
                     ? <InviteRows invites={recent} onOpen={openInvite} />
                     : <EmptyState icon={<Megaphone size={22} strokeWidth={1.5} />} title="No invites sent yet" message="Pick a template, choose who gets it by contact tag, and send now or later." />}
@@ -222,17 +273,40 @@ const Overview: React.FC<{
     );
 };
 
+/** WhatsApp invites or Email invites: how they did, and the list. */
+const ChannelInvites: React.FC<{ channel: Channel; conn: Msg91Connection; invites: Invite[]; isAdmin: boolean; canSend: boolean; openInvite: (id: string) => void; compose: () => void; onSetup: () => void }> = ({ channel, conn, invites, isAdmin, canSend, openInvite, compose, onSetup }) => {
+    const need = setupNeeded(channel, conn);
+    if (need) {
+        return <EmptyState icon={<PlugZap size={22} strokeWidth={1.5} />} title={need} message={channel === 'email' ? 'Verify your domain in MSG91, then set it under Setup and keys.' : 'Connect your MSG91 account and WhatsApp number under Setup and keys.'}
+            action={isAdmin ? <Button variant="primary" className="mt-4" icon={<Settings size={15} />} onClick={onSetup}>Setup and keys</Button> : <p className="mt-3 text-[12.5px] text-[var(--neu-text-dim)]">Ask an admin to set it up.</p>} />;
+    }
+    const mine = invites.filter(i => i.channel === channel);
+    const t = totalsOf(mine);
+    return (
+        <div className="space-y-4">
+            <StatStrip label={`${CHANNEL_NAME[channel]} invites`} stats={[
+                { label: 'Invited', value: fmt(t.people), sub: t.invites === 1 ? '1 invite' : `${fmt(t.invites)} invites`, Icon: Send },
+                { label: 'Delivered', value: pct(t.delivered, t.people), sub: t.failed ? `${fmt(t.failed)} failed` : fmt(t.delivered), Icon: CheckCheck },
+                { label: readLabel(channel), value: pct(t.read, t.people), sub: fmt(t.read), Icon: MailOpen },
+                { label: 'Coming', value: fmt(t.yes), sub: 'RSVP yes', Icon: CalendarCheck },
+            ]} footer={WORDS[channel].billing} />
+            <InvitesTab invites={mine} openInvite={openInvite} canSend={canSend} compose={compose} />
+        </div>
+    );
+};
+
 /* ------------------------------- Invites tab ------------------------------- */
 
 type StateFilter = 'all' | Invite['status'];
 
-const InvitesTab: React.FC<{ invites: Invite[]; filter: ChannelFilter; onFilter: (c: ChannelFilter) => void; openInvite: (id: string) => void; canSend: boolean; compose: () => void }> = ({ invites, filter, onFilter, openInvite, canSend, compose }) => {
+/** One channel's invites, searchable and by state. */
+const InvitesTab: React.FC<{ invites: Invite[]; openInvite: (id: string) => void; canSend: boolean; compose: () => void }> = ({ invites, openInvite, canSend, compose }) => {
     const [state, setState] = useState<StateFilter>('all');
     const [query, setQuery] = useState('');
     const q = query.trim().toLowerCase();
-    const byChannel = invites.filter(i => (filter === 'all' || i.channel === filter) && (!q || `${i.name} ${templateTitle(i.templateName)} ${i.createdByName}`.toLowerCase().includes(q)));
-    const shown = byChannel.filter(i => state === 'all' || i.status === state);
-    const count = (s: StateFilter) => byChannel.filter(i => s === 'all' || i.status === s).length;
+    const matching = invites.filter(i => !q || `${i.name} ${templateTitle(i.templateName)} ${i.createdByName}`.toLowerCase().includes(q));
+    const shown = matching.filter(i => state === 'all' || i.status === state);
+    const count = (s: StateFilter) => matching.filter(i => s === 'all' || i.status === s).length;
     return (
         <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
@@ -242,11 +316,8 @@ const InvitesTab: React.FC<{ invites: Invite[]; filter: ChannelFilter; onFilter:
                 </div>
                 {canSend && <Button variant="primary" icon={<Plus size={15} />} onClick={compose}>New invite</Button>}
             </div>
-            <div className="flex flex-wrap gap-x-4 gap-y-2">
-                <ChannelSwitch value={filter} onChange={onFilter} />
-                <div className="flex flex-wrap gap-2">
-                    {(['all', 'scheduled', 'sending', 'sent'] as StateFilter[]).map(s => <Pill key={s} active={state === s} onClick={() => setState(s)}>{s === 'all' ? 'Any state' : INVITE_LABEL[s]} {count(s)}</Pill>)}
-                </div>
+            <div className="flex flex-wrap gap-2">
+                {(['all', 'scheduled', 'sending', 'sent'] as StateFilter[]).map(s => <Pill key={s} active={state === s} onClick={() => setState(s)}>{s === 'all' ? 'Any state' : INVITE_LABEL[s]} {count(s)}</Pill>)}
             </div>
             {shown.length
                 ? <InviteRows invites={shown} onOpen={openInvite} />
@@ -405,15 +476,23 @@ const AccountForm: React.FC<{ conn: Msg91Connection | null; onChange: (c: Msg91C
 };
 
 const SettingsTab: React.FC<{ conn: Msg91Connection | null; isAdmin: boolean; onChange: (c: Msg91Connection) => void }> = ({ conn, isAdmin, onChange }) => {
-    if (!isAdmin) return <EmptyState icon={<Settings size={22} strokeWidth={1.5} />} title="Only an admin can change this" message="Ask an admin to connect MSG91 and set the email sender." />;
+    if (!isAdmin) return <EmptyState icon={<Settings size={22} strokeWidth={1.5} />} title="Only an admin can change this" message="Ask an admin to connect MSG91, set the email sender, or connect Instagram, Facebook and YouTube." />;
     const connected = conn?.connected ? conn : null;
     return (
-        <div className="grid lg:grid-cols-2 gap-4 lg:items-start">
-            <div className="space-y-4">
-                <AccountForm conn={conn} onChange={onChange} />
-                {connected && <EmailSenderForm current={connected.email} onSaved={onChange} />}
+        <div className="space-y-4">
+            <p className="px-3 text-[12.5px] text-[var(--neu-text-dim)]">Keys are stored encrypted and never shown again. Each workspace connects its own accounts.</p>
+            <div className="grid lg:grid-cols-2 gap-4 lg:items-start">
+                <div className="space-y-4">
+                    <SectionTitle className="px-3"><Send size={13} className="inline -mt-0.5 mr-1.5" aria-hidden />Sending invites</SectionTitle>
+                    <AccountForm conn={conn} onChange={onChange} />
+                    {connected && <EmailSenderForm current={connected.email} onSaved={onChange} />}
+                </div>
+                <div className="space-y-4">
+                    {connected && <WebhookCard url={connected.webhookUrl} />}
+                    <SectionTitle className="px-3"><BarChart3 size={13} className="inline -mt-0.5 mr-1.5" aria-hidden />Analytics</SectionTitle>
+                    <AnalyticsConnections isAdmin={isAdmin} />
+                </div>
             </div>
-            {connected && <WebhookCard url={connected.webhookUrl} />}
         </div>
     );
 };
@@ -436,22 +515,6 @@ function sendLabelOf(count: number, later: boolean, confirm: boolean, busy: bool
 }
 
 /** The inputs a template needs when sending: its fields, the place, the end of a link, an offer code. */
-const SlotInputs: React.FC<{ template: SocialTemplate; values: FieldValues; onChange: (v: FieldValues) => void }> = ({ template, values, onChange }) => {
-    const slots = sendSlots(template);
-    // A template from MSG91's panel has numbered fields; the first is nearly always the person's name.
-    const firstNumbered = slots.find(s => /^\d+$/.test(s.key))?.key;
-    if (!slots.length) return <p className="text-[13px] text-[var(--neu-text-dim)]">Nothing to fill in: each person’s name is added for you.</p>;
-    return (
-        <>
-            {slots.map(s => (
-                <Field key={s.key} label={s.label} htmlFor={`inv-${s.key}`} hint={s.key === firstNumbered ? `${NAME_TOKEN} puts each person’s own first name there.` : s.hint}>
-                    <Input id={`inv-${s.key}`} maxLength={200} placeholder={template.samples[s.key] || (SAMPLE as Record<string, string>)[s.key] || ''} value={values[s.key] ?? ''}
-                        onChange={e => onChange({ ...values, [s.key]: e.target.value })} />
-                </Field>
-            ))}
-        </>
-    );
-};
 
 /** Step 1: the channel and an approved template, as cards. */
 const TemplateChooser: React.FC<{ templates: SocialTemplate[]; value: string; onPick: (id: string) => void; onTemplates: () => void }> = ({ templates, value, onPick, onTemplates }) => {
@@ -850,18 +913,70 @@ const TemplateBuilder: React.FC<{ initial: Channel; ready: Record<Channel, boole
     return <TemplateForm key={channel} channel={channel} sender={sender} onDone={onDone} onChannel={setChannel} channels={CHANNELS.filter(c => ready[c])} />;
 };
 
+/** The connection status, and Instagram's figures when it is connected. A failure leaves both empty. */
+async function loadAnalytics(setAnalytics: (a: AnalyticsStatus | null) => void, setIg: (r: InstagramReport | null) => void): Promise<void> {
+    try {
+        const a = await socialService.analytics();
+        setAnalytics(a);
+        setIg(a.meta.connected && a.meta.igUsername ? await socialService.instagram().catch(() => null) : null);
+    } catch {
+        setAnalytics(null);
+    }
+}
+
+/** The line under each page's title. */
+function subtitleOf(page: Page, conn: Msg91Connection | null, sender: string): string {
+    if (page === 'whatsapp') return conn?.connected && conn.number ? `Sent from +${conn.number}` : '';
+    if (page === 'email') return sender ? `Sent from ${sender}` : 'Email sender not set yet';
+    if (page === 'settings') return 'MSG91, Instagram, Facebook and YouTube';
+    if (page !== 'home') return '';
+    return conn && !conn.connected ? 'Not connected to MSG91 yet' : 'Invites, replies and how your channels are doing';
+}
+
+/** Templates, WhatsApp and email apart. */
+const TemplatesPage: React.FC<{
+    channel: Channel; onChannel: (c: Channel) => void; ready: Record<Channel, boolean>; sender: string; canSend: boolean;
+    onNew: () => void; onUse: (t: SocialTemplate) => void; onOpen: (t: SocialTemplate) => void;
+}> = ({ channel, onChannel, ready, sender, canSend, onNew, onUse, onOpen }) => (
+    <div className="space-y-3">
+        <Segmented label="Channel" value={channel} onChange={onChannel} options={[
+            { key: 'whatsapp', label: 'WhatsApp', Icon: MessageCircle }, { key: 'email', label: 'Email', Icon: Mail },
+        ]} />
+        <p className="px-3 text-[12px] text-[var(--neu-text-dim)]">
+            {channel === 'whatsapp'
+                ? 'Meta must approve each WhatsApp template before it can be sent, usually within a day. Approved ones can’t be changed: make a new one instead.'
+                : 'MSG91 checks each email template once. Every email gets your address and an unsubscribe link at the bottom.'}
+        </p>
+        <TemplatesPanel key={channel} filter={channel} ready={ready} sender={sender} canSend={canSend} onNew={onNew} onUse={onUse} onOpen={onOpen} />
+    </div>
+);
+
+const TITLES: Record<Page, string> = {
+    home: 'Social', whatsapp: 'WhatsApp invites', email: 'Email invites', replies: 'Replies', templates: 'Templates', people: 'Who got the invites',
+    audience: 'Audience', instagram: 'Instagram', facebook: 'Facebook Page', youtube: 'YouTube', settings: 'Setup and keys',
+};
+
 export const SocialSpace: React.FC<{ onBack: () => void; onContacts: () => void }> = ({ onBack, onContacts }) => {
     const { can, isAdmin } = useAppChrome();
     const canSend = can('social', 'edit');
-    const [tab, setTab] = useState<Tab>('overview');
-    const [filter, setFilter] = useState<ChannelFilter>('all');
+    const [page, setPage] = useState<Page>(savedPage);
+    const go = useCallback((p: Page) => {
+        setPage(p);
+        try { sessionStorage.setItem(PAGE_KEY, p); } catch { /* private mode: the page just isn't remembered */ }
+    }, []);
+    const [templateChannel, setTemplateChannel] = useState<Channel>('whatsapp');
+    const [unread, setUnread] = useState(0);
     const [overlay, setOverlay] = useState<Overlay | null>(null);
     const [conn, setConn] = useState<Msg91Connection | null>(null);
     const [invites, setInvites] = useState<Invite[] | null>(null);
     const [approved, setApproved] = useState<Record<Channel, number>>({ whatsapp: 0, email: 0 });
+    const [analytics, setAnalytics] = useState<AnalyticsStatus | null>(null);
+    const [ig, setIg] = useState<InstagramReport | null>(null);
     const [failed, setFailed] = useState(false);
     const close = () => setOverlay(null);
     useBackClose(overlay !== null, close);
+    // Back from a page returns to the Social home, as its back arrow does.
+    useBackClose(page !== 'home', () => go('home'));
 
     const ready = useMemo(() => ({ whatsapp: !!conn && !setupNeeded('whatsapp', conn), email: !!conn && !setupNeeded('email', conn) }), [conn]);
     const load = useCallback(async () => {
@@ -873,56 +988,61 @@ export const SocialSpace: React.FC<{ onBack: () => void; onContacts: () => void 
             if (c.connected) {
                 const [tw, te] = await Promise.all((['whatsapp', 'email'] as const).map(ch => socialService.templates(ch).catch(() => [])));
                 setApproved({ whatsapp: tw.filter(t => t.status === 'approved').length, email: te.filter(t => t.status === 'approved').length });
+                if (c.number) socialService.replies().then(r => setUnread(r.threads.filter(t => t.unread).length)).catch(() => undefined);
             }
         } catch { setFailed(true); }
+        // The home page's analytics rows and figures: never in the way of the invites.
+        void loadAnalytics(setAnalytics, setIg);
     }, []);
     useEffect(() => { if (!overlay) void load(); }, [overlay, load]);
 
     const sender = senderName(conn);
-    const compose = (preset: Preset = {}) => setOverlay({ kind: 'compose', preset: preset.channel || filter === 'all' ? preset : { ...preset, channel: filter } });
+    const compose = (preset: Preset = {}) => setOverlay({ kind: 'compose', preset: preset.channel || (page !== 'whatsapp' && page !== 'email') ? preset : { ...preset, channel: page } });
     const openInvite = (id: string) => setOverlay({ kind: 'invite', id });
 
     if (overlay?.kind === 'compose') {
         return <Compose key={JSON.stringify(overlay.preset)} preset={overlay.preset} ready={ready} sender={sender} onBack={close}
-            onTemplates={() => { setTab('templates'); close(); }} onSent={inv => openInvite(inv.id)} />;
+            onTemplates={() => { go('templates'); close(); }} onSent={inv => openInvite(inv.id)} />;
     }
+    if (overlay?.kind === 'thread') return <ThreadPage key={overlay.phone} phone={overlay.phone} canSend={canSend} onBack={close} />;
     if (overlay?.kind === 'invite') return <InviteDetail key={overlay.id} id={overlay.id} canSend={canSend} onBack={close} onUseAgain={compose} onOpen={openInvite} />;
-    if (overlay?.kind === 'newTemplate') return <TemplateBuilder initial={overlay.channel} ready={ready} sender={sender} onDone={() => { setTab('templates'); close(); }} />;
+    if (overlay?.kind === 'newTemplate') return <TemplateBuilder initial={overlay.channel} ready={ready} sender={sender} onDone={() => { go('templates'); close(); }} />;
     if (overlay?.kind === 'template') {
         return <TemplatePage t={overlay.t} sender={sender} canSend={canSend} onBack={close} onUse={() => compose({ channel: overlay.t.channel, templateId: overlay.t.id })} />;
     }
 
-    const anyReady = ready.whatsapp || ready.email;
-    const scheduled = invites?.filter(i => i.status === 'scheduled').length ?? 0;
-    let subtitle = 'Invites on WhatsApp and by email';
-    if (conn && !conn.connected) subtitle = 'Not connected to MSG91 yet';
-    const newTemplateChannel: Channel = filter === 'all' ? (CHANNELS.find(c => ready[c]) ?? 'whatsapp') : filter;
+    const subtitle = subtitleOf(page, conn, sender);
 
     let body: React.ReactNode = spinner;
     if (failed) body = <EmptyState icon={<Megaphone size={22} strokeWidth={1.5} />} title="Social didn’t load" message="Check your connection and try again." action={<Button onClick={() => { void load(); }}>Try again</Button>} />;
     else if (invites && conn) {
-        const views: Record<Tab, React.ReactNode> = {
-            overview: <Overview conn={conn} invites={invites} approved={approved} isAdmin={isAdmin} canSend={canSend} go={setTab} compose={compose} openInvite={openInvite} />,
-            invites: <InvitesTab invites={invites} filter={filter} onFilter={setFilter} openInvite={openInvite} canSend={canSend && anyReady} compose={() => compose()} />,
-            templates: (
-                <div className="space-y-3">
-                    <ChannelSwitch value={filter} onChange={setFilter} />
-                    <TemplatesPanel filter={filter} ready={ready} sender={sender} canSend={canSend} onNew={() => setOverlay({ kind: 'newTemplate', channel: newTemplateChannel })}
-                        onUse={t => compose({ channel: t.channel, templateId: t.id })} onOpen={t => setOverlay({ kind: 'template', t })} />
-                </div>
-            ),
-            audience: <AudienceTab canSend={canSend} ready={ready} compose={compose} onContacts={onContacts} />,
-            settings: <SettingsTab conn={conn} isAdmin={isAdmin} onChange={setConn} />,
-        };
-        body = views[tab];
+        const onSetup = () => go('settings');
+        switch (page) {
+            case 'home': body = <Hub conn={conn} invites={invites} approved={approved} isAdmin={isAdmin} unread={unread} analytics={analytics} ig={ig} go={go} openInvite={openInvite} />; break;
+            case 'whatsapp':
+            case 'email': body = <ChannelInvites channel={page} conn={conn} invites={invites} isAdmin={isAdmin} canSend={canSend} openInvite={openInvite} compose={() => compose({ channel: page })} onSetup={onSetup} />; break;
+            case 'replies': body = <RepliesTab waReady={ready.whatsapp} onOpen={phone => setOverlay({ kind: 'thread', phone })} onUnread={setUnread} />; break;
+            case 'people': body = <PeopleTab canSend={canSend} isAdmin={isAdmin} />; break;
+            case 'templates':
+                body = <TemplatesPage channel={templateChannel} onChannel={setTemplateChannel} ready={ready} sender={sender} canSend={canSend}
+                    onNew={() => setOverlay({ kind: 'newTemplate', channel: templateChannel })} onUse={t => compose({ channel: t.channel, templateId: t.id })} onOpen={t => setOverlay({ kind: 'template', t })} />;
+                break;
+            case 'audience': body = <AudienceTab canSend={canSend} ready={ready} compose={compose} onContacts={onContacts} />; break;
+            case 'settings': body = <SettingsTab conn={conn} isAdmin={isAdmin} onChange={setConn} />; break;
+            default: body = <AnalyticsTab key={page} kind={page} isAdmin={isAdmin} onSetup={onSetup} />;
+        }
     }
 
+    const channelPage = page === 'whatsapp' || page === 'email';
+    const canCompose = canSend && (page === 'home' ? ready.whatsapp || ready.email : channelPage && ready[page]);
     return (
         <PageRoot width="wide">
-            <PageHeader title="Social" subtitle={subtitle} onBack={onBack}
-                actions={canSend && anyReady ? <PrimaryIconButton label="New invite" onClick={() => compose()} icon={<Plus size={16} />} /> : undefined}>
-                <TabBar tab={tab} onTab={setTab} badges={{ invites: scheduled }} />
-            </PageHeader>
+            <PageHeader title={TITLES[page]} subtitle={subtitle || undefined} onBack={page === 'home' ? onBack : () => go('home')}
+                actions={<>
+                    {page === 'home' && <GhostIconButton label="Setup and keys" onClick={() => go('settings')} icon={<Settings size={16} className="text-brand-900 dark:text-gold-400" />} />}
+                    {channelPage && <GhostIconButton label="Templates" onClick={() => { setTemplateChannel(page); go('templates'); }} icon={<FileText size={16} className="text-brand-900 dark:text-gold-400" />} />}
+                    {canCompose && <PrimaryIconButton label="New invite" onClick={() => compose()} icon={<Plus size={16} />} />}
+                </>} />
             <PageBody>{body}</PageBody>
         </PageRoot>
     );

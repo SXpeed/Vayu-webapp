@@ -1,4 +1,7 @@
-import type { Channel, FieldValues, Invite, InviteInput, Recipient, SocialTemplate, TemplateInput } from '../socialRules';
+import type {
+    AnalyticsStatus, Channel, FacebookReport, FieldValues, InstagramReport, Invite, InviteInput, PersonTrack, Recipient, ReplyMessage, ReplyThread, ResendSettings,
+    SocialTemplate, TemplateInput, TrackHistory, YoutubeReport,
+} from '../socialRules';
 import { apiCall as call } from './apiClient';
 
 const json = (method: string, body: unknown): RequestInit => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -46,4 +49,26 @@ export const socialService = {
     /** A new invite, the same message, to the people this one failed to reach. */
     retryFailed: (id: string) => call<Invite>(`/social/invites/${id}/retry`, { method: 'POST' }),
     reach: () => call<Reach>('/social/reach'),
+
+    /** Every contact sent an invite (their latest per channel), those never sent one, and the automatic resend settings. */
+    people: () => call<{ people: PersonTrack[]; never: { contactId: string; name: string }[]; settings: ResendSettings }>('/social/people'),
+    async personHistory(key: string): Promise<TrackHistory[]> { return (await call<{ history: TrackHistory[] }>(`/social/people/${encodeURIComponent(key)}`)).history; },
+    /** The same message again to these people (by their row on the invite); only those it didn't reach. */
+    resend: (recipientIds: string[]) => call<{ invites: number; people: number; problems: string[] }>('/social/resend', json('POST', { recipientIds })),
+    setResendSettings: (s: ResendSettings) => call<ResendSettings>('/social/resend-settings', json('PUT', s)),
+
+    /** WhatsApp conversations; email replies go to `replyTo`. */
+    replies: () => call<{ threads: ReplyThread[]; replyTo: string }>('/social/replies'),
+    thread: (phone: string) => call<{ phone: string; name: string; messages: ReplyMessage[]; lastInAt: number; windowMs: number; optedOut: boolean }>(`/social/replies/${phone}`),
+    async reply(phone: string, message: { text: string } | { templateId: string; values: FieldValues; imageUrl: string }): Promise<void> {
+        await call(`/social/replies/${phone}`, json('POST', message));
+    },
+
+    analytics: () => call<AnalyticsStatus>('/social/analytics'),
+    /** The address of Meta's or Google's sign-in (admins only). */
+    async connectAnalytics(provider: 'meta' | 'google'): Promise<string> { return (await call<{ url: string }>(`/social/analytics/${provider}/start`, { method: 'POST' })).url; },
+    async disconnectAnalytics(provider: 'meta' | 'google'): Promise<void> { await call(`/social/analytics/${provider}`, { method: 'DELETE' }); },
+    instagram: (refresh = false) => call<InstagramReport>(`/social/analytics/instagram${refresh ? '?refresh=1' : ''}`),
+    facebook: (refresh = false) => call<FacebookReport>(`/social/analytics/facebook${refresh ? '?refresh=1' : ''}`),
+    youtube: (refresh = false) => call<YoutubeReport>(`/social/analytics/youtube${refresh ? '?refresh=1' : ''}`),
 };

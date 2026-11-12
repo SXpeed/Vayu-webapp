@@ -59,6 +59,42 @@ async function upload(b, org) {
     return (await res.json()).url;
 }
 
+/** Meta's Graph API and Google's token, YouTube and YouTube Analytics APIs, as far as Social → Analytics uses them: [status, body] or null. */
+function standInAnalytics(req, body) {
+    const url = new URL(req.url, 'http://x');
+    const q = url.searchParams;
+    const path = url.pathname;
+    if (path === '/graph/oauth/access_token') {
+        if (q.get('fb_exchange_token') === 'short') return [200, { access_token: 'long' }];
+        return q.get('code') === 'good' && q.get('client_secret') === 'meta-secret' ? [200, { access_token: 'short' }] : [400, { error: { message: 'Invalid verification code' } }];
+    }
+    if (path === '/graph/me/accounts') return q.get('access_token') === 'long' ? [200, { data: [{ id: 'p0', name: 'Other Page', access_token: 'other' }, { id: 'p1', name: 'Vayu Design', access_token: 'page-token', instagram_business_account: { id: 'ig1', username: 'vayu.design' } }] }] : [401, { error: { message: 'bad token' } }];
+    if (path.startsWith('/graph/') && q.get('access_token') !== 'page-token') return [401, { error: { message: 'Invalid OAuth access token' } }];
+    if (path === '/graph/ig1') return [200, { username: 'vayu.design', followers_count: 12480 }];
+    if (path === '/graph/ig1/media') return [200, { data: [{ id: 'm1', caption: 'Studio walk-through\nmore', media_type: 'VIDEO', media_product_type: 'REELS', timestamp: '2026-11-10T10:00:00+0000', thumbnail_url: 'https://x.example/t.jpg', permalink: 'https://instagram.example/p/1', like_count: 10, comments_count: 2 }] }];
+    if (path === '/graph/m1/insights') return [200, { data: [{ name: 'views', values: [{ value: 100 }] }, { name: 'reach', total_value: { value: 80 } }, { name: 'saved', values: [{ value: 4 }] }, { name: 'ig_reels_avg_watch_time', values: [{ value: 11400 }] }] }];
+    if (path === '/graph/ig1/insights') return [200, { data: [{ name: 'reach', values: [{ value: 5, end_time: '2026-11-10T08:00:00+0000' }, { value: 7, end_time: '2026-11-11T08:00:00+0000' }] }] }];
+    if (path === '/graph/p1') return [200, { name: 'Vayu Design', followers_count: 8930, link: 'https://facebook.example/vayu' }];
+    if (path === '/graph/p1/insights') {
+        return q.get('metric') === 'page_media_view' ? [200, { data: [{ name: 'page_media_view', values: [{ value: 40, end_time: '2026-11-11T08:00:00+0000' }] }] }] : [400, { error: { message: '(#100) The value must be a valid insights metric' } }];
+    }
+    if (path === '/graph/p1/posts') return [200, { data: [{ id: 'f1', message: 'Show opens Friday', created_time: '2026-11-08T10:00:00+0000', reactions: { summary: { total_count: 41 } }, comments: { summary: { total_count: 3 } }, shares: { count: 5 } }] }];
+    if (path === '/google-token') {
+        if (body?.grant_type === 'authorization_code') return body.code === 'good' ? [200, { access_token: 'g-access', refresh_token: 'g-refresh' }] : [400, { error: 'invalid_grant' }];
+        return body?.refresh_token === 'g-refresh' ? [200, { access_token: 'g-access2' }] : [400, { error: 'invalid_grant' }];
+    }
+    if (path.startsWith('/youtube/') || path.startsWith('/yt-analytics/')) {
+        if (!['Bearer g-access', 'Bearer g-access2'].includes(req.headers.authorization)) return [401, { error: { message: 'Login Required' } }];
+        if (path === '/youtube/channels') return [200, { items: [{ id: 'UC1', snippet: { title: 'Vayu Studio' }, statistics: { subscriberCount: '4820', viewCount: '100000', videoCount: '40' } }] }];
+        if (path === '/youtube/videos') return [200, { items: [{ id: 'v1', snippet: { title: 'Inside the show', publishedAt: '2026-11-05T00:00:00Z', thumbnails: { medium: { url: 'https://y.example/t.jpg' } } } }] }];
+        const dims = q.get('dimensions');
+        if (dims === 'day') return [200, { rows: [['2026-11-01', 100, 300, 94, 3], ['2026-11-02', 120, 320, 90, 1]] }];
+        if (dims === 'insightTrafficSourceType') return [200, { rows: [['YT_SEARCH', 50], ['SUBSCRIBER', 20]] }];
+        if (dims === 'video') return [200, { rows: [['v1', 900, 410, 162, 61, 4]] }];
+    }
+    return null;
+}
+
 async function report(hookUrl, payload) {
     const res = await fetch(`${worker.origin}${new URL(hookUrl).pathname}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     return res.status;
@@ -78,9 +114,12 @@ before(async () => {
         let raw = '';
         req.on('data', c => { raw += c; });
         req.on('end', () => {
-            const body = raw ? JSON.parse(raw) : null;
-            calls.push({ method: req.method, path: req.url, key: req.headers.authkey, body });
+            let body = null;
+            try { body = raw ? JSON.parse(raw) : null; } catch { body = Object.fromEntries(new URLSearchParams(raw)); }
+            calls.push({ method: req.method, path: req.url, key: req.headers.authkey, auth: req.headers.authorization, body });
             const answer = (status, data) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)); };
+            const analytics = standInAnalytics(req, body);
+            if (analytics) return answer(...analytics);
             if (req.headers.authkey !== GOOD_KEY) return answer(401, { status: 'fail', hasError: true, errors: 'Unauthorized', code: '401' });
             if (req.url.endsWith('/whatsapp-activation/')) return answer(200, { status: 'success', hasError: false, data: [{ integrated_number: '919800000001' }] });
             if (req.url.includes('/get-template-client/')) {
@@ -100,7 +139,11 @@ before(async () => {
         });
     });
     await new Promise(r => msg91.listen(0, '127.0.0.1', r));
-    worker = await startDevWorker({ vars: { MSG91_API_BASE: `http://127.0.0.1:${msg91.address().port}` } });
+    const base = `http://127.0.0.1:${msg91.address().port}`;
+    worker = await startDevWorker({ vars: {
+        MSG91_API_BASE: base, ANALYTICS_API_BASE: base, SOCIAL_HOUR_MS: '50',
+        META_APP_ID: 'meta-app', META_APP_SECRET: 'meta-secret', YOUTUBE_CLIENT_ID: 'yt-client', YOUTUBE_CLIENT_SECRET: 'yt-secret',
+    } });
     const admin = worker.browser();
     assert.equal((await admin.signIn('admin@example.com', 'provider-admin-password')).status, 200);
     for (const [email, name] of [['owner-a@example.com', 'Roshni Shah'], ['staff-a@example.com', 'Staff A'], ['owner-b@example.com', 'Owner B']]) {
@@ -468,4 +511,146 @@ test('reach: each tag’s contacts on WhatsApp and by email, without those who o
     assert.ok(reach.body.optouts.some(o => o.address === '919811111111') && reach.body.optouts.some(o => o.address === 'meera@example.com'));
     assert.equal(reach.body.totals.optedOut, 2);
     assert.equal((await ownerB.call(app(orgA, '/social/reach'))).status, 404);
+});
+
+test('the rules: who got it, resend settings, the reply window', () => {
+    assert.deepEqual(['read', 'delivered', 'failed', 'sent', 'submitted', 'queued'].map(rules.trackState), ['got', 'got', 'failed', 'waiting', 'waiting', 'waiting']);
+    assert.deepEqual(rules.resendSettingsOf({ on: true, afterHours: '24', tries: 3 }), { on: true, afterHours: 24, tries: 3 });
+    assert.deepEqual(rules.resendSettingsOf({ on: 'yes', afterHours: 5, tries: 9 }), { on: false, afterHours: 6, tries: 1 }); // only the offered choices
+    assert.equal(rules.replyWindowLeft(1000, 1000 + rules.REPLY_WINDOW_MS - 1), 1);
+    assert.equal(rules.replyWindowLeft(1000, 1000 + rules.REPLY_WINDOW_MS), 0);
+    assert.equal(rules.replyWindowLeft(0), 0); // never wrote: closed
+    assert.deepEqual(rules.parseWebhook({ direction: 'inbound', customerNumber: '919822222222', content_type: 'image' }), { kind: 'reply', phone: '919822222222', text: '[image]' });
+});
+
+test('who got the invites: each contact’s latest on each channel, and who was never sent one', async () => {
+    const res = await ownerA.call(app(orgA, '/social/people'));
+    assert.equal(res.status, 200, res.text);
+    const by = name => res.body.people.find(p => p.name === name);
+    assert.deepEqual([by('Anjali Mehta').whatsapp.status, by('Anjali Mehta').rsvp, by('Anjali Mehta').email], ['read', 'yes', null]);
+    assert.equal(by('Dr. Rao').whatsapp.inviteName, 'Opening (again)'); // the resend is their latest
+    assert.deepEqual([by('Meera Iyer').email.status, by('Kabir').email.status], ['read', 'failed']);
+    assert.ok(res.body.never.some(c => c.name === 'Not Tagged'));
+    assert.ok(!res.body.never.some(c => c.name === 'No Phone')); // nothing to send to
+    assert.deepEqual(res.body.settings, { on: false, afterHours: 6, tries: 1 });
+    const history = await ownerA.call(app(orgA, `/social/people/${by('Dr. Rao').key}`));
+    assert.deepEqual(history.body.history.map(h => h.inviteName).filter(n => n.startsWith('Opening')), ['Opening (again)', 'Opening']);
+    assert.equal(history.body.history.find(h => h.inviteName === 'Opening').status, 'failed');
+    assert.equal((await ownerB.call(app(orgB, '/social/people'))).body.people.length, 0);
+});
+
+test('sending again by hand: only to people it didn’t reach, once', async () => {
+    const people = (await ownerA.call(app(orgA, '/social/people'))).body.people;
+    const kabir = people.find(p => p.name === 'Kabir').email;
+    const meera = people.find(p => p.name === 'Meera Iyer').email;
+    assert.equal((await post(ownerA, app(orgA, '/social/resend'), { recipientIds: [meera.recipientId] })).status, 409); // she got it
+    const before = calls.filter(c => c.path.endsWith('/email/send')).length;
+    const made = await post(ownerA, app(orgA, '/social/resend'), { recipientIds: [kabir.recipientId, meera.recipientId] });
+    assert.equal(made.status, 201, made.text);
+    assert.deepEqual([made.body.invites, made.body.people], [1, 1]);
+    await until(() => calls.filter(c => c.path.endsWith('/email/send')).length === before + 1, 'the email to go again');
+    assert.equal(calls.findLast(c => c.path.endsWith('/email/send')).body.recipients[0].to[0].email, 'kabir@example.com');
+    assert.equal((await post(ownerA, app(orgA, '/social/resend'), { recipientIds: [kabir.recipientId] })).status, 409); // already sent again
+    assert.equal((await post(ownerB, app(orgB, '/social/resend'), { recipientIds: [kabir.recipientId] })).status, 409); // not theirs
+});
+
+test('WhatsApp replies: kept as a conversation, answered freely for 24 hours, then only with a template', async () => {
+    const rao = '919822222222';
+    assert.equal(await report(hookUrl, { direction: 'inbound', customerNumber: rao, text: 'Is there parking nearby?' }), 200);
+    const list = await ownerA.call(app(orgA, '/social/replies'));
+    assert.equal(list.status, 200, list.text);
+    const thread = list.body.threads.find(t => t.phone === rao);
+    assert.deepEqual([thread.name, thread.unread, thread.lastText, list.body.replyTo], ['Dr. Rao', 1, 'Is there parking nearby?', 'hello@galleryvayu.com']);
+
+    const open = await ownerA.call(app(orgA, `/social/replies/${rao}`));
+    assert.ok(open.body.messages.some(m => m.dir === 'invite' && m.body.includes('Monsoon Show')));
+    assert.equal(open.body.messages.at(-1).body, 'Is there parking nearby?');
+    assert.equal((await ownerA.call(app(orgA, '/social/replies'))).body.threads.find(t => t.phone === rao).unread, 0);
+
+    const answer = await post(ownerA, app(orgA, `/social/replies/${rao}`), { text: 'Yes, valet at the gate.' });
+    assert.equal(answer.status, 201, answer.text);
+    const sent = calls.findLast(c => c.path.startsWith('/api/v5/whatsapp/whatsapp-outbound-message/?'));
+    assert.deepEqual([sent.body.recipient_number, sent.body.integrated_number, sent.body.text], [rao, '919800000001', 'Yes, valet at the gate.']);
+    assert.equal(new URL(sent.path, 'http://x').searchParams.get('text'), 'Yes, valet at the gate.');
+
+    await new Promise(r => setTimeout(r, 1300)); // "24 hours" in this test (SOCIAL_HOUR_MS = 50)
+    const late = await post(ownerA, app(orgA, `/social/replies/${rao}`), { text: 'Still there?' });
+    assert.deepEqual([late.status, late.body.code], [409, 'window_closed']);
+    const withTemplate = await post(ownerA, app(orgA, `/social/replies/${rao}`), { templateId, values: { event: 'Monsoon Show', date: 'Fri' } });
+    assert.equal(withTemplate.status, 201, withTemplate.text);
+    const after = (await ownerA.call(app(orgA, `/social/replies/${rao}`))).body.messages.filter(m => m.dir === 'out');
+    assert.deepEqual(after.map(m => [m.byName, m.template !== '']), [['Roshni Shah', false], ['Roshni Shah', true]]);
+
+    assert.equal((await post(ownerA, app(orgA, '/social/replies/919811111111'), { text: 'Hi' })).status, 409); // Anjali replied STOP
+    assert.equal((await staffA.call(app(orgA, '/social/replies'))).status, 403);
+    assert.equal((await ownerB.call(app(orgB, '/social/replies'))).body.threads.length, 0);
+});
+
+test('analytics: an admin connects Meta and Google; the figures come back; nothing crosses workspaces', async () => {
+    const status = await ownerA.call(app(orgA, '/social/analytics'));
+    assert.deepEqual([status.body.meta.available, status.body.meta.connected, status.body.google.connected], [true, false, false]);
+    assert.equal((await ownerA.call(app(orgA, '/social/analytics/instagram'))).status, 409); // not connected
+
+    const start = await post(ownerA, app(orgA, '/social/analytics/meta/start'));
+    assert.equal(start.status, 200, start.text);
+    const dialog = new URL(start.body.url);
+    assert.equal(dialog.searchParams.get('client_id'), 'meta-app');
+    const state = dialog.searchParams.get('state');
+    const callback = (p, q) => fetch(`${worker.origin}/api/v2/social/oauth/${p}?${new URLSearchParams(q)}`).then(r => r.text());
+    assert.match(await callback('meta', { code: 'good', state: 'f'.repeat(32) }), /expired/);
+    assert.match(await callback('meta', { code: 'good', state }), /connected/);
+    assert.match(await callback('meta', { code: 'good', state }), /expired/); // once only
+    const connected = (await ownerA.call(app(orgA, '/social/analytics'))).body.meta;
+    assert.deepEqual([connected.connected, connected.pageName, connected.igUsername], [true, 'Vayu Design', 'vayu.design']);
+
+    const ig = (await ownerA.call(app(orgA, '/social/analytics/instagram'))).body;
+    assert.deepEqual([ig.username, ig.followers, ig.reachDaily.length], ['vayu.design', 12480, 2]);
+    assert.deepEqual(ig.posts.map(p => [p.kind, p.caption, p.views, p.reach, p.saves, p.avgWatchSec]), [['Reel', 'Studio walk-through', 100, 80, 4, 11.4]]);
+    const fb = (await ownerA.call(app(orgA, '/social/analytics/facebook'))).body;
+    assert.deepEqual([fb.followers, fb.viewsDaily[0].value, fb.posts[0].reactions, fb.engagementDaily.length], [8930, 40, 41, 0]);
+    assert.ok(fb.problems.some(p => p.startsWith('Daily engagement'))); // a retired metric is reported, not fatal
+
+    const g = await post(ownerA, app(orgA, '/social/analytics/google/start'));
+    assert.match(await callback('google', { code: 'bad', state: new URL(g.body.url).searchParams.get('state') }), /not connected/);
+    const g2 = await post(ownerA, app(orgA, '/social/analytics/google/start'));
+    assert.match(await callback('google', { code: 'good', state: new URL(g2.body.url).searchParams.get('state') }), /connected/);
+    const yt = (await ownerA.call(app(orgA, '/social/analytics/youtube'))).body;
+    assert.deepEqual([yt.title, yt.subscribers, yt.daily.length, yt.sources[0].name, yt.top[0].title, yt.top[0].views], ['Vayu Studio', 4820, 2, 'YT_SEARCH', 'Inside the show', 900]);
+
+    assert.equal((await post(staffA, app(orgA, '/social/analytics/meta/start'))).status, 403);
+    assert.equal((await ownerB.call(app(orgB, '/social/analytics'))).body.meta.connected, false);
+    assert.equal((await ownerA.call(app(orgA, '/social/analytics/meta'), { method: 'DELETE' })).status, 200);
+    assert.equal((await ownerA.call(app(orgA, '/social/analytics'))).body.meta.connected, false);
+});
+
+test('automatic resend: after the chosen time, once, only where reports show it didn’t arrive', async () => {
+    assert.equal((await staffA.call(app(orgA, '/social/resend-settings'), { method: 'PUT', body: { on: true } })).status, 403);
+    const set = await ownerA.call(app(orgA, '/social/resend-settings'), { method: 'PUT', body: { on: true, afterHours: 1, tries: 1 } });
+    assert.deepEqual(set.body, { on: true, afterHours: 1, tries: 1 });
+
+    const tag = (await post(ownerA, app(orgA, '/contact-tags'), { name: 'Auto', color: '' })).body.id;
+    for (const [id, name, phone] of [['a1', 'Asha', '9855555551'], ['a2', 'Bina', '9855555552'], ['a3', 'Chitra', '9855555553']]) {
+        assert.ok((await post(ownerA, app(orgA, '/contacts'), { id, name, phones: [phone], emails: [], tags: [tag], notes: '' })).status < 300);
+    }
+    const made = await post(ownerA, app(orgA, '/social/invites'), { name: 'Preview', templateId, tagIds: [tag], values: { event: 'Preview', date: 'Sat' } });
+    assert.equal(made.status, 201, made.text);
+    const detail = () => ownerA.call(app(orgA, `/social/invites/${made.body.id}`));
+    const sent = await until(async () => { const d = await detail(); return d.body.invite.status === 'sent' && d; }, 'the invite to be sent');
+    const [asha, bina, chitra] = sent.body.recipients;
+    await report(hookUrl, { eventName: 'delivered', customerNumber: asha.phone, crqid: asha.id }); // Asha got it
+    await report(hookUrl, { eventName: 'failed', customerNumber: bina.phone, crqid: bina.id, reason: 'not on WhatsApp' }); // Bina failed; Chitra: no report
+    await new Promise(r => setTimeout(r, 120)); // past "an hour"
+    const bulk = () => calls.filter(c => c.path.endsWith('/whatsapp-outbound-message/bulk/'));
+    const before = bulk().length;
+    await fetch(`${worker.origin}/__scheduled?cron=*/10+*+*+*+*`);
+    await until(() => bulk().length === before + 1, 'the automatic resend');
+    const to = bulk().at(-1).body.payload.template.to_and_components.map(e => e.to[0]).sort();
+    assert.deepEqual(to, [bina.phone, chitra.phone].sort());
+    assert.ok((await ownerA.call(app(orgA, '/social/invites?channel=whatsapp'))).body.invites.some(i => i.name === 'Preview (resend)'));
+
+    await new Promise(r => setTimeout(r, 120));
+    await fetch(`${worker.origin}/__scheduled?cron=*/10+*+*+*+*`);
+    await new Promise(r => setTimeout(r, 800));
+    assert.equal(bulk().length, before + 1); // tries: 1 — not again
+    await ownerA.call(app(orgA, '/social/resend-settings'), { method: 'PUT', body: { on: false } });
 });

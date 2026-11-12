@@ -14,7 +14,7 @@ import storageService from '../services/storageService';
 import { socialService } from '../services/socialService';
 import {
     BUTTON_LIMITS, CATEGORIES, FIELDS, HEADERS, LANGUAGES, MAX_BODY, MAX_BUTTONS, MAX_EMAIL_BODY, MAX_FOOTER, MAX_HEADER_TEXT, MEDIA_HEADERS, MEDIA_RULES, RSVP_BUTTONS,
-    RSVP_NO, RSVP_YES, SAMPLE, fieldLabel, fieldsNeedingSamples, filledBody, parseTemplate, sampleOf, templateFields, templateSlug, templateTitle,
+    NAME_TOKEN, RSVP_NO, RSVP_YES, SAMPLE, fieldLabel, sendSlots, fieldsNeedingSamples, filledBody, parseTemplate, sampleOf, templateFields, templateSlug, templateTitle,
     type ButtonKind, type Category, type Channel, type FieldValues, type HeaderKind, type SocialTemplate, type TemplateButton, type TemplateInput,
 } from '../socialRules';
 
@@ -220,7 +220,42 @@ export const TemplateDetail: React.FC<{ t: SocialTemplate; sender?: string; canS
     );
 };
 
+/** The inputs a template needs filled before sending (not the person's name: that is added for each one). */
+export const SlotInputs: React.FC<{ template: SocialTemplate; values: FieldValues; onChange: (v: FieldValues) => void }> = ({ template, values, onChange }) => {
+    const slots = sendSlots(template);
+    // A template from MSG91's panel has numbered fields; the first is nearly always the person's name.
+    const firstNumbered = slots.find(s => /^\d+$/.test(s.key))?.key;
+    if (!slots.length) return <p className="text-[13px] text-[var(--neu-text-dim)]">Nothing to fill in: each person’s name is added for you.</p>;
+    return (
+        <>
+            {slots.map(s => (
+                <Field key={s.key} label={s.label} htmlFor={`inv-${s.key}`} hint={s.key === firstNumbered ? `${NAME_TOKEN} puts each person’s own first name there.` : s.hint}>
+                    <Input id={`inv-${s.key}`} maxLength={200} placeholder={template.samples[s.key] || (SAMPLE as Record<string, string>)[s.key] || ''} value={values[s.key] ?? ''}
+                        onChange={e => onChange({ ...values, [s.key]: e.target.value })} />
+                </Field>
+            ))}
+        </>
+    );
+};
+
 export type ChannelFilter = 'all' | Channel;
+
+/** Two or three big tabs (WhatsApp | Email, Instagram | Facebook | YouTube): one never mixes with the other. */
+export function Segmented<K extends string>({ value, onChange, options, label }: Readonly<{
+    value: K; onChange: (k: K) => void; label: string; options: { key: K; label: string; Icon: React.ElementType; count?: number }[];
+}>) {
+    return (
+        <div role="tablist" aria-label={label} className={`grid gap-1 p-1 rounded-xl neu-inset ${options.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
+            {options.map(o => (
+                <button key={o.key} type="button" role="tab" aria-selected={value === o.key} onClick={() => onChange(o.key)}
+                    className={`min-w-0 flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg text-[13px] font-medium transition-colors ${value === o.key ? 'neu-card !border-gold-500 text-brand-900 dark:text-gold-400' : 'text-[var(--neu-text-dim)]'}`}>
+                    <o.Icon size={15} className="shrink-0" aria-hidden /><span className="truncate">{o.label}</span>
+                    {!!o.count && <span className="tabular-nums text-[11px] opacity-70">{o.count}</span>}
+                </button>
+            ))}
+        </div>
+    );
+}
 export const CHANNEL_ICON: Record<Channel, React.ElementType> = { whatsapp: MessageCircle, email: Mail };
 export const CHANNEL_NAME: Record<Channel, string> = { whatsapp: 'WhatsApp', email: 'Email' };
 

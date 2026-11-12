@@ -32,6 +32,7 @@
     "staffRoster.ts",
     "sales.ts",
     "expenses.ts",
+    "notes.ts",
     "social.ts",
     "socialRules.ts",
     "invoices.ts",

@@ -579,7 +579,7 @@ const ContactDetails: React.FC<{
                     {related.map(i => (
                         <li key={i.id}>
                             <button type="button" onClick={() => onOpenInquiry(i.id)}
-                                className="w-full neu-raised-sm neu-btn rounded-xl px-3 py-2 flex items-center gap-2 text-left text-[12.5px]">
+                                className="w-full neu-raised-sm neu-btn rounded-xl px-3 py-2 flex items-center gap-2 text-left text-[12.5px] text-gray-900 dark:text-gray-100">
                                 <Search size={12} className="shrink-0 text-gold-600 dark:text-gold-400" />
                                 <span className="flex-1 min-w-0 truncate">{i.inquiryNumber} · {i.status}</span>
                                 <span className="shrink-0 text-[11px] text-[var(--neu-text-dim)]">{dateText(i.date)}</span>

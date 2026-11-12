@@ -478,8 +478,10 @@ export function parseWebhook(raw: unknown): WebhookEvent | null {
     if (!phone) return null;
     const direction = pick(o, 'direction').toLowerCase();
     if (direction === '0' || direction === 'inbound') {
-        const text = buttonText(o.button) || pick(o, 'text', 'message');
-        return text ? { kind: 'reply', phone, text: text.slice(0, 500) } : null;
+        // A photo, voice note or file with no words still belongs in the conversation.
+        const kind = pick(o, 'contentType', 'content_type', 'messageType', 'type').toLowerCase();
+        const text = buttonText(o.button) || pick(o, 'text', 'message', 'caption') || (kind && kind !== 'text' ? `[${kind}]` : '');
+        return text ? { kind: 'reply', phone, text: text.slice(0, 1000) } : null;
     }
     const status = pick(o, 'eventName', 'event_name', 'status', 'event').toLowerCase();
     if (status !== 'sent' && status !== 'delivered' && status !== 'read' && status !== 'failed') return null;
@@ -578,3 +580,63 @@ export function reached(c: Counts, step: 'sent' | 'delivered' | 'read'): number 
 }
 
 export const emptyCounts = (): Counts => ({ total: 0, queued: 0, submitted: 0, sent: 0, delivered: 0, read: 0, failed: 0, yes: 0, no: 0 });
+
+// ── Who got the invites, resending, replies ─────────────────────────────────
+
+/** Where a person's latest invite on a channel stands: got it, not yet, or failed. */
+export type TrackState = 'got' | 'waiting' | 'failed';
+export const trackState = (s: RecipientStatus): TrackState => {
+    if (s === 'delivered' || s === 'read') return 'got';
+    return s === 'failed' ? 'failed' : 'waiting';
+};
+
+/** A person's latest invite on one channel. */
+export interface LatestInvite { recipientId: string; inviteId: string; inviteName: string; address: string; status: RecipientStatus; reason: string; at: number; resent: boolean }
+/** One contact across every invite: their latest on each channel and how many they were sent. */
+export interface PersonTrack { key: string; contactId: string; name: string; whatsapp: LatestInvite | null; email: LatestInvite | null; rsvp: Rsvp; invites: number }
+export interface TrackHistory { recipientId: string; inviteId: string; inviteName: string; channel: Channel; address: string; status: RecipientStatus; reason: string; rsvp: Rsvp; at: number; auto: boolean }
+
+/** Automatic resend: after how long without a delivery, and how many more tries. Same channel, same message. */
+export interface ResendSettings { on: boolean; afterHours: number; tries: number }
+export const RESEND_HOURS = [1, 6, 24] as const;
+export const RESEND_TRIES = [1, 2, 3] as const;
+export const RESEND_OFF: ResendSettings = { on: false, afterHours: 6, tries: 1 };
+
+/** Settings as typed, kept to the choices offered. */
+export function resendSettingsOf(raw: unknown): ResendSettings {
+    const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const pickOf = <T extends number>(list: readonly T[], v: unknown, fallback: T): T => (list.includes(Number(v) as T) ? Number(v) as T : fallback);
+    return { on: r.on === true, afterHours: pickOf(RESEND_HOURS, r.afterHours, 6), tries: pickOf(RESEND_TRIES, r.tries, 1) };
+}
+
+/** WhatsApp lets a business write freely for 24 hours after the person's last message; after that only an approved template. */
+export const REPLY_WINDOW_MS = 24 * 3_600_000;
+export const replyWindowLeft = (lastInAt: number, now = Date.now(), windowMs = REPLY_WINDOW_MS): number => Math.max(0, lastInAt + windowMs - now);
+
+/** A WhatsApp conversation in the list. `phone` is digits. */
+export interface ReplyThread { phone: string; name: string; inviteName: string; rsvp: Rsvp; lastText: string; lastDir: 'in' | 'out'; lastAt: number; lastInAt: number; unread: number }
+/** One line of a conversation: their message, the team's answer, or an invite that went to them. */
+export interface ReplyMessage { id: string; dir: 'in' | 'out' | 'invite'; body: string; template: string; byName: string; at: number; status?: RecipientStatus }
+
+// ── Analytics: Instagram, Facebook Page, YouTube ────────────────────────────
+
+export interface AnalyticsStatus {
+    meta: { available: boolean; connected: boolean; pageName: string; igUsername: string; connectedAt: number };
+    google: { available: boolean; connected: boolean; channelTitle: string; connectedAt: number };
+}
+export interface DayValue { date: string; value: number }
+/** `problems`: parts Meta or Google didn't give (a retired metric, a missing permission), in their words. */
+export interface InstagramReport {
+    username: string; followers: number; reachDaily: DayValue[]; problems: string[]; fetchedAt?: number;
+    posts: { id: string; kind: string; caption: string; at: number; image: string; permalink: string; views: number; reach: number; likes: number; comments: number; shares: number; saves: number; avgWatchSec?: number }[];
+}
+export interface FacebookReport {
+    name: string; followers: number; link: string; viewsDaily: DayValue[]; engagementDaily: DayValue[]; problems: string[]; fetchedAt?: number;
+    posts: { id: string; caption: string; at: number; image: string; permalink: string; reactions: number; comments: number; shares: number }[];
+}
+export interface YoutubeReport {
+    title: string; subscribers: number; totalViews: number; videoCount: number; problems: string[]; fetchedAt?: number;
+    daily: { date: string; views: number; minutes: number; avgViewSec: number; subscribers: number }[];
+    sources: { name: string; views: number }[];
+    top: { id: string; title: string; thumb: string; at: number; views: number; minutes: number; avgViewSec: number; likes: number; comments: number }[];
+}

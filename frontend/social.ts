@@ -25,26 +25,28 @@ import {
     type SocialTemplate, type TemplateButton, type TemplateInput, type WebhookEvent,
 } from './socialRules';
 
-type Handler = (ctx: Ctx) => Promise<Response>;
-type Row = Record<string, unknown>;
+export type Handler = (ctx: Ctx) => Promise<Response>;
+export type Row = Record<string, unknown>;
 export interface SocialRoute { method: string; match: (path: string) => boolean; handler: Handler }
 
 /** People per MSG91 request, and requests per run (the scheduled job carries on every 10 minutes). */
 const CHUNK = 50;
 const CHUNKS_PER_RUN = 20;
-const PENDING = 'social-pending:';
-const ID = String.raw`[\w-]{1,64}`;
+export const PENDING = 'social-pending:';
+export const ID = String.raw`[\w-]{1,64}`;
 const TEMPLATE_PATH = new RegExp(`^/social/templates/(${ID})$`);
 const INVITE_PATH = new RegExp(`^/social/invites/(${ID})$`);
 const RETRY_PATH = new RegExp(`^/social/invites/(${ID})/retry$`);
-const channelOf = (v: unknown): Channel => (v === 'email' ? 'email' : 'whatsapp');
+export const channelOf = (v: unknown): Channel => (v === 'email' ? 'email' : 'whatsapp');
 
 const NEW_COLUMNS: Record<string, Record<string, string>> = {
     social_templates: { channel: "TEXT NOT NULL DEFAULT 'whatsapp'", category: "TEXT NOT NULL DEFAULT 'MARKETING'", spec: "TEXT NOT NULL DEFAULT ''" },
-    social_invites: { channel: "TEXT NOT NULL DEFAULT 'whatsapp'", link_base: "TEXT NOT NULL DEFAULT ''" },
+    social_invites: { channel: "TEXT NOT NULL DEFAULT 'whatsapp'", link_base: "TEXT NOT NULL DEFAULT ''", parent_id: "TEXT NOT NULL DEFAULT ''", auto: 'INTEGER NOT NULL DEFAULT 0' },
+    // A resend's people point back to the first message (origin) and count their tries; `resent` marks a row already sent again.
+    social_recipients: { origin: "TEXT NOT NULL DEFAULT ''", attempt: 'INTEGER NOT NULL DEFAULT 0', resent: 'INTEGER NOT NULL DEFAULT 0' },
 };
 
-function ensureSocialTables(db: D1Database): Promise<void> {
+export function ensureSocialTables(db: D1Database): Promise<void> {
     return runSetupOnce(db, 'socialTables', async () => {
         await db.batch([
             db.prepare('CREATE TABLE IF NOT EXISTS social_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)'),
@@ -66,6 +68,11 @@ function ensureSocialTables(db: D1Database): Promise<void> {
             db.prepare('CREATE INDEX IF NOT EXISTS idx_social_recipients_claim ON social_recipients (claim)'),
             // A WhatsApp number (digits) or an email address (lowercase) that asked not to be messaged.
             db.prepare('CREATE TABLE IF NOT EXISTS social_optouts (phone TEXT PRIMARY KEY, at INTEGER NOT NULL)'),
+            // WhatsApp conversations: what people wrote back (dir 'in') and the team's answers ('out'). Invites themselves stay in social_recipients.
+            db.prepare(`CREATE TABLE IF NOT EXISTS social_messages (
+                id TEXT PRIMARY KEY, phone TEXT NOT NULL, dir TEXT NOT NULL, body TEXT NOT NULL, template TEXT NOT NULL DEFAULT '',
+                by_name TEXT NOT NULL DEFAULT '', at INTEGER NOT NULL, seen INTEGER NOT NULL DEFAULT 0)`),
+            db.prepare('CREATE INDEX IF NOT EXISTS idx_social_messages_phone ON social_messages (phone, at)'),
         ]);
         for (const [table, columns] of Object.entries(NEW_COLUMNS)) {
             for (const [column, definition] of Object.entries(columns)) {
@@ -83,7 +90,7 @@ function ensureSocialTables(db: D1Database): Promise<void> {
 
 interface EmailSender { domain: string; from: string; fromName: string; replyTo: string }
 
-interface Connection {
+export interface Connection {
     /** The WhatsApp number to send from; '' when the account has none (email only). */
     number: string;
     /** Encrypted (platform/secrets.ts); never sent to the app. */
@@ -100,7 +107,7 @@ interface Connection {
 const keyContext = (env: Env) => `${env.ORG_ID}|msg91|authkey`;
 const randomHex = (bytes: number) => Array.from(crypto.getRandomValues(new Uint8Array(bytes))).map(b => b.toString(16).padStart(2, '0')).join('');
 
-async function readConnection(env: Env): Promise<Connection | null> {
+export async function readConnection(env: Env): Promise<Connection | null> {
     const row = await env.VAYU_DB.prepare("SELECT value FROM social_settings WHERE key = 'whatsapp'").first<{ value: string }>();
     return row ? JSON.parse(row.value) as Connection : null;
 }
@@ -108,7 +115,7 @@ async function readConnection(env: Env): Promise<Connection | null> {
 const saveConnection = (env: Env, conn: Connection) =>
     env.VAYU_DB.prepare("INSERT INTO social_settings (key, value) VALUES ('whatsapp', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(JSON.stringify(conn)).run();
 
-async function authKeyOf(env: Env, conn: Connection): Promise<string | null> {
+export async function authKeyOf(env: Env, conn: Connection): Promise<string | null> {
     try {
         return await decryptSecret(env, keyContext(env), conn.authKey);
     } catch (e) {
@@ -117,10 +124,10 @@ async function authKeyOf(env: Env, conn: Connection): Promise<string | null> {
     }
 }
 
-interface Msg91Answer { ok: boolean; status: number; data: any; error: string }
+export interface Msg91Answer { ok: boolean; status: number; data: any; error: string }
 
 /** One MSG91 API call (`path` after /api/v5). A 200 can still be a refusal (hasError), so both are checked. */
-async function msg91(env: Env, authKey: string, method: 'GET' | 'POST', path: string, body?: unknown): Promise<Msg91Answer> {
+export async function msg91(env: Env, authKey: string, method: 'GET' | 'POST', path: string, body?: unknown): Promise<Msg91Answer> {
     // MSG91_API_BASE: tests only, honoured only in development (like RAZORPAY_API_BASE).
     const base = env.PLATFORM_ENV === 'development' && env.MSG91_API_BASE ? env.MSG91_API_BASE.replace(/\/$/, '') : 'https://control.msg91.com';
     try {
@@ -144,13 +151,13 @@ async function msg91(env: Env, authKey: string, method: 'GET' | 'POST', path: st
 const KEY_REFUSED = 'MSG91 did not accept this key. Check it, and turn off "IP security" for it in MSG91 (our servers have no fixed address).';
 
 /** MSG91's refusal as this API's answer: a refused key says how to fix it; anything else, what MSG91 said. */
-const refusal = (res: Msg91Answer, what: string): Response =>
+export const refusal = (res: Msg91Answer, what: string): Response =>
     (res.status === 401 ? err(KEY_REFUSED) : err(`${what}: ${res.error}`, 502));
 
 const apiOrigin = (ctx: Ctx) => ctx.env.API_ORIGIN || ctx.url.origin;
 const hookUrl = (ctx: Ctx, conn: Connection) => `${apiOrigin(ctx)}/api/v2/webhooks/msg91/${ctx.env.ORG_ID}/${conn.hookToken}`;
 /** Where this workspace's public invite addresses start: files, RSVP and unsubscribe links. */
-const linkBase = (ctx: Ctx) => `${apiOrigin(ctx)}/api/v2/social`;
+export const linkBase = (ctx: Ctx) => `${apiOrigin(ctx)}/api/v2/social`;
 
 async function hmacHex(key: string, message: string): Promise<string> {
     const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
@@ -183,7 +190,7 @@ async function publicFileUrl(base: string, orgId: string, conn: Connection, key:
 // ── Who is asking ───────────────────────────────────────────────────────────
 
 /** Signed in, inside a workspace, tables ready. (View / edit is the router's ACCESS_TABLE: section `social`.) */
-async function caller(ctx: Ctx): Promise<SessionData | Response> {
+export async function caller(ctx: Ctx): Promise<SessionData | Response> {
     const session = await getSession(ctx.request, ctx.env.VAYU_KV);
     if (!session) return err('Unauthorized', 401);
     if (!ctx.env.ORG_ID) return err('Invites work inside a workspace. Sign in with your workspace account.', 409);
@@ -191,13 +198,13 @@ async function caller(ctx: Ctx): Promise<SessionData | Response> {
     return session;
 }
 
-async function body(ctx: Ctx): Promise<Record<string, unknown>> {
+export async function body(ctx: Ctx): Promise<Record<string, unknown>> {
     const b = await ctx.request.json().catch(() => null);
     return b && typeof b === 'object' && !Array.isArray(b) ? b as Record<string, unknown> : {};
 }
 
 /** The connection and its key, ready for this channel, or the answer that says what is missing. */
-async function account(ctx: Ctx, channel: Channel): Promise<{ conn: Connection; authKey: string } | Response> {
+export async function account(ctx: Ctx, channel: Channel): Promise<{ conn: Connection; authKey: string } | Response> {
     const conn = await readConnection(ctx.env);
     if (!conn) return err('Connect your MSG91 account first.', 409);
     if (channel === 'whatsapp' && !conn.number) return err('This MSG91 account has no WhatsApp number connected.', 409);
@@ -302,7 +309,7 @@ const connectionDelete: Handler = async (ctx) => {
 
 interface Spec { header: HeaderKind; headerText: string; buttons: TemplateButton[]; samples: FieldValues }
 
-const parseJson = <T>(raw: unknown, fallback: T): T => { try { return JSON.parse(text(raw)) as T; } catch { return fallback; } };
+export const parseJson = <T>(raw: unknown, fallback: T): T => { try { return JSON.parse(text(raw)) as T; } catch { return fallback; } };
 
 /** The stored parts; templates saved before `spec` existed had only a picture and RSVP switch. */
 function specOf(r: Row): Spec {
@@ -311,7 +318,7 @@ function specOf(r: Row): Spec {
     return { header: r.image ? 'image' : 'none', headerText: '', buttons: r.rsvp ? RSVP_BUTTONS : [], samples: {} };
 }
 
-const rowToTemplate = (r: Row): SocialTemplate => ({
+export const rowToTemplate = (r: Row): SocialTemplate => ({
     id: text(r.id), channel: channelOf(r.channel), name: text(r.name), language: text(r.language), category: text(r.category) === 'UTILITY' ? 'UTILITY' : 'MARKETING',
     body: text(r.body), footer: text(r.footer), ...specOf(r),
     status: text(r.status) as SocialTemplate['status'], reason: text(r.reason), createdAt: Number(r.created_at),
@@ -442,7 +449,7 @@ const templatesDelete: Handler = async (ctx) => {
 // ── Audience ────────────────────────────────────────────────────────────────
 
 /** `phone` holds the email address for an email invite. */
-interface Person { contactId: string; name: string; phone: string }
+export interface Person { contactId: string; name: string; phone: string; origin?: string; attempt?: number }
 
 const tagIdsOf = (raw: unknown): string[] =>
     [...new Set((Array.isArray(raw) ? raw : []).filter((v): v is string => typeof v === 'string' && v.length > 0 && v.length <= 128))].slice(0, 20);
@@ -554,12 +561,12 @@ const invitesGet: Handler = async (ctx) => {
     return json({ invite: rowToInvite(ctx.env, row, names.get(text(row.template_id)) ?? '', counts.get(id) ?? emptyCounts()), recipients });
 };
 
-interface Ready { template: SocialTemplate; namespace: string; values: FieldValues; mediaKey: string; mediaUrl: string }
+export interface Ready { template: SocialTemplate; namespace: string; values: FieldValues; mediaKey: string; mediaUrl: string }
 /** What sending needs from a ready invite (the stored file's key stays behind). */
 type ToSend = Omit<Ready, 'mediaKey'>;
 
 /** What both a real invite and a test need: an approved template, its inputs filled, its header file. */
-async function sendable(ctx: Ctx, b: Record<string, unknown>, conn: Connection): Promise<Ready | Response> {
+export async function sendable(ctx: Ctx, b: Record<string, unknown>, conn: Connection): Promise<Ready | Response> {
     const row = await ctx.env.VAYU_DB.prepare('SELECT * FROM social_templates WHERE id = ?').bind(text(b.templateId)).first<Row>();
     if (!row) return err('Choose a template.');
     const template = rowToTemplate(row);
@@ -596,7 +603,7 @@ async function emailPayload(conn: Connection, r: ToSend, links: Links, recipient
 }
 
 /** One request to MSG91 for these people, on the template's channel. */
-async function sendTo(env: Env, conn: Connection, authKey: string, r: ToSend, links: Links, people: { id: string; phone: string; name: string }[]): Promise<Msg91Answer> {
+export async function sendTo(env: Env, conn: Connection, authKey: string, r: ToSend, links: Links, people: { id: string; phone: string; name: string }[]): Promise<Msg91Answer> {
     if (r.template.channel === 'email') return msg91(env, authKey, 'POST', '/email/send', await emailPayload(conn, r, links, people));
     return msg91(env, authKey, 'POST', '/whatsapp/whatsapp-outbound-message/bulk/', whatsappPayload(conn, r, people));
 }
@@ -617,24 +624,64 @@ const testSend: Handler = async (ctx) => {
     return res.ok ? json({ ok: true }) : refusal(res, 'MSG91 did not send it');
 };
 
-/** A new invite to these people, saved and (unless it is for later) sending; gives its id. */
-async function createInvite(ctx: Ctx, session: SessionData, ready: Ready, name: string, tagIds: string[], people: Person[], sendAt: number): Promise<string> {
-    const db = ctx.env.VAYU_DB;
+/** Who made an invite: a person, or the automatic resend. */
+export interface Maker { userId: string; name: string }
+export interface InviteOptions { parentId?: string; auto?: boolean; base: string; start?: (work: Promise<unknown>) => void }
+/** Who an invite goes to, and when (0: now). */
+export interface InviteDraft { name: string; tagIds: string[]; people: Person[]; sendAt: number }
+
+/**
+ * A new invite to these people, saved and (unless it is for later) sending; gives its id.
+ * `start` runs the first send in the background (a request); without it the scheduled job sends it.
+ */
+export async function createInvite(env: Env, maker: Maker, ready: Ready, draft: InviteDraft, opts: InviteOptions): Promise<string> {
+    const { name, tagIds, people, sendAt } = draft;
+    const db = env.VAYU_DB;
     const now = Date.now();
     const id = `inv_${now}_${crypto.randomUUID().slice(0, 8)}`;
     const later = sendAt > now;
-    const rows = people.map(p => db.prepare('INSERT INTO social_recipients (id, invite_id, contact_id, name, phone, status_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(`r_${crypto.randomUUID()}`, id, p.contactId, p.name, p.phone, now));
+    const rows = people.map(p => db.prepare('INSERT INTO social_recipients (id, invite_id, contact_id, name, phone, status_at, origin, attempt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(`r_${crypto.randomUUID()}`, id, p.contactId, p.name, p.phone, now, p.origin ?? '', p.attempt ?? 0));
     // The invite row goes in with the first people: an invite never exists with nobody on it.
-    const invite = db.prepare(`INSERT INTO social_invites (id, channel, name, template_id, tag_ids, vals, image_key, image_url, link_base, status, send_at, created_at, created_by, created_by_name)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, ready.template.channel, name, ready.template.id, JSON.stringify(tagIds), JSON.stringify(ready.values), ready.mediaKey,
-        ready.mediaUrl, linkBase(ctx), later ? 'scheduled' : 'sending', later ? sendAt : now, now, session.userId, session.name);
+    const invite = db.prepare(`INSERT INTO social_invites (id, channel, name, template_id, tag_ids, vals, image_key, image_url, link_base, status, send_at, created_at, created_by, created_by_name, parent_id, auto)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, ready.template.channel, name, ready.template.id, JSON.stringify(tagIds), JSON.stringify(ready.values), ready.mediaKey,
+        ready.mediaUrl, opts.base, later ? 'scheduled' : 'sending', later ? sendAt : now, now, maker.userId, maker.name, opts.parentId ?? '', Number(!!opts.auto));
     await db.batch([invite, ...rows.slice(0, 80)]);
     for (let i = 80; i < rows.length; i += 80) await db.batch(rows.slice(i, i + 80)); // NOSONAR: one write batch at a time keeps the load bounded
     // The scheduled job finishes what this request doesn't (long lists, later send times).
-    await (ctx.env.SHARED_KV ?? ctx.env.VAYU_KV).put(`${PENDING}${ctx.env.ORG_ID}`, '1');
-    if (!later) ctx.execCtx.waitUntil(deliverInvite(ctx.env, id).catch(e => console.error('Sending an invite failed:', e)));
+    await (env.SHARED_KV ?? env.VAYU_KV).put(`${PENDING}${env.ORG_ID}`, '1');
+    if (!later && opts.start) opts.start(deliverInvite(env, id).catch(e => console.error('Sending an invite failed:', e)));
     return id;
+}
+
+/** The message of a sent invite, ready to send again; or why it can't be. */
+export async function readyFromInvite(db: D1Database, invite: Row): Promise<Ready | string> {
+    const row = await db.prepare('SELECT * FROM social_templates WHERE id = ?').bind(invite.template_id).first<Row>();
+    if (!row) return 'Its template was removed, so it can’t be sent again.';
+    const template = rowToTemplate(row);
+    if (template.status !== 'approved') return 'Its template is no longer approved.';
+    return { template, namespace: text(row.namespace), values: parseJson<FieldValues>(invite.vals, {}), mediaKey: text(invite.image_key), mediaUrl: text(invite.image_url) };
+}
+
+/**
+ * The same message again to some of an invite's people, as a new invite linked to it. Each row is
+ * marked resent first (only if it wasn't), so two runs never send to the same person twice.
+ */
+export async function resendRows(env: Env, maker: Maker, invite: Row, ready: Ready, rowIds: string[], opts: InviteOptions): Promise<{ id: string; people: number } | null> {
+    const db = env.VAYU_DB;
+    const claim = crypto.randomUUID();
+    for (let i = 0; i < rowIds.length; i += 90) {
+        const ids = rowIds.slice(i, i + 90);
+        await db.prepare(`UPDATE social_recipients SET resent = 1, claim = ? WHERE resent = 0 AND invite_id = ? AND id IN (${ids.map(() => '?').join(',')})`) // NOSONAR: in turn
+            .bind(claim, invite.id, ...ids).run();
+    }
+    const { results } = await db.prepare(`SELECT id, contact_id, name, phone, origin, attempt FROM social_recipients WHERE claim = ?
+        AND phone NOT IN (SELECT phone FROM social_optouts)`).bind(claim).all<Row>();
+    if (!results.length) return null;
+    const people: Person[] = results.map(r => ({ contactId: text(r.contact_id), name: text(r.name), phone: text(r.phone), origin: text(r.origin) || text(r.id), attempt: Number(r.attempt) + 1 }));
+    const name = `${text(invite.name).replace(/ \((again|resend)\)$/, '')} (${opts.auto ? 'resend' : 'again'})`.slice(0, 120);
+    const id = await createInvite(env, maker, ready, { name, tagIds: parseJson<string[]>(invite.tag_ids, []), people, sendAt: 0 }, { ...opts, parentId: text(invite.parent_id) || text(invite.id) });
+    return { id, people: people.length };
 }
 
 const inviteResponse = async (ctx: Ctx, id: string, templateName: string, people: number) => {
@@ -662,7 +709,7 @@ const invitesCreate: Handler = async (ctx) => {
     const { people } = await audience(ctx.env, tagIds, channel);
     if (!people.length) return err(channel === 'email' ? 'Nobody with those tags has an email address to send to.' : 'Nobody with those tags has a WhatsApp number to send to.');
     if (people.length > MAX_RECIPIENTS) return err(`One invite can go to ${MAX_RECIPIENTS} people. These tags have ${people.length}; split them.`, 409);
-    const id = await createInvite(ctx, session, ready, name, tagIds, people, sendAt);
+    const id = await createInvite(ctx.env, session, ready, { name, tagIds, people, sendAt }, { base: linkBase(ctx), start: w => ctx.execCtx.waitUntil(w) });
     return inviteResponse(ctx, id, ready.template.name, people.length);
 };
 
@@ -690,17 +737,12 @@ const invitesRetry: Handler = async (ctx) => {
     if (invite.status !== 'sent') return err('Wait until this invite has finished sending.', 409);
     const acct = await account(ctx, channelOf(invite.channel));
     if (acct instanceof Response) return acct;
-    const row = await db.prepare('SELECT * FROM social_templates WHERE id = ?').bind(invite.template_id).first<Row>();
-    if (!row) return err('Its template was removed, so it can’t be sent again.', 409);
-    const template = rowToTemplate(row);
-    if (template.status !== 'approved') return err('Its template is no longer approved.', 409);
-    const { results } = await db.prepare(`SELECT contact_id, name, phone FROM social_recipients WHERE invite_id = ? AND status = 'failed'
-        AND phone NOT IN (SELECT phone FROM social_optouts)`).bind(id).all<Row>();
-    const people: Person[] = results.map(r => ({ contactId: text(r.contact_id), name: text(r.name), phone: text(r.phone) }));
-    if (!people.length) return err('Nobody failed on this invite (or they have since opted out).', 409);
-    const ready: Ready = { template, namespace: text(row.namespace), values: parseJson<FieldValues>(invite.vals, {}), mediaKey: text(invite.image_key), mediaUrl: text(invite.image_url) };
-    const newId = await createInvite(ctx, session, ready, `${text(invite.name)} (again)`.slice(0, 120), parseJson<string[]>(invite.tag_ids, []), people, 0);
-    return inviteResponse(ctx, newId, template.name, people.length);
+    const ready = await readyFromInvite(db, invite);
+    if (typeof ready === 'string') return err(ready, 409);
+    const { results } = await db.prepare("SELECT id FROM social_recipients WHERE invite_id = ? AND status = 'failed' AND resent = 0").bind(id).all<{ id: string }>();
+    const made = results.length ? await resendRows(ctx.env, session, invite, ready, results.map(r => r.id), { base: linkBase(ctx), start: w => ctx.execCtx.waitUntil(w) }) : null;
+    if (!made) return err('Nobody failed on this invite (or they have since opted out, or were sent it again).', 409);
+    return inviteResponse(ctx, made.id, ready.template.name, made.people);
 };
 
 export interface TagReach { tagId: string; name: string; contacts: number; whatsapp: number; email: number }
@@ -750,7 +792,7 @@ const failQueued = (db: D1Database, inviteId: string, reason: string) =>
     db.prepare("UPDATE social_recipients SET status = 'failed', reason = ?, status_at = ? WHERE invite_id = ? AND status = 'queued'").bind(reason, Date.now(), inviteId).run();
 
 /** The id MSG91 gave a request, which its reports carry. */
-const requestIdOf = (res: Msg91Answer) => text(res.data?.request_id) || text(res.data?.data?.unique_id);
+export const requestIdOf = (res: Msg91Answer) => text(res.data?.request_id) || text(res.data?.data?.unique_id);
 
 /** Up to a run's worth of chunks to MSG91. Each chunk's people are claimed first, so no run (or crash) sends to them again. */
 async function sendChunks(env: Env, invite: Row, template: Row, conn: Connection, authKey: string): Promise<void> {
@@ -788,7 +830,7 @@ function cannotSend(channel: Channel, conn: Connection | null, authKey: string |
 }
 
 /** Sends an invite's queued people, a chunk at a time; true when nobody is left queued. */
-async function deliverInvite(env: Env, inviteId: string): Promise<boolean> {
+export async function deliverInvite(env: Env, inviteId: string): Promise<boolean> {
     const db = env.VAYU_DB;
     const invite = await db.prepare('SELECT * FROM social_invites WHERE id = ?').bind(inviteId).first<Row>();
     if (!invite || invite.status === 'sent') return true;
@@ -808,7 +850,7 @@ async function deliverInvite(env: Env, inviteId: string): Promise<boolean> {
     return true;
 }
 
-async function orgEnvById(env: Env, orgId: string): Promise<Env | null> {
+export async function orgEnvById(env: Env, orgId: string): Promise<Env | null> {
     if (!env.PLATFORM_DB) return null;
     const org = await env.PLATFORM_DB.prepare("SELECT id, app_storage FROM organizations WHERE id = ? AND status = 'active'")
         .bind(orgId).first<{ id: string; app_storage: 'own' | 'original' }>();
@@ -886,8 +928,9 @@ const optOut = (db: D1Database, address: string) => db.prepare('INSERT OR IGNORE
 const saveRsvp = (db: D1Database, address: string, rsvp: Rsvp) => db.prepare(`UPDATE social_recipients SET rsvp = ? WHERE id = (SELECT id FROM social_recipients
     WHERE phone = ? AND status != 'failed' AND status != 'queued' AND status_at > ? ORDER BY rowid DESC LIMIT 1)`).bind(rsvp, address, Date.now() - 30 * 86_400_000).run();
 
-/** A WhatsApp reply: STOP leaves the number out from now on; yes / no is their RSVP. */
+/** A WhatsApp reply: kept in its conversation; STOP leaves the number out from now on; yes / no is their RSVP. */
 async function applyReply(db: D1Database, ev: ReplyEvent): Promise<void> {
+    await db.prepare("INSERT INTO social_messages (id, phone, dir, body, at) VALUES (?, ?, 'in', ?, ?)").bind(`m_${crypto.randomUUID()}`, ev.phone, ev.text, Date.now()).run();
     if (isStop(ev.text)) {
         await optOut(db, ev.phone);
         return;
