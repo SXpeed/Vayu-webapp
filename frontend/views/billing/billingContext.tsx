@@ -89,7 +89,8 @@ export const BillingProvider: React.FC<{
             if (!doc) throw new Error('That document no longer exists.');
             return doc;
         };
-        const save = (doc: BillingDoc) => latest.current.handlers.handleSaveInvoice({ ...doc, updatedAt: Date.now() });
+        // updatedAt goes back as loaded: the server refuses a save made from an older copy.
+        const save = (doc: BillingDoc) => latest.current.handlers.handleSaveInvoice(doc);
 
         return {
             saveSettings: async (next: BillingSettings) => { await saveBillingSettings(next); },

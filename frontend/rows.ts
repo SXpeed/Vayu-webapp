@@ -245,8 +245,6 @@ export function rowToStore(row: Record<string, unknown>): any {
     latitude: row.latitude as number,
     longitude: row.longitude as number,
     gpsRadius: row.gps_radius as number,
-    wifiRequired: !!(row.wifi_required),
-    wifiSsid: (row.wifi_ssid as string) || '',
     createdAt: row.created_at as number,
   };
 }
@@ -288,7 +286,7 @@ const LITERAL_SEGMENTS = new Set([
   'ticket', 'ws', 'sales',
   'staff-roster', 'shifts', 'publish', 'leaves', 'titles', 'expenses', 'notes',
   'social', 'whatsapp', 'email', 'templates', 'audience', 'test', 'invites', 'retry', 'reach',
-  'people', 'resend', 'resend-settings', 'replies', 'analytics', 'start', 'instagram', 'youtube',
+  'people', 'resend', 'resend-settings', 'replies',
 ]);
 
 export function normalizeRoute(path: string): string {

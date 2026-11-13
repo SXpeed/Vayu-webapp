@@ -8,7 +8,6 @@ import { expenseRoutes } from './expenses';
 import { noteRoutes } from './notes';
 import { deliverDueInvites, handleSocialPublic, socialRoutes } from './social';
 import { autoResendDue, socialInboxRoutes } from './socialInbox';
-import { handleAnalyticsCallback, socialAnalyticsRoutes } from './socialAnalytics';
 import { salesRoutes } from './sales';
 import { ensureInvoicesTable, invoiceRoutes } from './invoices';
 import { paymentLinkRoutes, reconcileAllWorkspaces, routeOrgPaymentEvent } from './paymentLinks';
@@ -3224,9 +3223,7 @@ async function handleContactTagsDelete(ctx: Ctx): Promise<Response> {
 
 // ── Attendance: stores & check-in/out ───────────────────────────────────────
 // Geofenced employee attendance. ALL validation happens here on the server:
-// GPS radius check (haversine), GPS accuracy gate, per-store Wi-Fi strategy
-// (toggleable via the store's wifi_required flag without touching this flow),
-// and every timestamp is the SERVER clock — the phone's clock is never trusted.
+// GPS radius check (haversine), GPS accuracy gate, and every timestamp is the SERVER clock — the phone's clock is never trusted.
 
 const MAX_GPS_ACCURACY = 100; // meters — reject fixes worse than this
 
@@ -3251,8 +3248,6 @@ function ensureStoresTable(db: D1Database): Promise<void> {
         latitude REAL NOT NULL DEFAULT 0,
         longitude REAL NOT NULL DEFAULT 0,
         gps_radius INTEGER NOT NULL DEFAULT 150,
-        wifi_required INTEGER NOT NULL DEFAULT 0,
-        wifi_ssid TEXT NOT NULL DEFAULT '',
         created_at INTEGER NOT NULL DEFAULT 0
       )
     `).run().then(() => undefined));
@@ -3294,23 +3289,10 @@ function gpsFix(body: { lat?: unknown; lng?: unknown; accuracy?: unknown }): { l
   return { lat, lng };
 }
 
-/**
- * Wi-Fi strategy, a per-store toggle. Off: GPS and internet are enough (mobile
- * data allowed). On: the employee must be on the approved store Wi-Fi.
- */
-function storeWifiProblem(store: { wifiRequired: boolean; wifiSsid: string }, body: { connectionType?: unknown; wifiSsid?: unknown }): Response | null {
-  if (!store.wifiRequired) return null;
-  if (body.connectionType !== 'wifi') return err('Please connect to the store Wi-Fi before checking in', 422);
-  const approved = store.wifiSsid.trim().toLowerCase();
-  const reported = text(body.wifiSsid).trim().toLowerCase();
-  if (!approved || reported !== approved) return err('You are not on the approved store Wi-Fi network', 422);
-  return null;
-}
-
 async function validateAttendanceContext(
   ctx: Ctx,
   session: SessionData,
-  body: { storeId?: unknown; lat?: unknown; lng?: unknown; accuracy?: unknown; connectionType?: unknown; wifiSsid?: unknown }
+  body: { storeId?: unknown; lat?: unknown; lng?: unknown; accuracy?: unknown }
 ): Promise<{ ok: true; store: any } | { ok: false; response: Response }> {
   const storeId = typeof body.storeId === 'string' ? body.storeId : '';
   if (!storeId) return { ok: false, response: err('Store is required', 400) };
@@ -3337,9 +3319,6 @@ async function validateAttendanceContext(
   if (distance > store.gpsRadius) {
     return { ok: false, response: err('You are outside the store', 422) };
   }
-
-  const wifi = storeWifiProblem(store, body);
-  if (wifi) return { ok: false, response: wifi };
   return { ok: true, store };
 }
 
@@ -3351,7 +3330,7 @@ async function handleStoresList(ctx: Ctx): Promise<Response> {
   return json((results.results || []).map(rowToStore));
 }
 
-function readStoreBody(body: Record<string, unknown>): { error: Response } | { data: { name: string; latitude: number; longitude: number; gpsRadius: number; wifiRequired: number; wifiSsid: string } } {
+function readStoreBody(body: Record<string, unknown>): { error: Response } | { data: { name: string; latitude: number; longitude: number; gpsRadius: number } } {
   const name = text(body.name).trim();
   const latitude = typeof body.latitude === 'number' ? body.latitude : Number.parseFloat(String(body.latitude));
   const longitude = typeof body.longitude === 'number' ? body.longitude : Number.parseFloat(String(body.longitude));
@@ -3365,8 +3344,6 @@ function readStoreBody(body: Record<string, unknown>): { error: Response } | { d
       latitude,
       longitude,
       gpsRadius,
-      wifiRequired: body.wifiRequired ? 1 : 0,
-      wifiSsid: text(body.wifiSsid).trim(),
     },
   };
 }
@@ -3383,8 +3360,8 @@ async function handleStoresCreate(ctx: Ctx): Promise<Response> {
   await ensureChangeLogTable(ctx.env.VAYU_DB);
   await ctx.env.VAYU_DB.batch([
     ctx.env.VAYU_DB.prepare(
-      'INSERT INTO stores (id, name, latitude, longitude, gps_radius, wifi_required, wifi_ssid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).bind(id, data.name, data.latitude, data.longitude, data.gpsRadius, data.wifiRequired, data.wifiSsid, Date.now()),
+      'INSERT INTO stores (id, name, latitude, longitude, gps_radius, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).bind(id, data.name, data.latitude, data.longitude, data.gpsRadius, Date.now()),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'store', id, 'put', { actorId: session.userId }),
   ]);
   queueHubNotify(ctx, [{ entity: 'store', id, op: 'put' }]);
@@ -3402,8 +3379,8 @@ async function handleStoresUpdate(ctx: Ctx): Promise<Response> {
   if ('error' in parsed) return parsed.error;
   const { data } = parsed;
   const result = await ctx.env.VAYU_DB.prepare(
-    'UPDATE stores SET name = ?, latitude = ?, longitude = ?, gps_radius = ?, wifi_required = ?, wifi_ssid = ? WHERE id = ?'
-  ).bind(data.name, data.latitude, data.longitude, data.gpsRadius, data.wifiRequired, data.wifiSsid, storeId).run();
+    'UPDATE stores SET name = ?, latitude = ?, longitude = ?, gps_radius = ? WHERE id = ?'
+  ).bind(data.name, data.latitude, data.longitude, data.gpsRadius, storeId).run();
   if (!result.meta.changes) return err('Store not found', 404);
   await ensureChangeLogTable(ctx.env.VAYU_DB);
   await ctx.env.VAYU_DB.batch([
@@ -3559,7 +3536,9 @@ async function handleAttendanceRecords(ctx: Ctx): Promise<Response> {
   const to = Number(params.get('to'));
   if (params.get('from') && Number.isFinite(from)) { where.push('check_in_at >= ?'); binds.push(from); }
   if (params.get('to') && Number.isFinite(to)) { where.push('check_in_at < ?'); binds.push(to); }
-  const limit = canManage ? 1000 : 300;
+  // shortcut: a month is one request of up to 10,000 rows (about 320 people checking in daily; the register warns at the cap), page it when a workspace gets there
+  const managerLimit = params.get('from') && params.get('to') ? 10_000 : 1000;
+  const limit = canManage ? managerLimit : 300;
   const filter = where.length ? ' WHERE ' + where.join(' AND ') : '';
   const sql = `SELECT * FROM attendance${filter} ORDER BY check_in_at DESC LIMIT ${limit}`;
   const results = await ctx.env.VAYU_DB.prepare(sql).bind(...binds).all();
@@ -3976,6 +3955,12 @@ const routes: Route[] = [
       return results.map(r => ({ id: String(r.id), name: String(r.name) }));
     },
     canManage: (ctx, session) => sessionCan(ctx, session, 'schedule', 'edit'),
+    managerIds: async (ctx) => {
+      const roles = await getRoles(ctx.env.VAYU_KV);
+      return (await userRecords(ctx.env))
+        .filter(u => u.role === ADMIN_ROLE_ID || atLeast(permissionsFor(roles, u.role).schedule, 'edit'))
+        .map(u => u.id);
+    },
     push: (ctx, userIds, payload) => ctx.execCtx.waitUntil(sendPushToUsers(ctx.env, userIds, payload).catch(e => console.error('Staff roster push failed:', e))),
     logChange: logEntityChange,
     notify: queueHubNotify,
@@ -3990,7 +3975,6 @@ const routes: Route[] = [
   // Social: WhatsApp invites through the workspace's MSG91 account (social.ts)
   ...socialRoutes,
   ...socialInboxRoutes,
-  ...socialAnalyticsRoutes,
 
   // Sales ledger (sales.ts)
   ...salesRoutes({ logChange: logEntityChange, notify: queueHubNotify, ensureArtworks: db => ensureColumns(db, 'artworks') }),
@@ -4459,7 +4443,7 @@ export default {
     const ingress = await webhookIngressLimit(request, env);
     if (ingress) return ingress;
     // MSG91's delivery reports and WhatsApp fetching an invite's picture: no sign-in (social.ts).
-    const social = await handleSocialPublic(request, env) ?? await handleAnalyticsCallback(request, env);
+    const social = await handleSocialPublic(request, env);
     if (social) return social;
     // Platform (SaaS) API. Handled first so the legacy wildcard CORS below
     // never applies to cookie-authenticated routes.

@@ -59,46 +59,6 @@ async function upload(b, org) {
     return (await res.json()).url;
 }
 
-/** Instagram's login and API, and Google's token, YouTube and YouTube Analytics APIs, as far as Social → Analytics uses them: [status, body] or null. */
-function standInAnalytics(req, body) {
-    const url = new URL(req.url, 'http://x');
-    const q = url.searchParams;
-    const path = url.pathname;
-    if (path === '/ig-token') {
-        if (body?.client_id !== 'ig-app' || body?.client_secret !== 'ig-secret' || body?.grant_type !== 'authorization_code') return [400, { error_type: 'OAuthException', code: 400, error_message: 'Invalid client' }];
-        const short = { good: 'short', personal: 'short-p' }[body.code];
-        return short ? [200, { data: [{ access_token: short, user_id: '17841', permissions: 'instagram_business_basic,instagram_business_manage_insights' }] }]
-            : [400, { error_type: 'OAuthException', code: 400, error_message: 'Invalid authorization code' }];
-    }
-    if (path === '/ig/access_token') {
-        const long = { short: 'long', 'short-p': 'long-p' }[q.get('access_token')];
-        return q.get('grant_type') === 'ig_exchange_token' && q.get('client_secret') === 'ig-secret' && long ? [200, { access_token: long, token_type: 'bearer', expires_in: 5183944 }] : [400, { error: { message: 'Invalid token' } }];
-    }
-    if (path.startsWith('/ig/v23.0/')) {
-        const token = q.get('access_token');
-        if (token === 'long-p' && path === '/ig/v23.0/me') return [200, { user_id: '1', username: 'just.me', account_type: 'PERSONAL' }];
-        if (token !== 'long') return [400, { error: { message: 'Error validating access token', type: 'OAuthException', code: 190 } }];
-        if (path === '/ig/v23.0/me') return [200, { user_id: '17841', username: 'vayu.design', account_type: 'BUSINESS', followers_count: 12480 }];
-        if (path === '/ig/v23.0/me/media') return [200, { data: [{ id: 'm1', caption: 'Studio walk-through\nmore', media_type: 'VIDEO', media_product_type: 'REELS', timestamp: '2026-11-10T10:00:00+0000', thumbnail_url: 'https://x.example/t.jpg', permalink: 'https://instagram.example/p/1', like_count: 10, comments_count: 2 }] }];
-        if (path === '/ig/v23.0/m1/insights') return [200, { data: [{ name: 'views', values: [{ value: 100 }] }, { name: 'reach', total_value: { value: 80 } }, { name: 'saved', values: [{ value: 4 }] }, { name: 'ig_reels_avg_watch_time', values: [{ value: 11400 }] }] }];
-        if (path === '/ig/v23.0/17841/insights') return [200, { data: [{ name: 'reach', values: [{ value: 5, end_time: '2026-11-10T08:00:00+0000' }, { value: 7, end_time: '2026-11-11T08:00:00+0000' }] }] }];
-    }
-    if (path === '/google-token') {
-        if (body?.grant_type === 'authorization_code') return body.code === 'good' ? [200, { access_token: 'g-access', refresh_token: 'g-refresh' }] : [400, { error: 'invalid_grant' }];
-        return body?.refresh_token === 'g-refresh' ? [200, { access_token: 'g-access2' }] : [400, { error: 'invalid_grant' }];
-    }
-    if (path.startsWith('/youtube/') || path.startsWith('/yt-analytics/')) {
-        if (!['Bearer g-access', 'Bearer g-access2'].includes(req.headers.authorization)) return [401, { error: { message: 'Login Required' } }];
-        if (path === '/youtube/channels') return [200, { items: [{ id: 'UC1', snippet: { title: 'Vayu Studio' }, statistics: { subscriberCount: '4820', viewCount: '100000', videoCount: '40' } }] }];
-        if (path === '/youtube/videos') return [200, { items: [{ id: 'v1', snippet: { title: 'Inside the show', publishedAt: '2026-11-05T00:00:00Z', thumbnails: { medium: { url: 'https://y.example/t.jpg' } } } }] }];
-        const dims = q.get('dimensions');
-        if (dims === 'day') return [200, { rows: [['2026-11-01', 100, 300, 94, 3], ['2026-11-02', 120, 320, 90, 1]] }];
-        if (dims === 'insightTrafficSourceType') return [200, { rows: [['YT_SEARCH', 50], ['SUBSCRIBER', 20]] }];
-        if (dims === 'video') return [200, { rows: [['v1', 900, 410, 162, 61, 4]] }];
-    }
-    return null;
-}
-
 async function report(hookUrl, payload) {
     const res = await fetch(`${worker.origin}${new URL(hookUrl).pathname}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     return res.status;
@@ -122,8 +82,6 @@ before(async () => {
             try { body = raw ? JSON.parse(raw) : null; } catch { body = Object.fromEntries(new URLSearchParams(raw)); }
             calls.push({ method: req.method, path: req.url, key: req.headers.authkey, auth: req.headers.authorization, body });
             const answer = (status, data) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)); };
-            const analytics = standInAnalytics(req, body);
-            if (analytics) return answer(...analytics);
             if (req.headers.authkey !== GOOD_KEY) return answer(401, { status: 'fail', hasError: true, errors: 'Unauthorized', code: '401' });
             if (req.url.endsWith('/whatsapp-activation/')) return answer(200, { status: 'success', hasError: false, data: [{ integrated_number: '919800000001' }] });
             if (req.url.includes('/get-template-client/')) {
@@ -144,10 +102,7 @@ before(async () => {
     });
     await new Promise(r => msg91.listen(0, '127.0.0.1', r));
     const base = `http://127.0.0.1:${msg91.address().port}`;
-    worker = await startDevWorker({ vars: {
-        MSG91_API_BASE: base, ANALYTICS_API_BASE: base, SOCIAL_HOUR_MS: '50',
-        INSTAGRAM_APP_ID: 'ig-app', INSTAGRAM_APP_SECRET: 'ig-secret', YOUTUBE_CLIENT_ID: 'yt-client', YOUTUBE_CLIENT_SECRET: 'yt-secret',
-    } });
+    worker = await startDevWorker({ vars: { MSG91_API_BASE: base, SOCIAL_HOUR_MS: '50' } });
     const admin = worker.browser();
     assert.equal((await admin.signIn('admin@example.com', 'provider-admin-password')).status, 200);
     for (const [email, name] of [['owner-a@example.com', 'Roshni Shah'], ['staff-a@example.com', 'Staff A'], ['owner-b@example.com', 'Owner B']]) {
@@ -588,48 +543,6 @@ test('WhatsApp replies: kept as a conversation, answered freely for 24 hours, th
     assert.equal((await post(ownerA, app(orgA, '/social/replies/919811111111'), { text: 'Hi' })).status, 409); // Anjali replied STOP
     assert.equal((await staffA.call(app(orgA, '/social/replies'))).status, 403);
     assert.equal((await ownerB.call(app(orgB, '/social/replies'))).body.threads.length, 0);
-});
-
-test('analytics: an admin connects Instagram (its own login) and YouTube; the figures come back; nothing crosses workspaces', async () => {
-    const status = await ownerA.call(app(orgA, '/social/analytics'));
-    assert.deepEqual([status.body.instagram.available, status.body.instagram.connected, status.body.youtube.connected], [true, false, false]);
-    assert.equal((await ownerA.call(app(orgA, '/social/analytics/instagram'))).status, 409); // not connected
-
-    const start = await post(ownerA, app(orgA, '/social/analytics/instagram/start'));
-    assert.equal(start.status, 200, start.text);
-    const login = new URL(start.body.url);
-    assert.equal(login.origin + login.pathname, 'https://www.instagram.com/oauth/authorize'); // Instagram's own login page
-    assert.deepEqual([login.searchParams.get('client_id'), login.searchParams.get('enable_fb_login'), login.searchParams.get('scope')], ['ig-app', '0', 'instagram_business_basic,instagram_business_manage_insights']);
-    assert.ok(login.searchParams.get('redirect_uri').endsWith('/api/v2/social/oauth/instagram'));
-    const state = login.searchParams.get('state');
-    const callback = (p, q) => fetch(`${worker.origin}/api/v2/social/oauth/${p}?${new URLSearchParams(q)}`).then(r => r.text());
-    assert.match(await callback('instagram', { code: 'good', state: 'f'.repeat(32) }), /expired/);
-    assert.match(await callback('instagram', { code: 'good#_', state }), /Instagram connected/); // the "#_" Instagram sometimes adds is not part of the code
-    assert.match(await callback('instagram', { code: 'good', state }), /expired/); // once only
-    assert.equal((await ownerA.call(app(orgA, '/social/analytics'))).body.instagram.username, 'vayu.design');
-
-    const ig = (await ownerA.call(app(orgA, '/social/analytics/instagram'))).body;
-    assert.deepEqual([ig.username, ig.followers, ig.reachDaily.length, ig.problems], ['vayu.design', 12480, 2, []]);
-    assert.deepEqual(ig.posts.map(p => [p.kind, p.caption, p.views, p.reach, p.saves, p.avgWatchSec]), [['Reel', 'Studio walk-through', 100, 80, 4, 11.4]]);
-
-    // A personal account is turned away with what to do; a refused code changes nothing.
-    const again = async () => new URL((await post(ownerA, app(orgA, '/social/analytics/instagram/start'))).body.url).searchParams.get('state');
-    assert.match(await callback('instagram', { code: 'personal', state: await again() }), /personal Instagram account/);
-    assert.match(await callback('instagram', { code: 'bad', state: await again() }), /Invalid authorization code/);
-    assert.equal((await ownerA.call(app(orgA, '/social/analytics'))).body.instagram.username, 'vayu.design');
-
-    const g = await post(ownerA, app(orgA, '/social/analytics/youtube/start'));
-    assert.match(await callback('youtube', { code: 'bad', state: new URL(g.body.url).searchParams.get('state') }), /not connected/);
-    const g2 = await post(ownerA, app(orgA, '/social/analytics/youtube/start'));
-    assert.match(await callback('youtube', { code: 'good', state: new URL(g2.body.url).searchParams.get('state') }), /YouTube connected/);
-    const yt = (await ownerA.call(app(orgA, '/social/analytics/youtube'))).body;
-    assert.deepEqual([yt.title, yt.subscribers, yt.daily.length, yt.sources[0].name, yt.top[0].title, yt.top[0].views], ['Vayu Studio', 4820, 2, 'YT_SEARCH', 'Inside the show', 900]);
-
-    assert.equal((await post(ownerA, app(orgA, '/social/analytics/facebook/start'))).status, 404); // no Facebook any more
-    assert.equal((await post(staffA, app(orgA, '/social/analytics/instagram/start'))).status, 403);
-    assert.equal((await ownerB.call(app(orgB, '/social/analytics'))).body.instagram.connected, false);
-    assert.equal((await ownerA.call(app(orgA, '/social/analytics/instagram'), { method: 'DELETE' })).status, 200);
-    assert.equal((await ownerA.call(app(orgA, '/social/analytics'))).body.instagram.connected, false);
 });
 
 test('automatic resend: after the chosen time, once, only where reports show it didn’t arrive', async () => {

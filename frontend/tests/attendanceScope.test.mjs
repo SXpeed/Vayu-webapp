@@ -7,7 +7,22 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { load } from './helpers/load.mjs';
 
-const { inStore, ALL_STORES } = await load('views/attendance/attendanceUtils.ts');
+const { inStore, ALL_STORES, awayOn } = await load('views/attendance/attendanceUtils.ts');
+
+test('the roster says who is away: approved leave beats a day off, pending leave and other days count nothing', () => {
+    const shifts = [
+        { kind: 'off', employeeId: 'a', date: '2026-11-14' },
+        { kind: 'off', employeeId: 'b', date: '2026-11-13' },
+        { kind: 'shift', employeeId: 'c', date: '2026-11-14' },
+    ];
+    const leaves = [
+        { employeeId: 'a', from: '2026-11-10', to: '2026-11-14', status: 'approved' },
+        { employeeId: 'c', from: '2026-11-14', to: '2026-11-14', status: 'pending' },
+        { employeeId: 'd', from: '2026-11-15', to: '2026-11-16', status: 'approved' },
+    ];
+    assert.deepEqual([...awayOn('2026-11-14', shifts, leaves)], [['a', 'leave']]);
+    assert.deepEqual([...awayOn('2026-11-13', shifts, leaves)], [['b', 'off'], ['a', 'leave']]);
+});
 
 const team = [
     { id: 'a', name: 'Asha', storeId: 'flagship' },

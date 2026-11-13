@@ -617,22 +617,3 @@ export const replyWindowLeft = (lastInAt: number, now = Date.now(), windowMs = R
 export interface ReplyThread { phone: string; name: string; inviteName: string; rsvp: Rsvp; lastText: string; lastDir: 'in' | 'out'; lastAt: number; lastInAt: number; unread: number }
 /** One line of a conversation: their message, the team's answer, or an invite that went to them. */
 export interface ReplyMessage { id: string; dir: 'in' | 'out' | 'invite'; body: string; template: string; byName: string; at: number; status?: RecipientStatus }
-
-// ── Analytics: Instagram, YouTube ───────────────────────────────────────────
-
-export interface AnalyticsStatus {
-    instagram: { available: boolean; connected: boolean; username: string; connectedAt: number };
-    youtube: { available: boolean; connected: boolean; channelTitle: string; connectedAt: number };
-}
-export interface DayValue { date: string; value: number }
-/** `problems`: parts Instagram or Google didn't give (a retired metric, a missing permission), in their words. */
-export interface InstagramReport {
-    username: string; followers: number; reachDaily: DayValue[]; problems: string[]; fetchedAt?: number;
-    posts: { id: string; kind: string; caption: string; at: number; image: string; permalink: string; views: number; reach: number; likes: number; comments: number; shares: number; saves: number; avgWatchSec?: number }[];
-}
-export interface YoutubeReport {
-    title: string; subscribers: number; totalViews: number; videoCount: number; problems: string[]; fetchedAt?: number;
-    daily: { date: string; views: number; minutes: number; avgViewSec: number; subscribers: number }[];
-    sources: { name: string; views: number }[];
-    top: { id: string; title: string; thumb: string; at: number; views: number; minutes: number; avgViewSec: number; likes: number; comments: number }[];
-}

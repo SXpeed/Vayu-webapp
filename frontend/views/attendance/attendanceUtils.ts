@@ -188,6 +188,18 @@ export function inStore<T extends { id: string; storeId?: string }>(team: T[], r
     return { team: team.filter(u => u.storeId === scope || visitors.has(u.id)), records: here };
 }
 
+/** Who the staff roster says is away on a day (yyyy-mm-dd): on approved leave, else on a rostered day off. */
+export function awayOn(
+    iso: string,
+    shifts: { kind: string; employeeId: string | null; date: string }[],
+    leaves: { employeeId: string; from: string; to: string; status: string }[],
+): Map<string, 'leave' | 'off'> {
+    const away = new Map<string, 'leave' | 'off'>();
+    for (const s of shifts) if (s.kind === 'off' && s.employeeId && s.date === iso) away.set(s.employeeId, 'off');
+    for (const l of leaves) if (l.status === 'approved' && l.from <= iso && l.to >= iso) away.set(l.employeeId, 'leave');
+    return away;
+}
+
 export function peopleFrom(team: { id: string; name: string }[], records: AttendanceRecord[]): { id: string; name: string }[] {
     const map = new Map(team.map(u => [u.id, u.name]));
     for (const r of records) if (!map.has(r.employeeId)) map.set(r.employeeId, r.employeeName || 'Former employee');

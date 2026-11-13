@@ -144,6 +144,7 @@ test('leave: ask, keep private, decide, and see what it affects', async () => {
     const asked = await api(neha, '/staff-roster/leaves', { method: 'POST', body: { from: '2026-10-02', to: '2026-10-02', type: 'Personal leave', reason: 'Sister’s engagement' } });
     assert.equal(asked.status, 201, asked.text);
     assert.equal(asked.body.status, 'pending');
+    assert.equal((await api(neha, '/staff-roster/leaves', { method: 'POST', body: { from: '2026-10-01', to: '2026-10-03', type: 'Sick leave' } })).status, 409, 'not twice for the same days');
     assert.equal((await api(neha, '/staff-roster/leaves', { method: 'POST', body: { employeeId: staffId, from: '2026-10-02', to: '2026-10-02', type: 'Sick leave' } })).status, 403, 'not for someone else');
     assert.equal((await api(neha, '/staff-roster/leaves', { method: 'POST', body: { from: '2026-10-05', to: '2026-10-02', type: 'Sick leave' } })).status, 400);
 

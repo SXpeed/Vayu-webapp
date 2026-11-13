@@ -34,7 +34,6 @@ import { authClient, currentWorkspace, refreshCurrentWorkspace } from './service
 import { emailChangeLanding } from './services/emailChange';
 
 /** Views a push-notification click may deep-link into. */
-// social: where Meta's and Google's sign-in send people back (socialAnalytics.ts).
 const PUSH_VIEWS = ['messaging', 'inquiry', 'payments', 'schedule', 'social'] as const;
 type PushView = typeof PUSH_VIEWS[number];
 

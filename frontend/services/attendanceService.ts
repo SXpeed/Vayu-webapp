@@ -14,8 +14,6 @@ export interface CheckInPayload {
     lng: number;
     accuracy: number;
     connectionType: 'wifi' | 'mobile' | 'unknown';
-    /** Wi-Fi network the device is on — validated server-side when required. */
-    wifiSsid?: string;
 }
 
 export interface CheckInResponse {

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import toast from 'react-hot-toast';
-import { Crosshair, Loader2, MapPin, Pencil, Plus, Store as StoreIcon, Trash2, TriangleAlert, Users } from 'lucide-react';
+import { Crosshair, Loader2, MapPin, Pencil, Plus, Store as StoreIcon, Trash2, Users } from 'lucide-react';
 import { AuthUser } from '../../services/authService';
 import { StoreConfig } from '../../types';
 import { attendanceService } from '../../services/attendanceService';
@@ -13,9 +13,9 @@ interface StoresPanelProps {
     onChanged: () => Promise<void>;
 }
 
-const EMPTY_FORM = { name: '', latitude: '', longitude: '', gpsRadius: '150', wifiRequired: false, wifiSsid: '' };
+const EMPTY_FORM = { name: '', latitude: '', longitude: '', gpsRadius: '150' };
 
-/** Admin: the stores people check in at — geofence centre, radius, Wi-Fi. */
+/** Admin: the stores people check in at — geofence centre and radius. */
 export const StoresPanel: React.FC<StoresPanelProps> = ({ stores, team, onChanged }) => {
     // null = form closed, 'new' = adding, otherwise the store being edited.
     const [editing, setEditing] = useState<StoreConfig | 'new' | null>(stores.length === 0 ? 'new' : null);
@@ -29,7 +29,7 @@ export const StoresPanel: React.FC<StoresPanelProps> = ({ stores, team, onChange
         setEditing(s);
         setForm({
             name: s.name, latitude: String(s.latitude), longitude: String(s.longitude),
-            gpsRadius: String(s.gpsRadius), wifiRequired: s.wifiRequired, wifiSsid: s.wifiSsid,
+            gpsRadius: String(s.gpsRadius),
         });
     };
     const close = () => { setEditing(null); setForm({ ...EMPTY_FORM }); };
@@ -60,7 +60,6 @@ export const StoresPanel: React.FC<StoresPanelProps> = ({ stores, team, onChange
             await attendanceService.saveStore({
                 id: editing === 'new' ? undefined : editing.id,
                 name: form.name.trim(), latitude, longitude, gpsRadius,
-                wifiRequired: form.wifiRequired, wifiSsid: form.wifiSsid.trim(),
             });
             toast.success(editing === 'new' ? 'Store added' : 'Store updated');
             close();
@@ -130,12 +129,6 @@ export const StoresPanel: React.FC<StoresPanelProps> = ({ stores, team, onChange
                                 <Users size={12} className="shrink-0 mt-px" />
                                 {people.length ? people.map(u => u.name).join(', ') : 'No one assigned — anyone can check in here'}
                             </p>
-                            {s.wifiRequired && (
-                                <p className="mt-2 text-[11px] text-amber-700 dark:text-amber-400 flex items-start gap-1.5">
-                                    <TriangleAlert size={12} className="shrink-0 mt-px" />
-                                    "Require Wi-Fi" is on — nobody can check in here until it's turned off.
-                                </p>
-                            )}
                         </div>
                     );
                 })}
@@ -178,21 +171,6 @@ export const StoresPanel: React.FC<StoresPanelProps> = ({ stores, team, onChange
                         <label htmlFor="store-radius" className="neu-label">Check-in zone (meters)</label>
                         <input id="store-radius" value={form.gpsRadius} onChange={e => setForm(f => ({ ...f, gpsRadius: e.target.value }))} inputMode="numeric" className="neu-field" />
                         <p className="text-[11px] text-[var(--neu-text-dim)] mt-1.5">How far from the location people can be. 100–200 m works for most shops; phones are rarely more precise than ±30 m indoors.</p>
-                    </div>
-
-                    <div className="neu-inset rounded-2xl p-3 space-y-2">
-                        <label htmlFor="store-wifi-required" className="flex items-center justify-between gap-3 cursor-pointer text-xs font-medium text-[var(--neu-text)]">
-                            <span>Require store Wi-Fi</span>
-                            <button id="store-wifi-required" type="button" role="switch" aria-checked={form.wifiRequired} onClick={() => setForm(f => ({ ...f, wifiRequired: !f.wifiRequired }))} className="neu-toggle" data-on={form.wifiRequired}>
-                                <span className="neu-toggle-knob" />
-                            </button>
-                        </label>
-                        <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
-                            Leave this off. Web browsers can't read the Wi-Fi network name, so with it on every check-in here is refused. The GPS zone is what's checked.
-                        </p>
-                        {form.wifiRequired && (
-                            <input value={form.wifiSsid} onChange={e => setForm(f => ({ ...f, wifiSsid: e.target.value }))} placeholder="Wi-Fi name (SSID)" aria-label="Wi-Fi name" autoComplete="off" spellCheck={false} className="neu-field" />
-                        )}
                     </div>
 
                     <div className="flex gap-2">

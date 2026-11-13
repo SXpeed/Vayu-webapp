@@ -80,15 +80,6 @@ export interface Env {
   // given to outside callers such as the Razorpay webhook. Unset, those use
   // the address the request came in on.
   API_ORIGIN?: string;
-  // Social → Analytics: the platform's Instagram app (Meta app → Instagram API
-  // with Instagram Login) and Google OAuth client (YouTube), both read-only.
-  // Each stays "not set up" until set.
-  INSTAGRAM_APP_ID?: string;
-  INSTAGRAM_APP_SECRET?: string;
-  YOUTUBE_CLIENT_ID?: string;
-  YOUTUBE_CLIENT_SECRET?: string;
-  // Tests only, honoured only when PLATFORM_ENV is "development": a stand-in for Meta's and Google's APIs.
-  ANALYTICS_API_BASE?: string;
   // Tests only, development only: how long "an hour" is for Social's resend delay and WhatsApp's 24-hour reply window.
   SOCIAL_HOUR_MS?: string;
   // "development" relaxes nothing security-relevant except letting a single

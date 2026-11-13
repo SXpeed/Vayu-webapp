@@ -1,15 +1,14 @@
 // Social: invites on WhatsApp and by email through the workspace's own MSG91
-// account, and its Instagram and YouTube figures. The home page has the
-// headline figures and two lists — Invites (WhatsApp, Email, Replies,
-// Templates, Who got the invites, Audience) and Analytics (Instagram,
-// YouTube) — each row opening its own page; Setup and keys is behind
-// the header's gear. A new invite is four steps; an invite's page shows each
-// person, with search, export, resend-to-failed and cancel.
-// Server: social.ts, socialInbox.ts, socialAnalytics.ts.
+// account. The home page has the headline figures and the Invites list
+// (WhatsApp, Email, Replies, Templates, Who got the invites, Audience), each
+// row opening its own page; Setup and keys is behind the header's gear. A new
+// invite is four steps; an invite's page shows each person, with search,
+// export, resend-to-failed and cancel.
+// Server: social.ts, socialInbox.ts.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
-    AlertCircle, AtSign, BarChart3, CalendarCheck, Clapperboard, Eye, UserPlus, CalendarClock, Check, CheckCheck, ChevronLeft, ChevronRight, CircleDashed, Copy, Download, FileText,
+    AlertCircle, AtSign, CalendarCheck, CalendarClock, Check, CheckCheck, ChevronLeft, ChevronRight, CircleDashed, Copy, Download, FileText,
     Loader2, Mail, MailOpen, Megaphone, MessageCircle, MessagesSquare, PlugZap, Plus, RefreshCw, Repeat, RotateCcw, Search, Send, Settings, Tags, Trash2, UserCheck, UserX, Users, X,
 } from 'lucide-react';
 import { useBackClose } from '../hooks/useBackClose';
@@ -23,7 +22,7 @@ import { socialService, type Audience, type EmailSender, type Msg91Connection, t
 import { toCsv } from '../invoicingReports';
 import {
     MEDIA_HEADERS, MEDIA_RULES, NAME_TOKEN, SAMPLE, STATUS_LABEL, filledBody, firstName, inviteProblem, readLabel, reached, sendSlots, templateTitle,
-    type AnalyticsStatus, type Channel, type FieldValues, type InstagramReport, type Invite, type Recipient, type RecipientStatus, type SocialTemplate,
+    type Channel, type FieldValues, type Invite, type Recipient, type RecipientStatus, type SocialTemplate,
 } from '../socialRules';
 import type { ContactTag } from '../types';
 import {
@@ -31,10 +30,8 @@ import {
 } from './SocialTemplatesView';
 import { PeopleTab } from './SocialPeopleView';
 import { RepliesTab, ThreadPage } from './SocialRepliesView';
-import { AnalyticsConnections, AnalyticsTab, DayBars, InstaGlyph } from './SocialAnalyticsView';
 
 const fmt = (n: number) => n.toLocaleString('en-IN');
-const compactNum = (n: number) => new Intl.NumberFormat('en-IN', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 const pct = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : '–');
 const when = (ms: number) => new Date(ms).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
 const INVITE_LABEL = { scheduled: 'Scheduled', sending: 'Sending', sent: 'Sent' };
@@ -46,10 +43,10 @@ const WORDS = {
 } as const;
 
 /** The Social home, and the page each of its rows opens (Setup and keys from the header's gear). */
-type Page = 'home' | 'whatsapp' | 'email' | 'replies' | 'templates' | 'people' | 'audience' | 'instagram' | 'youtube' | 'settings';
-const PAGES = new Set<Page>(['home', 'whatsapp', 'email', 'replies', 'templates', 'people', 'audience', 'instagram', 'youtube', 'settings']);
+type Page = 'home' | 'whatsapp' | 'email' | 'replies' | 'templates' | 'people' | 'audience' | 'settings';
+const PAGES = new Set<Page>(['home', 'whatsapp', 'email', 'replies', 'templates', 'people', 'audience', 'settings']);
 const PAGE_KEY = 'social-page';
-/** The page last open on this device (it survives Meta's and Google's sign-in, which leaves the app and comes back). */
+/** The page last open on this device. */
 function savedPage(): Page {
     try {
         const p = sessionStorage.getItem(PAGE_KEY) as Page | null;
@@ -170,49 +167,20 @@ const notConnected = (words = 'Not connected') => <Badge className="hidden sm:in
 
 const SECTION_TITLE = 'text-xs font-bold text-gray-900 dark:text-gray-100 uppercase tracking-widest mb-3 px-3';
 
-/** The home page's figures: Instagram's when it is connected, else how invites were delivered. */
-function hubStats(t: ReturnType<typeof totalsOf>, ig: InstagramReport | null) {
-    const first = ig
-        ? [
-            { label: 'Reach', value: fmt(ig.reachDaily.reduce((s, d) => s + d.value, 0)), sub: 'Instagram, 28 days', Icon: Eye },
-            { label: 'Followers', value: fmt(ig.followers), sub: `@${ig.username}`, Icon: UserPlus },
-        ]
-        : [
-            { label: 'Delivered', value: pct(t.delivered, t.people), sub: t.failed ? `${fmt(t.failed)} failed` : fmt(t.delivered), Icon: CheckCheck },
-            { label: 'Read / opened', value: pct(t.read, t.people), sub: fmt(t.read), Icon: MailOpen },
-        ];
+/** The home page's figures: how invites were delivered. */
+function hubStats(t: ReturnType<typeof totalsOf>) {
     return [
-        ...first,
+        { label: 'Delivered', value: pct(t.delivered, t.people), sub: t.failed ? `${fmt(t.failed)} failed` : fmt(t.delivered), Icon: CheckCheck },
+        { label: 'Read / opened', value: pct(t.read, t.people), sub: fmt(t.read), Icon: MailOpen },
         { label: 'Invited', value: fmt(t.people), sub: t.invites === 1 ? '1 invite' : `${fmt(t.invites)} invites`, Icon: Send },
         { label: 'Coming', value: fmt(t.yes), sub: 'RSVP yes, WhatsApp and email', Icon: CalendarCheck },
     ];
 }
 
-/** A connection's line on the home page: not available on this server, not connected, or what is connected. */
-function connectionLine(available: boolean | undefined, connected: boolean | undefined, what: string): string {
-    if (!available) return 'Not switched on yet';
-    return connected ? what : 'Connect under Setup and keys';
-}
-
-function instagramLine(analytics: AnalyticsStatus | null, ig: InstagramReport | null): string {
-    const what = ig ? `@${ig.username} · ${compactNum(ig.followers)} followers` : `@${analytics?.instagram.username ?? ''}`;
-    return connectionLine(analytics?.instagram.available, analytics?.instagram.connected, what);
-}
-
-const AnalyticsRows: React.FC<{ analytics: AnalyticsStatus | null; ig: InstagramReport | null; go: (p: Page) => void }> = ({ analytics, ig, go }) => (
-    <ul className="neu-card px-2 py-1">
-        <HubRow icon={<InstaGlyph size={18} />} title="Instagram" onClick={() => go('instagram')} line={instagramLine(analytics, ig)}
-            status={analytics?.instagram.connected ? undefined : notConnected()} />
-        <HubRow icon={<Clapperboard size={18} strokeWidth={1.5} />} title="YouTube" onClick={() => go('youtube')}
-            line={connectionLine(analytics?.youtube.available, analytics?.youtube.connected, analytics?.youtube.channelTitle ?? '')}
-            status={analytics?.youtube.connected ? undefined : notConnected()} />
-    </ul>
-);
-
 const Hub: React.FC<{
     conn: Msg91Connection; invites: Invite[]; approved: Record<Channel, number>; isAdmin: boolean; unread: number;
-    analytics: AnalyticsStatus | null; ig: InstagramReport | null; go: (p: Page) => void; openInvite: (id: string) => void;
-}> = ({ conn, invites, approved, isAdmin, unread, analytics, ig, go, openInvite }) => {
+    go: (p: Page) => void; openInvite: (id: string) => void;
+}> = ({ conn, invites, approved, isAdmin, unread, go, openInvite }) => {
     const t = totalsOf(invites);
     const upcoming = invites.filter(i => i.status === 'scheduled').sort((a, b) => a.sendAt - b.sendAt);
     const recent = invites.filter(i => i.status !== 'scheduled').slice(0, 5);
@@ -226,10 +194,7 @@ const Hub: React.FC<{
     return (
         <div className="space-y-5">
             <SetupCard steps={setupSteps(conn, approved)} onSettings={() => go('settings')} isAdmin={isAdmin} />
-            <StatStrip label="At a glance" stats={hubStats(t, ig)} />
-            {ig && ig.reachDaily.length > 1 && (
-                <Card><SectionTitle>Instagram reach, last 28 days</SectionTitle><DayBars days={ig.reachDaily} label="Instagram accounts reached each day" /></Card>
-            )}
+            <StatStrip label="At a glance" stats={hubStats(t)} />
             <div className="grid lg:grid-cols-2 gap-5 lg:items-start">
                 <section className="min-w-0">
                     <h2 className={SECTION_TITLE}>Invites</h2>
@@ -247,16 +212,12 @@ const Hub: React.FC<{
                         <HubRow icon={<Users size={18} strokeWidth={1.5} />} title="Audience" onClick={() => go('audience')} line="Who each tag reaches, and who opted out" />
                     </ul>
                 </section>
-                <section className="min-w-0">
-                    <h2 className={SECTION_TITLE}>Analytics</h2>
-                    <AnalyticsRows analytics={analytics} ig={ig} go={go} />
-                    {upcoming.length > 0 && (
-                        <div className="mt-5">
-                            <h2 className={SECTION_TITLE}><CalendarClock size={13} className="inline -mt-0.5 mr-1.5" aria-hidden />Coming up</h2>
-                            <InviteRows invites={upcoming} onOpen={openInvite} />
-                        </div>
-                    )}
-                </section>
+                {upcoming.length > 0 && (
+                    <section className="min-w-0">
+                        <h2 className={SECTION_TITLE}><CalendarClock size={13} className="inline -mt-0.5 mr-1.5" aria-hidden />Coming up</h2>
+                        <InviteRows invites={upcoming} onOpen={openInvite} />
+                    </section>
+                )}
             </div>
             <section>
                 <h2 className={SECTION_TITLE}>Recent invites</h2>
@@ -471,7 +432,7 @@ const AccountForm: React.FC<{ conn: Msg91Connection | null; onChange: (c: Msg91C
 };
 
 const SettingsTab: React.FC<{ conn: Msg91Connection | null; isAdmin: boolean; onChange: (c: Msg91Connection) => void }> = ({ conn, isAdmin, onChange }) => {
-    if (!isAdmin) return <EmptyState icon={<Settings size={22} strokeWidth={1.5} />} title="Only an admin can change this" message="Ask an admin to connect MSG91, set the email sender, or connect Instagram and YouTube." />;
+    if (!isAdmin) return <EmptyState icon={<Settings size={22} strokeWidth={1.5} />} title="Only an admin can change this" message="Ask an admin to connect MSG91 or set the email sender." />;
     const connected = conn?.connected ? conn : null;
     return (
         <div className="space-y-4">
@@ -484,8 +445,6 @@ const SettingsTab: React.FC<{ conn: Msg91Connection | null; isAdmin: boolean; on
                 </div>
                 <div className="space-y-4">
                     {connected && <WebhookCard url={connected.webhookUrl} />}
-                    <SectionTitle className="px-3"><BarChart3 size={13} className="inline -mt-0.5 mr-1.5" aria-hidden />Analytics</SectionTitle>
-                    <AnalyticsConnections isAdmin={isAdmin} />
                 </div>
             </div>
         </div>
@@ -908,22 +867,11 @@ const TemplateBuilder: React.FC<{ initial: Channel; ready: Record<Channel, boole
     return <TemplateForm key={channel} channel={channel} sender={sender} onDone={onDone} onChannel={setChannel} channels={CHANNELS.filter(c => ready[c])} />;
 };
 
-/** The connection status, and Instagram's figures when it is connected. A failure leaves both empty. */
-async function loadAnalytics(setAnalytics: (a: AnalyticsStatus | null) => void, setIg: (r: InstagramReport | null) => void): Promise<void> {
-    try {
-        const a = await socialService.analytics();
-        setAnalytics(a);
-        setIg(a.instagram.connected ? await socialService.instagram().catch(() => null) : null);
-    } catch {
-        setAnalytics(null);
-    }
-}
-
 /** The line under each page's title. */
 function subtitleOf(page: Page, conn: Msg91Connection | null, sender: string): string {
     if (page === 'whatsapp') return conn?.connected && conn.number ? `Sent from +${conn.number}` : '';
     if (page === 'email') return sender ? `Sent from ${sender}` : 'Email sender not set yet';
-    if (page === 'settings') return 'MSG91, Instagram and YouTube';
+    if (page === 'settings') return 'MSG91';
     if (page !== 'home') return '';
     return conn && !conn.connected ? 'Not connected to MSG91 yet' : 'Invites, replies and how your channels are doing';
 }
@@ -948,7 +896,7 @@ const TemplatesPage: React.FC<{
 
 const TITLES: Record<Page, string> = {
     home: 'Social', whatsapp: 'WhatsApp invites', email: 'Email invites', replies: 'Replies', templates: 'Templates', people: 'Who got the invites',
-    audience: 'Audience', instagram: 'Instagram', youtube: 'YouTube', settings: 'Setup and keys',
+    audience: 'Audience', settings: 'Setup and keys',
 };
 
 export const SocialSpace: React.FC<{ onBack: () => void; onContacts: () => void }> = ({ onBack, onContacts }) => {
@@ -965,8 +913,6 @@ export const SocialSpace: React.FC<{ onBack: () => void; onContacts: () => void 
     const [conn, setConn] = useState<Msg91Connection | null>(null);
     const [invites, setInvites] = useState<Invite[] | null>(null);
     const [approved, setApproved] = useState<Record<Channel, number>>({ whatsapp: 0, email: 0 });
-    const [analytics, setAnalytics] = useState<AnalyticsStatus | null>(null);
-    const [ig, setIg] = useState<InstagramReport | null>(null);
     const [failed, setFailed] = useState(false);
     const close = () => setOverlay(null);
     useBackClose(overlay !== null, close);
@@ -986,8 +932,6 @@ export const SocialSpace: React.FC<{ onBack: () => void; onContacts: () => void 
                 if (c.number) socialService.replies().then(r => setUnread(r.threads.filter(t => t.unread).length)).catch(() => undefined);
             }
         } catch { setFailed(true); }
-        // The home page's analytics rows and figures: never in the way of the invites.
-        void loadAnalytics(setAnalytics, setIg);
     }, []);
     useEffect(() => { if (!overlay) void load(); }, [overlay, load]);
 
@@ -1013,7 +957,7 @@ export const SocialSpace: React.FC<{ onBack: () => void; onContacts: () => void 
     else if (invites && conn) {
         const onSetup = () => go('settings');
         switch (page) {
-            case 'home': body = <Hub conn={conn} invites={invites} approved={approved} isAdmin={isAdmin} unread={unread} analytics={analytics} ig={ig} go={go} openInvite={openInvite} />; break;
+            case 'home': body = <Hub conn={conn} invites={invites} approved={approved} isAdmin={isAdmin} unread={unread} go={go} openInvite={openInvite} />; break;
             case 'whatsapp':
             case 'email': body = <ChannelInvites channel={page} conn={conn} invites={invites} isAdmin={isAdmin} canSend={canSend} openInvite={openInvite} compose={() => compose({ channel: page })} onSetup={onSetup} />; break;
             case 'replies': body = <RepliesTab waReady={ready.whatsapp} onOpen={phone => setOverlay({ kind: 'thread', phone })} onUnread={setUnread} />; break;
@@ -1024,7 +968,6 @@ export const SocialSpace: React.FC<{ onBack: () => void; onContacts: () => void 
                 break;
             case 'audience': body = <AudienceTab canSend={canSend} ready={ready} compose={compose} onContacts={onContacts} />; break;
             case 'settings': body = <SettingsTab conn={conn} isAdmin={isAdmin} onChange={setConn} />; break;
-            default: body = <AnalyticsTab key={page} kind={page} isAdmin={isAdmin} />;
         }
     }
 

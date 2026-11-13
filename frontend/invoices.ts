@@ -276,6 +276,10 @@ export function invoiceRoutes(deps: InvoiceDeps): InvoiceRoute[] {
         const stored = await load(db, id);
         const before = stored?.doc ?? null;
         const sent = toBillingDoc(raw);
+        // The app sends back the save time it loaded; an older one means someone saved in between. (Apps from before this sent their own clock, which is never older.)
+        if (before && !fromBeforeBilling(raw) && sent.updatedAt < before.updatedAt) {
+            return err('Someone else changed this document meanwhile. Close it and open it again to see their changes.', 409);
+        }
         const now = Date.now();
         let doc: BillingDoc = {
             ...sent,
@@ -346,6 +350,9 @@ export function invoiceRoutes(deps: InvoiceDeps): InvoiceRoute[] {
         const reason = typeof sent === 'string' ? sent.trim().slice(0, 200) : '';
         if (!reason) return err('Give a reason for cancelling.');
         if (before.payments.length) return err('Payments are recorded on this invoice. Remove them or issue a credit note instead.', 409);
+        // Money a payment link took, on this invoice or on the proforma it came from (balanceOf counts both).
+        const source = before.sourceId ? await load(ctx.env.VAYU_DB, before.sourceId) : null;
+        if (before.linkPaidPaise || source?.doc.linkPaidPaise) return err('A payment link has collected money for this invoice. Issue a credit note instead.', 409);
         if ((await notesFor(ctx.env.VAYU_DB, before.id)).some(n => n.status === 'Issued')) return err('Notes are issued against this invoice. Cancel them first.', 409);
         const cancelled = logged({ ...before, status: 'Cancelled', cancelReason: reason }, `Cancelled: ${reason}`, session);
         await writeDocs(ctx, session, [{ ...stored, doc: cancelled }], inventoryMoves('cancel', cancelled), await readBillingSettings(ctx.env.VAYU_KV));

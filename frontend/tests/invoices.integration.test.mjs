@@ -150,8 +150,10 @@ test('a tax invoice is numbered and frozen when issued, never before', async () 
     assert.equal(edited.status, 409);
     assert.match(edited.body.error, /lines/);
     assert.equal((await save({ ...inv, party: { ...inv.party, name: 'Someone else' } })).status, 409);
-    assert.equal((await save({ ...inv, number: 'INV/26-27/9999' })).body.number, 'INV/26-27/0001', 'the number is the server’s');
-    const transport = await save({ ...inv, ewayBillNo: '123456789012', transport: { ...inv.transport, mode: 'Road', vehicleNo: 'MH01AB1234' } });
+    const renumbered = (await save({ ...inv, number: 'INV/26-27/9999' })).body;
+    assert.equal(renumbered.number, 'INV/26-27/0001', 'the number is the server’s');
+    assert.equal((await save({ ...inv, ewayBillNo: '123456789012' })).status, 409, 'a save from the copy loaded before someone else’s save is refused');
+    const transport = await save({ ...renumbered, ewayBillNo: '123456789012', transport: { ...inv.transport, mode: 'Road', vehicleNo: 'MH01AB1234' } });
     assert.equal(transport.status, 200, transport.text);
     assert.equal((await api(owner, `/invoices/${d.id}`, { method: 'DELETE' })).status, 409, 'issued documents are never deleted');
 });

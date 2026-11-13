@@ -44,7 +44,6 @@
     "notes.ts",
     "social.ts",
     "socialInbox.ts",
-    "socialAnalytics.ts",
     "invoices.ts",
     "paymentLinks.ts",
     "sessionCookies.ts",

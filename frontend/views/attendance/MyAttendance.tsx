@@ -191,14 +191,6 @@ const CheckInCard: React.FC<{ stores: StoreConfig[]; openRecord: AttendanceRecor
 
             {store && <LocationRow store={store} distance={distance} inside={inside} accuracy={gps?.accuracy ?? 0} gpsTooRough={gpsTooRough} locating={locating} onLocate={() => { void locate(); }} />}
 
-
-            {store?.wifiRequired && (
-                <p className="neu-inset rounded-2xl px-3.5 py-3 text-xs text-amber-700 dark:text-amber-400 flex gap-2">
-                    <TriangleAlert size={14} className="shrink-0 mt-0.5" />
-                    <span>This store has "Require Wi-Fi" switched on. Browsers can't read Wi-Fi names, so check-ins here will be refused. {canManage ? 'Turn it off in the Stores tab.' : 'Ask an admin to turn it off.'}</span>
-                </p>
-            )}
-
             {error && (
                 <p className="text-xs text-red-600 dark:text-red-400 flex items-start gap-1.5">
                     <XCircle size={13} className="mt-0.5 shrink-0" /> {error}

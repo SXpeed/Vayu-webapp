@@ -4,8 +4,9 @@ import { ChevronLeft, ChevronRight, Download, Loader2, Search, TriangleAlert } f
 import { AuthUser } from '../../services/authService';
 import { AttendanceRecord, StoreConfig } from '../../types';
 import { attendanceService } from '../../services/attendanceService';
+import { staffRosterService } from '../../services/staffRosterService';
 import {
-    ALL_STORES, DAY_MS, HOUR_MS, LONG_SHIFT_MS, dayRange, downloadCsv, fmtDay, fmtHours, fmtTime, inStore, peopleFrom, startOfDay,
+    ALL_STORES, awayOn, DAY_MS, HOUR_MS, LONG_SHIFT_MS, dayRange, downloadCsv, fmtDay, fmtHours, fmtTime, inStore, peopleFrom, startOfDay,
     storeName, toDateInput, workedMs,
 } from './attendanceUtils';
 
@@ -20,13 +21,15 @@ interface DayViewProps {
     onDayChange: (day: number) => void;
 }
 
-type DayStatus = 'in' | 'present' | 'forgot' | 'absent';
+type DayStatus = 'in' | 'present' | 'forgot' | 'leave' | 'off' | 'absent';
 
 const STATUS: Record<DayStatus, { label: string; cls: string; order: number }> = {
     in: { label: 'In now', cls: 'text-emerald-700 dark:text-emerald-400', order: 0 },
     present: { label: 'Present', cls: 'text-sky-700 dark:text-sky-400', order: 1 },
     forgot: { label: 'Not checked out', cls: 'text-red-600 dark:text-red-400', order: 2 },
-    absent: { label: 'Absent', cls: 'text-[var(--neu-text-dim)]', order: 3 },
+    leave: { label: 'On leave', cls: 'text-violet-700 dark:text-violet-400', order: 3 },
+    off: { label: 'Day off', cls: 'text-[var(--neu-text-dim)]', order: 4 },
+    absent: { label: 'Absent', cls: 'text-[var(--neu-text-dim)]', order: 5 },
 };
 
 interface Row {
@@ -46,6 +49,7 @@ export const DayView: React.FC<DayViewProps> = ({ team: everyone, stores, scope,
     const [allOpenElsewhere, setAllOpenElsewhere] = useState<AttendanceRecord[]>([]);
     const { team, records } = useMemo(() => inStore(everyone, allRecords, scope), [everyone, allRecords, scope]);
     const openElsewhere = scope === ALL_STORES ? allOpenElsewhere : allOpenElsewhere.filter(r => r.storeId === scope);
+    const [away, setAway] = useState(() => awayOn('', [], []));
     const [loading, setLoading] = useState(true);
     const [query, setQuery] = useState('');
     const [closing, setClosing] = useState<{ id: string; value: string } | null>(null);
@@ -57,12 +61,16 @@ export const DayView: React.FC<DayViewProps> = ({ team: everyone, stores, scope,
     const load = useCallback(async () => {
         setLoading(true);
         const { from, to } = dayRange(day);
+        const iso = toDateInput(day);
         try {
-            const [dayRecs, latest] = await Promise.all([
+            const [dayRecs, latest, roster] = await Promise.all([
                 attendanceService.getRecords({ from, to }),
                 // Forgotten check-outs from earlier days, for "needs attention".
                 day === startOfDay(Date.now()) ? attendanceService.getRecords() : Promise.resolve([] as AttendanceRecord[]),
+                // No access to the staff roster (or it is switched off): nobody reads as on leave or off.
+                staffRosterService.load(iso, iso).catch(() => null),
             ]);
+            setAway(awayOn(iso, roster?.shifts ?? [], roster?.leaves ?? []));
             // Filter again: older servers ignore the range.
             setAllRecords(dayRecs.filter(r => r.checkInAt && r.checkInAt >= from && r.checkInAt < to));
             setAllOpenElsewhere(latest.filter(r => r.status === 'checked-in' && r.checkInAt && r.checkInAt < from));
@@ -77,15 +85,15 @@ export const DayView: React.FC<DayViewProps> = ({ team: everyone, stores, scope,
 
     const rows = useMemo<Row[]>(() => peopleFrom(team, records).map(p => {
         const mine = records.filter(r => r.employeeId === p.id);
-        let status: DayStatus = 'absent';
+        let status: DayStatus = away.get(p.id) ?? 'absent';
         if (mine.some(r => r.status === 'checked-in')) status = isToday ? 'in' : 'forgot';
         else if (mine.length) status = 'present';
         return { ...p, status, records: mine, worked: mine.reduce((s, r) => s + workedMs(r, now), 0) };
     }).sort((a, b) => STATUS[a.status].order - STATUS[b.status].order || a.name.localeCompare(b.name)),
-    [team, records, isToday, now]);
+    [team, records, isToday, now, away]);
 
     const counts = useMemo(() => {
-        const c = { in: 0, present: 0, forgot: 0, absent: 0 };
+        const c = { in: 0, present: 0, forgot: 0, leave: 0, off: 0, absent: 0 };
         for (const r of rows) c[r.status] += 1;
         return c;
     }, [rows]);
@@ -191,6 +199,8 @@ export const DayView: React.FC<DayViewProps> = ({ team: everyone, stores, scope,
                 {isToday && <span><b className={STATUS.in.cls}>{counts.in}</b> in now</span>}
                 <span><b className={STATUS.present.cls}>{counts.present}</b> {isToday ? 'checked out' : 'present'}</span>
                 {!isToday && counts.forgot > 0 && <span><b className={STATUS.forgot.cls}>{counts.forgot}</b> not checked out</span>}
+                {counts.leave > 0 && <span><b className={STATUS.leave.cls}>{counts.leave}</b> on leave</span>}
+                {counts.off > 0 && <span><b className="text-[var(--neu-text)]">{counts.off}</b> day off</span>}
                 <span><b className="text-[var(--neu-text)]">{counts.absent}</b> absent</span>
             </p>
 

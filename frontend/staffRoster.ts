@@ -124,6 +124,8 @@ export interface StaffRosterDeps {
     people: (ctx: Ctx) => Promise<StoredUser[]>;
     stores: (ctx: Ctx) => Promise<{ id: string; name: string }[]>;
     canManage: (ctx: Ctx, session: SessionData) => Promise<boolean>;
+    /** Everyone who can manage the roster: who a new leave request is sent to. */
+    managerIds: (ctx: Ctx) => Promise<string[]>;
     push: (ctx: Ctx, userIds: string[], payload: PushPayload) => void;
     logChange: (ctx: Ctx, session: SessionData, action: string, entity: string, id: string, details: string) => void;
     notify: (ctx: Ctx, events: ChangeEvent[]) => void;
@@ -488,6 +490,9 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
         const asked = text(raw.type);
         const type = (LEAVE_TYPES as readonly string[]).includes(asked) ? asked : 'Other';
         const reason = cleanText(raw.reason, 300);
+        const clash = await db.prepare("SELECT from_date, to_date FROM staff_leaves WHERE employee_id = ? AND status != 'declined' AND from_date <= ? AND to_date >= ?")
+            .bind(employeeId, to, from).first<{ from_date: string; to_date: string }>();
+        if (clash) return err(`There is already leave for ${fmtRange(clash.from_date, clash.to_date)}. Remove it first to change the dates.`, 409);
         const now = Date.now();
         const leave = newLeave({ employeeId, from, to, type, reason }, forSomeoneElse ? session.name : null, now);
         await db.prepare(
@@ -495,6 +500,14 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).bind(leave.id, employeeId, from, to, type, reason, leave.status, now, session.userId, leave.decidedAt, forSomeoneElse ? session.userId : null, leave.decidedByName).run();
         if (leave.status === 'approved') await markChangedForLeave(db, leave);
+        else {
+            deps.push(ctx, (await deps.managerIds(ctx)).filter(id => id !== session.userId), {
+                title: `Leave request: ${session.name}`,
+                body: `${session.name} asked for ${type.toLowerCase()} for ${fmtRange(from, to)}.`,
+                tag: `leave-${leave.id}`,
+                data: { view: 'schedule' },
+            });
+        }
         deps.logChange(ctx, session, 'created', 'leave', leave.id, `${forSomeoneElse ? 'Recorded' : 'Asked for'} ${type.toLowerCase()} ${fmtRange(from, to)}`);
         signal(ctx, leave.id);
         return json(leave, 201);

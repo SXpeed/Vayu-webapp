@@ -307,10 +307,6 @@ export interface StoreConfig {
     longitude: number;
     /** Geofence radius in meters. */
     gpsRadius: number;
-    /** Require Store Wi-Fi ON/OFF — server-side toggle, core flow unchanged. */
-    wifiRequired: boolean;
-    /** Approved Wi-Fi network name (SSID). */
-    wifiSsid: string;
     createdAt: number;
 }
 

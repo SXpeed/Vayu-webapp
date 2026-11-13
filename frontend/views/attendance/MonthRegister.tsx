@@ -40,6 +40,7 @@ export const MonthRegister: React.FC<MonthRegisterProps> = ({ team: everyone, st
         const { from, to } = monthRange(year, month);
         try {
             const all = await attendanceService.getRecords({ from, to });
+            if (all.length >= 10_000) toast.error('This month has more check-ins than one page can load, so the register is incomplete.');
             setAllRecords(all.filter(r => r.checkInAt && r.checkInAt >= from && r.checkInAt < to));
         } catch (e) {
             toast.error((e as Error).message || 'Failed to load the month');
