@@ -3,7 +3,7 @@
 
 import { useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Loader2, Plus, Trash2, X, AlertTriangle, Lock } from 'lucide-react';
+import { Loader2, Plus, Trash2, X, AlertTriangle, Lock, ChevronDown } from 'lucide-react';
 import { Field, Input, Select, Textarea, ToggleRow, Button, Pill } from '../../components/ui';
 import { ArtworkPicker } from '../../components/ArtworkPicker';
 import { ContactSuggest } from '../../components/ContactSuggest';
@@ -263,9 +263,9 @@ function DocumentSection({ ed }: Readonly<{ ed: Editor }>) {
                     Moving stock to a store with a different GSTIN is a sale between them: issue a tax invoice instead. Same GSTIN: a challan is right.</p>
             )}
             <div className="space-y-1">
-                <ToggleRow title="Prices include GST" description="Rates you type already include tax; the taxable value is worked out from them." checked={d.priceIncludesTax} onChange={() => set({ priceIncludesTax: !d.priceIncludesTax })} />
-                {d.kind === 'tax' && <ToggleRow title="Reverse charge" description="The buyer pays the GST, not you." checked={d.reverseCharge} onChange={() => set({ reverseCharge: !d.reverseCharge })} />}
                 {d.kind === 'challan' && <ToggleRow title="Show tax on the challan" description="For goods moving as part of a sale or transfer." checked={!!d.challanTax} onChange={() => set({ challanTax: !d.challanTax })} />}
+                {(d.kind !== 'challan' || d.challanTax) && <ToggleRow title="Prices include GST" description="Rates you type already include tax; the taxable value is worked out from them." checked={d.priceIncludesTax} onChange={() => set({ priceIncludesTax: !d.priceIncludesTax })} />}
+                {d.kind === 'tax' && <ToggleRow title="Reverse charge" description="The buyer pays the GST, not you." checked={d.reverseCharge} onChange={() => set({ reverseCharge: !d.reverseCharge })} />}
             </div>
         </CardSection>
     );
@@ -345,9 +345,10 @@ function SummarySection({ ed }: Readonly<{ ed: Editor }>) {
     const { d, set, totals, mode } = ed;
     return (
         <CardSection title="Summary">
-            <Field label="Discount on the whole bill (₹)" htmlFor="doc-billdisc" hint="Spread over the items before tax, as GST requires.">
+            {/* A challan just records value moved; keep the field only if an old one already has a discount. */}
+            {(d.kind !== 'challan' || d.billDiscountPaise > 0) && <Field label="Discount on the whole bill (₹)" htmlFor="doc-billdisc" hint="Spread over the items before tax, as GST requires.">
                 <Input id="doc-billdisc" type="number" inputMode="decimal" min={0} value={d.billDiscountPaise ? d.billDiscountPaise / 100 : ''} onChange={e => set({ billDiscountPaise: Math.max(0, toPaise(e.target.value) || 0) })} />
-            </Field>
+            </Field>}
             <TotalsBlock totals={totals} mode={mode} pos={d.placeOfSupply} />
         </CardSection>
     );
@@ -383,9 +384,17 @@ function DatesSection({ ed }: Readonly<{ ed: Editor }>) {
 function TransportSection({ ed }: Readonly<{ ed: Editor }>) {
     const { d, set, setTransport, totals } = ed;
     if (d.kind !== 'tax' && d.kind !== 'challan') return null;
+    const needsEway = totals.total > EWAY_LIMIT && !d.ewayBillNo;
+    // Starts open when something is filled in or an e-way bill is likely needed.
+    const filled = !!d.ewayBillNo || Object.values(d.transport).some(Boolean);
     return (
-            <CardSection title="Transport & e-way bill" hint={totals.total > EWAY_LIMIT && !d.ewayBillNo ? 'Goods worth over ₹50,000 moving by vehicle usually need an e-way bill.' : undefined}>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <details className="neu-card p-4 lg:p-5 group" open={filled || needsEway}>
+            <summary className="cursor-pointer select-none list-none flex items-center justify-between gap-2 font-semibold">
+                Transport &amp; e-way bill
+                <ChevronDown size={16} className="transition-transform group-open:rotate-180" aria-hidden />
+            </summary>
+            {needsEway && <p className="mt-1 text-[11px] text-gray-600 dark:text-gray-400">Goods worth over ₹50,000 moving by vehicle usually need an e-way bill.</p>}
+                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <Field label="Mode" htmlFor="tr-mode">
                         <Select id="tr-mode" value={d.transport.mode} onChange={e => setTransport({ mode: e.target.value as Transport['mode'] })}>
                             <option value="">-</option>
@@ -398,7 +407,7 @@ function TransportSection({ ed }: Readonly<{ ed: Editor }>) {
                     <Field label="Dispatch date" htmlFor="tr-date"><Input id="tr-date" type="date" value={d.transport.dispatchDate} onChange={e => setTransport({ dispatchDate: e.target.value })} /></Field>
                     <Field label="E-way bill No." htmlFor="tr-eway"><Input id="tr-eway" inputMode="numeric" value={d.ewayBillNo} onChange={e => set({ ewayBillNo: e.target.value.replaceAll(/\D/g, '').slice(0, 12) })} /></Field>
                 </div>
-            </CardSection>
+        </details>
     );
 }
 
@@ -419,13 +428,19 @@ function EInvoiceSection({ ed }: Readonly<{ ed: Editor }>) {
 function NotesSection({ ed }: Readonly<{ ed: Editor }>) {
     const { d, set, locked } = ed;
     return (
-        <CardSection title="Notes">
+        <details className="neu-card p-4 lg:p-5 group">
+            <summary className="cursor-pointer select-none list-none flex items-center justify-between gap-2 font-semibold">
+                Notes
+                <ChevronDown size={16} className="transition-transform group-open:rotate-180" aria-hidden />
+            </summary>
+            <div className="mt-3 space-y-4">
             {!locked && <>
                 <Field label="Notes (printed)" htmlFor="doc-notes"><Textarea id="doc-notes" rows={2} className="resize-none" value={d.notes} onChange={e => set({ notes: e.target.value })} /></Field>
                 {d.kind !== 'challan' && <Field label="Terms & conditions (printed)" htmlFor="doc-terms"><Textarea id="doc-terms" rows={3} className="resize-none" value={d.terms} onChange={e => set({ terms: e.target.value })} /></Field>}
             </>}
             <Field label="Internal note" htmlFor="doc-internal" hint="Only your team sees this. Never printed."><Textarea id="doc-internal" rows={2} className="resize-none" value={d.internalNote} onChange={e => set({ internalNote: e.target.value })} /></Field>
-        </CardSection>
+            </div>
+        </details>
     );
 }
 
