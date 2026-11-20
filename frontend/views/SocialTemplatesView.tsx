@@ -4,8 +4,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
-    AlertCircle, Bold, CheckCheck, Code, Copy, ExternalLink, FileText, Image as ImageIcon, Italic, Languages, Loader2, Mail, MapPin, MessageCircle,
-    Phone, Plus, RefreshCw, Reply, Search, Send, Strikethrough, Trash2, Upload, Video, X,
+    AlertCircle, Bold, CheckCheck, Code, Copy, ExternalLink, FileText, Heading, Image as ImageIcon, Italic, Languages, Link as LinkIcon, List, Loader2, Mail, MapPin, MessageCircle,
+    Monitor, Phone, Plus, Smartphone, RefreshCw, Reply, Search, Send, Strikethrough, Trash2, Upload, Video, X,
 } from 'lucide-react';
 import { useIsDesktop } from '../hooks/useMediaQuery';
 import { PageRoot, PageHeader, PageBody, GhostIconButton, Button, Card, SectionTitle, Field, Input, Textarea, Select, Pill, Badge, EmptyState, ToggleRow } from '../components/ui';
@@ -13,9 +13,9 @@ import { PhotoAttachments } from '../components/PhotoAttachments';
 import storageService from '../services/storageService';
 import { socialService } from '../services/socialService';
 import {
-    BUTTON_LIMITS, CATEGORIES, FIELDS, HEADERS, LANGUAGES, MAX_BODY, MAX_BUTTONS, MAX_EMAIL_BODY, MAX_FOOTER, MAX_HEADER_TEXT, MEDIA_HEADERS, MEDIA_RULES, RSVP_BUTTONS,
+    BUTTON_LIMITS, CATEGORIES, EMAIL_STYLE, FIELDS, MAX_EMAIL_FOOTER, MAX_EMAIL_LINKS, MAX_PREHEADER, emailBlocks, inkOn, HEADERS, LANGUAGES, MAX_BODY, MAX_BUTTONS, MAX_EMAIL_BODY, MAX_FOOTER, MAX_HEADER_TEXT, MEDIA_HEADERS, MEDIA_RULES, RSVP_BUTTONS,
     NAME_TOKEN, RSVP_NO, RSVP_YES, SAMPLE, fieldLabel, sendSlots, fieldsNeedingSamples, filledBody, parseTemplate, sampleOf, templateFields, templateSlug, templateTitle,
-    type ButtonKind, type Category, type Channel, type FieldValues, type HeaderKind, type SocialTemplate, type TemplateButton, type TemplateInput,
+    type ButtonKind, type Category, type EmailStyle, type Inline, type Channel, type FieldValues, type HeaderKind, type SocialTemplate, type TemplateButton, type TemplateInput,
 } from '../socialRules';
 
 export const message = (e: unknown) => (e as Error).message || 'Something went wrong. Please try again.';
@@ -90,19 +90,56 @@ export const Bubble: React.FC<{ t: Pick<TemplateInput, 'header' | 'headerText' |
     </div>
 );
 
-/** The email as it looks in an inbox: subject, picture, message, RSVP buttons, unsubscribe line. */
-export const EmailPreview: React.FC<{ t: Pick<TemplateInput, 'header' | 'headerText' | 'body' | 'buttons' | 'samples'>; mediaUrl?: string; values: FieldValues; sender?: string }> = ({ t, mediaUrl, values, sender }) => (
-    <Card className="text-[var(--neu-text)]">
-        <p className="text-[11px] text-[var(--neu-text-dim)] truncate">From: {sender || 'Your gallery'}</p>
-        <p className="mt-1 font-serif text-[16px] text-gray-900 dark:text-white break-words">{filledBody(t.headerText, values, t.samples) || 'Subject'}</p>
-        <div className="mt-3 pt-3 border-t border-[var(--neu-line)] space-y-3">
-            {t.header === 'image' && <HeaderPreview t={t} mediaUrl={mediaUrl} values={values} />}
-            {(filledBody(t.body, values, t.samples) || 'Your message').split(/\n{2,}/).map((p, i) => <p key={`${i}-${p.length}`} className="text-[13.5px] leading-relaxed whitespace-pre-line break-words">{p}</p>)}
-            {t.buttons.length > 0 && <div className="flex flex-wrap gap-2"><Button variant="primary" tabIndex={-1}>{RSVP_YES}</Button><Button tabIndex={-1}>{RSVP_NO}</Button></div>}
-        </div>
-        <p className="mt-4 text-[10.5px] text-[var(--neu-text-dim)]">{sender || 'Your gallery'} · <u>Unsubscribe</u></p>
-    </Card>
+/** One line of an email's message, formatted as the email will be. */
+const EmailLine: React.FC<{ line: Inline[]; fill: (s: string) => string; accent: string }> = ({ line, fill, accent }) => (
+    <>
+        {line.map((p, i) => {
+            const key = `${i}-${p.k}`;
+            const w = fill(p.text);
+            if (p.k === 'a') return <a key={key} href={p.href} target="_blank" rel="noreferrer" className="underline" style={{ color: accent }}>{w}</a>;
+            if (p.k === 'b') return <strong key={key}>{w}</strong>;
+            if (p.k === 'i') return <em key={key}>{w}</em>;
+            return p.k === 's' ? <s key={key}>{w}</s> : <React.Fragment key={key}>{w}</React.Fragment>;
+        })}
+    </>
 );
+
+/** The email as it looks in an inbox: subject and preview text, logo, picture, message, buttons, footer, unsubscribe line. */
+export const EmailPreview: React.FC<{ t: Pick<TemplateInput, 'header' | 'headerText' | 'body' | 'buttons' | 'samples' | 'style'>; mediaUrl?: string; values: FieldValues; sender?: string }> = ({ t, mediaUrl, values, sender }) => {
+    const s = t.style ?? EMAIL_STYLE;
+    const fill = (x: string) => filledBody(x, values, t.samples);
+    const blocks = emailBlocks(t.body);
+    const rsvp = t.buttons.some(b => b.kind === 'quick_reply');
+    const links = t.buttons.filter(b => b.kind === 'url');
+    const solid = { background: s.accent, color: inkOn(s.accent), borderColor: s.accent };
+    const outline = { color: s.accent, borderColor: s.accent };
+    const button = 'inline-flex items-center px-4 py-2 rounded-lg border text-[13px] font-semibold';
+    return (
+        <Card className="text-[var(--neu-text)]">
+            <p className="text-[11px] text-[var(--neu-text-dim)] truncate">From: {sender || 'Your gallery'}</p>
+            <p className="mt-1 font-serif text-[16px] text-gray-900 dark:text-white break-words">{fill(t.headerText) || 'Subject'}</p>
+            {s.preheader && <p className="text-[12px] text-[var(--neu-text-dim)] truncate">{s.preheader}</p>}
+            <div className="mt-3 pt-3 border-t border-[var(--neu-line)] space-y-3">
+                {s.logoUrl && <img src={s.logoUrl} alt={sender || 'Logo'} className="mx-auto max-h-14 max-w-[200px] object-contain" />}
+                {t.header === 'image' && <HeaderPreview t={t} mediaUrl={mediaUrl} values={values} />}
+                {blocks.length ? blocks.map((b, i) => {
+                    const key = `${i}-${b.k}`;
+                    if (b.k === 'h') return <h3 key={key} className="font-serif text-[18px] leading-snug text-gray-900 dark:text-white"><EmailLine line={b.lines[0]} fill={fill} accent={s.accent} /></h3>;
+                    if (b.k === 'ul') return <ul key={key} className="list-disc pl-5 text-[13.5px] leading-relaxed">{b.lines.map((l, j) => <li key={`${j}-${l.length}`}><EmailLine line={l} fill={fill} accent={s.accent} /></li>)}</ul>;
+                    return <p key={key} className="text-[13.5px] leading-relaxed break-words">{b.lines.map((l, j) => <React.Fragment key={`${j}-${l.length}`}>{j > 0 && <br />}<EmailLine line={l} fill={fill} accent={s.accent} /></React.Fragment>)}</p>;
+                }) : <p className="text-[13.5px]">Your message</p>}
+                {(rsvp || links.length > 0) && (
+                    <div className="flex flex-wrap gap-2">
+                        {rsvp && <><span className={button} style={solid}>{RSVP_YES}</span><span className={button} style={outline}>{RSVP_NO}</span></>}
+                        {links.map((b, i) => <span key={`${i}-${b.text}`} className={button} style={!rsvp && i === 0 ? solid : outline}>{b.text || 'Button'}</span>)}
+                    </div>
+                )}
+            </div>
+            {s.footer && <p className="mt-4 text-[10.5px] text-center whitespace-pre-line text-[var(--neu-text-dim)]">{s.footer}</p>}
+            <p className="mt-2 text-[10.5px] text-center text-[var(--neu-text-dim)]">{sender || 'Your gallery'} · <u>Unsubscribe</u></p>
+        </Card>
+    );
+};
 
 export const TemplatePreview: React.FC<{ t: TemplateInput; mediaUrl?: string; values: FieldValues; sender?: string }> = ({ t, mediaUrl, values, sender }) =>
     (t.channel === 'email' ? <EmailPreview t={t} mediaUrl={mediaUrl} values={values} sender={sender} /> : <Bubble t={t} mediaUrl={mediaUrl} values={values} />);
@@ -380,6 +417,25 @@ function insertAt(el: HTMLTextAreaElement | HTMLInputElement | null, value: stri
     requestAnimationFrame(() => { el?.focus(); const p = at + pad.length + insert.length; el?.setSelectionRange(p, p); });
 }
 
+/** Puts `prefix` at the start of the cursor's line ("# " heading, "- " list item). */
+function prefixLine(el: HTMLTextAreaElement | null, value: string, prefix: string, set: (v: string) => void) {
+    const at = el?.selectionStart ?? value.length;
+    const start = value.lastIndexOf('\n', at - 1) + 1;
+    set(`${value.slice(0, start)}${prefix}${value.slice(start)}`);
+    requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(at + prefix.length, at + prefix.length); });
+}
+
+/** Turns the selected words into [words](https://), with the cursor on the link to type it. */
+function insertLink(el: HTMLTextAreaElement | null, value: string, set: (v: string) => void) {
+    const start = el?.selectionStart ?? value.length;
+    const end = el?.selectionEnd ?? value.length;
+    const words = value.slice(start, end) || 'link words';
+    const link = `[${words}](https://)`;
+    set(`${value.slice(0, start)}${link}${value.slice(end)}`);
+    const at = start + link.length - 1;
+    requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(at, at); });
+}
+
 const MARKS: { mark: string; label: string; Icon: React.ElementType }[] = [
     { mark: '*', label: 'Bold', Icon: Bold }, { mark: '_', label: 'Italic', Icon: Italic }, { mark: '~', label: 'Strikethrough', Icon: Strikethrough }, { mark: '```', label: 'Monospace', Icon: Code },
 ];
@@ -472,6 +528,7 @@ interface Draft extends TemplateInput { title: string }
 const blankDraft = (channel: Channel): Draft => ({
     channel, title: STARTERS[0].title, name: '', language: 'en', category: 'MARKETING', header: 'none', headerText: channel === 'email' ? STARTERS[0].subject : '',
     body: STARTERS[0].body, footer: channel === 'email' ? '' : 'Reply STOP to opt out', buttons: RSVP_BUTTONS, samples: {},
+    ...(channel === 'email' ? { style: { ...EMAIL_STYLE } } : {}),
 });
 
 /** The parts only a WhatsApp template has: category, header, small print, buttons. */
@@ -510,21 +567,67 @@ const WhatsappParts: React.FC<{ d: Draft; set: (p: Partial<Draft>) => void; samp
     );
 };
 
-/** The parts only an email has: the subject line, and a picture and RSVP buttons by switch. */
-const EmailParts: React.FC<{ d: Draft; set: (p: Partial<Draft>) => void; extra: string[] }> = ({ d, set, extra }) => {
+/** The subject line and the grey preview text after it in an inbox. */
+const EmailSubject: React.FC<{ d: Draft; set: (p: Partial<Draft>) => void; extra: string[] }> = ({ d, set, extra }) => {
     const subjectRef = useRef<HTMLInputElement>(null);
+    const style = d.style ?? EMAIL_STYLE;
     return (
         <>
             <Field label="Subject line" htmlFor="tpl-subject">
                 <Input ref={subjectRef} id="tpl-subject" maxLength={150} value={d.headerText} onChange={e => set({ headerText: e.target.value })} />
                 <FieldInserter target="subject" extra={extra} onInsert={f => insertAt(subjectRef.current, d.headerText, `{{${f}}}`, v => set({ headerText: v }))} />
             </Field>
+            <Field label="Preview text (optional)" htmlFor="tpl-pre" hint={`${style.preheader.length} / ${MAX_PREHEADER}. Shown after the subject in most inboxes.`}>
+                <Input id="tpl-pre" maxLength={MAX_PREHEADER} value={style.preheader} onChange={e => set({ style: { ...style, preheader: e.target.value } })} placeholder="An evening of new work, and you’re on the list" />
+            </Field>
+        </>
+    );
+};
+
+/** What only an email has after its message: picture, RSVP and link buttons, and the gallery's look. */
+const EmailParts: React.FC<{ d: Draft; set: (p: Partial<Draft>) => void; setUploading: (b: boolean) => void }> = ({ d, set, setUploading }) => {
+    const style = d.style ?? EMAIL_STYLE;
+    const setStyle = (p: Partial<EmailStyle>) => set({ style: { ...style, ...p } });
+    const rsvp = d.buttons.some(b => b.kind === 'quick_reply');
+    const links = d.buttons.filter(b => b.kind === 'url');
+    const setLinks = (next: TemplateButton[]) => set({ buttons: [...(rsvp ? RSVP_BUTTONS : []), ...next] });
+    return (
+        <>
             <ToggleRow title="Picture on top" description="You choose the picture each time you send" checked={d.header === 'image'} onChange={() => set({ header: d.header === 'image' ? 'none' : 'image' })} />
-            <ToggleRow title="RSVP buttons" description={`“${RSVP_YES}” and “${RSVP_NO}”; answers show on the invite`} checked={d.buttons.length > 0} onChange={() => set({ buttons: d.buttons.length ? [] : RSVP_BUTTONS })} />
+            <ToggleRow title="RSVP buttons" description={`“${RSVP_YES}” and “${RSVP_NO}”; answers show on the invite`} checked={rsvp} onChange={() => set({ buttons: [...(rsvp ? [] : RSVP_BUTTONS), ...links] })} />
+            <Field label="Link buttons (optional)">
+                <div className="space-y-2">
+                    {links.map((b, i) => (
+                        <ButtonEditor key={`url-${i}`} b={b} index={i} onChange={nb => setLinks(links.map((x, j) => (j === i ? nb : x)))} onRemove={() => setLinks(links.filter((_, j) => j !== i))} />
+                    ))}
+                    {links.length < MAX_EMAIL_LINKS && <Pill onClick={() => setLinks([...links, { kind: 'url', text: 'View the catalogue', url: 'https://' }])}>+ Link button</Pill>}
+                </div>
+            </Field>
+            <SectionTitle>Your look</SectionTitle>
+            <Field label="Logo (optional)"><MediaPicker kind="image" urls={style.logoUrl ? [style.logoUrl] : []} onChange={u => setStyle({ logoUrl: u[0] ?? '' })} onUploadingChange={setUploading} /></Field>
+            <Field label="Button and link colour" htmlFor="tpl-accent">
+                <span className="flex items-center gap-2">
+                    <input id="tpl-accent" type="color" value={style.accent} onChange={e => setStyle({ accent: e.target.value })} className="h-9 w-12 rounded-lg cursor-pointer bg-transparent" />
+                    <span className="text-[12.5px] font-mono text-[var(--neu-text-dim)]">{style.accent}</span>
+                    {style.accent !== EMAIL_STYLE.accent && <Pill onClick={() => setStyle({ accent: EMAIL_STYLE.accent })}>Reset</Pill>}
+                </span>
+            </Field>
+            <Field label="Footer (optional)" htmlFor="tpl-efoot" hint={`${style.footer.length} / ${MAX_EMAIL_FOOTER}. Your address, opening hours or social links. No fields.`}>
+                <Textarea id="tpl-efoot" rows={3} maxLength={MAX_EMAIL_FOOTER} value={style.footer} onChange={e => setStyle({ footer: e.target.value })} placeholder={'Vayu Gallery, Kala Ghoda, Mumbai\nOpen Tue–Sun, 11 am – 7 pm · @vayugallery'} />
+            </Field>
             <p className="text-[11.5px] text-[var(--neu-text-dim)]">Every email ends with your name and an unsubscribe link; people who unsubscribe aren’t emailed again.</p>
         </>
     );
 };
+
+const EMAIL_TOOLS: { label: string; Icon: React.ElementType; run: (el: HTMLTextAreaElement | null, v: string, set: (v: string) => void) => void }[] = [
+    { label: 'Bold', Icon: Bold, run: (el, v, set) => wrapSelection(el, v, '*', set) },
+    { label: 'Italic', Icon: Italic, run: (el, v, set) => wrapSelection(el, v, '_', set) },
+    { label: 'Strikethrough', Icon: Strikethrough, run: (el, v, set) => wrapSelection(el, v, '~', set) },
+    { label: 'Heading', Icon: Heading, run: (el, v, set) => prefixLine(el, v, '# ', set) },
+    { label: 'List', Icon: List, run: (el, v, set) => prefixLine(el, v, '- ', set) },
+    { label: 'Link', Icon: LinkIcon, run: insertLink },
+];
 
 export const TemplateForm: React.FC<{ channel: Channel; sender?: string; onDone: () => void; onChannel?: (c: Channel) => void; channels?: Channel[] }> = ({ channel, sender, onDone, onChannel, channels = [] }) => {
     const [d, setD] = useState<Draft>(() => blankDraft(channel));
@@ -532,6 +635,8 @@ export const TemplateForm: React.FC<{ channel: Channel; sender?: string; onDone:
     const [uploading, setUploading] = useState(false);
     const [busy, setBusy] = useState(false);
     const [problem, setProblem] = useState('');
+    const [testing, setTesting] = useState(false);
+    const [wide, setWide] = useState(false);
     const bodyRef = useRef<HTMLTextAreaElement>(null);
     const set = (p: Partial<Draft>) => { setD(x => ({ ...x, ...p })); setProblem(''); };
     // Fields already used anywhere, so the inserter offers them again.
@@ -551,6 +656,12 @@ export const TemplateForm: React.FC<{ channel: Channel; sender?: string; onDone:
             toast.success(isEmail ? 'Saved and sent to MSG91' : 'Sent to Meta for approval');
             onDone();
         } catch (e) { setProblem(message(e)); setBusy(false); }
+    };
+    const sendTest = async () => {
+        const t = parseTemplate({ ...d, name });
+        if ('problem' in t) { setProblem(t.problem); return; }
+        setTesting(true);
+        try { toast.success(`Test sent to ${(await socialService.testDraft(t)).to}`); } catch (e) { setProblem(message(e)); } finally { setTesting(false); }
     };
 
     return (
@@ -579,29 +690,45 @@ export const TemplateForm: React.FC<{ channel: Channel; sender?: string; onDone:
                                 </Select>
                             </Field>
                         </div>
-                        {isEmail && <EmailParts d={d} set={set} extra={used} />}
-                        <Field label="Message" htmlFor="tpl-body" hint={`${d.body.length} / ${isEmail ? MAX_EMAIL_BODY : MAX_BODY}. Tap a field to put it at the cursor; each person gets their own name.`}>
-                            {!isEmail && (
-                                <div className="flex gap-1 mb-1.5" role="toolbar" aria-label="Formatting">
-                                    {MARKS.map(m => <GhostIconButton key={m.label} label={m.label} onClick={() => wrapSelection(bodyRef.current, d.body, m.mark, v => set({ body: v }))} icon={<m.Icon size={14} />} />)}
-                                </div>
-                            )}
+                        {isEmail && <EmailSubject d={d} set={set} extra={used} />}
+                        <Field label="Message" htmlFor="tpl-body" hint={`${d.body.length} / ${isEmail ? MAX_EMAIL_BODY : MAX_BODY}. ${isEmail ? '*bold*, _italic_, # heading, - list, [words](https://link). ' : ''}Tap a field to put it at the cursor; each person gets their own name.`}>
+                            <div className="flex gap-1 mb-1.5" role="toolbar" aria-label="Formatting">
+                                {isEmail
+                                    ? EMAIL_TOOLS.map(m => <GhostIconButton key={m.label} label={m.label} onClick={() => m.run(bodyRef.current, d.body, v => set({ body: v }))} icon={<m.Icon size={14} />} />)
+                                    : MARKS.map(m => <GhostIconButton key={m.label} label={m.label} onClick={() => wrapSelection(bodyRef.current, d.body, m.mark, v => set({ body: v }))} icon={<m.Icon size={14} />} />)}
+                            </div>
                             <Textarea ref={bodyRef} id="tpl-body" rows={isEmail ? 9 : 6} maxLength={isEmail ? MAX_EMAIL_BODY : MAX_BODY} value={d.body} onChange={e => set({ body: e.target.value })} />
                             <FieldInserter target="message" extra={used} onInsert={f => insertAt(bodyRef.current, d.body, `{{${f}}}`, v => set({ body: v }))} />
                         </Field>
+                        {isEmail && <EmailParts d={d} set={set} setUploading={setUploading} />}
                         {!isEmail && <WhatsappParts d={d} set={set} sample={sample} setSample={setSample} setUploading={setUploading} extra={used} />}
                         <SamplesEditor fields={needSamples} samples={d.samples} onChange={samples => set({ samples })} />
                         <Problem>{problem}</Problem>
                         <Button type="submit" variant="primary" block disabled={busy || uploading} icon={busy ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}>
                             {busy ? 'Sending…' : 'Send for approval'}
                         </Button>
+                        {isEmail && (
+                            <Button type="button" block disabled={testing || busy || uploading} onClick={() => { void sendTest(); }} icon={testing ? <Loader2 size={15} className="animate-spin" /> : <Mail size={15} />}>
+                                Email me a test
+                            </Button>
+                        )}
                         <p className="text-[11.5px] text-[var(--neu-text-dim)]">{isEmail
                             ? 'MSG91 checks new email templates before they can be sent. It can’t be changed afterwards; make a new one instead.'
                             : 'Meta reviews every template, usually within a day. It can’t be changed afterwards; make a new one instead.'}</p>
                     </form>
                     <section className="lg:sticky lg:top-4">
-                        <SectionTitle className="px-3">Preview</SectionTitle>
-                        <TemplatePreview t={d} mediaUrl={sample[0]} values={{ ...SAMPLE, ...d.samples, name: SAMPLE.name }} sender={sender} />
+                        <div className="flex items-center justify-between gap-2 px-3">
+                            <SectionTitle>Preview</SectionTitle>
+                            {isEmail && (
+                                <div className="flex gap-1.5">
+                                    <Pill active={!wide} onClick={() => setWide(false)}><Smartphone size={13} className="inline -mt-0.5 mr-1" aria-hidden />Phone</Pill>
+                                    <Pill active={wide} onClick={() => setWide(true)}><Monitor size={13} className="inline -mt-0.5 mr-1" aria-hidden />Desktop</Pill>
+                                </div>
+                            )}
+                        </div>
+                        <div className={isEmail && !wide ? 'max-w-[375px] mx-auto' : ''}>
+                            <TemplatePreview t={d} mediaUrl={sample[0]} values={{ ...SAMPLE, ...d.samples, name: SAMPLE.name }} sender={sender} />
+                        </div>
                         {used.some(f => !sampleOf(f, d.samples)) && <p className="mt-2 px-3 text-[11.5px] text-[var(--neu-text-dim)]">Fields without an example show as {'{{field}}'}.</p>}
                     </section>
                 </div>

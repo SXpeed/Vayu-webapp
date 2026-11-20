@@ -67,7 +67,15 @@ export interface TemplateInput {
     buttons: TemplateButton[];
     /** Examples for fields without a ready one, and for button fields (Meta's review needs them). */
     samples: FieldValues;
+    /** Email only: how it looks; baked into the HTML MSG91 keeps. */
+    style?: EmailStyle;
 }
+/** `preheader`: the grey line after the subject in an inbox list. `logoUrl`: an uploaded picture, '' for none. */
+export interface EmailStyle { preheader: string; accent: string; logoUrl: string; footer: string }
+export const EMAIL_STYLE: EmailStyle = { preheader: '', accent: '#b8902f', logoUrl: '', footer: '' };
+export const MAX_EMAIL_LINKS = 3;
+export const MAX_PREHEADER = 150;
+export const MAX_EMAIL_FOOTER = 300;
 export interface SocialTemplate extends TemplateInput { id: string; status: TemplateStatus; reason: string; createdAt: number }
 
 export type RecipientStatus = 'queued' | 'submitted' | 'sent' | 'delivered' | 'read' | 'failed';
@@ -205,10 +213,12 @@ function whatsappProblem(t: TemplateInput): string | null {
 /** The parts that decide what a template needs filled in. */
 export type TemplateParts = Pick<TemplateInput, 'body' | 'header' | 'headerText' | 'buttons' | 'channel'>;
 
+const linkFields = (buttons: TemplateButton[]) => buttons.flatMap(b => (b.kind === 'url' ? templateFields(b.url ?? '') : []));
+
 /** The fields whose examples must be given: those without a ready one, in the body, header and links. */
 export const fieldsNeedingSamples = (t: TemplateParts): string[] => {
     const fromHeader = t.header === 'text' || t.channel === 'email' ? templateFields(t.headerText) : [];
-    const fromLinks = t.buttons.flatMap(b => (b.kind === 'url' ? templateFields(b.url ?? '') : []));
+    const fromLinks = linkFields(t.buttons);
     return [...new Set([...templateFields(t.body), ...fromHeader, ...fromLinks])].filter(f => !isKnown(f));
 };
 
@@ -218,19 +228,42 @@ function draftOf(r: Record<string, unknown>): TemplateInput {
     const email = channel === 'email';
     const header = (Object.hasOwn(HEADERS, r.header as string) ? r.header : 'none') as HeaderKind;
     const buttons = ordered((Array.isArray(r.buttons) ? r.buttons : []).slice(0, MAX_BUTTONS + 1).map(parseButton).filter((b): b is TemplateButton => !!b));
-    const emailButtons = buttons.length ? RSVP_BUTTONS : [];
+    const emailButtons = [...(buttons.some(b => b.kind === 'quick_reply') ? RSVP_BUTTONS : []), ...buttons.filter(b => b.kind === 'url').slice(0, MAX_EMAIL_LINKS + 1)];
     return {
         channel, name: str(r.name, 60), language: str(r.language, 10) || 'en', category: r.category === 'UTILITY' ? 'UTILITY' : 'MARKETING',
         header: email && header !== 'image' ? 'none' : header, headerText: str(r.headerText, 200),
         body: str(r.body, MAX_EMAIL_BODY + 1), footer: email ? '' : str(r.footer, MAX_FOOTER + 1),
-        buttons: email ? emailButtons : buttons, samples: {},
+        buttons: email ? emailButtons : buttons, samples: {}, ...(email ? { style: styleOf(r.style) } : {}),
     };
+}
+
+function styleOf(v: unknown): EmailStyle {
+    const s = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
+    const accent = str(s.accent, 7).toLowerCase();
+    return {
+        preheader: str(s.preheader, MAX_PREHEADER + 1), accent: /^#[0-9a-f]{6}$/.test(accent) ? accent : EMAIL_STYLE.accent,
+        logoUrl: str(s.logoUrl, 2000), footer: str(s.footer, MAX_EMAIL_FOOTER + 1),
+    };
+}
+
+function emailProblem(t: TemplateInput): string | null {
+    const s = t.style ?? EMAIL_STYLE;
+    if (s.preheader.length > MAX_PREHEADER) return `The preview text can be up to ${MAX_PREHEADER} characters.`;
+    if (s.footer.length > MAX_EMAIL_FOOTER) return `The footer can be up to ${MAX_EMAIL_FOOTER} characters.`;
+    if (/\{\{/.test(s.preheader + s.footer)) return 'The preview text and footer cannot use fields.';
+    const links = t.buttons.filter(b => b.kind === 'url');
+    if (links.length > MAX_EMAIL_LINKS) return `Up to ${MAX_EMAIL_LINKS} link buttons.`;
+    for (const b of links) {
+        const p = buttonProblem(b);
+        if (p) return p;
+    }
+    return null;
 }
 
 function draftProblem(t: TemplateInput): string | null {
     if (!/^[a-z][a-z0-9_]{2,59}$/.test(t.name)) return 'Give the template a name: small letters, numbers and underscores, at least 3 characters.';
     if (!Object.hasOwn(LANGUAGES, t.language)) return 'Choose a language.';
-    if (t.channel === 'email') return t.headerText ? bodyProblem(t.body, MAX_EMAIL_BODY) : 'Write the subject line.';
+    if (t.channel === 'email') return t.headerText ? bodyProblem(t.body, MAX_EMAIL_BODY) ?? emailProblem(t) : 'Write the subject line.';
     return bodyProblem(t.body, MAX_BODY) ?? whatsappProblem(t);
 }
 
@@ -309,7 +342,7 @@ export interface Slot { key: string; label: string; hint?: string }
 /** Everything typed when sending this template, in screen order (the person's own name is never typed). */
 export function sendSlots(t: TemplateParts): Slot[] {
     const hf = t.channel === 'email' ? '' : headerField(t);
-    const subject = t.channel === 'email' ? templateFields(t.headerText) : [];
+    const subject = t.channel === 'email' ? [...templateFields(t.headerText), ...linkFields(t.buttons)] : [];
     const body = [...new Set([...subject, ...templateFields(t.body)])].filter(f => f !== 'name' && f !== hf);
     return [
         ...(hf && hf !== 'name' ? [{ key: hf, label: hf === 'h1' ? 'Header field' : fieldLabel(hf) }] : []),
@@ -384,31 +417,88 @@ export const EMAIL_LINKS = ['image_url', 'rsvp_yes_url', 'rsvp_no_url', 'unsubsc
 
 const escapeHtml = (s: string) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 
+/** One run of words in an email: plain, *bold*, _italic_, ~struck~, or [a link](https://…). */
+export type Inline = { k: 'text' | 'b' | 'i' | 's'; text: string } | { k: 'a'; text: string; href: string };
+/** A paragraph (its lines), a "# heading", or a list of "- " lines. */
+export interface Block { k: 'p' | 'h' | 'ul'; lines: Inline[][] }
+
+const INLINE = /(\[[^\]\n]+\]\(https?:\/\/[^\s(){}\u0000]+\)|\*[^*\n]+\*|_[^_\n]+_|~[^~\n]+~)/g;
+const MARK_KIND = { '*': 'b', _: 'i', '~': 's' } as const;
+const TAG = { b: 'strong', i: 'em', s: 's' } as const;
+
 /**
- * The email's HTML, as stored in MSG91 (handlebars): the picture, the
- * message's paragraphs, the RSVP buttons and the unsubscribe line. Fields stay
- * as {{field}} for MSG91 to fill per person.
+ * The email's message as blocks, the same for the preview and the HTML.
+ * Fields are set aside first so an underscore in {{event_name}} is never read as italics.
  */
-export function emailHtml(t: Pick<TemplateInput, 'header' | 'body' | 'buttons'>, sender: string): string {
-    const paragraphs = t.body.split(/\n{2,}/).map(p => `<p style="margin:0 0 14px;line-height:1.55">${escapeHtml(p).replaceAll('\n', '<br>')}</p>`).join('');
+export function emailBlocks(body: string): Block[] {
+    const fields: string[] = [];
+    const safe = body.replace(PLACEHOLDER, m => `\u0000${fields.push(m) - 1}\u0000`);
+    const back = (x: string) => x.replace(/\u0000(\d+)\u0000/g, (_, i: string) => fields[Number(i)]);
+    const parts = (line: string): Inline[] => line.split(INLINE).filter(Boolean).map((part): Inline => {
+        const link = /^\[([^\]]+)\]\((https?:\/\/.+)\)$/.exec(part);
+        if (link) return { k: 'a', text: back(link[1]), href: link[2] };
+        const kind = part.length > 2 && part.endsWith(part[0]) ? MARK_KIND[part[0] as keyof typeof MARK_KIND] : undefined;
+        return kind ? { k: kind, text: back(part.slice(1, -1)) } : { k: 'text', text: back(part) };
+    });
+    return safe.split(/\n{2,}/).map(c => c.split('\n')).filter(lines => lines.join('').trim()).map((lines): Block => {
+        if (lines.length === 1 && /^#{1,3}\s/.test(lines[0])) return { k: 'h', lines: [parts(lines[0].replace(/^#+\s+/, ''))] };
+        if (lines.every(l => /^[-•]\s/.test(l))) return { k: 'ul', lines: lines.map(l => parts(l.replace(/^[-•]\s+/, ''))) };
+        return { k: 'p', lines: lines.map(parts) };
+    });
+}
+
+/** Dark words on a light accent, white on a dark one. */
+export const inkOn = (hex: string): string => {
+    const [r, g, b] = [1, 3, 5].map(i => Number.parseInt(hex.slice(i, i + 2), 16) / 255);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.6 ? '#1f1f1f' : '#ffffff';
+};
+
+/**
+ * The email's HTML, as stored in MSG91 (handlebars): preview text, logo, the
+ * picture, the formatted message, RSVP and link buttons, footer and the
+ * unsubscribe line. Fields stay as {{field}} for MSG91 to fill per person.
+ * `style.logoUrl` must already be a link email readers can open.
+ */
+export function emailHtml(t: Pick<TemplateInput, 'header' | 'body' | 'buttons' | 'style'>, sender: string): string {
+    const s = t.style ?? EMAIL_STYLE;
+    const inline = (line: Inline[]) => line.map(p => {
+        const w = escapeHtml(p.text);
+        if (p.k === 'a') return `<a href="${escapeHtml(p.href)}" style="color:${s.accent}">${w}</a>`;
+        return p.k === 'text' ? w : `<${TAG[p.k]}>${w}</${TAG[p.k]}>`;
+    }).join('');
+    const block = (b: Block) => {
+        if (b.k === 'h') return `<h2 style="margin:0 0 12px;font-family:Georgia,'Times New Roman',serif;font-weight:600;font-size:20px;line-height:1.3">${inline(b.lines[0])}</h2>`;
+        if (b.k === 'ul') return `<ul style="margin:0 0 14px;padding-left:22px;line-height:1.55">${b.lines.map(l => `<li>${inline(l)}</li>`).join('')}</ul>`;
+        return `<p style="margin:0 0 14px;line-height:1.55">${b.lines.map(inline).join('<br>')}</p>`;
+    };
     const button = (href: string, label: string, primary: boolean) =>
-        `<a href="{{${href}}}" style="display:inline-block;margin:0 8px 8px 0;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600;${primary ? 'background:#b8902f;color:#fff' : 'border:1px solid #b8902f;color:#8a6a1f'}">${escapeHtml(label)}</a>`;
+        `<a href="${href}" style="display:inline-block;margin:0 8px 8px 0;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600;${primary ? `background:${s.accent};color:${inkOn(s.accent)}` : `border:1px solid ${s.accent};color:${s.accent}`}">${escapeHtml(label)}</a>`;
+    const rsvp = t.buttons.some(b => b.kind === 'quick_reply');
+    const buttons = [
+        ...(rsvp ? [button('{{rsvp_yes_url}}', RSVP_YES, true), button('{{rsvp_no_url}}', RSVP_NO, false)] : []),
+        ...t.buttons.filter(b => b.kind === 'url').map((b, i) => button(escapeHtml(b.url ?? ''), b.text, !rsvp && i === 0)),
+    ].join('');
     return [
-        '<!doctype html><html><body style="margin:0;background:#f4f2ee;font-family:Arial,Helvetica,sans-serif;color:#1f1f1f">',
-        '<div style="max-width:560px;margin:0 auto;padding:24px 16px"><div style="background:#fff;border-radius:12px;padding:24px">',
+        '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>',
+        '<body style="margin:0;background:#f4f2ee;font-family:Arial,Helvetica,sans-serif;color:#1f1f1f">',
+        s.preheader ? `<div style="display:none;max-height:0;overflow:hidden;opacity:0">${escapeHtml(s.preheader)}</div>` : '',
+        '<div style="max-width:560px;margin:0 auto;padding:24px 16px">',
+        s.logoUrl ? `<img src="${escapeHtml(s.logoUrl)}" alt="${escapeHtml(sender)}" style="display:block;max-height:56px;max-width:200px;margin:0 auto 16px">` : '',
+        '<div style="background:#fff;border-radius:12px;padding:24px">',
         t.header === 'image' ? '<img src="{{image_url}}" alt="" style="display:block;width:100%;height:auto;border-radius:8px;margin:0 0 18px">' : '',
-        paragraphs,
-        t.buttons.length ? `<div style="margin-top:8px">${button('rsvp_yes_url', RSVP_YES, true)}${button('rsvp_no_url', RSVP_NO, false)}</div>` : '',
+        emailBlocks(t.body).map(block).join(''),
+        buttons ? `<div style="margin-top:8px">${buttons}</div>` : '',
         '</div>',
+        s.footer ? `<p style="font-size:12px;line-height:1.5;color:#777;text-align:center;margin:14px 0 0">${escapeHtml(s.footer).replaceAll('\n', '<br>')}</p>` : '',
         `<p style="font-size:12px;color:#777;text-align:center;margin:14px 0 0">${escapeHtml(sender)} · <a href="{{unsubscribe_url}}" style="color:#777">Unsubscribe</a></p>`,
         '</div></body></html>',
     ].join('');
 }
 
 /** The handlebars variables for one person's email. */
-export function emailVariables(t: Pick<TemplateInput, 'body' | 'headerText'>, values: FieldValues, person: string, links: Record<typeof EMAIL_LINKS[number], string>): Record<string, string> {
+export function emailVariables(t: Pick<TemplateInput, 'body' | 'headerText' | 'buttons'>, values: FieldValues, person: string, links: Record<typeof EMAIL_LINKS[number], string>): Record<string, string> {
     const name = firstName(person);
-    const fields = [...new Set([...templateFields(t.headerText), ...templateFields(t.body)])];
+    const fields = [...new Set([...templateFields(t.headerText), ...templateFields(t.body), ...linkFields(t.buttons)])];
     return { ...Object.fromEntries(fields.map(f => [f, valueFor(f, values, name)])), ...links };
 }
 

@@ -19,10 +19,11 @@ import { ensureContactSchema, orgCountry } from './contactStore';
 import { emailKey, phoneKey } from './contactKeys';
 import { decryptSecret, encryptSecret, reportDecryptFailure, secretsConfigured } from './platform/secrets';
 import { SNIFF_BYTES, safeExtension, storedContentType } from './fileTypes';
+import { sendHtmlEmail } from './platform/email';
 import {
     MAX_RECIPIENTS, MEDIA_HEADERS, MEDIA_RULES, RSVP_BUTTONS, accountTemplates, createTemplatePayload, emailHtml, emailTemplateStatus, emailVariables,
-    emptyCounts, inviteProblem, isStop, nextStatus, parseTemplate, parseWebhook, rsvpOf, sendPayload, sendSlots,
-    type Channel, type Counts, type FieldValues, type HeaderKind, type Invite, type Recipient, type RecipientStatus, type Rsvp,
+    emptyCounts, filledBody, inviteProblem, isStop, nextStatus, parseTemplate, parseWebhook, rsvpOf, sendPayload, sendSlots,
+    type Channel, type Counts, type EmailStyle, type FieldValues, type HeaderKind, type Invite, type Recipient, type RecipientStatus, type Rsvp,
     type SocialTemplate, type TemplateButton, type TemplateInput, type WebhookEvent,
 } from './socialRules';
 
@@ -310,14 +311,14 @@ const connectionDelete: Handler = async (ctx) => {
 
 // ── Templates ───────────────────────────────────────────────────────────────
 
-interface Spec { header: HeaderKind; headerText: string; buttons: TemplateButton[]; samples: FieldValues }
+interface Spec { header: HeaderKind; headerText: string; buttons: TemplateButton[]; samples: FieldValues; style?: EmailStyle }
 
 export const parseJson = <T>(raw: unknown, fallback: T): T => { try { return JSON.parse(text(raw)) as T; } catch { return fallback; } };
 
 /** The stored parts; templates saved before `spec` existed had only a picture and RSVP switch. */
 function specOf(r: Row): Spec {
     const spec = parseJson<Partial<Spec> | null>(r.spec, null);
-    if (spec?.header) return { header: spec.header, headerText: spec.headerText ?? '', buttons: spec.buttons ?? [], samples: spec.samples ?? {} };
+    if (spec?.header) return { header: spec.header, headerText: spec.headerText ?? '', buttons: spec.buttons ?? [], samples: spec.samples ?? {}, ...(spec.style ? { style: spec.style } : {}) };
     return { header: r.image ? 'image' : 'none', headerText: '', buttons: r.rsvp ? RSVP_BUTTONS : [], samples: {} };
 }
 
@@ -327,8 +328,8 @@ export const rowToTemplate = (r: Row): SocialTemplate => ({
     status: text(r.status) as SocialTemplate['status'], reason: text(r.reason), createdAt: Number(r.created_at),
 });
 
-const specJson = (t: Pick<TemplateInput, 'header' | 'headerText' | 'buttons' | 'samples'>) =>
-    JSON.stringify({ header: t.header, headerText: t.headerText, buttons: t.buttons, samples: t.samples } satisfies Spec);
+const specJson = (t: Pick<TemplateInput, 'header' | 'headerText' | 'buttons' | 'samples' | 'style'>) =>
+    JSON.stringify({ header: t.header, headerText: t.headerText, buttons: t.buttons, samples: t.samples, style: t.style } satisfies Spec);
 
 const insertTemplate = (db: D1Database, id: string, t: TemplateInput, status: string, reason: string, namespace: string) =>
     db.prepare(`INSERT OR IGNORE INTO social_templates (id, channel, name, language, category, body, footer, image, rsvp, spec, status, reason, namespace, created_at)
@@ -403,9 +404,21 @@ async function submitWhatsapp(ctx: Ctx, t: TemplateInput, conn: Connection, auth
     return res.ok ? '' : refusal(res, 'MSG91 did not take the template');
 }
 
+/** The email's HTML with its logo as a link email readers can open (only an uploaded picture). */
+async function emailHtmlFor(ctx: Ctx, t: TemplateInput, conn: Connection): Promise<string | Response> {
+    const style = t.style;
+    const logoKey = style?.logoUrl ? uploadKey(style.logoUrl) : '';
+    if (style?.logoUrl && !logoKey) return err('Upload the logo again.');
+    const bad = logoKey ? await mediaProblem(ctx.env, logoKey, 'image') : null;
+    if (bad) return err(`Logo: ${bad}`);
+    const logoUrl = logoKey ? await publicFileUrl(linkBase(ctx), ctx.env.ORG_ID!, conn, logoKey) : '';
+    return emailHtml({ ...t, ...(style ? { style: { ...style, logoUrl } } : {}) }, conn.email?.fromName ?? '');
+}
+
 /** An email template to MSG91; gives the slug it is sent by, or the refusal. */
 async function submitEmail(ctx: Ctx, t: TemplateInput, conn: Connection, authKey: string): Promise<string | Response> {
-    const html = emailHtml(t, conn.email?.fromName ?? '');
+    const html = await emailHtmlFor(ctx, t, conn);
+    if (html instanceof Response) return html;
     const res = await msg91(ctx.env, authKey, 'POST', '/email/templates', { name: t.name, slug: t.name, subject: t.headerText, body: html });
     if (!res.ok) return refusal(res, 'MSG91 did not take the email template');
     return text(res.data?.data?.slug) || text(res.data?.data?.versions?.[0]?.slug) || t.name;
@@ -434,6 +447,31 @@ const templatesCreate: Handler = async (ctx) => {
     const id = `tpl_${crypto.randomUUID()}`;
     await insertTemplate(db, id, t, 'pending', '', namespace).run();
     return json({ id, ...t, status: 'pending', reason: '', createdAt: Date.now() } satisfies SocialTemplate, 201);
+};
+
+/**
+ * POST /social/templates/test — an email template not yet sent for review, to the signed-in
+ * person's own address only (so it can't be used to email others), with the examples filled in.
+ * It comes from the platform's address: MSG91 can only send a template it already has.
+ */
+const templateTest: Handler = async (ctx) => {
+    const session = await caller(ctx);
+    if (session instanceof Response) return session;
+    const b = await body(ctx);
+    const t = parseTemplate({ ...b, channel: 'email', name: 'test_email' });
+    if ('problem' in t) return err(t.problem);
+    const acct = await account(ctx, 'email');
+    if (acct instanceof Response) return acct;
+    const html = await emailHtmlFor(ctx, { ...t, header: 'none' }, acct.conn);
+    if (html instanceof Response) return html;
+    const name = session.name.split(/\s+/)[0] ?? '';
+    const fill = (x: string) => filledBody(x, { name }, t.samples);
+    const esc = (x: string) => x.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+    // Examples go into HTML, so each is escaped; the person's own links become '#'.
+    const filledHtml = html.replaceAll(/\{\{([^{}]*)\}\}/g, (m, f: string) => (/^(rsvp_yes_url|rsvp_no_url|unsubscribe_url)$/.test(f.trim()) ? '#' : esc(fill(m))));
+    const sent = await sendHtmlEmail(ctx.env, session.email, `[Test] ${fill(t.headerText)}`, filledHtml, fill(t.body));
+    if (!sent.sent) return err(sent.reason === 'not_configured' ? 'Test emails are not set up here.' : 'The test email could not be sent. Try again.', 502);
+    return json({ ok: true, to: session.email });
 };
 
 // shortcut: removes it from this list only; the template stays in MSG91 (delete it there too once people ask).
@@ -1065,6 +1103,7 @@ export const socialRoutes: SocialRoute[] = [
     { method: 'PUT', match: isExact('/social/email'), handler: emailSenderPut },
     { method: 'GET', match: isExact('/social/templates'), handler: templatesList },
     { method: 'POST', match: isExact('/social/templates'), handler: templatesCreate },
+    { method: 'POST', match: isExact('/social/templates/test'), handler: templateTest },
     { method: 'DELETE', match: p => TEMPLATE_PATH.test(p), handler: templatesDelete },
     { method: 'GET', match: isExact('/social/audience'), handler: audienceGet },
     { method: 'POST', match: isExact('/social/test'), handler: testSend },

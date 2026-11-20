@@ -102,7 +102,7 @@ before(async () => {
     });
     await new Promise(r => msg91.listen(0, '127.0.0.1', r));
     const base = `http://127.0.0.1:${msg91.address().port}`;
-    worker = await startDevWorker({ vars: { MSG91_API_BASE: base, SOCIAL_HOUR_MS: '50' } });
+    worker = await startDevWorker({ vars: { MSG91_API_BASE: base, SOCIAL_HOUR_MS: '50', EMAIL_SENDING: 'on', EMAIL_FROM: 'no-reply@ateliersupport.com' } });
     const admin = worker.browser();
     assert.equal((await admin.signIn('admin@example.com', 'provider-admin-password')).status, 200);
     for (const [email, name] of [['owner-a@example.com', 'Roshni Shah'], ['staff-a@example.com', 'Staff A'], ['owner-b@example.com', 'Owner B']]) {
@@ -206,6 +206,19 @@ test('the rules: templates, names, what MSG91 is sent and what its reports mean'
     assert.equal(rules.parseWebhook({ eventName: 'Failed', recipient: 'a@x.in', reason: '550 no such user' }).reason, '550 no such user');
     const html = rules.emailHtml({ header: 'image', body: 'Hello {{name}},\n\nSee <you>.', buttons: rules.RSVP_BUTTONS }, 'Vayu & Co');
     assert.ok(html.includes('{{image_url}}') && html.includes('{{rsvp_yes_url}}') && html.includes('{{unsubscribe_url}}') && html.includes('See &lt;you&gt;.') && html.includes('Vayu &amp; Co'));
+    // Email formatting: an underscore inside a field is never italics; headings, lists and https links only.
+    assert.deepEqual(rules.emailBlocks('# Hi *{{first_name}}*\n\n- one\n- _two_\n\nSee {{event_name}} and {{offer_code}} [here](https://x.in/a) or [no](javascript:x)'), [
+        { k: 'h', lines: [[{ k: 'text', text: 'Hi ' }, { k: 'b', text: '{{first_name}}' }]] },
+        { k: 'ul', lines: [[{ k: 'text', text: 'one' }], [{ k: 'i', text: 'two' }]] },
+        { k: 'p', lines: [[{ k: 'text', text: 'See {{event_name}} and {{offer_code}} ' }, { k: 'a', text: 'here', href: 'https://x.in/a' }, { k: 'text', text: ' or [no](javascript:x)' }]] },
+    ]);
+    const styled = rules.emailHtml({ header: 'none', body: 'Hi', buttons: [{ kind: 'url', text: 'Catalogue', url: 'https://x.in/"c' }], style: { preheader: 'Soon', accent: '#ffee00', logoUrl: 'https://x.in/l.png', footer: 'A\nB' } }, 'V');
+    assert.ok(styled.includes('>Soon</div>') && styled.includes('src="https://x.in/l.png"') && styled.includes('href="https://x.in/&quot;c"') && styled.includes('color:#1f1f1f') && styled.includes('A<br>B') && !styled.includes('rsvp_yes_url'));
+    const email = { channel: 'email', name: 'abc', language: 'en', header: 'none', headerText: 'Hi', body: 'Hello there {{name}}', buttons: [] };
+    assert.equal(rules.parseTemplate({ ...email, style: { footer: 'Hi {{name}}' } }).problem, 'The preview text and footer cannot use fields.');
+    assert.equal(rules.parseTemplate({ ...email, buttons: [1, 2, 3, 4].map(() => ({ kind: 'url', text: 'Go', url: 'https://x.in' })) }).problem, 'Up to 3 link buttons.');
+    assert.deepEqual(rules.parseTemplate({ ...email, buttons: [{ kind: 'phone', text: 'x', phone: '+919800000000' }, ...rules.RSVP_BUTTONS], style: { accent: 'red' } }).buttons, rules.RSVP_BUTTONS);
+    assert.equal(rules.parseTemplate({ ...email, style: { accent: 'red' } }).style.accent, '#b8902f');
 });
 
 test('an admin connects the workspace’s own MSG91 account; the key is never shown again', async () => {
@@ -393,11 +406,22 @@ test('email: the sender is set, a template made, and its review checked', async 
     assert.equal(toMsg91.subject, 'You’re invited, {{name}}');
     assert.ok(toMsg91.body.includes('{{rsvp_yes_url}}') && toMsg91.body.includes('Vayu Gallery'));
 
+    // A draft emailed to yourself before review: examples filled in, your own links blanked; never to another address.
+    const draft = { ...email, name: '', headerText: 'For {{name}}: {{event}}', body: 'Hello *{{name}}*,\n\nJoin us for {{event}}.', style: { preheader: 'Soon', accent: '#224466', logoUrl: '', footer: 'Kala Ghoda' }, buttons: [...rules.RSVP_BUTTONS, { kind: 'url', text: 'Catalogue', url: 'https://vayu.in/c' }], to: 'someone@else.com' };
+    const tested = await post(ownerA, app(orgA, '/social/templates/test'), draft);
+    assert.equal(tested.status, 200, tested.text);
+    assert.equal(tested.body.to, 'owner-a@example.com');
+    const testMail = await until(() => worker.emails().find(m => m.subject === '[Test] For Roshni: Monsoon Show'), 'the test email');
+    assert.equal(testMail.to, 'owner-a@example.com');
+    assert.ok(!worker.emails().some(m => m.to === 'someone@else.com'));
+    assert.equal((await post(ownerA, app(orgA, '/social/templates/test'), { ...draft, style: { footer: '{{x}}' } })).status, 400);
+
     // Lists are per channel; the review result comes from MSG91 by slug.
     assert.ok(!(await ownerA.call(app(orgA, '/social/templates?channel=whatsapp'))).body.templates.some(t => t.id === emailTemplateId));
     emailTemplates.set('email_opening_7', 2);
     const list = await ownerA.call(app(orgA, '/social/templates?channel=email&refresh=1'));
     assert.deepEqual([list.body.checked, list.body.templates.map(t => [t.id, t.status])], [true, [[emailTemplateId, 'approved']]]);
+    assert.deepEqual(list.body.templates[0].style, rules.EMAIL_STYLE); // the look is kept with the template
 });
 
 test('email: an invite goes to tagged contacts with an address, with their own links; reports, RSVP and unsubscribe work', async () => {

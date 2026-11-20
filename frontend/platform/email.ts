@@ -37,15 +37,20 @@ function fromAddress(env: Env): string {
   return env.EMAIL_FROM?.trim() || `no-reply@ateliersupport.com`;
 }
 
-export async function sendEmail(env: Env, to: string, subject: string, content: EmailContent): Promise<SendResult> {
+export function sendEmail(env: Env, to: string, subject: string, content: EmailContent): Promise<SendResult> {
+  return sendHtmlEmail(env, to, subject, renderHtml(subject, content), renderText(content));
+}
+
+/** A message whose HTML is already built (a workspace's email template, as a test). */
+export async function sendHtmlEmail(env: Env, to: string, subject: string, html: string, text: string): Promise<SendResult> {
   if (!env.EMAIL || !emailConfigured(env)) return { sent: false, reason: 'not_configured' };
   try {
     await env.EMAIL.send({
       from: { name: APP_NAME, email: fromAddress(env) },
       to,
       subject,
-      text: renderText(content),
-      html: renderHtml(subject, content),
+      text,
+      html,
       ...(env.EMAIL_REPLY_TO ? { replyTo: env.EMAIL_REPLY_TO } : {}),
     });
     return { sent: true };

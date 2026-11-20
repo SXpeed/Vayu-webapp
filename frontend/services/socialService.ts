@@ -34,6 +34,8 @@ export const socialService = {
     /** Asks MSG91 too: each review's result, and (WhatsApp) templates made in its own panel; `skipped` are ones this app can't send. */
     refreshTemplates: (channel: Channel) => call<{ templates: SocialTemplate[]; checked: boolean; skipped: number }>(`/social/templates?channel=${channel}&refresh=1`),
     createTemplate: (t: TemplateInput & { sampleImageUrl?: string }) => call<SocialTemplate>('/social/templates', json('POST', t)),
+    /** An email template not sent for review yet, to your own address; gives that address. */
+    testDraft: (t: TemplateInput) => call<{ ok: true; to: string }>('/social/templates/test', json('POST', t)),
     async removeTemplate(id: string): Promise<void> { await call(`/social/templates/${id}`, { method: 'DELETE' }); },
 
     audience: (channel: Channel, tagIds: string[]) => call<Audience>(`/social/audience?channel=${channel}&tags=${tagIds.map(encodeURIComponent).join(',')}`),
