@@ -18,6 +18,7 @@ import { orgStorageEnv } from './orgApp';
 import { ensureContactSchema, orgCountry } from './contactStore';
 import { emailKey, phoneKey } from './contactKeys';
 import { decryptSecret, encryptSecret, reportDecryptFailure, secretsConfigured } from './platform/secrets';
+import { SNIFF_BYTES, safeExtension, storedContentType } from './fileTypes';
 import {
     MAX_RECIPIENTS, MEDIA_HEADERS, MEDIA_RULES, RSVP_BUTTONS, accountTemplates, createTemplatePayload, emailHtml, emailTemplateStatus, emailVariables,
     emptyCounts, inviteProblem, isStop, nextStatus, parseTemplate, parseWebhook, rsvpOf, sendPayload, sendSlots,
@@ -44,6 +45,8 @@ const NEW_COLUMNS: Record<string, Record<string, string>> = {
     social_invites: { channel: "TEXT NOT NULL DEFAULT 'whatsapp'", link_base: "TEXT NOT NULL DEFAULT ''", parent_id: "TEXT NOT NULL DEFAULT ''", auto: 'INTEGER NOT NULL DEFAULT 0' },
     // A resend's people point back to the first message (origin) and count their tries; `resent` marks a row already sent again.
     social_recipients: { origin: "TEXT NOT NULL DEFAULT ''", attempt: 'INTEGER NOT NULL DEFAULT 0', resent: 'INTEGER NOT NULL DEFAULT 0' },
+    // A photo, video, voice note, file or place someone sent: our copy's address (MSG91's link if copying failed), its type and file name.
+    social_messages: { media_url: "TEXT NOT NULL DEFAULT ''", media_type: "TEXT NOT NULL DEFAULT ''", media_name: "TEXT NOT NULL DEFAULT ''" },
 };
 
 export function ensureSocialTables(db: D1Database): Promise<void> {
@@ -83,7 +86,7 @@ export function ensureSocialTables(db: D1Database): Promise<void> {
                 }
             }
         }
-    });
+    }, JSON.stringify(NEW_COLUMNS)); // a new column runs the setup again
 }
 
 // ── The MSG91 account ───────────────────────────────────────────────────────
@@ -928,9 +931,38 @@ const optOut = (db: D1Database, address: string) => db.prepare('INSERT OR IGNORE
 const saveRsvp = (db: D1Database, address: string, rsvp: Rsvp) => db.prepare(`UPDATE social_recipients SET rsvp = ? WHERE id = (SELECT id FROM social_recipients
     WHERE phone = ? AND status != 'failed' AND status != 'queued' AND status_at > ? ORDER BY rowid DESC LIMIT 1)`).bind(rsvp, address, Date.now() - 30 * 86_400_000).run();
 
-/** A WhatsApp reply: kept in its conversation; STOP leaves the number out from now on; yes / no is their RSVP. */
-async function applyReply(db: D1Database, ev: ReplyEvent): Promise<void> {
-    await db.prepare("INSERT INTO social_messages (id, phone, dir, body, at) VALUES (?, ?, 'in', ?, ?)").bind(`m_${crypto.randomUUID()}`, ev.phone, ev.text, Date.now()).run();
+const MEDIA_MAX_BYTES = 32 * 1024 * 1024;
+
+/** A file someone sent, copied into this workspace's storage (MSG91's link dies after 30 days); null when it couldn't be. */
+async function keepMedia(space: Env, media: NonNullable<ReplyEvent['media']>): Promise<{ url: string; type: string } | null> {
+    try {
+        const res = await fetch(media.url, { signal: AbortSignal.timeout(15_000) });
+        if (!res.ok || Number(res.headers.get('Content-Length') ?? 0) > MEDIA_MAX_BYTES) return null;
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        if (!bytes.length || bytes.length > MEDIA_MAX_BYTES) return null;
+        const type = storedContentType(res.headers.get('Content-Type') ?? '', bytes.slice(0, SNIFF_BYTES));
+        const ext = safeExtension(media.name) || safeExtension(`x.${type.split('/')[1]?.split(/[;+]/)[0] ?? ''}`);
+        const key = `uploads/whatsapp/${Date.now()}-${crypto.randomUUID()}${ext ? '.' + ext : ''}`;
+        await space.VAYU_R2.put(key, bytes, { httpMetadata: { contentType: type } });
+        return { url: fileUrl(space, key), type };
+    } catch (e) {
+        console.error('A WhatsApp file was not copied:', (e as Error).message);
+        return null;
+    }
+}
+
+/** A WhatsApp reply: kept in its conversation, with any file they sent; STOP leaves the number out from now on; yes / no is their RSVP. */
+async function applyReply(space: Env, ev: ReplyEvent): Promise<void> {
+    const db = space.VAYU_DB;
+    let media = { url: '', type: '', name: '' };
+    if (ev.media?.kind === 'location') media = { url: ev.media.url, type: 'location', name: '' };
+    else if (ev.media) {
+        const kept = await keepMedia(space, ev.media);
+        // Not copied: MSG91's own link still opens it for 30 days.
+        media = { url: kept?.url ?? ev.media.url, type: kept?.type ?? ev.media.kind, name: ev.media.name };
+    }
+    await db.prepare("INSERT INTO social_messages (id, phone, dir, body, at, media_url, media_type, media_name) VALUES (?, ?, 'in', ?, ?, ?, ?, ?)")
+        .bind(`m_${crypto.randomUUID()}`, ev.phone, ev.text, Date.now(), media.url, media.type, media.name).run();
     if (isStop(ev.text)) {
         await optOut(db, ev.phone);
         return;
@@ -939,10 +971,11 @@ async function applyReply(db: D1Database, ev: ReplyEvent): Promise<void> {
     if (rsvp) await saveRsvp(db, ev.phone, rsvp);
 }
 
-async function applyEvent(db: D1Database, raw: unknown): Promise<void> {
+async function applyEvent(space: Env, raw: unknown): Promise<void> {
+    const db = space.VAYU_DB;
     const ev = parseWebhook(raw);
     if (ev?.kind === 'status') await applyStatus(db, ev);
-    else if (ev?.kind === 'reply') await applyReply(db, ev);
+    else if (ev?.kind === 'reply') await applyReply(space, ev);
     else if (ev?.kind === 'stop') await optOut(db, ev.phone);
 }
 
@@ -955,7 +988,7 @@ async function receiveReports(request: Request, space: Env, conn: Connection, to
     const payload = await request.json().catch(() => null);
     // Always 200 once the address is right: MSG91 pauses a webhook that answers 4xx.
     for (const one of (Array.isArray(payload) ? payload : [payload]).slice(0, 200)) {
-        await applyEvent(space.VAYU_DB, one).catch(e => console.error('A MSG91 report was not applied:', e)); // NOSONAR: reports for one person must apply in order
+        await applyEvent(space, one).catch(e => console.error('A MSG91 report was not applied:', e)); // NOSONAR: reports for one person must apply in order
     }
     return json({ ok: true });
 }

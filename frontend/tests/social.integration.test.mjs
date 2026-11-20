@@ -480,6 +480,21 @@ test('the rules: who got it, resend settings, the reply window', () => {
     assert.equal(rules.replyWindowLeft(1000, 1000 + rules.REPLY_WINDOW_MS), 0);
     assert.equal(rules.replyWindowLeft(0), 0); // never wrote: closed
     assert.deepEqual(rules.parseWebhook({ direction: 'inbound', customerNumber: '919822222222', content_type: 'image' }), { kind: 'reply', phone: '919822222222', text: '[image]' });
+    assert.deepEqual(rules.parseWebhook({ direction: 'inbound', customerNumber: '91982', contentType: 'document', url: 'https://x.test/a', filename: 'plan.pdf' }).media,
+        { kind: 'document', url: 'https://x.test/a', name: 'plan.pdf' });
+    assert.equal(rules.parseWebhook({ direction: 'inbound', customerNumber: '91982', contentType: 'image', url: 'http://x.test/a' }).media, undefined); // https only
+    assert.deepEqual(rules.parseWebhook({ direction: 'inbound', customerNumber: '91982', contentType: 'location', latitude: '28.6', longitude: '77.2' }).media,
+        { kind: 'location', url: 'https://maps.google.com/?q=28.6,77.2', name: '' });
+});
+
+test('a photo they send shows in the conversation (MSG91’s link kept when it can’t be copied)', async () => {
+    const phone = '919833333333';
+    const url = 'https://127.0.0.1:1/photo.jpg'; // nothing answers there
+    assert.equal(await report(hookUrl, { direction: 'inbound', customerNumber: phone, contentType: 'image', url, caption: 'The view' }), 200);
+    const open = await ownerA.call(app(orgA, `/social/replies/${phone}`));
+    assert.equal(open.status, 200, open.text);
+    const m = open.body.messages.at(-1);
+    assert.deepEqual([m.body, m.media], ['The view', { url, type: 'image', name: '' }]);
 });
 
 test('who got the invites: each contact’s latest on each channel, and who was never sent one', async () => {

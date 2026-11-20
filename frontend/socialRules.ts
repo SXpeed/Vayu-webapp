@@ -436,8 +436,11 @@ export function nextStatus(current: RecipientStatus, incoming: RecipientStatus):
 /** `phone` is the email address for an email report; `stop` marks an email unsubscribe. */
 export type WebhookEvent =
     | { kind: 'status'; id: string; requestId: string; phone: string; status: RecipientStatus; reason: string }
-    | { kind: 'reply'; phone: string; text: string }
+    | { kind: 'reply'; phone: string; text: string; media?: InboundMedia }
     | { kind: 'stop'; phone: string };
+
+/** A file or place someone sent: MSG91's link to it (Meta keeps it 30 days), or a map link. */
+export interface InboundMedia { kind: string; url: string; name: string }
 
 const pick = (o: Record<string, unknown>, ...keys: string[]): string => {
     for (const k of keys) {
@@ -481,7 +484,14 @@ export function parseWebhook(raw: unknown): WebhookEvent | null {
         // A photo, voice note or file with no words still belongs in the conversation.
         const kind = pick(o, 'contentType', 'content_type', 'messageType', 'type').toLowerCase();
         const text = buttonText(o.button) || pick(o, 'text', 'message', 'caption') || (kind && kind !== 'text' ? `[${kind}]` : '');
-        return text ? { kind: 'reply', phone, text: text.slice(0, 1000) } : null;
+        if (!text) return null;
+        const url = pick(o, 'url');
+        const lat = pick(o, 'latitude');
+        const lng = pick(o, 'longitude');
+        let media: InboundMedia | undefined;
+        if (/^https:\/\//i.test(url)) media = { kind: kind || 'file', url, name: pick(o, 'filename').slice(0, 200) };
+        else if (lat && lng && Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))) media = { kind: 'location', url: `https://maps.google.com/?q=${Number(lat)},${Number(lng)}`, name: '' };
+        return { kind: 'reply', phone, text: text.slice(0, 1000), ...(media && { media }) };
     }
     const status = pick(o, 'eventName', 'event_name', 'status', 'event').toLowerCase();
     if (status !== 'sent' && status !== 'delivered' && status !== 'read' && status !== 'failed') return null;
@@ -616,4 +626,8 @@ export const replyWindowLeft = (lastInAt: number, now = Date.now(), windowMs = R
 /** A WhatsApp conversation in the list. `phone` is digits. */
 export interface ReplyThread { phone: string; name: string; inviteName: string; rsvp: Rsvp; lastText: string; lastDir: 'in' | 'out'; lastAt: number; lastInAt: number; unread: number }
 /** One line of a conversation: their message, the team's answer, or an invite that went to them. */
-export interface ReplyMessage { id: string; dir: 'in' | 'out' | 'invite'; body: string; template: string; byName: string; at: number; status?: RecipientStatus }
+export interface ReplyMessage {
+    id: string; dir: 'in' | 'out' | 'invite'; body: string; template: string; byName: string; at: number; status?: RecipientStatus;
+    /** What they sent with it: `type` is the file's type (image/jpeg…) or 'location'. */
+    media?: { url: string; type: string; name: string };
+}

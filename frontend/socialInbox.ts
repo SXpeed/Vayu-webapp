@@ -242,14 +242,17 @@ const threadGet: Handler = async (ctx) => {
     const phone = THREAD_PATH.exec(ctx.path)![1];
     const db = ctx.env.VAYU_DB;
     const [messages, invites, stopped] = await Promise.all([
-        db.prepare('SELECT id, dir, body, template, by_name, at FROM social_messages WHERE phone = ? ORDER BY at DESC LIMIT 300').bind(phone).all<Row>(),
+        db.prepare('SELECT id, dir, body, template, by_name, at, media_url, media_type, media_name FROM social_messages WHERE phone = ? ORDER BY at DESC LIMIT 300').bind(phone).all<Row>(),
         db.prepare(`SELECT r.id, r.name, r.status, r.status_at, i.vals, i.created_at, t.body, t.name AS template FROM social_recipients r
             JOIN social_invites i ON i.id = r.invite_id LEFT JOIN social_templates t ON t.id = i.template_id
             WHERE r.phone = ? AND i.channel = 'whatsapp' AND i.status != 'scheduled' ORDER BY r.rowid DESC LIMIT 50`).bind(phone).all<Row>(),
         db.prepare('SELECT 1 FROM social_optouts WHERE phone = ?').bind(phone).first(),
     ]);
     const list: ReplyMessage[] = [
-        ...messages.results.map(m => ({ id: text(m.id), dir: (m.dir === 'in' ? 'in' : 'out') as ReplyMessage['dir'], body: text(m.body), template: text(m.template), byName: text(m.by_name), at: Number(m.at) })),
+        ...messages.results.map(m => ({
+            id: text(m.id), dir: (m.dir === 'in' ? 'in' : 'out') as ReplyMessage['dir'], body: text(m.body), template: text(m.template), byName: text(m.by_name), at: Number(m.at),
+            ...(m.media_url ? { media: { url: text(m.media_url), type: text(m.media_type), name: text(m.media_name) } } : {}),
+        })),
         ...invites.results.map(r => ({
             id: text(r.id), dir: 'invite' as const, template: templateTitle(text(r.template)), byName: '', at: Number(r.created_at), status: text(r.status) as RecipientStatus,
             body: filledBody(text(r.body), { ...parseJson<Record<string, string>>(r.vals, {}), name: text(r.name) }),

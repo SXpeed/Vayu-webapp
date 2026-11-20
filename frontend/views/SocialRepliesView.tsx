@@ -4,7 +4,9 @@
 // own reply-to mailbox. Server: socialInbox.ts.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { AlertCircle, CheckCheck, Clock, Loader2, Mail, MessageCircle, RefreshCw, Search, Send, UserX } from 'lucide-react';
+import { AlertCircle, CheckCheck, Clock, Download, FileText, Loader2, Mail, MapPin, MessageCircle, RefreshCw, Search, Send, UserX } from 'lucide-react';
+import { ImageViewer } from './chat/ImageViewer';
+import { saveBlob } from '../services/saveFile';
 import { Badge, Button, Card, EmptyState, Field, GhostIconButton, Input, PageBody, PageHeader, PageRoot, Pill, Select, Textarea } from '../components/ui';
 import { socialService } from '../services/socialService';
 import { MEDIA_HEADERS, firstName, inviteProblem, replyWindowLeft, templateTitle, type Channel, type FieldValues, type ReplyMessage, type ReplyThread, type SocialTemplate } from '../socialRules';
@@ -131,13 +133,53 @@ export const RepliesTab: React.FC<{ waReady: boolean; onOpen: (phone: string) =>
 
 /* ------------------------------- One conversation ------------------------------- */
 
+let saving = false; // a second tap while the file is still loading would save it twice
+async function saveMedia(url: string, name: string) {
+    if (saving) return;
+    saving = true;
+    const toastId = toast.loading('Saving file…');
+    try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('Could not download the file');
+        await saveBlob(await res.blob(), name);
+        toast.dismiss(toastId);
+    } catch (e) {
+        if ((e as Error).name === 'AbortError') toast.dismiss(toastId);
+        else toast.error('Could not download the file', { id: toastId });
+    } finally {
+        saving = false;
+    }
+}
+
+/** What they sent: a photo (tap to zoom), video, voice note, place, or any other file to save. */
+const Media: React.FC<{ media: NonNullable<ReplyMessage['media']>; caption: string }> = ({ media, caption }) => {
+    const [open, setOpen] = useState(false);
+    const name = media.name || 'WhatsApp file';
+    const link = 'mt-1 mb-1 flex items-center gap-2 text-[13px] underline text-brand-900 dark:text-gold-400';
+    if (media.type === 'location') return <a href={media.url} target="_blank" rel="noopener noreferrer" className={link}><MapPin size={15} aria-hidden />Open location in Maps</a>;
+    if (media.type.startsWith('image')) return (
+        <>
+            <button type="button" onClick={() => setOpen(true)} className="block mb-1 -mx-1 active-scale" aria-label="Open photo">
+                <img src={media.url} alt={media.name || 'Photo they sent'} loading="lazy" className="rounded-xl max-h-72 max-w-full object-cover" />
+            </button>
+            {open && <ImageViewer image={{ url: media.url, name: media.name || 'whatsapp-photo.jpg', caption }} onClose={() => setOpen(false)} />}
+        </>
+    );
+    if (media.type.startsWith('video')) return <video src={media.url} controls preload="metadata" className="mb-1 rounded-xl max-h-72 max-w-full" />;
+    if (media.type.startsWith('audio') || media.type === 'voice') return <audio src={media.url} controls preload="metadata" className="mb-1 max-w-full" />;
+    return <button type="button" onClick={() => { void saveMedia(media.url, name); }} className={link}><FileText size={15} aria-hidden />{name}<Download size={14} aria-hidden /></button>;
+};
+
 const Bubble: React.FC<{ m: ReplyMessage }> = ({ m }) => {
     const ours = m.dir !== 'in';
+    // "[image]" only stood in for a photo with no words; the photo itself shows now.
+    const words = m.media && /^\[\w+\]$/.test(m.body) ? '' : m.body;
     return (
         <li className={`flex ${ours ? 'justify-end' : 'justify-start'}`}>
             <div className={`max-w-[85%] sm:max-w-[70%] rounded-2xl px-3 py-2 text-[13.5px] ${ours ? 'bg-gold-500/15 rounded-br-sm text-gray-900 dark:text-white' : 'neu-card rounded-bl-sm'}`}>
                 {(m.dir === 'invite' || m.template) && <p className="mb-1 text-[10.5px] uppercase tracking-wider text-[var(--neu-text-dim)]">{m.dir === 'invite' ? 'Invite' : 'Template'}{m.template ? ` · ${m.template}` : ''}</p>}
-                <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{m.body}</p>
+                {m.media && <Media media={m.media} caption={time(m.at)} />}
+                {words && <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{words}</p>}
                 <p className="mt-1 text-right text-[10.5px] text-[var(--neu-text-dim)]">{m.byName ? `${m.byName} · ` : ''}{time(m.at)}{m.status ? ` · ${tick(m.status)}` : ''}</p>
             </div>
         </li>
