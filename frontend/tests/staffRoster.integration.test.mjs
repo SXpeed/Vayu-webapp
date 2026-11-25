@@ -225,5 +225,5 @@ test('an organization whose plan leaves the staff roster out: closed to everyone
     const refused = await orgOwner.call(app('/staff-roster'));
     assert.equal(refused.status, 403);
     assert.equal(refused.body.code, 'module_off');
-    assert.deepEqual((await orgOwner.call(app('/auth/me'))).body.sectionsOff, ['schedule']);
+    assert.deepEqual((await orgOwner.call(app('/auth/me'))).body.sectionsOff, ['schedule', 'meetings']); // meetings are off until switched on per org
 });

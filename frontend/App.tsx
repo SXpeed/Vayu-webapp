@@ -103,6 +103,7 @@ const viewLoaders = {
     StaffRosterView: () => import('./views/StaffRosterView'),
     SalesView: () => import('./views/SalesView'),
     HubViews: () => import('./views/HubViews'),
+    MeetingsView: () => import('./views/MeetingsView'),
 };
 
 const ArtworksView = lazy(() => viewLoaders.ArtworksView().then(m => ({ default: m.ArtworksView })));
@@ -122,6 +123,7 @@ const StaffRosterView = lazy(() => viewLoaders.StaffRosterView().then(m => ({ de
 const SalesView = lazy(() => viewLoaders.SalesView().then(m => ({ default: m.SalesView })));
 const MySpaceView = lazy(() => viewLoaders.HubViews().then(m => ({ default: m.MySpaceView })));
 const SocialView = lazy(() => viewLoaders.HubViews().then(m => ({ default: m.SocialView })));
+const MeetingsView = lazy(() => viewLoaders.MeetingsView().then(m => ({ default: m.MeetingsView })));
 const AdminHubView = lazy(() => viewLoaders.HubViews().then(m => ({ default: m.AdminHubView })));
 
 /** Warm every view chunk once the app is idle after sign-in, one per idle
@@ -584,6 +586,8 @@ const App: React.FC = () => {
                 return <MySpaceView events={events} teamMembers={teamMembers} currentUserId={userProfile?.id || authUser?.id || ''} userName={userProfile?.name || authUser?.name || ''} onUpdateEvent={handlers.handleUpdateEvent} />;
             case 'social':
                 return <SocialView />;
+            case 'meetings':
+                return <MeetingsView canEdit={can('meetings', 'edit')} />;
             case 'admin':
                 return <AdminHubView />;
             case 'profile':

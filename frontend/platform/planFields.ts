@@ -63,6 +63,7 @@ export const MODULE_FIELDS: FlagField[] = [
   { key: 'calendar', label: 'Calendar & follow-ups', hint: 'Events, reminders and follow-ups.', default: true },
   { key: 'attendance', label: 'Attendance', hint: 'Check-in and check-out with location.', default: false },
   { key: 'staffRoster', label: 'Staff roster', hint: 'Weekly shifts at each store, days off, leave requests and publishing to staff. Switching it off hides it for everyone.', default: true },
+  { key: 'meetings', label: 'Meetings', hint: 'Record or type meetings, with AI transcription, summaries and translation (AI usage is charged). Off hides it for everyone.', default: false },
 ];
 
 /** Capabilities that are not a whole module. */

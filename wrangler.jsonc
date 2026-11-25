@@ -104,6 +104,12 @@
     // TEMPORARY (2026-09-30): the shared account still has TEST keys, which
     // can't take real money. Remove this line when live keys are set; then
     // test-mode links are refused in production again.
-    "SHARED_RAZORPAY_ALLOW_TEST": "on"
+    "SHARED_RAZORPAY_ALLOW_TEST": "on",
+    // Meetings AI (docs/MEETINGS.md): OpenAI Whisper for speech-to-text, and a
+    // stand-in text model for summaries and translation until one is chosen.
+    // The key is a secret: wrangler secret put MEETING_AI_KEY
+    "MEETING_AI_URL": "https://api.openai.com/v1",
+    "MEETING_TRANSCRIBE_MODEL": "whisper-1",
+    "MEETING_TEXT_MODEL": "gpt-4o-mini"
   }
 }

@@ -42,6 +42,7 @@
     "sales.ts",
     "expenses.ts",
     "notes.ts",
+    "meetings.ts",
     "social.ts",
     "socialInbox.ts",
     "invoices.ts",

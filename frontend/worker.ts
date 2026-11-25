@@ -6,6 +6,7 @@ import {
 import { staffRosterRoutes } from './staffRoster';
 import { expenseRoutes } from './expenses';
 import { noteRoutes } from './notes';
+import { meetingRoutes } from './meetings';
 import { deliverDueInvites, handleSocialPublic, socialRoutes } from './social';
 import { autoResendDue, socialInboxRoutes } from './socialInbox';
 import { salesRoutes } from './sales';
@@ -312,6 +313,7 @@ const ACCESS_TABLE: AccessEntry[] = [
   { prefixes: ['/payments'], section: 'payments' },
   { prefixes: ['/sales'], section: 'sales' },
   { prefixes: ['/social'], section: 'social' },
+  { prefixes: ['/meetings'], section: 'meetings' },
   { prefixes: ['/events', '/holidays'], section: 'calendar' },
   { prefixes: ['/conversations', '/messages'], section: 'messages' },
   { prefixes: ['/activity-logs'], rule: (_path, method) => (method === 'GET' ? { section: 'activity', level: 'view' } : null) },
@@ -3971,6 +3973,9 @@ const routes: Route[] = [
 
   // My Notes, private to each person (notes.ts)
   ...noteRoutes,
+
+  // Meetings: recordings, AI summaries and translation (meetings.ts)
+  ...meetingRoutes,
 
   // Social: WhatsApp invites through the workspace's MSG91 account (social.ts)
   ...socialRoutes,

@@ -20,3 +20,6 @@ PAYMENT_SECRETS_KEY=
 
 # Local only: allow provider admins without 2FA. Never set this in staging/production.
 # ADMIN_REQUIRE_2FA=off
+
+# Meetings AI (docs/MEETINGS.md): your OpenAI key, for Whisper and summaries.
+MEETING_AI_KEY=

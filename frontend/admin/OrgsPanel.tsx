@@ -572,6 +572,18 @@ const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; on
         void act('/entitlements', { key: 'maxMembers', value: value.trim() === '' ? null : Number(value), reason });
     };
 
+    // Meetings run paid AI, so they are switched on one organization at a time (an override, audited).
+    const meetingsOn = info.limits.modules.meetings === true;
+    const toggleMeetings = async () => {
+        const reason = await dialogs.prompt({
+            title: meetingsOn ? 'Turn Meetings off for this organization' : 'Turn Meetings on for this organization',
+            body: meetingsOn ? 'Meetings disappear for everyone in it within a minute. Saved meetings are kept.' : 'Its admins then choose which roles can read or record meetings. AI usage is charged to the platform.',
+            label: 'Reason (recorded in the audit log)', minLength: 3, confirmLabel: meetingsOn ? 'Turn off' : 'Turn on',
+        });
+        if (!reason) return;
+        void act('/entitlements', { key: 'meetings', value: !meetingsOn, reason });
+    };
+
     const limits = info.limits.limits;
     const overridden = new Set(Object.keys(info.overrides));
     const included = [
@@ -622,6 +634,7 @@ const PlanCard: React.FC<{ orgId: string; info: Entitlements; reauth: Reauth; on
                 <div className="flex flex-wrap gap-2">
                     <Button onClick={extend} disabled={busy || !hasPlan}>{sub.status === 'trialing' ? 'Extend trial' : 'Extend plan'}</Button>
                     <Button onClick={override} disabled={busy}>Override seat limit</Button>
+                    <Button onClick={toggleMeetings} disabled={busy}>{meetingsOn ? 'Turn Meetings off' : 'Turn Meetings on'}</Button>
                 </div>
             </div>
         </Section>

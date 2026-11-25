@@ -21,6 +21,7 @@ export const VIEW_SECTION: Partial<Record<ViewState, SectionId>> = {
     schedule: 'schedule',
     activity: 'activity',
     social: 'social',
+    meetings: 'meetings',
     admin: 'schedule', // the Requests tab itself shows approve / decline only to managers (server-checked)
 };
 

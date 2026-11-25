@@ -8,7 +8,7 @@
 // quota. There are no server-side exports or searches to limit (CSV and PDF
 // exports, and searches, run in the browser).
 
-export type CostlyGroup = 'payment_link' | 'payment_check' | 'billing' | 'upload' | 'import' | 'invite' | 'room';
+export type CostlyGroup = 'payment_link' | 'payment_check' | 'billing' | 'upload' | 'import' | 'invite' | 'room' | 'ai';
 
 interface CostlyRoute { method: string; match: (path: string) => boolean; group: CostlyGroup }
 
@@ -26,6 +26,8 @@ const COSTLY: CostlyRoute[] = [
   { method: 'POST', match: exact('/contacts/import'), group: 'import' },
   { method: 'POST', match: p => p === '/team/invitations' || p === '/auth/users', group: 'invite' },
   { method: 'POST', match: exact('/viewing-rooms'), group: 'room' },
+  // Each is a paid call to the meetings AI service.
+  { method: 'POST', match: p => /^\/meetings\/[\w-]{1,64}\/(transcribe|summarize|translate)$/.test(p), group: 'ai' },
   // Each sends real WhatsApp messages, charged to the workspace's MSG91 account.
   { method: 'POST', match: p => p === '/social/invites' || p === '/social/test' || p === '/social/templates' || /^\/social\/invites\/[\w-]{1,64}\/retry$/.test(p), group: 'invite' },
 ];

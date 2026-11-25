@@ -120,6 +120,16 @@ export interface Env {
   // test config starts with it off so tests opt in).
   EMAIL_SENDING?: string;
 
+  // Meetings AI (meetings.ts, docs/MEETINGS.md): any OpenAI-compatible
+  // service. Unset, meetings still record and save; the AI buttons explain.
+  MEETING_AI_URL?: string;
+  MEETING_AI_KEY?: string; // secret
+  MEETING_TEXT_MODEL?: string;
+  MEETING_TRANSCRIBE_MODEL?: string;
+  // Speech-to-text from a different service than the text model (optional).
+  MEETING_TRANSCRIBE_URL?: string;
+  MEETING_TRANSCRIBE_KEY?: string; // secret
+
   // ── The app per organization (frontend/orgApp.ts) ───────────────────────
   // One Durable Object per organization holding its app database
   // (frontend/orgStorage.ts, OrgAppDb).

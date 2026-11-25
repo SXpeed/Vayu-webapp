@@ -4,7 +4,7 @@ import { Artwork, CalendarEvent, EventTodo, ViewState, UserProfile } from '../ty
 import { FullScreenPortal } from '../components/FullScreenPortal';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { EVENT_COLORS, eventColor, eventTimeLabel } from '../services/eventService';
-import { Clock, Receipt, HandCoins, Eye, EyeOff, ChevronLeft, Palette, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronRight, ShieldCheck, User, CalendarClock, UserRound, Megaphone } from 'lucide-react';
+import { Clock, Receipt, HandCoins, Eye, EyeOff, ChevronLeft, Palette, IndianRupee, CalendarDays, Plus, Trash2, X, Loader2, Users, Check, ChevronRight, ShieldCheck, User, CalendarClock, UserRound, Megaphone, Mic } from 'lucide-react';
 import { PageRoot, PageHeader, PageBody, GhostIconButton } from '../components/ui';
 import { BellButton } from '../components/NotificationBell';
 import { useAppChrome } from '../components/Layout';
@@ -92,6 +92,7 @@ const QUICK_ACTIONS: { section?: SectionId; level?: AccessLevel; view: ViewState
     { section: 'schedule', view: 'schedule', label: 'Staff roster', Icon: CalendarClock },
     { view: 'myspace', label: 'My Space', Icon: UserRound },
     { section: 'social', view: 'social', label: 'Social', Icon: Megaphone },
+    { section: 'meetings', view: 'meetings', label: 'Meetings', Icon: Mic },
     // Admin holds leave decisions, so it shows to whoever manages the Staff roster.
     { section: 'schedule', level: 'edit', view: 'admin', label: 'Admin', Icon: ShieldCheck },
 ];

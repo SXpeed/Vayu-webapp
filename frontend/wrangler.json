@@ -61,6 +61,9 @@
     "WORKSPACE_ID": "default",
     "EMAIL_SENDING": "off",
     "LEGACY_PAYMENT_LINKS": "on",
-    "LEGACY_BEARER_UNTIL": "2099-01-01"
+    "LEGACY_BEARER_UNTIL": "2099-01-01",
+    "MEETING_AI_URL": "https://api.openai.com/v1",
+    "MEETING_TRANSCRIBE_MODEL": "whisper-1",
+    "MEETING_TEXT_MODEL": "gpt-4o-mini"
   }
 }
