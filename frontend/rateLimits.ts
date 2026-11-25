@@ -27,7 +27,7 @@ const COSTLY: CostlyRoute[] = [
   { method: 'POST', match: p => p === '/team/invitations' || p === '/auth/users', group: 'invite' },
   { method: 'POST', match: exact('/viewing-rooms'), group: 'room' },
   // Each is a paid call to the meetings AI service.
-  { method: 'POST', match: p => /^\/meetings\/[\w-]{1,64}\/(transcribe|summarize|translate)$/.test(p), group: 'ai' },
+  { method: 'POST', match: p => p === '/meetings/ask' || /^\/meetings\/[\w-]{1,64}\/(summarize|translate|speakers|ask|parts|parts\/\d{1,4}\/transcribe)$/.test(p), group: 'ai' },
   // Each sends real WhatsApp messages, charged to the workspace's MSG91 account.
   { method: 'POST', match: p => p === '/social/invites' || p === '/social/test' || p === '/social/templates' || /^\/social\/invites\/[\w-]{1,64}\/retry$/.test(p), group: 'invite' },
 ];

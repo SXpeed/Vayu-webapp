@@ -313,7 +313,8 @@ const ACCESS_TABLE: AccessEntry[] = [
   { prefixes: ['/payments'], section: 'payments' },
   { prefixes: ['/sales'], section: 'sales' },
   { prefixes: ['/social'], section: 'social' },
-  { prefixes: ['/meetings'], section: 'meetings' },
+  // Meetings: asking about them only needs "view"; recording and the other AI steps, "edit".
+  { prefixes: ['/meetings'], rule: (path, method) => ({ section: 'meetings', level: method === 'GET' || path.endsWith('/ask') ? 'view' : 'edit' }) },
   { prefixes: ['/events', '/holidays'], section: 'calendar' },
   { prefixes: ['/conversations', '/messages'], section: 'messages' },
   { prefixes: ['/activity-logs'], rule: (_path, method) => (method === 'GET' ? { section: 'activity', level: 'view' } : null) },

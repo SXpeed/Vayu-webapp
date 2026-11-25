@@ -105,11 +105,11 @@
     // can't take real money. Remove this line when live keys are set; then
     // test-mode links are refused in production again.
     "SHARED_RAZORPAY_ALLOW_TEST": "on",
-    // Meetings AI (docs/MEETINGS.md): OpenAI Whisper for speech-to-text, and a
+    // Meetings AI (docs/MEETINGS.md), through OpenRouter: Whisper for speech-to-text, and a
     // stand-in text model for summaries and translation until one is chosen.
     // The key is a secret: wrangler secret put MEETING_AI_KEY
-    "MEETING_AI_URL": "https://api.openai.com/v1",
-    "MEETING_TRANSCRIBE_MODEL": "whisper-1",
-    "MEETING_TEXT_MODEL": "gpt-4o-mini"
+    "MEETING_AI_URL": "https://openrouter.ai/api/v1",
+    "MEETING_TRANSCRIBE_MODEL": "openai/whisper-1",
+    "MEETING_TEXT_MODEL": "openai/gpt-4o-mini"
   }
 }

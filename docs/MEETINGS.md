@@ -1,9 +1,14 @@
 # Meetings
 
-Record a meeting (or type it), get it transcribed, summarized for its type
-(Reporting, Brainstorm, Brief, Notes) and translated. Code: `frontend/meetings.ts`
-(server), `frontend/meetingRules.ts` (checks + AI instructions),
-`frontend/views/MeetingsView.tsx` (screen).
+Record a meeting (or upload a recording, or type it). While recording, audio
+is saved and transcribed every 3 minutes (live text, nothing lost if the tab
+closes). Then: a summary for its type (Reporting, Brainstorm, Brief, Notes),
+action items (tick off, add to Tasks), who said what (AI, from the words;
+rename speakers), questions about one meeting or all of them, translation, and
+sharing (share sheet, WhatsApp, email to attendees, print/PDF).
+
+Code: `frontend/meetings.ts` (server), `frontend/meetingRules.ts` (checks + AI
+instructions), `frontend/views/MeetingsView.tsx` + `frontend/views/meetings/` (screens).
 
 ## Who gets it
 
@@ -17,9 +22,10 @@ Record a meeting (or type it), get it transcribed, summarized for its type
 
 ## Choosing the AI
 
-**Now (trial, 2026-11-25):** OpenAI `whisper-1` for speech-to-text and `gpt-4o-mini`
-as a stand-in for summaries and translation, set in `wrangler.jsonc`. Only the
-key is left: `wrangler secret put MEETING_AI_KEY` (prod), `MEETING_AI_KEY=` in
+**Now (trial, 2026-11-25):** OpenRouter (`https://openrouter.ai/api/v1`): `openai/whisper-1`
+for speech-to-text and `openai/gpt-4o-mini` as a stand-in for summaries, action items,
+speakers, questions and translation, set in `wrangler.jsonc`. Any OpenRouter model id
+works (e.g. `anthropic/claude-sonnet-4.5` for better summaries). The key (an OpenRouter key) is left: `wrangler secret put MEETING_AI_KEY` (prod), `MEETING_AI_KEY=` in
 `frontend/.dev.vars` (local).
 
 Any OpenAI-compatible service works. Set these on the API Worker:
@@ -36,6 +42,10 @@ Until they are set, meetings still record and save; the AI buttons say AI isn't 
 
 ## Limits
 
-- Recordings: up to 90 minutes at 32 kbps (~22 MB); transcription takes one file up to 25 MB.
-- 500 meetings per workspace; AI calls share the "costly" rate limit (30 a minute per person).
+- Recordings: up to 4 hours, in 3-minute parts (~1 MB each at 32 kbps). Uploaded
+  files over 25 MB are decoded in the browser and split into 10-minute WAV parts
+  (a phone may run out of memory on files several hours long).
+- 500 meetings per workspace. AI calls share the "costly" rate limit (30 a minute per person).
+- Asking across meetings reads the 6 meetings whose words best match the question.
+- "Who said what" guesses from the words (names used, replies), not from voices.
 - No per-org monthly AI allowance yet: usage is only capped by the rate limit.

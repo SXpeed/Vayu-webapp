@@ -26,6 +26,7 @@ import { InboxContext, useInboxState } from './hooks/useInbox';
 import { pushService } from './services/pushService';
 import { syncService } from './services/syncService';
 import { canOpenView, makeCan, permissionsOf } from './access';
+import { tasksEventFor } from './views/meetings/tasks';
 import { PLAN_BLOCKED_EVENT, SIGNED_OUT_EVENT } from './services/apiClient';
 import { PlanBlockedView } from './views/PlanBlockedView';
 import { PageRoot, PageHeader, PageBody, EmptyState, Button } from './components/ui';
@@ -496,6 +497,11 @@ const App: React.FC = () => {
         );
     }
 
+    // A meeting's action items into Tasks: only for people who may add calendar events.
+    const addMeetingTasks = can('calendar', 'edit')
+        ? (m: Parameters<typeof tasksEventFor>[0]) => handlers.handleAddEvent(tasksEventFor(m, teamMembers, Date.now()))
+        : undefined;
+
     const renderView = () => {
         // Role gate: a screen this role can't open (via a notification link,
         // say, or a role changed while the app was open) explains itself.
@@ -587,7 +593,9 @@ const App: React.FC = () => {
             case 'social':
                 return <SocialView />;
             case 'meetings':
-                return <MeetingsView canEdit={can('meetings', 'edit')} />;
+                return (
+                    <MeetingsView canEdit={can('meetings', 'edit')} team={teamMembers} onAddTasks={addMeetingTasks} />
+                );
             case 'admin':
                 return <AdminHubView />;
             case 'profile':
