@@ -194,7 +194,7 @@ test('the rules: templates, names, what MSG91 is sent and what its reports mean'
     assert.deepEqual(rules.parseWebhook({ eventName: 'delivered', customerNumber: '919811111111', crqid: 'r_1', requestId: 'q' }),
         { kind: 'status', phone: '919811111111', status: 'delivered', id: 'r_1', requestId: 'q', reason: '' });
     assert.equal(rules.parseWebhook({ status: 'Failed', customer_number: '+91 98111 11111', reason: '131049 not delivered' }).reason, '131049 not delivered');
-    assert.deepEqual(rules.parseWebhook({ direction: 0, customerNumber: '919811111111', button: '{"payload":"x","text":"Yes, I’ll come"}' }), { kind: 'reply', phone: '919811111111', text: 'Yes, I’ll come' });
+    assert.deepEqual(rules.parseWebhook({ direction: 0, customerNumber: '919811111111', button: '{"payload":"x","text":"Yes, I’ll come"}' }), { kind: 'reply', phone: '919811111111', text: 'Yes, I’ll come', uuid: '' });
     assert.equal(rules.parseWebhook({ eventName: 'request received', customerNumber: '919811111111' }), null);
     assert.equal(rules.parseWebhook(null), null);
     assert.deepEqual(['Yes, I’ll come', "Can't make it", 'YES please', 'maybe'].map(rules.rsvpOf), ['yes', 'no', 'yes', '']);
@@ -503,7 +503,7 @@ test('the rules: who got it, resend settings, the reply window', () => {
     assert.equal(rules.replyWindowLeft(1000, 1000 + rules.REPLY_WINDOW_MS - 1), 1);
     assert.equal(rules.replyWindowLeft(1000, 1000 + rules.REPLY_WINDOW_MS), 0);
     assert.equal(rules.replyWindowLeft(0), 0); // never wrote: closed
-    assert.deepEqual(rules.parseWebhook({ direction: 'inbound', customerNumber: '919822222222', content_type: 'image' }), { kind: 'reply', phone: '919822222222', text: '[image]' });
+    assert.deepEqual(rules.parseWebhook({ direction: 'inbound', customerNumber: '919822222222', content_type: 'image' }), { kind: 'reply', phone: '919822222222', text: '[image]', uuid: '' });
     assert.deepEqual(rules.parseWebhook({ direction: 'inbound', customerNumber: '91982', contentType: 'document', url: 'https://x.test/a', filename: 'plan.pdf' }).media,
         { kind: 'document', url: 'https://x.test/a', name: 'plan.pdf' });
     assert.equal(rules.parseWebhook({ direction: 'inbound', customerNumber: '91982', contentType: 'image', url: 'http://x.test/a' }).media, undefined); // https only
@@ -554,7 +554,9 @@ test('sending again by hand: only to people it didn’t reach, once', async () =
 
 test('WhatsApp replies: kept as a conversation, answered freely for 24 hours, then only with a template', async () => {
     const rao = '919822222222';
-    assert.equal(await report(hookUrl, { direction: 'inbound', customerNumber: rao, text: 'Is there parking nearby?' }), 200);
+    const ask = { direction: 'inbound', customerNumber: rao, text: 'Is there parking nearby?', uuid: 'wamid.ask1' };
+    assert.equal(await report(hookUrl, ask), 200);
+    assert.equal(await report(hookUrl, ask), 200); // a second webhook reports it again: still one message
     const list = await ownerA.call(app(orgA, '/social/replies'));
     assert.equal(list.status, 200, list.text);
     const thread = list.body.threads.find(t => t.phone === rao);

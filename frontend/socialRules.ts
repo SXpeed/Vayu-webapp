@@ -526,7 +526,7 @@ export function nextStatus(current: RecipientStatus, incoming: RecipientStatus):
 /** `phone` is the email address for an email report; `stop` marks an email unsubscribe. */
 export type WebhookEvent =
     | { kind: 'status'; id: string; requestId: string; phone: string; status: RecipientStatus; reason: string }
-    | { kind: 'reply'; phone: string; text: string; media?: InboundMedia }
+    | { kind: 'reply'; phone: string; text: string; uuid: string; media?: InboundMedia }
     | { kind: 'stop'; phone: string };
 
 /** A file or place someone sent: MSG91's link to it (Meta keeps it 30 days), or a map link. */
@@ -581,7 +581,7 @@ export function parseWebhook(raw: unknown): WebhookEvent | null {
         let media: InboundMedia | undefined;
         if (/^https:\/\//i.test(url)) media = { kind: kind || 'file', url, name: pick(o, 'filename').slice(0, 200) };
         else if (lat && lng && Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))) media = { kind: 'location', url: `https://maps.google.com/?q=${Number(lat)},${Number(lng)}`, name: '' };
-        return { kind: 'reply', phone, text: text.slice(0, 1000), ...(media && { media }) };
+        return { kind: 'reply', phone, text: text.slice(0, 1000), uuid: pick(o, 'uuid').slice(0, 200), ...(media && { media }) };
     }
     const status = pick(o, 'eventName', 'event_name', 'status', 'event').toLowerCase();
     if (status !== 'sent' && status !== 'delivered' && status !== 'read' && status !== 'failed') return null;

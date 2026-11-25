@@ -992,6 +992,9 @@ async function keepMedia(space: Env, media: NonNullable<ReplyEvent['media']>): P
 /** A WhatsApp reply: kept in its conversation, with any file they sent; STOP leaves the number out from now on; yes / no is their RSVP. */
 async function applyReply(space: Env, ev: ReplyEvent): Promise<void> {
     const db = space.VAYU_DB;
+    // Several webhooks can report the same message: WhatsApp's id keeps it once.
+    const id = ev.uuid ? `m_${ev.uuid}` : `m_${crypto.randomUUID()}`;
+    if (ev.uuid && await db.prepare('SELECT 1 FROM social_messages WHERE id = ?').bind(id).first()) return;
     let media = { url: '', type: '', name: '' };
     if (ev.media?.kind === 'location') media = { url: ev.media.url, type: 'location', name: '' };
     else if (ev.media) {
@@ -999,8 +1002,8 @@ async function applyReply(space: Env, ev: ReplyEvent): Promise<void> {
         // Not copied: MSG91's own link still opens it for 30 days.
         media = { url: kept?.url ?? ev.media.url, type: kept?.type ?? ev.media.kind, name: ev.media.name };
     }
-    await db.prepare("INSERT INTO social_messages (id, phone, dir, body, at, media_url, media_type, media_name) VALUES (?, ?, 'in', ?, ?, ?, ?, ?)")
-        .bind(`m_${crypto.randomUUID()}`, ev.phone, ev.text, Date.now(), media.url, media.type, media.name).run();
+    await db.prepare("INSERT OR IGNORE INTO social_messages (id, phone, dir, body, at, media_url, media_type, media_name) VALUES (?, ?, 'in', ?, ?, ?, ?, ?)")
+        .bind(id, ev.phone, ev.text, Date.now(), media.url, media.type, media.name).run();
     if (isStop(ev.text)) {
         await optOut(db, ev.phone);
         return;
