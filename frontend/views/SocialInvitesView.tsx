@@ -924,13 +924,14 @@ export const SocialSpace: React.FC<{ onBack: () => void; onContacts: () => void 
         setFailed(false);
         try {
             const [c, wa, em] = await Promise.all([socialService.connection(), socialService.invites('whatsapp'), socialService.invites('email')]);
-            setConn(c);
-            setInvites([...wa, ...em].sort((a, b) => b.createdAt - a.createdAt));
+            // Count approved templates before showing anything: set separately, the Hub flashed "Getting ready" with 0 approved.
             if (c.connected) {
                 const [tw, te] = await Promise.all((['whatsapp', 'email'] as const).map(ch => socialService.templates(ch).catch(() => [])));
                 setApproved({ whatsapp: tw.filter(t => t.status === 'approved').length, email: te.filter(t => t.status === 'approved').length });
                 if (c.number) socialService.replies().then(r => setUnread(r.threads.filter(t => t.unread).length)).catch(() => undefined);
             }
+            setConn(c);
+            setInvites([...wa, ...em].sort((a, b) => b.createdAt - a.createdAt));
         } catch { setFailed(true); }
     }, []);
     useEffect(() => { if (!overlay) void load(); }, [overlay, load]);
@@ -977,7 +978,7 @@ export const SocialSpace: React.FC<{ onBack: () => void; onContacts: () => void 
         <PageRoot width="wide">
             <PageHeader title={TITLES[page]} subtitle={subtitle || undefined} onBack={page === 'home' ? onBack : () => go('home')}
                 actions={<>
-                    {page === 'home' && <GhostIconButton label="Setup and keys" onClick={() => go('settings')} icon={<Settings size={16} className="text-brand-900 dark:text-gold-400" />} />}
+                    {page === 'home' && isAdmin && conn && <GhostIconButton label="Setup and keys" onClick={() => go('settings')} icon={<Settings size={16} className="text-brand-900 dark:text-gold-400" />} />}
                     {channelPage && <GhostIconButton label="Templates" onClick={() => { setTemplateChannel(page); go('templates'); }} icon={<FileText size={16} className="text-brand-900 dark:text-gold-400" />} />}
                     {canCompose && <PrimaryIconButton label="New invite" onClick={() => compose()} icon={<Plus size={16} />} />}
                 </>} />
