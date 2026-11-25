@@ -380,7 +380,7 @@ export const InquiryView: React.FC<InquiryViewProps> = ({ inquiries, artworks, o
                         messages={inquiryMessages.filter(m => m.inquiryId === chatInquiry.id)}
                         resolveName={resolveName}
                         currentUserId={currentUserId}
-
+                        teamMembers={teamMembers}
                         onClose={() => setChatInquiry(null)}
                         onSendMessage={(text, tags, replyTo, attachment) => onSendInquiryMessage(chatInquiry.id, text, tags, replyTo, attachment)}
                         onReact={onReactToInquiryMessage}
@@ -399,13 +399,14 @@ interface InquiryChatModalProps {
     messages: InquiryMessage[];
     resolveName: (id: string | undefined, storedName?: string) => string;
     currentUserId: string;
-
+    teamMembers: UserProfile[];
     onClose: () => void;
     onSendMessage: (text: string, tags: MessageTag[], replyTo?: MessageReplyTo, attachment?: MessageAttachment) => void | Promise<void>;
     onReact?: (messageId: string, emoji: string | null) => void;
 }
 
-const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, resolveName, currentUserId, onClose, onSendMessage, onReact }) => {
+const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, resolveName, currentUserId, teamMembers, onClose, onSendMessage, onReact }) => {
+    const memberNames = teamMembers.map(m => m.name).filter(Boolean);
     // Phone Back closes the chat onto the inquiry list, not the screen before it.
     useBackClose(true, onClose);
     // Hold a message, as in Messages: react, reply or copy.
@@ -523,6 +524,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                                         msg={msg}
                                         isMe={isMe}
                                         senderName={senderName}
+                                        mentionNames={memberNames}
                                         replySenderName={msg.replyTo ? replySenderName(msg.replyTo) : ''}
                                         onOpenImage={() => msg.attachment && setViewing({ url: msg.attachment.url, name: msg.attachment.name, caption: `${isMe ? 'You' : senderName} · ${chatDayLabel(msg.timestamp)}, ${messageTime(msg.timestamp)}` })}
                                         meta={(
@@ -542,7 +544,7 @@ const InquiryChatModal: React.FC<InquiryChatModalProps> = ({ inquiry, messages, 
                 </div>
             </div>
 
-            <ChatComposer key={inquiry.id} multiple replyingTo={replyingTo} onCancelReply={() => setReplyingTo(null)} onSend={handleSend} />
+            <ChatComposer key={inquiry.id} mentionNames={teamMembers.filter(m => m.id !== currentUserId).map(m => m.name).filter(Boolean)} multiple replyingTo={replyingTo} onCancelReply={() => setReplyingTo(null)} onSend={handleSend} />
 
             {menu && (
                 <MessageActionMenu

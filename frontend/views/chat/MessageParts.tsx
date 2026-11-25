@@ -8,6 +8,7 @@ import { usePdfFirstPage } from '../../components/CatalogCover';
 import { usePhotoCapture } from '../../hooks/usePhotoCapture';
 import { pastedFiles, safeExtension } from '../../fileTypes';
 import type { Message, MessageAttachment, MessageReplyTo, MessageTag } from '../../types';
+import { mentionQueryAt, withMentions } from './mentions';
 
 /** The message bubble and the message bar every chat uses: team chats
  *  (group and one-to-one) and inquiry chats look and type the same. */
@@ -70,7 +71,7 @@ export function jumpToMessage(id: string, from: HTMLElement): void {
     row.animate([{ backgroundColor: 'rgba(212, 175, 55, 0.28)' }, { backgroundColor: 'rgba(212, 175, 55, 0)' }], { duration: 1600, delay: reduced ? 0 : 300, easing: 'ease-out' });
 }
 
-export const messageTime = (timestamp: number) => new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+export const messageTime =(timestamp: number) => new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
 /** A sent file in its bubble. A PDF shows its first page above its name, as on WhatsApp;
  *  the box keeps its height while the page is drawn, so the chat doesn't jump. */
@@ -107,7 +108,9 @@ export const MessageBubble: React.FC<{
     onOpenImage: () => void;
     /** Bottom-right corner: the time and ticks, or a retry button. */
     meta: React.ReactNode;
-}> = ({ msg, isMe, senderName, replySenderName, onOpenImage, meta }) => {
+    /** Chat members' names, so `@Name` in the text is highlighted. */
+    mentionNames?: string[];
+}> = ({ msg, isMe, senderName, replySenderName, onOpenImage, meta, mentionNames = [] }) => {
     const file = useOpenFile();
     return (
     <div className={`px-3.5 py-2.5 ${isMe ? 'neu-bubble-out' : 'neu-bubble-in'}`}>
@@ -140,7 +143,7 @@ export const MessageBubble: React.FC<{
                 <FileCard file={msg.attachment} onOpen={() => msg.attachment && file.open(msg.attachment)} />
             )
         )}
-        {msg.text && <p className="text-[13px] leading-relaxed">{msg.text}</p>}
+        {msg.text && <p className="text-[13px] leading-relaxed">{withMentions(msg.text, mentionNames)}</p>}
         <div className="flex items-center justify-between mt-1.5 gap-2">
             {msg.tags.length > 0 && (
                 <div className="flex gap-1 flex-wrap">
@@ -163,8 +166,26 @@ export const ChatComposer: React.FC<{
     /** Several attachments per send (each extra one becomes its own message). */
     multiple?: boolean;
     onSend: (text: string, tags: MessageTag[], attachments: MessageAttachment[]) => void;
-}> = ({ replyingTo, onCancelReply, multiple = false, onSend }) => {
+    /** Who `@` can tag (not including yourself). */
+    mentionNames?: string[];
+}> = ({ replyingTo, onCancelReply, multiple = false, onSend, mentionNames = [] }) => {
     const [text, setText] = useState('');
+    const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+    const textRef = useRef<HTMLTextAreaElement>(null);
+    const mentionMatches = mentionQuery === null ? [] : mentionNames
+        .filter(n => n.toLowerCase().includes(mentionQuery.toLowerCase())).slice(0, 6);
+
+    // Swap the typed `@query` before the caret for `@Full Name `.
+    const insertMention = (name: string) => {
+        const box = textRef.current;
+        const caret = box?.selectionStart ?? text.length;
+        const start = caret - (mentionQuery?.length ?? 0) - 1;
+        const next = `${text.slice(0, start)}@${name} ${text.slice(caret)}`;
+        setText(next);
+        setMentionQuery(null);
+        const pos = start + name.length + 2;
+        requestAnimationFrame(() => { box?.focus(); box?.setSelectionRange(pos, pos); });
+    };
     const [selectedTags, setSelectedTags] = useState<Set<MessageTag>>(new Set());
     const [showTagPicker, setShowTagPicker] = useState(false);
     const [showAttachMenu, setShowAttachMenu] = useState(false);
@@ -231,6 +252,7 @@ export const ChatComposer: React.FC<{
         if (!canSend) return;
         onSend(text.trim(), Array.from(selectedTags), attachments);
         setText('');
+        setMentionQuery(null);
         setSelectedTags(new Set());
         setShowTagPicker(false);
         setAttachments([]);
@@ -320,6 +342,24 @@ export const ChatComposer: React.FC<{
                         ))}
                     </div>
                 )}
+                {mentionMatches.length > 0 && (
+                    <div role="listbox" aria-label="Tag someone" className="mb-2 p-1 neu-raised-sm rounded-lg animate-fade-in">
+                        {mentionMatches.map((name, i) => (
+                            <button
+                                key={name}
+                                type="button"
+                                role="option"
+                                aria-selected={i === 0}
+                                // Keep focus (and the phone keyboard) in the text box.
+                                onMouseDown={e => e.preventDefault()}
+                                onClick={() => insertMention(name)}
+                                className={`block w-full text-left px-3 py-2 rounded-md text-xs text-gray-800 dark:text-gray-100 active-scale ${i === 0 ? 'neu-inset' : ''}`}
+                            >
+                                @{name}
+                            </button>
+                        ))}
+                    </div>
+                )}
                 {selectedTags.size > 0 && (
                     <div className="flex gap-1 mb-2 flex-wrap">
                         {Array.from(selectedTags).map(tag => (
@@ -362,10 +402,20 @@ export const ChatComposer: React.FC<{
                     {/* A one-line textarea, not an input: Chrome on Android never puts
                         its autofill bar (passwords, cards, addresses) over a textarea. */}
                     <textarea
+                        ref={textRef}
                         rows={1}
                         value={text}
-                        onChange={e => setText(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+                        onChange={e => {
+                            setText(e.target.value);
+                            setMentionQuery(mentionQueryAt(e.target.value, e.target.selectionStart));
+                        }}
+                        onKeyDown={e => {
+                            // While the tag list is open, Enter/Tab tag the top name and Escape closes it.
+                            if (mentionMatches.length > 0 && (e.key === 'Enter' || e.key === 'Tab') && !e.shiftKey) { e.preventDefault(); insertMention(mentionMatches[0]); return; }
+                            if (mentionMatches.length > 0 && e.key === 'Escape') { e.preventDefault(); setMentionQuery(null); return; }
+                            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+                        }}
+                        onBlur={() => setMentionQuery(null)}
                         onPaste={handlePaste}
                         placeholder="Type a message..."
                         enterKeyHint="send"

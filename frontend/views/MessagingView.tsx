@@ -641,6 +641,8 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
     // Rows are memoised so typing in the message box (state on this
     // component) doesn't rebuild every bubble of a long thread per keystroke.
     const participantIds = conversation.participantIds;
+    const memberNames = useMemo(() => participantIds.map(id => resolveName(id)).filter(n => n !== 'Team member'), [participantIds, resolveName]);
+    const myName = resolveName(currentUserId);
     const messageRows = useMemo(() => withDayDividers(displayedMessages, (msg) => {
         const isMe = msg.senderId === currentUserId;
         const openMenu = (target: HTMLElement) => {
@@ -653,6 +655,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                 msg={msg}
                 isMe={isMe}
                 senderName={senderName}
+                mentionNames={memberNames}
                 replySenderName={msg.replyTo ? replySenderName(msg.replyTo) : ''}
                 onOpenImage={() => msg.attachment && setViewing({ url: msg.attachment.url, name: msg.attachment.name, caption: `${isMe ? 'You' : senderName} · ${chatDayLabel(msg.timestamp)}, ${messageTime(msg.timestamp)}` })}
                 meta={isMe && msg.status === 'failed' ? (
@@ -708,7 +711,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                 {!isMe && reactButton}
             </div>
         );
-    }), [displayedMessages, messages, currentUserId, resolveName, onRetryMessage, participantIds, isMember]);
+    }), [displayedMessages, messages, currentUserId, resolveName, onRetryMessage, participantIds, isMember, memberNames]);
 
     const reactionsMsg = reactionsOf ? messages.find(m => m.id === reactionsOf) : undefined;
     const infoMsg = infoOf ? messages.find(m => m.id === infoOf) : undefined;
@@ -864,7 +867,7 @@ const ChatDetailModal: React.FC<ChatDetailModalProps> = ({ conversation, message
                 </div>
             </div>
 
-            <ChatComposer key={conversation.id} replyingTo={replyingTo} onCancelReply={() => setReplyingTo(null)} onSend={handleSend} />
+            <ChatComposer key={conversation.id} mentionNames={memberNames.filter(n => n !== myName)} replyingTo={replyingTo} onCancelReply={() => setReplyingTo(null)} onSend={handleSend} />
 
             {menu && (
                 <MessageActionMenu
