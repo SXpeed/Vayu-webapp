@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from 'react';
+import type { Artwork } from './types';
 import { Lock } from 'lucide-react';
 
 import toast, { Toaster } from 'react-hot-toast';
@@ -224,6 +225,8 @@ const App: React.FC = () => {
     // ── Handlers ──────────────────────────────────────────────────────────
     /** The chat or inquiry a notification tap asked for, until its page has opened it. */
     const [pushTarget, setPushTarget] = useState<PushTarget | null>(null);
+    // A piece picked with "Sell" on its page, waiting for Billing to start its invoice.
+    const [sellArtwork, setSellArtwork] = useState<Artwork | null>(null);
     /**
      * A tap that launched the app, read once at start. Sign-in also honours
      * it: the sign-in screen shows briefly at start and, finding the person
@@ -526,7 +529,7 @@ const App: React.FC = () => {
             case 'attendance':
                 return authUser ? <AttendanceView authUser={authUser} canManage={can('attendance', 'edit')} onBack={() => navigateTo('home')} /> : null;
             case 'invoice':
-                return <BillingScreen docs={invoices} artworks={artworks} contacts={contacts} handlers={handlers} onArtworkClick={handleArtworkClick} onCollectPayment={() => navigateTo('payments')} />;
+                return <BillingScreen docs={invoices} artworks={artworks} contacts={contacts} handlers={handlers} onArtworkClick={handleArtworkClick} onCollectPayment={() => navigateTo('payments')} sell={sellArtwork} onSellStarted={() => setSellArtwork(null)} />;
             case 'inquiry':
                 return (
                     <InquiryView
@@ -605,7 +608,8 @@ const App: React.FC = () => {
             <Suspense fallback={<ViewFallback />}>
                 {renderView()}
                 {selectedArtwork && (
-                    <ArtworkDetailView artwork={selectedArtwork} onClose={handleCloseArtwork} onUpdateArtwork={handlers.handleUpdateArtwork} onDeleteArtwork={handlers.handleDeleteArtwork} />
+                    <ArtworkDetailView artwork={selectedArtwork} onClose={handleCloseArtwork} onUpdateArtwork={handlers.handleUpdateArtwork} onDeleteArtwork={handlers.handleDeleteArtwork}
+                        onSell={a => { setSellArtwork(a); setSelectedArtwork(null); navigateTo('invoice'); }} />
                 )}
             </Suspense>
         </Layout>

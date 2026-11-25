@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import toast from 'react-hot-toast';
-import { ArrowLeft, Edit2, X, Image as ImageIcon, Share2 } from 'lucide-react';
+import { ArrowLeft, Edit2, X, Image as ImageIcon, Receipt, Share2 } from 'lucide-react';
 import { Artwork, editionLabel, stockOf } from '../types';
 import { ArtworkFormModal } from './ArtworksView';
 import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
@@ -61,9 +61,11 @@ interface ArtworkDetailViewProps {
     onClose: () => void;
     onUpdateArtwork: (artwork: Artwork) => void;
     onDeleteArtwork: (id: string) => void;
+    /** Starts a tax invoice for this piece in Billing. */
+    onSell?: (artwork: Artwork) => void;
 }
 
-export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, onClose, onUpdateArtwork, onDeleteArtwork }) => {
+export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, onClose, onUpdateArtwork, onDeleteArtwork, onSell }) => {
     const [activeImageIndex, setActiveImageIndex] = useState(0);
     const [isEditing, setIsEditing] = useState(false);
     const [isFullScreen, setIsFullScreen] = useState(false);
@@ -289,6 +291,14 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                                     Edit
                                 </button>
                             </IfCan>
+                            {onSell && artwork.status === 'Available' && stockOf(artwork) > 0 && (
+                                <IfCan section="invoices">
+                                    <button type="button" onClick={() => onSell(artwork)} className="neu-button flex-1 lg:flex-none inline-flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-medium text-[var(--neu-text)] active-scale">
+                                        <Receipt size={15} className="text-[var(--neu-gold)]" />
+                                        Sell
+                                    </button>
+                                </IfCan>
+                            )}
                         </div>
 
                         {artwork.description && (

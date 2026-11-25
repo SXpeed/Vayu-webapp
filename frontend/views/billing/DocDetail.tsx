@@ -4,12 +4,12 @@ import React, { useState } from 'react';
 import toast from 'react-hot-toast';
 import {
     Edit2, Download, Share2, Printer, Loader2, Send, CheckCircle2, XCircle, Receipt, Truck, FileMinus, FilePlus, Copy,
-    Ban, IndianRupee, Link2, PackageCheck, Undo2, Phone, Mail, MapPin, Trash2,
+    Ban, IndianRupee, Link2, PackageCheck, Undo2, Phone, Mail, MapPin, Trash2, UserPlus, ChevronDown, Check,
 } from 'lucide-react';
 import { Button, Field, Input, Select, Textarea } from '../../components/ui';
 import { useBilling, type BillingApi } from './billingContext';
 import {
-    balanceOf, convertDoc, displayStatus, docTotals, isLocked, KIND_LABEL, kindLabel, PAYMENT_MODES, PURPOSE_LABEL, RETURNABLE,
+    balanceOf, convertDoc, displayStatus, docTotals, isLocked, KIND_LABEL, kindLabel, newDoc, PAYMENT_MODES, PURPOSE_LABEL, RETURNABLE,
     sellerOf, storeOf, SUPPLY_LABEL, taxModeOf, type Balance, type BillingDoc, type BillingSettings, type DocKind, type DocLine, type PaymentMode,
 } from '../../invoicing';
 import { formatPaise, rupeesText, stateLabel, toPaise, type TaxMode } from '../../gstRules';
@@ -31,6 +31,7 @@ interface ActionContext {
     taxLabel: string;
     balance: Balance | null;
     convert: (kind: DocKind) => void;
+    billAgain: () => void;
     paymentLink: (paise: number, what: string) => void;
     openModal: (m: ModalKind) => void;
     onClose: () => void;
@@ -42,10 +43,10 @@ function proformaActions(x: ActionContext): ActionSpec[] {
     const { doc, b } = x;
     const open = doc.status !== 'Converted';
     const out: ActionSpec[] = [];
+    if (open) out.push({ label: `Convert to ${x.taxLabel}`, Icon: Receipt, run: () => x.convert('tax'), variant: 'primary' });
     if (doc.status !== 'Sent') out.push({ label: 'Mark sent', Icon: Send, run: run(() => b.setStatus(doc.id, 'Sent')) });
     if (open && doc.status !== 'Accepted') out.push({ label: 'Accepted', Icon: CheckCircle2, run: run(() => b.setStatus(doc.id, 'Accepted')) });
     if (open && doc.status !== 'Rejected') out.push({ label: 'Rejected', Icon: XCircle, run: run(() => b.setStatus(doc.id, 'Rejected')) });
-    if (open) out.push({ label: `Convert to ${x.taxLabel}`, Icon: Receipt, run: () => x.convert('tax'), variant: 'primary' });
     out.push({ label: 'Make challan', Icon: Truck, run: () => x.convert('challan') });
     if (doc.advancePaise) {
         const advance = doc.advancePaise;
@@ -90,11 +91,43 @@ function actionsFor(x: ActionContext): ActionSpec[] {
     if (doc.kind === 'tax' && doc.status === 'Issued') out.push(...taxActions(x));
     if (doc.kind === 'challan' && (doc.status === 'Issued' || doc.status === 'Delivered')) out.push(...challanActions(x));
     if (doc.kind !== 'credit' && doc.kind !== 'debit') out.push({ label: 'Duplicate', Icon: Copy, run: () => x.convert(doc.kind) });
+    if (doc.kind === 'proforma' || doc.kind === 'tax') out.push({ label: 'New bill for this customer', Icon: UserPlus, run: x.billAgain });
     if (isLocked(doc) && doc.status !== 'Cancelled') out.push({ label: 'Cancel', Icon: Ban, run: () => x.openModal('cancel'), variant: 'danger' });
     if (draft) {
         out.push({ label: 'Delete draft', Icon: Trash2, variant: 'danger', run: () => { void attempt(() => b.deleteDoc(doc.id), 'Draft deleted').then(ok => { if (ok) x.onClose(); }); } });
     }
     return out;
+}
+
+/** The usual path for each kind, and how far this document is along it (-1: off the path, e.g. cancelled). */
+function progressOf(doc: BillingDoc, status: string): { steps: string[]; at: number } {
+    const steps: Record<DocKind, string[]> = {
+        proforma: ['Draft', 'Sent', 'Accepted', 'Converted'],
+        tax: ['Draft', 'Issued', 'Paid'],
+        challan: ['Draft', 'Issued', 'Delivered', 'Back or invoiced'],
+        credit: ['Draft', 'Issued'],
+        debit: ['Draft', 'Issued'],
+    };
+    const path = steps[doc.kind];
+    const done: Record<string, string> = { Unpaid: 'Issued', 'Partly paid': 'Issued', Overdue: 'Issued', 'Part returned': 'Delivered', Returned: 'Back or invoiced', Invoiced: 'Back or invoiced' };
+    return { steps: path, at: path.indexOf(done[status] ?? status) };
+}
+
+function Progress({ doc, status }: Readonly<{ doc: BillingDoc; status: string }>) {
+    const { steps, at } = progressOf(doc, status);
+    if (at < 0) return null;
+    return (
+        <ol className="flex items-center gap-1 text-[10px] uppercase tracking-wider" aria-label="Progress">
+            {steps.map((st, i) => (
+                <li key={st} className="flex items-center gap-1 min-w-0" aria-current={i === at ? 'step' : undefined}>
+                    {i > 0 && <span className={`h-px w-3 sm:w-6 shrink-0 ${i <= at ? 'bg-gold-500' : 'bg-gray-300 dark:bg-gray-600'}`} aria-hidden />}
+                    <span className={`flex items-center gap-1 truncate ${i <= at ? 'text-gold-700 dark:text-gold-300 font-semibold' : 'text-gray-500 dark:text-gray-400'}`}>
+                        {i < at && <Check size={10} className="shrink-0" aria-hidden />}{st}
+                    </span>
+                </li>
+            ))}
+        </ol>
+    );
 }
 
 type MaybeRow = [string, string | number | false | null | undefined];
@@ -135,9 +168,10 @@ function lineSummary(l: DocLine, mode: TaxMode, challan: boolean): string {
 function PdfButtons({ doc, source }: Readonly<{ doc: BillingDoc; source?: BillingDoc }>) {
     const b = useBilling();
     const [busy, setBusy] = useState<PdfHow | null>(null);
+    // Sharing first: it opens WhatsApp, mail and the rest with the PDF attached.
     const buttons: [PdfHow, React.ElementType, string][] = [
+        ...(typeof navigator.canShare === 'function' ? [['share', Share2, 'WhatsApp / Share'] as [PdfHow, React.ElementType, string]] : []),
         ['download', Download, 'PDF'],
-        ...(typeof navigator.canShare === 'function' ? [['share', Share2, 'Share'] as [PdfHow, React.ElementType, string]] : []),
         ['print', Printer, 'Print'],
     ];
     const pdf = async (how: PdfHow) => {
@@ -158,7 +192,7 @@ function PdfButtons({ doc, source }: Readonly<{ doc: BillingDoc; source?: Billin
         <div className="flex gap-2">
             {buttons.map(([how, Icon, label], i) => (
                 <button key={how} type="button" onClick={() => { void pdf(how); }} disabled={busy !== null}
-                    className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-lg text-[11px] font-bold uppercase tracking-widest active-scale disabled:opacity-60 ${i === 0 ? 'neu-raised-sm neu-btn text-gold-700 dark:text-gold-300' : 'neu-inset text-gray-700 dark:text-gray-200'}`}>
+                    className={`${i === 0 ? 'flex-[2]' : 'flex-1'} flex items-center justify-center gap-2 py-3 rounded-lg text-[11px] font-bold uppercase tracking-widest active-scale disabled:opacity-60 ${i === 0 ? 'neu-raised-sm neu-btn text-gold-700 dark:text-gold-300' : 'neu-inset text-gray-700 dark:text-gray-200'}`}>
                     {busy === how ? <Loader2 size={15} className="animate-spin" /> : <Icon size={15} />} {label}
                 </button>
             ))}
@@ -305,6 +339,7 @@ export function DocDetail({ doc, onClose, onEdit, onOpen, onSetup, onCollectPaym
         taxLabel: kindLabel('tax', s.registration).toLowerCase(),
         openModal: setModal,
         // A duplicate is a fresh draft of the same kind, not linked to this one.
+        billAgain: () => onEdit({ ...newDoc(doc.kind, s, doc.storeId, Date.now()), party: { ...doc.party }, placeOfSupply: doc.placeOfSupply }),
         convert: kind => onEdit(kind === doc.kind ? { ...convertDoc(doc, kind, s, Date.now()), sourceId: undefined, reference: '' } : convertDoc(doc, kind, s, Date.now())),
         // Payment links live in Payments, where the server works out what is still to collect.
         paymentLink: (paise, what) => {
@@ -320,13 +355,8 @@ export function DocDetail({ doc, onClose, onEdit, onOpen, onSetup, onCollectPaym
                 <button type="button" onClick={() => onEdit(doc)} aria-label={`Edit ${title.toLowerCase()}`} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale"><Edit2 size={18} /></button>
             )}>
             <PdfButtons doc={doc} source={source} />
-            {b.canEdit && actions.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                    {actions.map(a => (
-                        <Button key={a.label} type="button" variant={a.variant ?? 'default'} onClick={a.run} icon={<a.Icon size={14} />} className="!py-2 !px-3 text-xs">{a.label}</Button>
-                    ))}
-                </div>
-            )}
+            <Progress doc={doc} status={status} />
+            {b.canEdit && actions.length > 0 && <Actions actions={actions} />}
             <DocPreview doc={doc} status={status} />
             {balance && <PaymentsCard doc={doc} balance={balance} />}
             {linked.length > 0 && <LinkedCard docs={linked} onOpen={onOpen} />}
@@ -344,6 +374,34 @@ export function DocDetail({ doc, onClose, onEdit, onOpen, onSetup, onCollectPaym
     );
 }
 
+/** The next step as one big button; everything else under More. */
+function Actions({ actions }: Readonly<{ actions: ActionSpec[] }>) {
+    const main = actions.find(a => a.variant === 'primary');
+    const rest = actions.filter(a => a !== main);
+    const buttons = (
+        <div className="flex flex-wrap gap-2">
+            {rest.map(a => (
+                <Button key={a.label} type="button" variant={a.variant ?? 'default'} onClick={a.run} icon={<a.Icon size={14} />} className="!py-2 !px-3 text-xs">{a.label}</Button>
+            ))}
+        </div>
+    );
+    // With no clear next step there is nothing to hide the others behind.
+    if (!main) return buttons;
+    return (
+        <div className="space-y-2">
+            <Button type="button" variant="primary" block onClick={main.run} icon={<main.Icon size={15} />}>{main.label}</Button>
+            {rest.length > 0 && (
+                <details className="group">
+                    <summary className="cursor-pointer select-none list-none neu-button w-full flex items-center justify-center gap-1.5 text-xs">
+                        More <ChevronDown size={14} className="transition-transform group-open:rotate-180" aria-hidden />
+                    </summary>
+                    <div className="mt-2">{buttons}</div>
+                </details>
+            )}
+        </div>
+    );
+}
+
 function PaymentModal({ docId, due, onClose }: Readonly<{ docId: string; due: number; onClose: () => void }>) {
     const b = useBilling();
     const [amount, setAmount] = useState(String(due / 100));
@@ -355,7 +413,7 @@ function PaymentModal({ docId, due, onClose }: Readonly<{ docId: string; due: nu
     };
     return (
         <Modal title="Record payment" onClose={onClose} footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" onClick={submit}>Save payment</Button></>}>
-            <p className="text-xs text-gray-600 dark:text-gray-400">Balance due {rupeesText(due)}</p>
+            <p className="text-xs text-gray-600 dark:text-gray-400">Balance due {rupeesText(due)}. The amount is filled in as paid in full: change it for a part payment.</p>
             <div className="grid grid-cols-2 gap-3">
                 <Field label="Amount (₹)" htmlFor="pay-amt"><Input id="pay-amt" type="number" inputMode="decimal" min={0} value={amount} onChange={e => setAmount(e.target.value)} /></Field>
                 <Field label="Date" htmlFor="pay-date"><Input id="pay-date" type="date" value={date} onChange={e => setDate(e.target.value)} /></Field>

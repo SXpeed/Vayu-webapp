@@ -482,6 +482,18 @@ export function issueProblems(doc: BillingDoc, s: BillingSettings): string[] {
     return [...setup, ...partyProblems(doc), ...lineProblems(doc, s), ...kindProblems(doc), ...(number ? [number] : [])];
 }
 
+/** The editor field an issue problem belongs under ('line-<index>' for item lines), or '' when it has none. Keep in step with the messages above. */
+export function problemField(p: string): string {
+    const line = /^Line (\d+):/.exec(p);
+    if (line) return `line-${Number(line[1]) - 1}`;
+    const starts: [string, string][] = [
+        ['Add the customer’s name', 'p-name'], ['Add the customer’s phone', 'p-phone'], ['Choose the customer’s state', 'p-state'],
+        ['Choose the place of supply', 'p-pos'], ['Customer GSTIN', 'p-gstin'], ['Add the LUT', 'ex-lutNo'],
+        ['Choose the challan', 'doc-purpose'], ['Give the reason', 'doc-reason'], ['Add at least one item', 'items'],
+    ];
+    return starts.find(([prefix]) => p.startsWith(prefix))?.[1] ?? '';
+}
+
 /** A credit note may not take an invoice below zero: room left, in paise. */
 export function creditRoom(invoice: BillingDoc, all: readonly BillingDoc[], s: BillingSettings, exceptId = ''): number {
     const credited = all

@@ -150,6 +150,22 @@ test('issue checks: setup, HSN on tax documents only, customer GSTIN, LUT number
     assert.ok(inv.issueProblems(doc('tax', s, { supplyType: 'export-lut' }), s).includes('Add the LUT/bond number.'));
 });
 
+test('problemField: every customer, line and kind problem lands under a field', () => {
+    const s = settings();
+    const blank = { party: { name: '', phone: '', state: '', gstin: '27AAPFU0939F1ZX' }, placeOfSupply: '', lines: [{ key: 'k', artworkId: '', description: '', detail: '', hsn: '', qty: 0, unit: 'Nos', ratePaise: 0, discountPct: 0, gstRate: 5 }] };
+    const all = [
+        ...inv.issueProblems(doc('tax', s, blank), s),
+        ...inv.issueProblems(doc('proforma', s, { ...blank, lines: [] }), s),
+        ...inv.issueProblems(doc('tax', s, { supplyType: 'export-lut' }), s),
+        ...inv.issueProblems(doc('challan', s, { challanPurpose: undefined }), s),
+        ...inv.issueProblems(doc('credit', s), s),
+    ];
+    const unplaced = all.filter(p => !inv.problemField(p) && p !== 'A note has to be against an invoice.');
+    assert.deepEqual(unplaced, []);
+    assert.equal(inv.problemField('Line 2: add a description.'), 'line-1');
+    assert.equal(inv.problemField('Finish billing setup first.'), '');
+});
+
 test('issued documents are locked except payments, transport, e-way/IRN and challan returns', () => {
     const s = settings();
     const draft = doc('tax', s);

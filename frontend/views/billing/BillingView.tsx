@@ -1,7 +1,7 @@
 // Billing: Proforma · Tax Invoice · Challan · Notes · Reports, with the store
 // switcher, the setup (⚙) button and New (+) in the header of every tab.
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { AlertTriangle, FileText, Plus, Receipt, Settings, Truck, FileMinus, BarChart3, Store } from 'lucide-react';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton, GhostIconButton, EmptyState, Pill, Button } from '../../components/ui';
@@ -15,7 +15,7 @@ import {
 import { rupeesText } from '../../gstRules';
 import { PERIODS, periodRange, type Period } from '../../invoicingReports';
 import { StatusBadge, shortDate } from './parts';
-import { DocEditor } from './DocEditor';
+import { artworkLine, DocEditor } from './DocEditor';
 import { DocDetail } from './DocDetail';
 import { SettingsSheet, type SettingsSection } from './SettingsSheet';
 import { ReportsView } from './ReportsView';
@@ -43,8 +43,16 @@ const DRAFT_LABEL: Partial<Record<DocKind, string>> = { credit: 'Credit note dra
 
 const TAB_ICON: Record<Tab, React.ElementType> = { proforma: FileText, tax: Receipt, challan: Truck, notes: FileMinus, reports: BarChart3 };
 
-/** `onCollectPayment` opens Payments to make a link against a document. */
-export function BillingView({ onCollectPayment }: { readonly onCollectPayment?: () => void }) {
+/** What each tab is for, on an empty list. */
+const TAB_PURPOSE: Record<Exclude<Tab, 'reports'>, string> = {
+    proforma: 'A proforma is a price quote: send it before the sale. When the customer agrees, convert it into a tax invoice.',
+    tax: 'A tax invoice is the bill for a sale. Issuing it gives it the next number and locks it.',
+    challan: 'A challan goes with pieces that leave the gallery without being sold yet: on approval, for an exhibition, or for framing.',
+    notes: 'Credit and debit notes correct an issued tax invoice (a return, a discount after the sale). Open the invoice and choose Credit note or Debit note.',
+};
+
+/** `onCollectPayment` opens Payments to make a link against a document; `sell` starts a tax invoice for that piece. */
+export function BillingView({ onCollectPayment, sell, onSellStarted }: { readonly onCollectPayment?: () => void; readonly sell?: Artwork | null; readonly onSellStarted?: () => void }) {
     const b = useBilling();
     const { settings: s, docs } = b;
     const [tab, setTab] = useState<Tab>(readTab);
@@ -103,6 +111,15 @@ export function BillingView({ onCollectPayment }: { readonly onCollectPayment?: 
     }, [docs, tab, storeId, range[0], range[1], status, query, s]);
 
     const cards = useMemo(() => summaryCards(tab, list, docs, s, now), [tab, list, docs, s, now]);
+
+    // "Sell this piece" from an artwork: a tax invoice draft with that piece on it.
+    useEffect(() => {
+        if (!sell || !b.canEdit) return;
+        onSellStarted?.();
+        chooseTab('tax');
+        setEditing({ ...newDoc('tax', s, newDocStore, Date.now()), lines: [artworkLine(sell, s)] });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [sell]);
 
     const startNew = () => setEditing(newDoc(tab === 'notes' || tab === 'reports' ? 'proforma' : tab, s, newDocStore, Date.now()));
     const open = openId ? docs.find(d => d.id === openId) ?? null : null;
@@ -163,8 +180,10 @@ export function BillingView({ onCollectPayment }: { readonly onCollectPayment?: 
                             <select aria-label="Period" value={period} onChange={e => setPeriod(e.target.value as Period)} className="neu-field !py-1.5 !w-auto text-xs shrink-0">
                                 {PERIODS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
                             </select>
-                            <Pill active={!status} onClick={() => setStatus('')} className="shrink-0">All</Pill>
-                            {STATUS_FILTERS[tab].map(st => <Pill key={st} active={status === st} onClick={() => setStatus(status === st ? '' : st)} className="shrink-0">{st}</Pill>)}
+                            <select aria-label="Status" value={status} onChange={e => setStatus(e.target.value)} className="neu-field !py-1.5 !w-auto text-xs shrink-0">
+                                <option value="">Any status</option>
+                                {STATUS_FILTERS[tab].map(st => <option key={st} value={st}>{st}</option>)}
+                            </select>
                         </div>
 
                         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
@@ -206,7 +225,7 @@ export function BillingView({ onCollectPayment }: { readonly onCollectPayment?: 
                             })}
                             {list.length === 0 && (
                                 <EmptyState icon={<FileText size={20} />} title={`No ${tabLabel(tab).toLowerCase()} documents here`}
-                                    message={tab === 'notes' ? 'Credit and debit notes are made from an issued tax invoice: open it and choose Credit note or Debit note.' : 'Create one with the + button above, or change the filters.'} />
+                                    message={status || query || period !== 'all' ? 'Nothing matches these filters. Try another status or period.' : `${TAB_PURPOSE[tab]}${tab === 'notes' ? '' : ' Create one with the + button above.'}`} />
                             )}
                         </div>
                     </>
@@ -262,17 +281,19 @@ function summaryCards(tab: Tab, list: BillingDoc[], all: BillingDoc[], s: Return
 }
 
 /** Billing with its data and actions: what App renders for the Billing screen. */
-export function BillingScreen({ docs, artworks, contacts, handlers, onArtworkClick, onCollectPayment }: {
+export function BillingScreen({ docs, artworks, contacts, handlers, onArtworkClick, onCollectPayment, sell, onSellStarted }: {
     readonly docs: BillingDoc[];
     readonly artworks: Artwork[];
     readonly contacts: readonly Contact[];
     readonly handlers: BillingHandlers;
     readonly onArtworkClick?: (artwork: Artwork) => void;
     readonly onCollectPayment?: () => void;
+    readonly sell?: Artwork | null;
+    readonly onSellStarted?: () => void;
 }) {
     return (
         <BillingProvider docs={docs} artworks={artworks} contacts={contacts} handlers={handlers} onArtworkClick={onArtworkClick}>
-            <BillingView onCollectPayment={onCollectPayment} />
+            <BillingView onCollectPayment={onCollectPayment} sell={sell} onSellStarted={onSellStarted} />
         </BillingProvider>
     );
 }

@@ -15,11 +15,13 @@ import { attempt, CardSection, readImage, Sheet } from './parts';
 
 export type SettingsSection = 'business' | 'stores' | 'bank' | 'numbering' | 'tax' | 'print' | 'tally' | 'more';
 
+// The three a new business needs come first; Next walks through them in order.
+const ESSENTIAL = 3;
 const SECTIONS: { id: SettingsSection; label: string; Icon: React.ElementType }[] = [
     { id: 'business', label: 'Business', Icon: Building2 },
-    { id: 'stores', label: 'Stores', Icon: Store },
     { id: 'bank', label: 'Bank', Icon: Landmark },
     { id: 'numbering', label: 'Numbering', Icon: Hash },
+    { id: 'stores', label: 'Stores', Icon: Store },
     { id: 'tax', label: 'Tax', Icon: Percent },
     { id: 'print', label: 'Print', Icon: Printer },
     { id: 'tally', label: 'Tally', Icon: BookOpen },
@@ -93,6 +95,10 @@ export function SettingsSheet({ initialSection, onClose }: Readonly<{ initialSec
         });
     };
     const problems = setupProblems(s);
+    const top = React.useRef<HTMLDivElement>(null);
+    const at = SECTIONS.findIndex(x => x.id === section);
+    const next = SECTIONS[at + 1];
+    const go = (id: SettingsSection) => { setSection(id); top.current?.scrollIntoView({ block: 'start' }); };
 
     const setStore = (id: string, patch: Partial<BillingStore>) => set({ stores: s.stores.map(st => (st.id === id ? { ...st, ...patch } : st)) });
     const addStore = () => set({
@@ -120,7 +126,7 @@ export function SettingsSheet({ initialSection, onClose }: Readonly<{ initialSec
             actions={<button type="button" onClick={close} disabled={saving} className="text-gold-700 dark:text-gold-300 font-medium px-2 py-2 uppercase tracking-wider text-xs flex items-center gap-1 disabled:opacity-60">
                 {saving && <Loader2 size={12} className="animate-spin" />} Done
             </button>}>
-            <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-1 px-1 py-0.5">
+            <div ref={top} className="flex gap-2 overflow-x-auto no-scrollbar -mx-1 px-1 py-0.5 scroll-mt-4">
                 {SECTIONS.map(({ id, label, Icon }) => {
                     const missing = problems.some(p => p[0] === id);
                     return (
@@ -130,6 +136,10 @@ export function SettingsSheet({ initialSection, onClose }: Readonly<{ initialSec
                     );
                 })}
             </div>
+
+            <p className="text-[11px] text-gray-600 dark:text-gray-400 -mt-2">
+                {at < ESSENTIAL ? `Step ${at + 1} of ${ESSENTIAL}` : 'Optional: change only if it applies to you.'}
+            </p>
 
             {problems.length > 0 ? (
                 <div className="neu-inset rounded-2xl p-3 text-[12px] text-gray-700 dark:text-gray-300">
@@ -320,6 +330,11 @@ export function SettingsSheet({ initialSection, onClose }: Readonly<{ initialSec
                         checked={s.inventoryEffects} onChange={() => set({ inventoryEffects: !s.inventoryEffects })} />
                 </CardSection>
             )}
+
+            {next && at < ESSENTIAL - 1
+                ? <Button variant="primary" block onClick={() => go(next.id)}>Next: {next.label}</Button>
+                : <Button variant="primary" block onClick={close} disabled={saving}>Done</Button>}
+            {at === ESSENTIAL - 1 && <p className="text-[11px] text-center text-gray-600 dark:text-gray-400 -mt-2">That’s everything needed. Stores, tax defaults, printing and Tally are optional: open them from the tabs above.</p>}
         </Sheet>
     );
 }

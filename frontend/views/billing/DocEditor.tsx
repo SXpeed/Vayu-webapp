@@ -1,7 +1,7 @@
 // New / edit form for every billing document. Drafts edit everything; an
 // issued document only opens the fields GST lets change afterwards.
 
-import { useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Loader2, Plus, Trash2, X, AlertTriangle, Lock, ChevronDown } from 'lucide-react';
 import { Field, Input, Select, Textarea, ToggleRow, Button, Pill } from '../../components/ui';
@@ -11,10 +11,10 @@ import { TypeDeleteDialog } from '../../components/TypeDeleteDialog';
 import { editionLabel, stockOf, type Artwork, type Contact } from '../../types';
 import { useBilling, type BillingApi } from './billingContext';
 import {
-    currentSeller, docTotals, isLocked, ISSUED_KINDS, issueProblems, kindLabel, PURPOSE_LABEL, RETURNABLE, stateOfGstin,
+    currentSeller, docTotals, isLocked, ISSUED_KINDS, issueProblems, kindLabel, problemField, PURPOSE_LABEL, RETURNABLE, stateOfGstin,
     SUPPLY_LABEL, taxModeOf, type BillingDoc, type BillingSettings, type ChallanPurpose, type DocLine, type Party, type SupplyType, type Transport,
 } from '../../invoicing';
-import { amountInWords, GST_RATES, gstinProblem, rupeesText, sgstLabel, STATES, toPaise, type TaxMode } from '../../gstRules';
+import { amountInWords, GST_RATES, gstinProblem, rupeesText, sgstLabel, stateLabel, STATES, toPaise, type TaxMode } from '../../gstRules';
 import { attempt, CardSection, dateInput, fromDateInput, Sheet } from './parts';
 import { PhotoAttachments } from '../../components/PhotoAttachments';
 import { MAX_PHOTOS } from '../../salesRules';
@@ -25,6 +25,30 @@ const EWAY_LIMIT = 5_000_000;
 const UNITS = ['Nos', 'Pcs', 'Set', 'Sq ft', 'Hrs', 'Job', 'Lot'];
 const CHARGES = ['Packing', 'Framing', 'Freight', 'Insurance', 'Installation'];
 const NOTE_REASONS = ['Sales return', 'Discount after sale', 'Price correction', 'Deficiency in service', 'Other'];
+
+/** Plain-words meanings behind the "?" next to GST terms. */
+const HELP = {
+    gstin: 'The customer’s 15-character GST number. Only registered businesses have one; leave it empty for a private buyer.',
+    pos: 'The state the goods are delivered to. Same state as you: CGST + SGST. Another state: IGST.',
+    hsn: 'A code that tells GST what was sold. 9701 is paintings; services such as framing use a SAC code (9988…).',
+    gst: 'The tax rate on this item. Check it with your CA if unsure.',
+    supply: 'A normal sale in India, or an export / SEZ sale, which is taxed differently.',
+    eway: 'A permit from the GST e-way bill portal, needed to move goods worth over ₹50,000 by vehicle.',
+    irn: 'The Invoice Reference Number from the e-invoice portal. Only for businesses with turnover above ₹5 crore.',
+};
+
+/** A section that folds away, open when it holds something that needs a look. */
+function Fold({ title, summary, open, children }: Readonly<{ title: string; summary?: string; open?: boolean; children?: React.ReactNode }>) {
+    return (
+        <details className="neu-card p-4 lg:p-5 group" open={open}>
+            <summary className="cursor-pointer select-none list-none flex items-center justify-between gap-2 font-semibold">
+                <span className="min-w-0">{title}{summary && <span className="block text-[11px] font-normal text-gray-600 dark:text-gray-400 truncate">{summary}</span>}</span>
+                <ChevronDown size={16} className="transition-transform group-open:rotate-180 shrink-0" aria-hidden />
+            </summary>
+            <div className="mt-3 space-y-4">{children}</div>
+        </details>
+    );
+}
 
 const artworkDetail = (a: Artwork): string => [
     [a.artist, a.artworkYear].filter(Boolean).join(', '),
@@ -108,6 +132,8 @@ function useDocEditor({ initial, onClose, onSaved, onSetup }: EditorProps) {
     const [busy, setBusy] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [uploading, setUploading] = useState<ReadonlySet<string>>(new Set());
+    // Problems show under their fields once a save or issue was refused, not on a blank form.
+    const [showErrors, setShowErrors] = useState(false);
     const locked = isLocked(initial);
     const title = kindLabel(d.kind, s.registration);
 
@@ -133,9 +159,26 @@ function useDocEditor({ initial, onClose, onSaved, onSetup }: EditorProps) {
     const mode = taxModeOf(d, currentSeller(s, d.storeId));
     const problems = locked ? [] : issueProblems(d, s);
 
+    const errors: Record<string, string> = {};
+    if (showErrors) for (const p of problems) { const f = problemField(p); if (f) errors[f] = errors[f] ? `${errors[f]} ${p}` : p; }
+
+    const refuse = (missing: string[]) => {
+        setShowErrors(true);
+        toast.error(missing.length > 1 ? `${missing[0]} (and ${missing.length - 1} more)` : missing[0]);
+        const f = missing.map(problemField).find(Boolean) ?? '';
+        const line = /^line-(\d+)$/.exec(f);
+        const id = line ? `line-desc-${d.lines[Number(line[1])]?.key}` : f;
+        // After the re-render that opens folded sections.
+        requestAnimationFrame(() => {
+            const el = document.getElementById(id);
+            el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            el?.focus({ preventScroll: true });
+        });
+    };
+
     const save = (issue: boolean) => {
-        if (!d.party.name.trim()) return toast.error('Add the customer’s name.');
-        if (d.kind === 'proforma' && problems.length) return toast.error(problems[0]);
+        const missing = issue || d.kind === 'proforma' ? problems : problems.filter(p => problemField(p) === 'p-name');
+        if (missing.length) return refuse(missing);
         if (uploading.size > 0) return toast.error('Wait for the photos to finish uploading');
         setBusy(true);
         void persist(b, d, issue, title).then(saved => {
@@ -146,7 +189,7 @@ function useDocEditor({ initial, onClose, onSaved, onSetup }: EditorProps) {
 
     return {
         d, s, b, set, setParty, setTransport, setLine, setLines, setPosTouched, setUploading, toggleArtwork, addLine, selectedArt, totals, mode,
-        problems, locked, title, busy, save, confirmDelete, setConfirmDelete, onClose, onSetup,
+        problems, errors, locked, title, busy, save, confirmDelete, setConfirmDelete, onClose, onSetup,
         modeText: modeTextOf(mode, d),
         isNote: d.kind === 'credit' || d.kind === 'debit',
         source: d.sourceId ? b.docs.find(x => x.id === d.sourceId) : undefined,
@@ -168,13 +211,13 @@ export function DocEditor(props: Readonly<EditorProps>) {
     const sheetTitle = locked ? d.number : `${verb} ${title.toLowerCase()}`;
     return (
         <Sheet title={sheetTitle} subtitle={locked ? 'Issued: only these details can change' : undefined} onClose={onClose} close="close" z="z-[70]"
-            actions={
+            actions={issuable && (
                 <button type="button" onClick={() => save(false)} disabled={busy}
                     className="text-gold-700 dark:text-gold-300 font-medium px-2 py-2 uppercase tracking-wider text-xs active-scale disabled:opacity-60 flex items-center gap-1">
                     {busy && <Loader2 size={12} className="animate-spin" />}
-                    {issuable ? 'Save draft' : 'Save'}
+                    Save draft
                 </button>
-            }>
+            )}>
             {locked ? (
                 <div className="neu-inset rounded-2xl p-3 flex items-center gap-2 text-[12px] text-gray-700 dark:text-gray-300">
                     <Lock size={14} className="shrink-0" /> Issued documents can’t change their customer, items or amounts. Use a credit or debit note for that.
@@ -183,8 +226,10 @@ export function DocEditor(props: Readonly<EditorProps>) {
                 <>
                     <DocumentSection ed={ed} />
                     <CustomerSection ed={ed} />
+                    <ShippingSection ed={ed} />
                     <ItemsSection ed={ed} />
                     <SummarySection ed={ed} />
+                    <MoreOptionsSection ed={ed} />
                     <ExportSection ed={ed} />
                 </>
             )}
@@ -199,7 +244,7 @@ export function DocEditor(props: Readonly<EditorProps>) {
 }
 
 function DocumentSection({ ed }: Readonly<{ ed: Editor }>) {
-    const { d, s, set, totals, source, isNote } = ed;
+    const { d, s, set, totals, source, isNote, errors } = ed;
     return (
         <CardSection title="Document">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -213,11 +258,6 @@ function DocumentSection({ ed }: Readonly<{ ed: Editor }>) {
                 )}
                 {d.kind === 'proforma' && <>
                     <Field label="Valid until" htmlFor="doc-valid"><Input id="doc-valid" type="date" value={dateInput(d.validUntil)} onChange={e => set({ validUntil: fromDateInput(e.target.value) })} /></Field>
-                    <Field label="Status" htmlFor="doc-status">
-                        <Select id="doc-status" value={d.status} onChange={e => set({ status: e.target.value as BillingDoc['status'] })}>
-                            {['Draft', 'Sent', 'Accepted', 'Rejected'].map(x => <option key={x}>{x}</option>)}
-                        </Select>
-                    </Field>
                     <Field label="Advance requested (₹)" htmlFor="doc-adv" hint={`${s.advancePct}% of the total is ${rupeesText(Math.round(totals.total * s.advancePct / 100))}`}>
                         <div className="flex gap-2">
                             <Input id="doc-adv" type="number" inputMode="decimal" min={0} value={d.advancePaise ? d.advancePaise / 100 : ''} onChange={e => set({ advancePaise: toPaise(e.target.value) || 0 })} />
@@ -225,19 +265,11 @@ function DocumentSection({ ed }: Readonly<{ ed: Editor }>) {
                         </div>
                     </Field>
                 </>}
-                {d.kind === 'tax' && <>
+                {d.kind === 'tax' && (
                     <Field label="Due date" htmlFor="doc-due"><Input id="doc-due" type="date" value={dateInput(d.dueDate)} onChange={e => set({ dueDate: fromDateInput(e.target.value) })} /></Field>
-                    <Field label="Supply type" htmlFor="doc-supply">
-                        <Select id="doc-supply" value={d.supplyType} onChange={e => {
-                            const supplyType = e.target.value as SupplyType;
-                            set({ supplyType, placeOfSupply: supplyType.startsWith('export') ? '96' : d.party.state || d.placeOfSupply });
-                        }}>
-                            {(Object.keys(SUPPLY_LABEL) as SupplyType[]).map(k => <option key={k} value={k}>{SUPPLY_LABEL[k]}</option>)}
-                        </Select>
-                    </Field>
-                </>}
+                )}
                 {d.kind === 'challan' && <>
-                    <Field label="Purpose" htmlFor="doc-purpose">
+                    <Field label="Purpose" htmlFor="doc-purpose" error={errors['doc-purpose']}>
                         <Select id="doc-purpose" value={d.challanPurpose} onChange={e => {
                             const challanPurpose = e.target.value as ChallanPurpose;
                             set({ challanPurpose, challanTax: challanPurpose === 'sale' || challanPurpose === 'transfer' });
@@ -251,43 +283,71 @@ function DocumentSection({ ed }: Readonly<{ ed: Editor }>) {
                 </>}
                 {isNote && <>
                     <Field label="Against invoice"><p className="neu-value">{source ? `${source.number} · ${source.party.name}` : 'Missing'}</p></Field>
-                    <Field label="Reason *" htmlFor="doc-reason">
+                    <Field label="Reason *" htmlFor="doc-reason" error={errors['doc-reason']}>
                         <Input id="doc-reason" list="note-reasons" value={d.noteReason ?? ''} onChange={e => set({ noteReason: e.target.value })} placeholder="e.g. Sales return" />
                         <datalist id="note-reasons">{NOTE_REASONS.map(r => <option key={r} value={r} />)}</datalist>
                     </Field>
                 </>}
-                <Field label="Reference" htmlFor="doc-ref" hint="PO number, order, earlier document…"><Input id="doc-ref" value={d.reference} onChange={e => set({ reference: e.target.value })} maxLength={80} /></Field>
             </div>
             {d.kind === 'challan' && d.challanPurpose === 'transfer' && (
                 <p className="text-[12px] text-gold-700 dark:text-gold-300 flex gap-2"><AlertTriangle size={14} className="shrink-0 mt-0.5" />
                     Moving stock to a store with a different GSTIN is a sale between them: issue a tax invoice instead. Same GSTIN: a challan is right.</p>
             )}
-            <div className="space-y-1">
-                {d.kind === 'challan' && <ToggleRow title="Show tax on the challan" description="For goods moving as part of a sale or transfer." checked={!!d.challanTax} onChange={() => set({ challanTax: !d.challanTax })} />}
-                {(d.kind !== 'challan' || d.challanTax) && <ToggleRow title="Prices include GST" description="Rates you type already include tax; the taxable value is worked out from them." checked={d.priceIncludesTax} onChange={() => set({ priceIncludesTax: !d.priceIncludesTax })} />}
-                {d.kind === 'tax' && <ToggleRow title="Reverse charge" description="The buyer pays the GST, not you." checked={d.reverseCharge} onChange={() => set({ reverseCharge: !d.reverseCharge })} />}
-            </div>
+            {d.kind === 'challan' && <ToggleRow title="Show tax on the challan" description="For goods moving as part of a sale or transfer." checked={!!d.challanTax} onChange={() => set({ challanTax: !d.challanTax })} />}
         </CardSection>
     );
 }
 
+/** What most bills never touch: reference, supply type, GST-inclusive prices, reverse charge. */
+function MoreOptionsSection({ ed }: Readonly<{ ed: Editor }>) {
+    const { d, s, set } = ed;
+    const taxed = d.kind !== 'challan' || !!d.challanTax;
+    const summary = [
+        d.reference && `Ref ${d.reference}`,
+        d.kind === 'tax' && d.supplyType !== 'regular' && SUPPLY_LABEL[d.supplyType],
+        taxed && (d.priceIncludesTax ? 'Prices include GST' : 'GST added to prices'),
+        d.reverseCharge && 'Reverse charge',
+    ].filter(Boolean).join(' · ');
+    return (
+        <Fold title="More options" summary={summary} open={!!d.reference || d.supplyType !== 'regular' || d.reverseCharge || d.priceIncludesTax !== s.pricesIncludeTax}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <Field label="Reference" htmlFor="doc-ref" hint="PO number, order, earlier document…"><Input id="doc-ref" value={d.reference} onChange={e => set({ reference: e.target.value })} maxLength={80} /></Field>
+                {d.kind === 'tax' && (
+                    <Field label="Supply type" htmlFor="doc-supply" help={HELP.supply}>
+                        <Select id="doc-supply" value={d.supplyType} onChange={e => {
+                            const supplyType = e.target.value as SupplyType;
+                            set({ supplyType, placeOfSupply: supplyType.startsWith('export') ? '96' : d.party.state || d.placeOfSupply });
+                        }}>
+                            {(Object.keys(SUPPLY_LABEL) as SupplyType[]).map(k => <option key={k} value={k}>{SUPPLY_LABEL[k]}</option>)}
+                        </Select>
+                    </Field>
+                )}
+            </div>
+            <div className="space-y-1">
+                {taxed && <ToggleRow title="Prices include GST" description="Rates you type already include tax; the taxable value is worked out from them." checked={d.priceIncludesTax} onChange={() => set({ priceIncludesTax: !d.priceIncludesTax })} />}
+                {d.kind === 'tax' && <ToggleRow title="Reverse charge" description="The buyer pays the GST, not you." checked={d.reverseCharge} onChange={() => set({ reverseCharge: !d.reverseCharge })} />}
+            </div>
+        </Fold>
+    );
+}
+
 function CustomerSection({ ed }: Readonly<{ ed: Editor }>) {
-    const { d, b, set, setParty, modeText, gstinErr, pickContact, setPosTouched } = ed;
+    const { d, b, setParty, gstinErr, pickContact, errors } = ed;
     return (
         <CardSection title={d.kind === 'challan' ? 'Consignee' : 'Customer'} hint={d.kind === 'proforma' ? 'Name, plus a phone number or email.' : 'Add the GSTIN for a registered business (B2B).'}>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <Field label="Name *" htmlFor="p-name" className="sm:col-span-2">
+                <Field label="Name *" htmlFor="p-name" className="sm:col-span-2" error={errors['p-name']}>
                     <ContactSuggest contacts={b.contacts} query={d.party.name} onPick={pickContact}>
                         {p => <input id="p-name" className="neu-field" value={d.party.name} onChange={e => setParty({ name: e.target.value })} placeholder="Customer or business name" {...p} />}
                     </ContactSuggest>
                 </Field>
-                <Field label="Phone" htmlFor="p-phone">
+                <Field label="Phone" htmlFor="p-phone" error={errors['p-phone']}>
                     <ContactSuggest contacts={b.contacts} query={d.party.phone} onPick={pickContact}>
                         {p => <input id="p-phone" type="tel" className="neu-field" value={d.party.phone} onChange={e => setParty({ phone: e.target.value })} placeholder="+91 98765 43210" {...p} />}
                     </ContactSuggest>
                 </Field>
                 <Field label="Email" htmlFor="p-email"><Input id="p-email" type="email" value={d.party.email} onChange={e => setParty({ email: e.target.value })} placeholder="name@example.com" /></Field>
-                <Field label="GSTIN" htmlFor="p-gstin" hint={gstinErr ?? (d.party.gstin ? 'Valid GSTIN ✓' : 'Leave empty for a customer without GST (B2C).')}>
+                <Field label="GSTIN" htmlFor="p-gstin" help={HELP.gstin} error={errors['p-gstin']} hint={gstinErr ?? (d.party.gstin ? 'Valid GSTIN ✓' : 'Leave empty for a customer without GST (B2C).')}>
                     <Input id="p-gstin" value={d.party.gstin} maxLength={15} aria-invalid={!!gstinErr}
                         onChange={e => {
                             const gstin = e.target.value.toUpperCase().replaceAll(/\s/g, '');
@@ -295,10 +355,20 @@ function CustomerSection({ ed }: Readonly<{ ed: Editor }>) {
                             setParty({ gstin, ...(st ? { state: st } : {}) });
                         }} placeholder="27ABCDE1234F1Z5" className={gstinErr ? '!ring-1 !ring-red-400' : ''} />
                 </Field>
-                <Field label={d.kind === 'proforma' ? 'State' : 'State *'} htmlFor="p-state"><StateSelect id="p-state" value={d.party.state} onChange={v => setParty({ state: v })} /></Field>
+                <Field label={d.kind === 'proforma' ? 'State' : 'State *'} htmlFor="p-state" error={errors['p-state']}><StateSelect id="p-state" value={d.party.state} onChange={v => setParty({ state: v })} /></Field>
                 <Field label="Billing address" htmlFor="p-addr" className="sm:col-span-2"><Textarea id="p-addr" rows={2} className="resize-none" value={d.party.address} onChange={e => setParty({ address: e.target.value })} /></Field>
                 <Field label="PIN code" htmlFor="p-pin"><Input id="p-pin" inputMode="numeric" maxLength={6} value={d.party.pincode} onChange={e => setParty({ pincode: e.target.value.replaceAll(/\D/g, '') })} /></Field>
             </div>
+        </CardSection>
+    );
+}
+
+/** Shipping and place of supply fold away: the place follows the customer's state on its own. */
+function ShippingSection({ ed }: Readonly<{ ed: Editor }>) {
+    const { d, set, setParty, modeText, setPosTouched, errors } = ed;
+    const where = d.party.sameShipping ? 'Ships to the billing address' : `Ships to ${d.party.shipName || d.party.name || 'another address'}`;
+    return (
+        <Fold title="Shipping & place of supply" summary={`${where} · ${stateLabel(d.placeOfSupply) || 'no place of supply yet'}`} open={!d.party.sameShipping || !!errors['p-pos']}>
             <ToggleRow title="Ship to the same address" checked={d.party.sameShipping} onChange={() => setParty({ sameShipping: !d.party.sameShipping })} />
             {!d.party.sameShipping && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -308,15 +378,15 @@ function CustomerSection({ ed }: Readonly<{ ed: Editor }>) {
                     <Field label="PIN code" htmlFor="p-spin"><Input id="p-spin" inputMode="numeric" maxLength={6} value={d.party.shipPincode} onChange={e => setParty({ shipPincode: e.target.value.replaceAll(/\D/g, '') })} /></Field>
                 </div>
             )}
-            <Field label="Place of supply *" htmlFor="p-pos" hint={modeText}>
+            <Field label="Place of supply *" htmlFor="p-pos" hint={modeText} help={HELP.pos} error={errors['p-pos']}>
                 <StateSelect id="p-pos" foreign value={d.placeOfSupply} onChange={v => { setPosTouched(true); set({ placeOfSupply: v }); }} />
             </Field>
-        </CardSection>
+        </Fold>
     );
 }
 
 function ItemsSection({ ed }: Readonly<{ ed: Editor }>) {
-    const { d, setLine, setLines, totals, mode, isNote, selectedArt, toggleArtwork, addLine, pickable, setUploading } = ed;
+    const { d, setLine, setLines, totals, mode, isNote, selectedArt, toggleArtwork, addLine, pickable, setUploading, errors } = ed;
     return (
         <CardSection title="Items" actions={<span className="text-[11px] neu-inset px-2 py-0.5 rounded-[3px] text-gray-600 dark:text-gray-300 uppercase tracking-wider">{d.lines.length} lines</span>}>
             {!isNote && (
@@ -325,7 +395,7 @@ function ItemsSection({ ed }: Readonly<{ ed: Editor }>) {
             )}
             <datalist id="billing-units">{UNITS.map(u => <option key={u} value={u} />)}</datalist>
             {d.lines.map((l, i) => (
-                <LineEditor key={l.key} line={l} index={i} total={totals.lines[i]?.total ?? 0} taxed={mode !== 'none'} challan={d.kind === 'challan'}
+                <LineEditor key={l.key} line={l} index={i} total={totals.lines[i]?.total ?? 0} taxed={mode !== 'none'} challan={d.kind === 'challan'} error={errors[`line-${i}`]}
                     onChange={patch => setLine(l.key, patch)} onRemove={() => setLines(lines => lines.filter(x => x.key !== l.key))}
                     onUploading={busy => setUploading(prev => {
                         const next = new Set(prev);
@@ -333,6 +403,7 @@ function ItemsSection({ ed }: Readonly<{ ed: Editor }>) {
                         return next;
                     })} />
             ))}
+            {errors.items && <p id="items" tabIndex={-1} className="text-[11px] text-red-600 dark:text-red-400">{errors.items}</p>}
             <div className="flex flex-wrap gap-2 items-center">
                 <Button type="button" onClick={() => addLine()} icon={<Plus size={14} />} className="!py-2 text-xs">Item not in inventory</Button>
                 {!isNote && CHARGES.map(c => <Pill key={c} onClick={() => addLine(c, true)}>+ {c}</Pill>)}
@@ -355,13 +426,13 @@ function SummarySection({ ed }: Readonly<{ ed: Editor }>) {
 }
 
 function ExportSection({ ed }: Readonly<{ ed: Editor }>) {
-    const { d, set } = ed;
+    const { d, set, errors } = ed;
     if (d.kind !== 'tax' || d.supplyType === 'regular') return null;
     return (
             <CardSection title="Export / SEZ details">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {([['lutNo', 'LUT / bond number'], ['currency', 'Currency'], ['exchangeRate', 'Exchange rate (₹)'], ['portCode', 'Port code'], ['shippingBillNo', 'Shipping bill No.'], ['shippingBillDate', 'Shipping bill date']] as const).map(([k, label]) => (
-                        <Field key={k} label={label} htmlFor={`ex-${k}`}>
+                        <Field key={k} label={label} htmlFor={`ex-${k}`} error={errors[`ex-${k}`]}>
                             <Input id={`ex-${k}`} type={k === 'shippingBillDate' ? 'date' : 'text'} value={d.exportInfo[k]} onChange={e => set({ exportInfo: { ...d.exportInfo, [k]: e.target.value } })} />
                         </Field>
                     ))}
@@ -388,13 +459,8 @@ function TransportSection({ ed }: Readonly<{ ed: Editor }>) {
     // Starts open when something is filled in or an e-way bill is likely needed.
     const filled = !!d.ewayBillNo || Object.values(d.transport).some(Boolean);
     return (
-        <details className="neu-card p-4 lg:p-5 group" open={filled || needsEway}>
-            <summary className="cursor-pointer select-none list-none flex items-center justify-between gap-2 font-semibold">
-                Transport &amp; e-way bill
-                <ChevronDown size={16} className="transition-transform group-open:rotate-180" aria-hidden />
-            </summary>
-            {needsEway && <p className="mt-1 text-[11px] text-gray-600 dark:text-gray-400">Goods worth over ₹50,000 moving by vehicle usually need an e-way bill.</p>}
-                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Fold title="Transport & e-way bill" summary={needsEway ? 'Goods worth over ₹50,000 moving by vehicle usually need an e-way bill.' : undefined} open={filled || needsEway}>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <Field label="Mode" htmlFor="tr-mode">
                         <Select id="tr-mode" value={d.transport.mode} onChange={e => setTransport({ mode: e.target.value as Transport['mode'] })}>
                             <option value="">-</option>
@@ -405,9 +471,9 @@ function TransportSection({ ed }: Readonly<{ ed: Editor }>) {
                     <Field label="Vehicle No." htmlFor="tr-veh"><Input id="tr-veh" value={d.transport.vehicleNo} onChange={e => setTransport({ vehicleNo: e.target.value.toUpperCase() })} placeholder="MH01AB1234" /></Field>
                     <Field label="LR / docket No." htmlFor="tr-lr"><Input id="tr-lr" value={d.transport.lrNo} onChange={e => setTransport({ lrNo: e.target.value })} /></Field>
                     <Field label="Dispatch date" htmlFor="tr-date"><Input id="tr-date" type="date" value={d.transport.dispatchDate} onChange={e => setTransport({ dispatchDate: e.target.value })} /></Field>
-                    <Field label="E-way bill No." htmlFor="tr-eway"><Input id="tr-eway" inputMode="numeric" value={d.ewayBillNo} onChange={e => set({ ewayBillNo: e.target.value.replaceAll(/\D/g, '').slice(0, 12) })} /></Field>
+                    <Field label="E-way bill No." htmlFor="tr-eway" help={HELP.eway}><Input id="tr-eway" inputMode="numeric" value={d.ewayBillNo} onChange={e => set({ ewayBillNo: e.target.value.replaceAll(/\D/g, '').slice(0, 12) })} /></Field>
                 </div>
-        </details>
+        </Fold>
     );
 }
 
@@ -415,58 +481,63 @@ function EInvoiceSection({ ed }: Readonly<{ ed: Editor }>) {
     const { d, set, isNote } = ed;
     if (d.kind !== 'tax' && !isNote) return null;
     return (
-            <CardSection title="E-invoice" hint="Only if your turnover is above ₹5 crore. Paste the IRN details from the e-invoice portal.">
+            <Fold title="E-invoice" summary={d.irn ? `IRN ${d.irn.slice(0, 12)}…` : 'Only if your turnover is above ₹5 crore'} open={!!d.irn}>
+                <p className="text-[11px] text-gray-600 dark:text-gray-400">Paste the IRN details from the e-invoice portal.</p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <Field label="IRN" htmlFor="ei-irn" className="sm:col-span-2"><Input id="ei-irn" value={d.irn} maxLength={64} onChange={e => set({ irn: e.target.value.trim() })} /></Field>
+                    <Field label="IRN" htmlFor="ei-irn" className="sm:col-span-2" help={HELP.irn}><Input id="ei-irn" value={d.irn} maxLength={64} onChange={e => set({ irn: e.target.value.trim() })} /></Field>
                     <Field label="Ack No." htmlFor="ei-ack"><Input id="ei-ack" value={d.ackNo} onChange={e => set({ ackNo: e.target.value })} /></Field>
                     <Field label="Ack date" htmlFor="ei-ackd"><Input id="ei-ackd" type="date" value={d.ackDate} onChange={e => set({ ackDate: e.target.value })} /></Field>
                 </div>
-            </CardSection>
+            </Fold>
     );
 }
 
 function NotesSection({ ed }: Readonly<{ ed: Editor }>) {
     const { d, set, locked } = ed;
     return (
-        <details className="neu-card p-4 lg:p-5 group">
-            <summary className="cursor-pointer select-none list-none flex items-center justify-between gap-2 font-semibold">
-                Notes
-                <ChevronDown size={16} className="transition-transform group-open:rotate-180" aria-hidden />
-            </summary>
-            <div className="mt-3 space-y-4">
+        <Fold title="Notes">
             {!locked && <>
                 <Field label="Notes (printed)" htmlFor="doc-notes"><Textarea id="doc-notes" rows={2} className="resize-none" value={d.notes} onChange={e => set({ notes: e.target.value })} /></Field>
                 {d.kind !== 'challan' && <Field label="Terms & conditions (printed)" htmlFor="doc-terms"><Textarea id="doc-terms" rows={3} className="resize-none" value={d.terms} onChange={e => set({ terms: e.target.value })} /></Field>}
             </>}
             <Field label="Internal note" htmlFor="doc-internal" hint="Only your team sees this. Never printed."><Textarea id="doc-internal" rows={2} className="resize-none" value={d.internalNote} onChange={e => set({ internalNote: e.target.value })} /></Field>
-            </div>
-        </details>
+        </Fold>
     );
 }
 
 function ChecklistSection({ ed }: Readonly<{ ed: Editor }>) {
     const { d, problems, onSetup, locked } = ed;
-    if (locked || problems.length === 0) return null;
+    const unplaced = problems.filter(p => !problemField(p));
+    if (locked || unplaced.length === 0) return null;
     return (
             <CardSection title={d.kind === 'proforma' ? 'Before saving' : 'Before issuing'}>
                 <ul className="space-y-1.5 text-[12px] text-gray-700 dark:text-gray-300">
-                    {problems.map(p => <li key={p} className="flex gap-2"><AlertTriangle size={13} className="text-gold-600 shrink-0 mt-0.5" />{p}</li>)}
+                    {unplaced.map(p => <li key={p} className="flex gap-2"><AlertTriangle size={13} className="text-gold-600 shrink-0 mt-0.5" />{p}</li>)}
                 </ul>
-                {problems.includes('Finish billing setup first.') && <Button type="button" onClick={() => onSetup('business')}>Open billing setup</Button>}
+                {unplaced.includes('Finish billing setup first.') && <Button type="button" onClick={() => onSetup('business')}>Open billing setup</Button>}
             </CardSection>
     );
 }
 
 function EditorFooter({ ed }: Readonly<{ ed: Editor }>) {
-    const { d, b, problems, issuable, title, busy, save, existing, confirmDelete, setConfirmDelete, onClose } = ed;
+    const { d, b, problems, issuable, title, busy, save, existing, confirmDelete, setConfirmDelete, onClose, totals, locked } = ed;
+    const left = issuable || d.kind === 'proforma' ? problems.length : 0;
+    let label = 'Save';
+    if (issuable) label = 'Save & issue';
+    else if (!locked) label = `Save ${title.toLowerCase()}`;
     return (
         <>
-            {issuable && (
-                <Button variant="primary" block disabled={busy || problems.length > 0} onClick={() => save(true)}>
-                    {busy ? <Loader2 size={14} className="animate-spin" /> : null} Save &amp; issue {title.toLowerCase()}
+            {/* Total and the one main button stay in reach while scrolling. Negative bottom cancels the sheet's bottom padding, so the bar meets the screen edge. */}
+            <div className="sticky bottom-[calc(-6rem-var(--safe-bottom-ui))] lg:-bottom-8 z-10 -mx-3 lg:-mx-6 px-3 lg:px-6 py-3 bg-[var(--neu-bg)] border-t border-[var(--neu-line)] flex items-center gap-3">
+                <div className="min-w-0 flex-1">
+                    <p className="text-[10px] uppercase tracking-widest text-gray-600 dark:text-gray-400">{left ? `Total · ${left} to fill` : 'Total'}</p>
+                    <p className="font-serif text-lg text-brand-900 dark:text-gold-400 truncate">{rupeesText(totals.total)}</p>
+                </div>
+                <Button variant="primary" disabled={busy} onClick={() => save(issuable)} className="shrink-0">
+                    {busy ? <Loader2 size={14} className="animate-spin" /> : null} {label}
                 </Button>
-            )}
-            {issuable && <p className="text-[11px] text-center text-gray-600 dark:text-gray-400 -mt-2">Issuing gives it the next number and locks it. {!b.online && 'You’re offline: save the draft now and issue it once you’re back online.'}</p>}
+            </div>
+            {issuable && <p className="text-[11px] text-center text-gray-600 dark:text-gray-400">Issuing gives it the next number and locks it. {!b.online && 'You’re offline: save the draft now and issue it once you’re back online.'}</p>}
 
             {existing && (d.kind === 'proforma' || d.status === 'Draft') && (
                 <button type="button" onClick={() => setConfirmDelete(true)} className="neu-button neu-button-danger w-full">
@@ -480,8 +551,8 @@ function EditorFooter({ ed }: Readonly<{ ed: Editor }>) {
     );
 }
 
-function LineEditor({ line: l, index, total, taxed, challan, onChange, onRemove, onUploading }: {
-    readonly line: DocLine; readonly index: number; readonly total: number; readonly taxed: boolean; readonly challan: boolean;
+function LineEditor({ line: l, index, total, taxed, challan, error, onChange, onRemove, onUploading }: {
+    readonly line: DocLine; readonly index: number; readonly total: number; readonly taxed: boolean; readonly challan: boolean; readonly error?: string;
     readonly onChange: (patch: Partial<DocLine>) => void; readonly onRemove: () => void; readonly onUploading: (busy: boolean) => void;
 }) {
     const id = (f: string) => `line-${f}-${l.key}`;
@@ -496,18 +567,28 @@ function LineEditor({ line: l, index, total, taxed, challan, onChange, onRemove,
                 </div>
                 <button type="button" onClick={onRemove} aria-label={`Remove ${l.description || 'line'}`} className="neu-icon-btn text-gray-600 dark:text-gray-300 active-scale shrink-0"><X size={16} /></button>
             </div>
-            <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 pl-6">
-                <Field label="HSN/SAC" htmlFor={id('hsn')}><Input id={id('hsn')} inputMode="numeric" maxLength={8} value={l.hsn} onChange={e => onChange({ hsn: e.target.value.replaceAll(/\D/g, '') })} /></Field>
+            <div className="grid grid-cols-3 gap-2 pl-6">
                 <Field label="Qty" htmlFor={id('qty')}><Input id={id('qty')} type="number" inputMode="decimal" min={0} step="any" value={l.qty} onChange={e => onChange({ qty: Number(e.target.value) })} /></Field>
-                <Field label="Unit" htmlFor={id('unit')}><Input id={id('unit')} list="billing-units" value={l.unit} onChange={e => onChange({ unit: e.target.value })} /></Field>
                 <Field label="Rate (₹)" htmlFor={id('rate')}><Input id={id('rate')} type="number" inputMode="decimal" min={0} step="0.01" value={l.ratePaise / 100} onChange={e => onChange({ ratePaise: toPaise(e.target.value) || 0 })} /></Field>
                 <Field label="Disc %" htmlFor={id('disc')}><Input id={id('disc')} type="number" inputMode="decimal" min={0} max={100} value={l.discountPct || ''} onChange={e => onChange({ discountPct: Math.min(100, Math.max(0, Number(e.target.value) || 0)) })} /></Field>
-                <Field label="GST %" htmlFor={id('gst')}>
-                    <Select id={id('gst')} value={l.gstRate} onChange={e => onChange({ gstRate: Number(e.target.value) })} disabled={!taxed}>
-                        {rates.map(r => <option key={r} value={r}>{r}%</option>)}
-                    </Select>
-                </Field>
             </div>
+            {/* Filled from billing setup; most lines never need these. */}
+            <details className="pl-6 group/tax" open={!!error?.includes('HSN')}>
+                <summary className="cursor-pointer select-none list-none text-[11px] text-gray-600 dark:text-gray-400 flex items-center gap-1">
+                    Tax details: HSN {l.hsn || '-'} · {l.unit}{taxed ? ` · GST ${l.gstRate}%` : ''}
+                    <ChevronDown size={12} className="transition-transform group-open/tax:rotate-180" aria-hidden />
+                </summary>
+                <div className="grid grid-cols-3 gap-2 mt-2">
+                    <Field label="HSN/SAC" htmlFor={id('hsn')} help={HELP.hsn}><Input id={id('hsn')} inputMode="numeric" maxLength={8} value={l.hsn} onChange={e => onChange({ hsn: e.target.value.replaceAll(/\D/g, '') })} /></Field>
+                    <Field label="Unit" htmlFor={id('unit')}><Input id={id('unit')} list="billing-units" value={l.unit} onChange={e => onChange({ unit: e.target.value })} /></Field>
+                    <Field label="GST %" htmlFor={id('gst')} help={HELP.gst}>
+                        <Select id={id('gst')} value={l.gstRate} onChange={e => onChange({ gstRate: Number(e.target.value) })} disabled={!taxed}>
+                            {rates.map(r => <option key={r} value={r}>{r}%</option>)}
+                        </Select>
+                    </Field>
+                </div>
+            </details>
+            {error && <p className="pl-6 text-[11px] text-red-600 dark:text-red-400">{error}</p>}
             {!l.artworkId && (
                 <div className="pl-6">
                     <PhotoAttachments

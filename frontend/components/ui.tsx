@@ -583,18 +583,34 @@ interface FieldProps {
     label: string;
     htmlFor?: string;
     hint?: string;
+    /** Shown in red in place of the hint. */
+    error?: string;
+    /** Plain-words meaning of the label, behind a "?" button. */
+    help?: string;
     children?: React.ReactNode;
     className?: string;
 }
 
 /** Label + control + hint, with one spacing rhythm everywhere. */
-export const Field: React.FC<FieldProps> = ({ label, htmlFor, hint, children, className = '' }) => (
-    <div className={className}>
-        <label htmlFor={htmlFor} className="neu-label">{label}</label>
-        {children}
-        {hint && <p className="mt-1 text-[11px] text-gray-600 dark:text-gray-400 font-light">{hint}</p>}
-    </div>
-);
+export const Field: React.FC<FieldProps> = ({ label, htmlFor, hint, error, help, children, className = '' }) => {
+    const [showHelp, setShowHelp] = useState(false);
+    return (
+        <div className={className}>
+            <div className="flex items-center gap-1.5">
+                <label htmlFor={htmlFor} className="neu-label">{label}</label>
+                {help && (
+                    <button type="button" onClick={() => setShowHelp(v => !v)} aria-expanded={showHelp} aria-label={`What is ${label.replace(' *', '')}?`}
+                        className="neu-label !mb-0 -mt-1 w-4 h-4 rounded-full neu-inset text-[10px] leading-4 text-center">?</button>
+                )}
+            </div>
+            {showHelp && <p className="mb-1.5 text-[11px] text-gray-700 dark:text-gray-300 neu-inset rounded-lg px-2 py-1.5">{help}</p>}
+            {children}
+            {error
+                ? <p className="mt-1 text-[11px] text-red-600 dark:text-red-400">{error}</p>
+                : hint && <p className="mt-1 text-[11px] text-gray-600 dark:text-gray-400 font-light">{hint}</p>}
+        </div>
+    );
+};
 
 // ComponentProps, not the attributes alone: they carry `ref` (a plain prop in React 19), for callers that place the cursor.
 type InputProps = React.ComponentProps<'input'>;
