@@ -4,6 +4,8 @@ import storageService from './storageService';
 
 const json = (method: string, body: unknown): RequestInit => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
+const EXT: Record<string, string> = { mp4: 'm4a', ogg: 'ogg' };
+
 export interface MeetingList { meetings: Meeting[]; ai: { text: boolean; transcribe: boolean } }
 
 export const meetingService = {
@@ -14,7 +16,7 @@ export const meetingService = {
     async create(m: MeetingInput, audio?: { blob: Blob; durationSec: number }): Promise<Meeting> {
         let audioKey = '';
         if (audio) {
-            const ext = audio.blob.type.includes('mp4') ? 'm4a' : audio.blob.type.includes('ogg') ? 'ogg' : 'webm';
+            const ext = Object.entries(EXT).find(([k]) => audio.blob.type.includes(k))?.[1] ?? 'webm';
             audioKey = (await storageService.upload(new File([audio.blob], `meeting.${ext}`, { type: audio.blob.type.split(';')[0] }))).key;
         }
         return call<Meeting>('/meetings', json('POST', { ...m, audioKey, durationSec: audio?.durationSec ?? 0 }));

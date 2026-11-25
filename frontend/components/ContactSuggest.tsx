@@ -75,7 +75,7 @@ export const ContactSuggest: React.FC<{
                     className="absolute left-0 right-0 top-full mt-1.5 z-[90] max-h-64 overflow-y-auto overscroll-contain rounded-2xl neu-raised p-1.5 animate-fade-in"
                 >
                     {matches.map((c, i) => (
-                        <li
+                        <li // NOSONAR: the combobox input handles the keyboard (arrows, Enter) via aria-activedescendant
                             key={c.id}
                             id={`${id}-${i}`}
                             role="option"

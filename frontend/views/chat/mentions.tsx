@@ -10,8 +10,8 @@ export const mentionQueryAt = (text: string, caret: number): string | null =>
 export function withMentions(text: string, names: string[]): React.ReactNode {
     if (!text.includes('@') || names.length === 0) return text;
     const alternatives = [...new Set(names)].filter(Boolean).sort((a, b) => b.length - a.length)
-        .map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+        .map(n => n.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`));
     if (alternatives.length === 0) return text;
     return text.split(new RegExp(`(@(?:${alternatives.join('|')}))`, 'g')).map((part, i) =>
-        i % 2 ? <span key={i} className="font-semibold text-gold-700 dark:text-gold-300">{part}</span> : part);
+        i % 2 ? <span key={i} /* NOSONAR: pieces of one fixed string, in order; nothing reorders them */ className="font-semibold text-gold-700 dark:text-gold-300">{part}</span> : part);
 }

@@ -471,6 +471,13 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
         return json({ weekStart, status: 'published', publishedAt: now, publishedByName: session.name, notified: notified.length });
     };
 
+    /** Recording leave for someone else: managers only, and only for someone on the team. */
+    const mayRecordLeaveFor = async (ctx: Ctx, session: SessionData, employeeId: string): Promise<Response | null> => {
+        if (!(await deps.canManage(ctx, session))) return err('You can only ask for leave for yourself.', 403);
+        if (!(await lookups(ctx)).peopleIds.has(employeeId)) return err('That person is not on this team.');
+        return null;
+    };
+
     /** POST /staff-roster/leaves — for yourself (pending), or, as a manager, for someone else (approved). */
     const requestLeave: Handler = async (ctx) => {
         const session = await caller(ctx);
@@ -480,10 +487,8 @@ export function staffRosterRoutes(deps: StaffRosterDeps): StaffRosterRoute[] {
         if (!raw) return err('Invalid request body');
         const employeeId = typeof raw.employeeId === 'string' && raw.employeeId ? raw.employeeId : session.userId;
         const forSomeoneElse = employeeId !== session.userId;
-        if (forSomeoneElse) {
-            if (!(await deps.canManage(ctx, session))) return err('You can only ask for leave for yourself.', 403);
-            if (!(await lookups(ctx)).peopleIds.has(employeeId)) return err('That person is not on this team.');
-        }
+        const refused = forSomeoneElse ? await mayRecordLeaveFor(ctx, session, employeeId) : null;
+        if (refused) return refused;
         const from = text(raw.from), to = text(raw.to);
         const datesProblem = leaveDatesProblem(from, to);
         if (datesProblem) return err(datesProblem);

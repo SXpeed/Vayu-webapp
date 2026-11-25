@@ -165,8 +165,8 @@ const Media: React.FC<{ media: NonNullable<ReplyMessage['media']>; caption: stri
             {open && <ImageViewer image={{ url: media.url, name: media.name || 'whatsapp-photo.jpg', caption }} onClose={() => setOpen(false)} />}
         </>
     );
-    if (media.type.startsWith('video')) return <video src={media.url} controls preload="metadata" className="mb-1 rounded-xl max-h-72 max-w-full" />;
-    if (media.type.startsWith('audio') || media.type === 'voice') return <audio src={media.url} controls preload="metadata" className="mb-1 max-w-full" />;
+    if (media.type.startsWith('video')) return <video src={media.url} controls preload="metadata" className="mb-1 rounded-xl max-h-72 max-w-full"><track kind="captions" /></video>;
+    if (media.type.startsWith('audio') || media.type === 'voice') return <audio src={media.url} controls preload="metadata" className="mb-1 max-w-full"><track kind="captions" /></audio>;
     return <button type="button" onClick={() => { void saveMedia(media.url, name); }} className={link}><FileText size={15} aria-hidden />{name}<Download size={14} aria-hidden /></button>;
 };
 

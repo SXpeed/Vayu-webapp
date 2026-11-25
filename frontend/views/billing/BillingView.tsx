@@ -20,6 +20,9 @@ import { DocDetail } from './DocDetail';
 import { SettingsSheet, type SettingsSection } from './SettingsSheet';
 import { ReportsView } from './ReportsView';
 
+/** What an empty tab is for, and how to start one (notes are made from an invoice). */
+const emptyPurpose = (tab: keyof typeof TAB_PURPOSE) => (tab === 'notes' ? TAB_PURPOSE[tab] : `${TAB_PURPOSE[tab]} Create one with the + button above.`);
+
 export type Tab = 'proforma' | 'tax' | 'challan' | 'notes' | 'reports';
 const TAB_KEY = 'vayu.billing.tab';
 
@@ -225,7 +228,7 @@ export function BillingView({ onCollectPayment, sell, onSellStarted }: { readonl
                             })}
                             {list.length === 0 && (
                                 <EmptyState icon={<FileText size={20} />} title={`No ${tabLabel(tab).toLowerCase()} documents here`}
-                                    message={status || query || period !== 'all' ? 'Nothing matches these filters. Try another status or period.' : `${TAB_PURPOSE[tab]}${tab === 'notes' ? '' : ' Create one with the + button above.'}`} />
+                                    message={status || query || period !== 'all' ? 'Nothing matches these filters. Try another status or period.' : emptyPurpose(tab)} />
                             )}
                         </div>
                     </>

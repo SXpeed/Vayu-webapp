@@ -207,7 +207,7 @@ export function useHandlers(args: HandlerArgs) {
     /** Numbers and locks a draft; the documents it changed (a converted proforma, an invoiced challan) come back too. */
     const handleIssueInvoice = useCallback(async (id: string): Promise<Invoice[]> => {
         const changed = await invoiceService.issueInvoice(id);
-        await Promise.all(changed.map(keepInvoice));
+        await Promise.all(changed.map(doc => keepInvoice(doc)));
         return changed;
     }, [keepInvoice]);
 

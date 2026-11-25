@@ -26,12 +26,14 @@ export interface Workspace {
 }
 
 const WORKSPACE_KEY = 'as_workspace';
+/** Organization ids go into API addresses: anything else stored or set is refused. */
+const isWorkspaceId = (id: unknown): id is string => typeof id === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(id);
 
 function read(): Workspace | null {
     try {
         const raw = localStorage.getItem(WORKSPACE_KEY);
         const parsed = raw ? JSON.parse(raw) as Workspace : null;
-        return parsed && typeof parsed.id === 'string' ? parsed : null;
+        return parsed && isWorkspaceId(parsed.id) ? parsed : null;
     } catch {
         return null;
     }
@@ -49,9 +51,9 @@ export function isPlatformSession(): boolean {
 }
 
 export function setWorkspace(workspace: Workspace | null): void {
-    current = workspace;
+    current = workspace && isWorkspaceId(workspace.id) ? workspace : null;
     try {
-        if (workspace) localStorage.setItem(WORKSPACE_KEY, JSON.stringify(workspace));
+        if (current) localStorage.setItem(WORKSPACE_KEY, JSON.stringify(current));
         else localStorage.removeItem(WORKSPACE_KEY);
     } catch { /* private mode: it lasts for this visit */ }
 }

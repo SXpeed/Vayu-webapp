@@ -22,7 +22,8 @@ function roomFromUrl(): { token: string; workspace: string | null } {
     if (match) return { token: match[2], workspace: match[1] ?? null };
     const params = new URLSearchParams(location.search);
     const workspace = params.get('w');
-    return { token: params.get('t') ?? '', workspace: workspace && /^[A-Za-z0-9-]{1,64}$/.test(workspace) ? workspace : null };
+    const token = params.get('t') ?? '';
+    return { token: /^[A-Za-z0-9_-]{43}$/.test(token) ? token : '', workspace: workspace && /^[A-Za-z0-9-]{1,64}$/.test(workspace) ? workspace : null };
 }
 
 const ROOM = roomFromUrl();

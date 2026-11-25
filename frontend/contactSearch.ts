@@ -26,8 +26,8 @@ export function searchContacts(contacts: readonly Contact[], query: string, limi
         else if (name.includes(q) || [c.email, ...(c.emails ?? [])].some(e => (e ?? '').toLowerCase().includes(q))) score = 3;
         if (score >= 0) scored.push({ score, c });
     }
+    scored.sort((a, b) => a.score - b.score || (a.c.name ?? '').localeCompare(b.c.name ?? ''));
     return scored
-        .sort((a, b) => a.score - b.score || (a.c.name ?? '').localeCompare(b.c.name ?? ''))
         .slice(0, limit)
         .map(x => x.c);
 }

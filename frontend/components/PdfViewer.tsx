@@ -77,7 +77,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ url, name, onClose, onDown
 
     return (
         <FullScreenPortal>
-            <div role="dialog" aria-modal="true" aria-label={name} className="absolute inset-0 z-[80] bg-neutral-900 flex flex-col animate-fade-in">
+            <dialog open aria-modal="true" aria-label={name} className="absolute inset-0 z-[80] bg-neutral-900 flex flex-col animate-fade-in">
                 <div className="flex items-center gap-2 px-3 pt-[calc(0.75rem+var(--safe-top))] pb-3 text-white">
                     <button type="button" onClick={onClose} className={iconBtn} aria-label="Close PDF"><X size={20} /></button>
                     <div className="flex-1 min-w-0">
@@ -89,27 +89,38 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ url, name, onClose, onDown
                     <button type="button" onClick={onDownload} className={iconBtn} aria-label="Download PDF"><Download size={18} /></button>
                 </div>
                 <div className="flex-1 overflow-auto overscroll-contain">
-                    {error ? (
-                        <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center text-white/80 text-sm">
-                            <p>{error}</p>
-                            <button type="button" onClick={onDownload} className="rounded-full bg-white/10 px-4 py-2 text-white active-scale">Download instead</button>
-                        </div>
-                    ) : total === 0 ? (
-                        <div className="h-full flex items-center justify-center text-white/70" role="status" aria-label="Opening PDF">
-                            <Loader2 size={28} className="animate-spin" />
-                        </div>
-                    ) : (
-                        <div className="mx-auto flex flex-col gap-3 p-3 pb-[calc(1rem+var(--safe-bottom))]" style={{ width: `min(${z * 100}%, ${z * 900}px)` }}>
-                            {pages.map((src, i) => <img key={src} src={src} alt={`Page ${i + 1}`} className="w-full bg-white shadow-lg" />)}
-                            {Array.from({ length: total - pages.length }, (_, i) => (
-                                <div key={i} className="w-full bg-white/5 flex items-center justify-center text-white/50" style={{ aspectRatio: `1 / ${aspect}` }}>
-                                    {i === 0 && <Loader2 size={22} className="animate-spin" />}
-                                </div>
-                            ))}
-                        </div>
-                    )}
+                    <PdfBody error={error} total={total} pages={pages} z={z} aspect={aspect} onDownload={onDownload} />
                 </div>
-            </div>
+            </dialog>
         </FullScreenPortal>
+    );
+};
+
+/** Inside the viewer: why it can't show, the spinner while it opens, or the pages as they render. */
+const PdfBody: React.FC<{ error: string | null; total: number; pages: string[]; z: number; aspect: number; onDownload: () => void }> = ({ error, total, pages, z, aspect, onDownload }) => {
+    if (error) {
+        return (
+            <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center text-white/80 text-sm">
+                <p>{error}</p>
+                <button type="button" onClick={onDownload} className="rounded-full bg-white/10 px-4 py-2 text-white active-scale">Download instead</button>
+            </div>
+        );
+    }
+    if (total === 0) {
+        return (
+            <output className="h-full flex items-center justify-center text-white/70" aria-label="Opening PDF">
+                <Loader2 size={28} className="animate-spin" />
+            </output>
+        );
+    }
+    return (
+        <div className="mx-auto flex flex-col gap-3 p-3 pb-[calc(1rem+var(--safe-bottom))]" style={{ width: `min(${z * 100}%, ${z * 900}px)` }}>
+            {pages.map((src, i) => <img key={src} src={src} alt={`Page ${i + 1}`} className="w-full bg-white shadow-lg" />)}
+            {Array.from({ length: total - pages.length }, (_, i) => (
+                <div key={i} /* NOSONAR: placeholders for pages not drawn yet; only their position matters */ className="w-full bg-white/5 flex items-center justify-center text-white/50" style={{ aspectRatio: `1 / ${aspect}` }}>
+                    {i === 0 && <Loader2 size={22} className="animate-spin" />}
+                </div>
+            ))}
+        </div>
     );
 };

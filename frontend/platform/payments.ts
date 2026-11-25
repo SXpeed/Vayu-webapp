@@ -144,7 +144,7 @@ export async function razorpay(
 ): Promise<{ ok: boolean; status: number; data: any }> {
   const res = await fetch(`${razorpayApiBase(env)}/v1${path}`, {
     method,
-    headers: { Authorization: `Basic ${btoa(`${keys.keyId}:${keys.keySecret}`)}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Basic ${btoa(keys.keyId + ':' + keys.keySecret)}`, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(15_000),
   });

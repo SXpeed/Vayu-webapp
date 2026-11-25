@@ -17,6 +17,14 @@ import {
 import type { ChangeEvent, Ctx, SessionData } from './workerEnv';
 import { getSession } from './workerRoles';
 
+/** Why a save can't go ahead: a status change it can't make, a field GST locks once issued, or the payments. */
+function saveProblem(before: BillingDoc | null, doc: BillingDoc, s: Awaited<ReturnType<typeof readBillingSettings>>): string | null {
+    const locked = before ? lockedFieldChanged(before, doc) : null;
+    return statusChangeProblem(before, doc)
+        ?? (locked ? `This ${KIND_LABEL[doc.kind].toLowerCase()} is issued, so “${locked}” can’t change. Use a credit or debit note.` : null)
+        ?? paymentsProblem(before, doc, s);
+}
+
 export function ensureInvoicesTable(db: D1Database): Promise<void> {
     return runSetupOnce(db, 'invoicesTable', async () => {
         await db.prepare(`CREATE TABLE IF NOT EXISTS invoices (
@@ -297,10 +305,7 @@ export function invoiceRoutes(deps: InvoiceDeps): InvoiceRoute[] {
             createdAt: before?.createdAt ?? now,
         };
         const s = await readBillingSettings(ctx.env.VAYU_KV);
-        const locked = before ? lockedFieldChanged(before, doc) : null;
-        const problem = statusChangeProblem(before, doc)
-            ?? (locked ? `This ${KIND_LABEL[doc.kind].toLowerCase()} is issued, so “${locked}” can’t change. Use a credit or debit note.` : null)
-            ?? paymentsProblem(before, doc, s);
+        const problem = saveProblem(before, doc, s);
         if (problem) return err(problem, 409);
 
         doc = withTotals(logged(doc, before ? 'Edited' : 'Created', session, now), s);

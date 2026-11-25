@@ -598,7 +598,7 @@ const EmailParts: React.FC<{ d: Draft; set: (p: Partial<Draft>) => void; setUplo
             <Field label="Link buttons (optional)">
                 <div className="space-y-2">
                     {links.map((b, i) => (
-                        <ButtonEditor key={`url-${i}`} b={b} index={i} onChange={nb => setLinks(links.map((x, j) => (j === i ? nb : x)))} onRemove={() => setLinks(links.filter((_, j) => j !== i))} />
+                        <ButtonEditor key={`url-${i}`} /* NOSONAR: buttons have no id; each editor shows its button's current values, so a removal can't show stale text */ b={b} index={i} onChange={nb => setLinks(links.map((x, j) => (j === i ? nb : x)))} onRemove={() => setLinks(links.filter((_, j) => j !== i))} />
                     ))}
                     {links.length < MAX_EMAIL_LINKS && <Pill onClick={() => setLinks([...links, { kind: 'url', text: 'View the catalogue', url: 'https://' }])}>+ Link button</Pill>}
                 </div>

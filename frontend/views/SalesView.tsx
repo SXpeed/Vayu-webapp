@@ -213,6 +213,28 @@ const FreeTextItem: React.FC<{
 );
 
 /** Choosing the piece sold among the available ones. */
+/** How many: typed on a new sale (capped at the stock of a chosen piece), shown on a saved one. */
+const Quantity: React.FC<{ isNew: boolean; qty: number; inStock: number | null; linked: boolean; onQty: (text: string) => void }> = ({ isNew, qty, inStock, linked, onQty }) => (
+    <>
+        {isNew && (
+            <Field label="Quantity" htmlFor="sale-qty" hint={inStock === null ? undefined : `${inStock} in stock`}>
+                <Input id="sale-qty" type="number" inputMode="numeric" min={1} max={inStock ?? undefined} step={1} value={qty || ''} onChange={e => onQty(e.target.value)} />
+            </Field>
+        )}
+        {!isNew && qty > 1 && <p className="text-[12.5px]">Quantity: <strong className="font-medium">{qty}</strong></p>}
+        {linked && <p className="text-[11.5px] text-[var(--neu-text-dim)]">To change the piece, delete this sale (the piece goes back on sale) and record it again.</p>}
+    </>
+);
+
+/** A sale not tied to a listed piece yet: typed in by hand, or a piece being chosen. */
+const UnlinkedItem: React.FC<{
+    freeText: boolean; s: SaleInput; priceText: string; available: Artwork[]; picked: Artwork | null;
+    onTitle: (v: string) => void; onPrice: (v: string) => void; onAddPhotos: (urls: string[]) => void; onRemovePhoto: (url: string) => void;
+    onUploading: (busy: boolean) => void; onChoose?: () => void; onPick: (id: string) => void; onNotListed: () => void;
+}> = ({ freeText, s, priceText, available, picked, onTitle, onPrice, onAddPhotos, onRemovePhoto, onUploading, onChoose, onPick, onNotListed }) => (freeText
+    ? <FreeTextItem title={s.itemTitle} priceText={priceText} photoUrls={s.photoUrls} onTitle={onTitle} onPrice={onPrice} onAddPhotos={onAddPhotos} onRemovePhoto={onRemovePhoto} onUploading={onUploading} onChoose={onChoose} />
+    : <PieceChooser available={available} picked={picked} pickedId={s.artworkId} onPick={onPick} onNotListed={onNotListed} />);
+
 const PieceChooser: React.FC<{ available: Artwork[]; picked: Artwork | null; pickedId: string | null; onPick: (id: string) => void; onNotListed: () => void }> = ({ available, picked, pickedId, onPick, onNotListed }) => (
     <div className="space-y-2">
         {picked && <p className="text-[12.5px]">Selected: <strong className="font-medium">{picked.title}</strong> · listed at {rupees(picked.price)}</p>}
@@ -345,7 +367,10 @@ export const SalesView: React.FC<SalesViewProps> = ({ artworks, contacts }) => {
     const filtered = mode !== 'all' || !!q || tagFilter.kind !== 'all';
     // The figures follow the filters, so choosing an event's tag gives that event's takings.
     // Unfiltered, the server's totals count every sale, past the listed rows too.
-    const summary = useMemo(() => (data ? (filtered ? summarize(shown) : data.summary) : null), [data, shown, filtered]);
+    const summary = useMemo(() => {
+        if (!data) return null;
+        return filtered ? summarize(shown) : data.summary;
+    }, [data, shown, filtered]);
     const activeTag = tagFilter.kind === 'tag' ? tagFilter.tag : null;
 
     const today = todayIso();
@@ -360,7 +385,7 @@ export const SalesView: React.FC<SalesViewProps> = ({ artworks, contacts }) => {
         if (kind === range.kind) return;
         if (kind === 'custom') {
             // Custom starts from the dates on screen, to adjust from there.
-            const next: Range = { kind, from: range.from, to: range.to > today ? today : range.to };
+            const next: Range = { kind, from: range.from, to: range.to > today ? today : range.to }; // NOSONAR: ISO date strings; Math.min doesn't apply
             setCustomDraft({ from: next.from, to: next.to });
             setRange(next);
             return;
@@ -684,18 +709,12 @@ const SaleEditor: React.FC<{
         }
     };
 
-    let item: React.ReactNode;
-    if (sale?.artworkId) {
-        item = <LinkedItem sale={sale} />;
-    } else if (freeText) {
-        item = (
-            <FreeTextItem title={s.itemTitle} priceText={priceText} photoUrls={s.photoUrls}
-                onTitle={v => set({ itemTitle: v })} onPrice={setPriceText} onAddPhotos={addPhotos} onRemovePhoto={removePhoto}
-                onUploading={setUploading} onChoose={isNew && available.length > 0 ? () => setFreeText(false) : undefined} />
-        );
-    } else {
-        item = <PieceChooser available={available} picked={picked} pickedId={s.artworkId} onPick={pick} onNotListed={() => { setFreeText(true); set({ artworkId: null }); }} />;
-    }
+    const item = sale?.artworkId ? <LinkedItem sale={sale} /> : (
+        <UnlinkedItem freeText={freeText} s={s} priceText={priceText} available={available} picked={picked}
+            onTitle={v => set({ itemTitle: v })} onPrice={setPriceText} onAddPhotos={addPhotos} onRemovePhoto={removePhoto} onUploading={setUploading}
+            onChoose={isNew && available.length > 0 ? () => setFreeText(false) : undefined}
+            onPick={pick} onNotListed={() => { setFreeText(true); set({ artworkId: null }); }} />
+    );
     const carried = isNew && carriedTags.length > 0 && carriedTags.every(t => s.tags.includes(t));
 
     return (
@@ -707,12 +726,7 @@ const SaleEditor: React.FC<{
             <section aria-label="Item" className="space-y-2">
                 <h3 className="neu-label">Item sold</h3>
                 {item}
-                {isNew ? (
-                    <Field label="Quantity" htmlFor="sale-qty" hint={picked ? `${inStock} in stock` : undefined}>
-                        <Input id="sale-qty" type="number" inputMode="numeric" min={1} max={picked ? inStock : undefined} step={1} value={s.qty || ''} onChange={e => setQty(e.target.value)} />
-                    </Field>
-                ) : s.qty > 1 && <p className="text-[12.5px]">Quantity: <strong className="font-medium">{s.qty}</strong></p>}
-                {sale?.artworkId && <p className="text-[11.5px] text-[var(--neu-text-dim)]">To change the piece, delete this sale (the piece goes back on sale) and record it again.</p>}
+                <Quantity isNew={isNew} qty={s.qty} inStock={picked ? inStock : null} linked={!!sale?.artworkId} onQty={setQty} />
             </section>
 
             <BuyerFields s={s} contacts={contacts} onBuyer={name => set(withBuyer(s, name, contactsByName))} onPhone={buyerPhone => set({ buyerPhone })}

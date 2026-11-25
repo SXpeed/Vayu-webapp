@@ -422,7 +422,8 @@ export type Inline = { k: 'text' | 'b' | 'i' | 's'; text: string } | { k: 'a'; t
 /** A paragraph (its lines), a "# heading", or a list of "- " lines. */
 export interface Block { k: 'p' | 'h' | 'ul'; lines: Inline[][] }
 
-const INLINE = /(\[[^\]\n]+\]\(https?:\/\/[^\s(){}\u0000]+\)|\*[^*\n]+\*|_[^_\n]+_|~[^~\n]+~)/g;
+// Linear: every repeated class excludes the character that ends it.
+const INLINE = /(\[[^\]\n]+\]\(https?:\/\/[^\s(){}\uE000]+\)|\*[^*\n]+\*|_[^_\n]+_|~[^~\n]+~)/g; // NOSONAR: no backtracking (see above)
 const MARK_KIND = { '*': 'b', _: 'i', '~': 's' } as const;
 const TAG = { b: 'strong', i: 'em', s: 's' } as const;
 
@@ -432,8 +433,8 @@ const TAG = { b: 'strong', i: 'em', s: 's' } as const;
  */
 export function emailBlocks(body: string): Block[] {
     const fields: string[] = [];
-    const safe = body.replace(PLACEHOLDER, m => `\u0000${fields.push(m) - 1}\u0000`);
-    const back = (x: string) => x.replace(/\u0000(\d+)\u0000/g, (_, i: string) => fields[Number(i)]);
+    const safe = body.replace(PLACEHOLDER, m => `\uE000${fields.push(m) - 1}\uE000`);
+    const back = (x: string) => x.replace(/\uE000(\d+)\uE000/g, (_, i: string) => fields[Number(i)]);
     const parts = (line: string): Inline[] => line.split(INLINE).filter(Boolean).map((part): Inline => {
         const link = /^\[([^\]]+)\]\((https?:\/\/.+)\)$/.exec(part);
         if (link) return { k: 'a', text: back(link[1]), href: link[2] };
@@ -468,11 +469,14 @@ export function emailHtml(t: Pick<TemplateInput, 'header' | 'body' | 'buttons' |
     }).join('');
     const block = (b: Block) => {
         if (b.k === 'h') return `<h2 style="margin:0 0 12px;font-family:Georgia,'Times New Roman',serif;font-weight:600;font-size:20px;line-height:1.3">${inline(b.lines[0])}</h2>`;
-        if (b.k === 'ul') return `<ul style="margin:0 0 14px;padding-left:22px;line-height:1.55">${b.lines.map(l => `<li>${inline(l)}</li>`).join('')}</ul>`;
+        const item = (l: Inline[]) => `<li>${inline(l)}</li>`;
+        if (b.k === 'ul') return `<ul style="margin:0 0 14px;padding-left:22px;line-height:1.55">${b.lines.map(item).join('')}</ul>`;
         return `<p style="margin:0 0 14px;line-height:1.55">${b.lines.map(inline).join('<br>')}</p>`;
     };
+    const filled = `background:${s.accent};color:${inkOn(s.accent)}`;
+    const outlined = `border:1px solid ${s.accent};color:${s.accent}`;
     const button = (href: string, label: string, primary: boolean) =>
-        `<a href="${href}" style="display:inline-block;margin:0 8px 8px 0;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600;${primary ? `background:${s.accent};color:${inkOn(s.accent)}` : `border:1px solid ${s.accent};color:${s.accent}`}">${escapeHtml(label)}</a>`;
+        `<a href="${href}" style="display:inline-block;margin:0 8px 8px 0;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600;${primary ? filled : outlined}">${escapeHtml(label)}</a>`;
     const rsvp = t.buttons.some(b => b.kind === 'quick_reply');
     const buttons = [
         ...(rsvp ? [button('{{rsvp_yes_url}}', RSVP_YES, true), button('{{rsvp_no_url}}', RSVP_NO, false)] : []),
@@ -561,6 +565,20 @@ function parseEmailReport(o: Record<string, unknown>, email: string): WebhookEve
     return { kind: 'status', phone: email, status, id: pick(o, 'crqid', 'CRQID'), requestId: pick(o, 'requestId', 'request_id', 'uuid', 'unique_id'), reason };
 }
 
+/** A message someone sent us. A photo, voice note or file with no words still belongs in the conversation. */
+function parseInboundReply(o: Record<string, unknown>, phone: string): WebhookEvent | null {
+    const kind = pick(o, 'contentType', 'content_type', 'messageType', 'type').toLowerCase();
+    const text = buttonText(o.button) || pick(o, 'text', 'message', 'caption') || (kind && kind !== 'text' ? `[${kind}]` : '');
+    if (!text) return null;
+    const url = pick(o, 'url');
+    const lat = pick(o, 'latitude');
+    const lng = pick(o, 'longitude');
+    let media: InboundMedia | undefined;
+    if (/^https:\/\//i.test(url)) media = { kind: kind || 'file', url, name: pick(o, 'filename').slice(0, 200) };
+    else if (lat && lng && Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))) media = { kind: 'location', url: `https://maps.google.com/?q=${Number(lat)},${Number(lng)}`, name: '' };
+    return { kind: 'reply', phone, text: text.slice(0, 1000), uuid: pick(o, 'uuid').slice(0, 200), ...(media && { media }) };
+}
+
 /** One MSG91 webhook payload, WhatsApp or email, in either spelling it has used; null when it isn't one we act on. */
 export function parseWebhook(raw: unknown): WebhookEvent | null {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -570,19 +588,7 @@ export function parseWebhook(raw: unknown): WebhookEvent | null {
     const phone = digits(pick(o, 'customerNumber', 'customer_number', 'mobile', 'to'));
     if (!phone) return null;
     const direction = pick(o, 'direction').toLowerCase();
-    if (direction === '0' || direction === 'inbound') {
-        // A photo, voice note or file with no words still belongs in the conversation.
-        const kind = pick(o, 'contentType', 'content_type', 'messageType', 'type').toLowerCase();
-        const text = buttonText(o.button) || pick(o, 'text', 'message', 'caption') || (kind && kind !== 'text' ? `[${kind}]` : '');
-        if (!text) return null;
-        const url = pick(o, 'url');
-        const lat = pick(o, 'latitude');
-        const lng = pick(o, 'longitude');
-        let media: InboundMedia | undefined;
-        if (/^https:\/\//i.test(url)) media = { kind: kind || 'file', url, name: pick(o, 'filename').slice(0, 200) };
-        else if (lat && lng && Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))) media = { kind: 'location', url: `https://maps.google.com/?q=${Number(lat)},${Number(lng)}`, name: '' };
-        return { kind: 'reply', phone, text: text.slice(0, 1000), uuid: pick(o, 'uuid').slice(0, 200), ...(media && { media }) };
-    }
+    if (direction === '0' || direction === 'inbound') return parseInboundReply(o, phone);
     const status = pick(o, 'eventName', 'event_name', 'status', 'event').toLowerCase();
     if (status !== 'sent' && status !== 'delivered' && status !== 'read' && status !== 'failed') return null;
     return {

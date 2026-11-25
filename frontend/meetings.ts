@@ -76,10 +76,12 @@ const getRow = (ctx: Ctx, id: string) =>
 
 interface AiTarget { url: string; key: string; model: string }
 
+const noTrailingSlash = (url: string) => (url.endsWith('/') ? url.slice(0, -1) : url);
+
 function aiTargets(env: Env): { text: AiTarget | null; transcribe: AiTarget | null } {
-    const base = (env.MEETING_AI_URL ?? '').replace(/\/+$/, '');
+    const base = noTrailingSlash(env.MEETING_AI_URL ?? '');
     const key = env.MEETING_AI_KEY ?? '';
-    const tBase = (env.MEETING_TRANSCRIBE_URL ?? '').replace(/\/+$/, '') || base;
+    const tBase = noTrailingSlash(env.MEETING_TRANSCRIBE_URL ?? '') || base;
     const tKey = env.MEETING_TRANSCRIBE_KEY || key;
     return {
         text: base && key && env.MEETING_TEXT_MODEL ? { url: base, key, model: env.MEETING_TEXT_MODEL } : null,
@@ -172,54 +174,64 @@ const remove: Handler = async (ctx) => {
     return json({ ok: true });
 };
 
+type AiStep = (ctx: Ctx, meeting: Meeting, ai: ReturnType<typeof aiTargets>) => Promise<Response | null>;
+
+const transcribe: AiStep = async (ctx, meeting, ai) => {
+    if (!ai.transcribe) return notSetUp();
+    if (!meeting.audioKey) return err('This meeting has no recording.');
+    const obj = await ctx.env.VAYU_R2.get(meeting.audioKey);
+    if (!obj) return err('The recording is missing.', 404);
+    // shortcut: one file per request, so recordings over 25 MB (~100 min) are refused; split into parts if longer meetings are needed.
+    if (obj.size > MAX_AUDIO_BYTES) return err('This recording is too long to transcribe in one go (over 25 MB).', 413);
+    const type = (meeting.audioType || 'audio/webm').split(';')[0];
+    const form = new FormData();
+    form.append('file', new File([await obj.arrayBuffer()], `meeting.${AUDIO_EXT[type] ?? 'webm'}`, { type }));
+    form.append('model', ai.transcribe.model);
+    form.append('prompt', TRANSCRIBE_HINT);
+    const res = await fetch(`${ai.transcribe.url}/audio/transcriptions`, {
+        method: 'POST', headers: { Authorization: `Bearer ${ai.transcribe.key}` }, body: form, signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+    });
+    if (!res.ok) return aiFailed(res, 'transcribe');
+    const transcript = (await res.json<{ text?: string }>().catch(() => null))?.text?.trim();
+    if (!transcript) return err('No speech was heard in this recording.', 422);
+    await ctx.env.VAYU_DB.prepare('UPDATE meetings SET transcript = ?, updated_at = ? WHERE id = ?').bind(transcript, Date.now(), meeting.id).run();
+    return null;
+};
+
+const summarize: AiStep = async (ctx, meeting, ai) => {
+    if (!ai.text) return notSetUp();
+    if (!meeting.transcript.trim()) return err('There is no text to summarize yet.');
+    const summary = await chat(ai.text, summaryMessages(meeting.type, meeting.title, meeting.transcript));
+    if (summary instanceof Response) return summary;
+    await ctx.env.VAYU_DB.prepare('UPDATE meetings SET summary = ?, updated_at = ? WHERE id = ?').bind(summary, Date.now(), meeting.id).run();
+    return null;
+};
+
+const translate: AiStep = async (ctx, meeting, ai) => {
+    if (!ai.text) return notSetUp();
+    const b = await body(ctx);
+    const lang = LANGUAGES.find(l => l === b.lang);
+    if (!lang) return err('Pick a language.');
+    const fromTranscript = b.source === 'transcript';
+    const source = fromTranscript ? meeting.transcript : meeting.summary;
+    if (!source.trim()) return err(fromTranscript ? 'There is no transcript yet.' : 'Summarize the meeting first.');
+    const translation = await chat(ai.text, translateMessages(lang, source));
+    if (translation instanceof Response) return translation;
+    await ctx.env.VAYU_DB.prepare('UPDATE meetings SET translation = ?, translation_lang = ?, updated_at = ? WHERE id = ?').bind(translation, lang, Date.now(), meeting.id).run();
+    return null;
+};
+
+const AI_STEPS: Record<string, AiStep> = { transcribe, summarize, translate };
+
+/** POST /meetings/:id/(transcribe|summarize|translate) — runs one AI step and returns the updated meeting. */
 const runAi: Handler = async (ctx) => {
     const session = await caller(ctx);
     if (session instanceof Response) return session;
     const [, id, action] = AI_PATH.exec(ctx.path)!;
     const row = await getRow(ctx, id);
     if (!row) return err('That meeting was not found.', 404);
-    const meeting = toMeeting(ctx.env, row);
-    const ai = aiTargets(ctx.env);
-    const db = ctx.env.VAYU_DB;
-    const now = Date.now();
-
-    if (action === 'transcribe') {
-        if (!ai.transcribe) return notSetUp();
-        if (!meeting.audioKey) return err('This meeting has no recording.');
-        const obj = await ctx.env.VAYU_R2.get(meeting.audioKey);
-        if (!obj) return err('The recording is missing.', 404);
-        // shortcut: one file per request, so recordings over 25 MB (~100 min) are refused; split into parts if longer meetings are needed.
-        if (obj.size > MAX_AUDIO_BYTES) return err('This recording is too long to transcribe in one go (over 25 MB).', 413);
-        const type = (meeting.audioType || 'audio/webm').split(';')[0];
-        const form = new FormData();
-        form.append('file', new File([await obj.arrayBuffer()], `meeting.${AUDIO_EXT[type] ?? 'webm'}`, { type }));
-        form.append('model', ai.transcribe.model);
-        form.append('prompt', TRANSCRIBE_HINT);
-        const res = await fetch(`${ai.transcribe.url}/audio/transcriptions`, {
-            method: 'POST', headers: { Authorization: `Bearer ${ai.transcribe.key}` }, body: form, signal: AbortSignal.timeout(AI_TIMEOUT_MS),
-        });
-        if (!res.ok) return aiFailed(res, 'transcribe');
-        const transcript = (await res.json<{ text?: string }>().catch(() => null))?.text?.trim();
-        if (!transcript) return err('No speech was heard in this recording.', 422);
-        await db.prepare('UPDATE meetings SET transcript = ?, updated_at = ? WHERE id = ?').bind(transcript, now, id).run();
-    } else if (action === 'summarize') {
-        if (!ai.text) return notSetUp();
-        if (!meeting.transcript.trim()) return err('There is no text to summarize yet.');
-        const summary = await chat(ai.text, summaryMessages(meeting.type, meeting.title, meeting.transcript));
-        if (summary instanceof Response) return summary;
-        await db.prepare('UPDATE meetings SET summary = ?, updated_at = ? WHERE id = ?').bind(summary, now, id).run();
-    } else {
-        if (!ai.text) return notSetUp();
-        const b = await body(ctx);
-        const lang = LANGUAGES.find(l => l === b.lang);
-        if (!lang) return err('Pick a language.');
-        const source = b.source === 'transcript' ? meeting.transcript : meeting.summary;
-        if (!source.trim()) return err(b.source === 'transcript' ? 'There is no transcript yet.' : 'Summarize the meeting first.');
-        const translation = await chat(ai.text, translateMessages(lang, source));
-        if (translation instanceof Response) return translation;
-        await db.prepare('UPDATE meetings SET translation = ?, translation_lang = ?, updated_at = ? WHERE id = ?').bind(translation, lang, now, id).run();
-    }
-    return json(toMeeting(ctx.env, (await getRow(ctx, id))!));
+    const refused = await AI_STEPS[action](ctx, toMeeting(ctx.env, row), aiTargets(ctx.env));
+    return refused ?? json(toMeeting(ctx.env, (await getRow(ctx, id))!));
 };
 
 export const meetingRoutes: MeetingRoute[] = [

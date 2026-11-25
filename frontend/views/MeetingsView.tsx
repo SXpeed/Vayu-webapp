@@ -75,6 +75,8 @@ export const MeetingsView: React.FC<{ canEdit: boolean }> = ({ canEdit }) => {
 
 // ── New meeting: type, then record or type ──────────────────────────────────
 
+const MIC_BLOCKED = 'The microphone is blocked for this site. Tap the icon left of the web address → Permissions (or Site settings) → Microphone → Allow, then reload. In the installed app: phone Settings → Apps → this app → Permissions → Microphone.';
+
 function pickMime(): string {
     for (const t of ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus']) {
         if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t)) return t;
@@ -110,6 +112,16 @@ const NewMeeting: React.FC<{ ai: Ai; onCancel: () => void; onSaved: (m: Meeting)
     useEffect(() => () => { recorder.current?.stream.getTracks().forEach(t => t.stop()); void wakeLock.current?.release().catch(() => {}); }, []);
     useEffect(() => () => { if (audio) URL.revokeObjectURL(audio.url); }, [audio]);
 
+    // A site can't grant itself the microphone; say which popup choice makes the browser remember it.
+    const [mic, setMic] = useState<PermissionState | ''>('');
+    useEffect(() => {
+        let status: PermissionStatus | null = null;
+        navigator.permissions?.query({ name: 'microphone' as PermissionName })
+            .then(s => { status = s; setMic(s.state); s.onchange = () => setMic(s.state); })
+            .catch(() => { /* Firefox and older Safari can't say */ });
+        return () => { if (status) status.onchange = null; };
+    }, []);
+
     const start = async () => {
         setProblem('');
         if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') { setProblem('This browser can’t record. Type the meeting instead.'); return; }
@@ -117,7 +129,7 @@ const NewMeeting: React.FC<{ ai: Ai; onCancel: () => void; onSaved: (m: Meeting)
         try {
             stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
         } catch (e) {
-            setProblem((e as Error).name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it in the browser settings and try again.' : 'No microphone was found.');
+            setProblem((e as Error).name === 'NotAllowedError' ? MIC_BLOCKED : 'No microphone was found.');
             return;
         }
         const mimeType = pickMime();
@@ -195,16 +207,19 @@ const NewMeeting: React.FC<{ ai: Ai; onCancel: () => void; onSaved: (m: Meeting)
                         <Input id="mtg-date" type="date" value={date} onChange={e => setDate(e.target.value)} />
                     </Field>
 
-                    <div className="flex gap-2" role="group" aria-label="How to add the meeting">
+                    <fieldset className="flex gap-2">
+                        <legend className="sr-only">How to add the meeting</legend>
                         <Pill active={mode === 'record'} onClick={() => { if (rec === 'idle') setMode('record'); }}><Mic size={14} className="inline mr-1" />Record</Pill>
                         <Pill active={mode === 'type'} onClick={() => { if (rec === 'idle') setMode('type'); }}><Keyboard size={14} className="inline mr-1" />Type</Pill>
-                    </div>
+                    </fieldset>
 
                     {mode === 'record' ? (
                         <div className="rounded-2xl neu-inset p-4 text-center space-y-3">
                             <p className="font-serif text-3xl tabular-nums" aria-live="polite">{clock(seconds)}</p>
                             {rec === 'recording' && <p className="text-[12px] text-red-600 dark:text-red-400">● Recording. Keep this screen open.</p>}
                             {rec === 'paused' && <p className="text-[12px] text-[var(--neu-text-dim)]">Paused</p>}
+                            {rec === 'idle' && mic === 'prompt' && <p className="text-[12px] text-[var(--neu-text-dim)]">Your browser will ask for the microphone. Choose <b>Allow on every visit</b> (or <b>Allow</b>) and it won’t ask again.</p>}
+                            {rec === 'idle' && mic === 'denied' && <p className="text-[12px] text-red-600 dark:text-red-400">{MIC_BLOCKED}</p>}
                             {rec === 'idle' && <Button type="button" variant="primary" block icon={<Mic size={15} />} onClick={() => { void start(); }}>Start recording</Button>}
                             {(rec === 'recording' || rec === 'paused') && (
                                 <div className="flex gap-2">
@@ -216,7 +231,7 @@ const NewMeeting: React.FC<{ ai: Ai; onCancel: () => void; onSaved: (m: Meeting)
                             )}
                             {rec === 'done' && audio && (
                                 <>
-                                    <audio controls src={audio.url} className="w-full" />
+                                    <audio controls src={audio.url} className="w-full"><track kind="captions" /></audio>
                                     <Button type="button" onClick={discard}>Record again</Button>
                                 </>
                             )}
@@ -242,6 +257,7 @@ const NewMeeting: React.FC<{ ai: Ai; onCancel: () => void; onSaved: (m: Meeting)
 // ── One meeting: recording, summary, transcript, translation ───────────────
 
 type Tab = 'summary' | 'transcript' | 'translation';
+type Source = 'summary' | 'transcript';
 
 const MeetingDetail: React.FC<{ initial: Meeting; autoRun: boolean; ai: Ai; canEdit: boolean; onDone: () => void }> = ({ initial, autoRun, ai, canEdit, onDone }) => {
     const [m, setM] = useState(initial);
@@ -290,7 +306,7 @@ const MeetingDetail: React.FC<{ initial: Meeting; autoRun: boolean; ai: Ai; canE
         try { setAudioSrc(await meetingService.audioUrl(m)); } catch (e) { setProblem(message(e, 'The recording did not load.')); } finally { setWorking(''); }
     };
 
-    const shown = tab === 'summary' ? m.summary : tab === 'transcript' ? m.transcript : m.translation;
+    const shown = { summary: m.summary, transcript: m.transcript, translation: m.translation }[tab];
     const startEdit = () => { setDraft(shown); setEditing(true); };
     const saveEdit = async () => {
         const input = parseMeeting({ ...m, [tab]: draft });
@@ -308,6 +324,7 @@ const MeetingDetail: React.FC<{ initial: Meeting; autoRun: boolean; ai: Ai; canE
     };
 
     const busyLabel: Record<string, string> = { transcribe: 'Turning the recording into text… long meetings take a minute or two.', summarize: 'Writing the summary…', translate: `Translating into ${lang}…` };
+    const tabLabel: Record<Tab, string> = { summary: 'Summary', transcript: 'Transcript', translation: m.translationLang ? `Translation (${m.translationLang})` : 'Translation' };
     const empty: Record<Tab, string> = {
         summary: m.transcript ? 'No summary yet.' : 'The summary is written from the transcript.',
         transcript: m.audioKey ? 'Not transcribed yet.' : 'No text.',
@@ -322,24 +339,22 @@ const MeetingDetail: React.FC<{ initial: Meeting; autoRun: boolean; ai: Ai; canE
                     {m.audioKey && (
                         <div className="neu-card p-4">
                             {audioSrc
-                                ? <audio controls autoPlay src={audioSrc} className="w-full" />
+                                ? <audio controls autoPlay src={audioSrc} className="w-full"><track kind="captions" /></audio>
                                 : <Button block icon={<Play size={15} />} disabled={!!working} onClick={() => { void playRecording(); }}>Play recording{m.durationSec ? ` (${clock(m.durationSec)})` : ''}</Button>}
                         </div>
                     )}
 
                     {working && busyLabel[working] && (
-                        <div className="neu-card p-4 flex items-center gap-3 text-[13px]" role="status">
+                        <output className="neu-card p-4 flex items-center gap-3 text-[13px]">
                             <Loader2 size={18} className="animate-spin shrink-0" />{busyLabel[working]}
-                        </div>
+                        </output>
                     )}
                     <Problem text={problem} />
 
                     <div className="neu-card p-4 space-y-3">
-                        <div className="flex gap-2 flex-wrap" role="tablist">
+                        <div className="flex gap-2 flex-wrap">
                             {(['summary', 'transcript', 'translation'] as Tab[]).map(t => (
-                                <Pill key={t} active={tab === t} onClick={() => { setTab(t); setEditing(false); }}>
-                                    {t === 'summary' ? 'Summary' : t === 'transcript' ? 'Transcript' : `Translation${m.translationLang ? ` (${m.translationLang})` : ''}`}
-                                </Pill>
+                                <Pill key={t} active={tab === t} onClick={() => { setTab(t); setEditing(false); }}>{tabLabel[t]}</Pill>
                             ))}
                         </div>
                         {editing ? (
@@ -350,55 +365,72 @@ const MeetingDetail: React.FC<{ initial: Meeting; autoRun: boolean; ai: Ai; canE
                                     <Button onClick={() => setEditing(false)}>Cancel</Button>
                                 </div>
                             </>
-                        ) : shown ? (
-                            <>
-                                <div className="whitespace-pre-wrap break-words text-[14px] leading-relaxed">{shown}</div>
-                                <div className="flex gap-2 flex-wrap">
-                                    <Button icon={<Copy size={14} />} onClick={() => { void copy(); }}>Copy</Button>
-                                    {canEdit && tab !== 'translation' && <Button icon={<Pencil size={14} />} onClick={startEdit}>Edit</Button>}
-                                </div>
-                            </>
-                        ) : (
-                            <p className="text-[13px] text-[var(--neu-text-dim)]">{empty[tab]}</p>
-                        )}
+                        ) : <Shown text={shown} empty={empty[tab]} onCopy={() => { void copy(); }} onEdit={canEdit && tab !== 'translation' ? startEdit : undefined} />}
                     </div>
 
                     {canEdit && (
-                        <div className="neu-card p-4 space-y-3">
-                            {!ai.text && <p className="text-[12.5px] text-[var(--neu-text-dim)]">AI isn’t set up yet, so transcription, summaries and translation are off. Everything else works.</p>}
-                            {m.audioKey && (
-                                <Button block icon={<Mic size={15} />} disabled={!!working || !ai.transcribe} onClick={() => { void run('transcribe', m); }}>
-                                    {m.transcript ? 'Transcribe again' : 'Transcribe recording'}
-                                </Button>
-                            )}
-                            <Button block variant={m.summary ? 'default' : 'primary'} icon={<Sparkles size={15} />} disabled={!!working || !ai.text || !m.transcript.trim()}
-                                onClick={() => { void run('summarize', m).then(n => { if (n) setTab('summary'); }); }}>
-                                {m.summary ? `Rewrite ${typeLabel(m.type).toLowerCase()} summary` : `Write ${typeLabel(m.type).toLowerCase()} summary`}
-                            </Button>
-                            <div className="flex gap-2 flex-wrap items-end">
-                                <Field label="Translate" htmlFor="mtg-source" className="flex-1 min-w-[8rem]">
-                                    <Select id="mtg-source" value={source} onChange={e => setSource(e.target.value as 'summary' | 'transcript')}>
-                                        <option value="summary">Summary</option>
-                                        <option value="transcript">Transcript</option>
-                                    </Select>
-                                </Field>
-                                <Field label="Into" htmlFor="mtg-lang" className="flex-1 min-w-[8rem]">
-                                    <Select id="mtg-lang" value={lang} onChange={e => setLang(e.target.value)}>
-                                        {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
-                                    </Select>
-                                </Field>
-                                <Button icon={<Languages size={15} />} disabled={!!working || !ai.text || !(source === 'summary' ? m.summary : m.transcript).trim()}
-                                    onClick={() => { void run('translate', m, { lang, source }).then(n => { if (n) setTab('translation'); }); }}>
-                                    Translate
-                                </Button>
-                            </div>
-                            <Button block variant="danger" icon={<Trash2 size={15} />} disabled={!!working} onClick={() => { void remove(); }}>
-                                {confirmDelete ? 'Tap again to delete' : 'Delete meeting'}
-                            </Button>
-                        </div>
+                        <AiCard m={m} ai={ai} busy={!!working} source={source} lang={lang} confirmDelete={confirmDelete}
+                            onSource={setSource} onLang={setLang} onRemove={() => { void remove(); }}
+                            onTranscribe={() => { void run('transcribe', m); }}
+                            onSummarize={() => { void run('summarize', m).then(n => { if (n) setTab('summary'); }); }}
+                            onTranslate={() => { void run('translate', m, { lang, source }).then(n => { if (n) setTab('translation'); }); }} />
                     )}
                 </div>
             </PageBody>
         </PageRoot>
     );
 };
+
+/** The open tab's text with Copy and Edit, or why there is none yet. */
+const Shown: React.FC<{ text: string; empty: string; onCopy: () => void; onEdit?: () => void }> = ({ text, empty, onCopy, onEdit }) => {
+    if (!text) return <p className="text-[13px] text-[var(--neu-text-dim)]">{empty}</p>;
+    return (
+        <>
+            <div className="whitespace-pre-wrap break-words text-[14px] leading-relaxed">{text}</div>
+            <div className="flex gap-2 flex-wrap">
+                <Button icon={<Copy size={14} />} onClick={onCopy}>Copy</Button>
+                {onEdit && <Button icon={<Pencil size={14} />} onClick={onEdit}>Edit</Button>}
+            </div>
+        </>
+    );
+};
+
+/** Transcribe, summarize, translate and delete: for people who can record. */
+const AiCard: React.FC<{
+    m: Meeting; ai: Ai; busy: boolean; source: Source; lang: string; confirmDelete: boolean;
+    onSource: (s: Source) => void; onLang: (l: string) => void; onRemove: () => void;
+    onTranscribe: () => void; onSummarize: () => void; onTranslate: () => void;
+}> = ({ m, ai, busy, source, lang, confirmDelete, onSource, onLang, onRemove, onTranscribe, onSummarize, onTranslate }) => (
+    <div className="neu-card p-4 space-y-3">
+        {!ai.text && <p className="text-[12.5px] text-[var(--neu-text-dim)]">AI isn’t set up yet, so transcription, summaries and translation are off. Everything else works.</p>}
+        {m.audioKey && (
+            <Button block icon={<Mic size={15} />} disabled={busy || !ai.transcribe} onClick={onTranscribe}>
+                {m.transcript ? 'Transcribe again' : 'Transcribe recording'}
+            </Button>
+        )}
+        <Button block variant={m.summary ? 'default' : 'primary'} icon={<Sparkles size={15} />} disabled={busy || !ai.text || !m.transcript.trim()}
+            onClick={onSummarize}>
+            {`${m.summary ? 'Rewrite' : 'Write'} ${typeLabel(m.type).toLowerCase()} summary`}
+        </Button>
+        <div className="flex gap-2 flex-wrap items-end">
+            <Field label="Translate" htmlFor="mtg-source" className="flex-1 min-w-[8rem]">
+                <Select id="mtg-source" value={source} onChange={e => onSource(e.target.value as Source)}>
+                    <option value="summary">Summary</option>
+                    <option value="transcript">Transcript</option>
+                </Select>
+            </Field>
+            <Field label="Into" htmlFor="mtg-lang" className="flex-1 min-w-[8rem]">
+                <Select id="mtg-lang" value={lang} onChange={e => onLang(e.target.value)}>
+                    {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
+                </Select>
+            </Field>
+            <Button icon={<Languages size={15} />} disabled={busy || !ai.text || !m[source].trim()}
+                onClick={onTranslate}>
+                Translate
+            </Button>
+        </div>
+        <Button block variant="danger" icon={<Trash2 size={15} />} disabled={busy} onClick={onRemove}>
+            {confirmDelete ? 'Tap again to delete' : 'Delete meeting'}
+        </Button>
+    </div>
+);
