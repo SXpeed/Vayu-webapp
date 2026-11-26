@@ -15,6 +15,8 @@ let worker, ai, owner, staff, reader;
 const chats = [];
 /** The lookups the fake model asks for first: [name, arguments]. */
 let wanted = [];
+/** Whether the fake service streams (server-sent events) or sends whole replies. */
+let sse = true;
 
 async function api(token, path, { method = 'GET', body, raw, type } = {}) {
     const headers = new Headers();
@@ -25,6 +27,11 @@ async function api(token, path, { method = 'GET', body, raw, type } = {}) {
     const text = await res.text();
     let json = null;
     try { json = JSON.parse(text); } catch { /* not JSON */ }
+    // A streamed answer: JSON lines of steps, words and problems.
+    if ((res.headers.get('Content-Type') ?? '').includes('ndjson')) {
+        const lines = text.split('\n').filter(Boolean).map(l => JSON.parse(l));
+        json = { answer: lines.map(l => l.text ?? '').join(''), steps: lines.flatMap(l => l.step ?? []), error: lines.find(l => l.error)?.error };
+    }
     return { status: res.status, body: withSessionToken(json, res), text };
 }
 
@@ -53,7 +60,18 @@ before(async () => {
             if (req.url === '/v1/audio/transcriptions') return res.end(JSON.stringify({ text: ` status of Priya's inquiry ${raw.includes('question.webm') ? 'webm' : '?'} ` }));
             const body = JSON.parse(raw);
             chats.push(body);
-            res.end(JSON.stringify({ choices: [{ message: reply(body.messages) }] }));
+            const msg = reply(body.messages);
+            if (!sse || !body.stream) return res.end(JSON.stringify({ choices: [{ message: msg }] }));
+            // Streamed the way OpenAI-style services do: words, and each call's arguments, in pieces.
+            res.setHeader('Content-Type', 'text/event-stream');
+            const deltas = msg.tool_calls
+                ? msg.tool_calls.flatMap((c, index) => {
+                    const half = Math.ceil(c.function.arguments.length / 2);
+                    return [{ tool_calls: [{ index, id: c.id, type: 'function', function: { name: c.function.name, arguments: c.function.arguments.slice(0, half) } }] },
+                        { tool_calls: [{ index, function: { arguments: c.function.arguments.slice(half) } }] }];
+                })
+                : msg.content.match(/.{1,7}/gs).map(content => ({ content }));
+            res.end(`${deltas.map(d => `data: ${JSON.stringify({ choices: [{ delta: d }] })}\n\n`).join(': keep-alive\n\n')}data: [DONE]\n\n`);
         });
     });
     await new Promise(r => ai.listen(0, '127.0.0.1', r));
@@ -92,6 +110,8 @@ test('lookups follow the role, and the answer uses what they found', async () =>
     assert.deepEqual(first.tools.map(t => t.function.name), ['find_inquiries', 'meetings', 'my_expenses', 'my_notes']);
     assert.match(first.messages[0].content, /can't see: .*inventory/);
     assert.deepEqual(first.messages.slice(1, 3).map(m => m.content), ['earlier', 'before']);
+    assert.equal(first.stream, true);
+    assert.deepEqual(res.body.steps, ['Looking at inquiries', 'Looking at inventory']);
 
     // The owner gets every lookup; the inventory has nothing yet.
     chats.length = 0;
@@ -99,6 +119,37 @@ test('lookups follow the role, and the answer uses what they found', async () =>
     assert.equal(all.status, 200, all.text);
     assert.equal(chats[0].tools.length, 17);
     assert.match(all.body.answer, /\| \[\]$/);
+});
+
+test('a service that ignores streaming still answers', async () => {
+    sse = false;
+    wanted = [['find_inquiries', { query: 'INQ-7' }]];
+    const res = await api(reader, '/assistant/ask', { method: 'POST', body: { question: 'INQ-7?' } });
+    sse = true;
+    assert.equal(res.status, 200, res.text);
+    assert.match(res.body.answer, /^found: .*INQ-7/);
+});
+
+test('saved chats are private, and can be cleared', async () => {
+    const turns = [{ q: 'Sales this month?', a: '**₹1,20,000** from 3 sales' }];
+    assert.equal((await api(reader, '/assistant/chats/chat_a', { method: 'PUT', body: { turns } })).status, 200);
+    assert.equal((await api(reader, '/assistant/chats/chat_b', { method: 'PUT', body: { title: 'Stock', turns } })).status, 200);
+    assert.equal((await api(reader, '/assistant/chats/chat_c', { method: 'PUT', body: { turns: [] } })).status, 400);
+    const mine = await api(reader, '/assistant/chats');
+    assert.deepEqual(mine.body.chats.map(c => c.title).sort(), ['Sales this month?', 'Stock']);
+    assert.deepEqual((await api(reader, '/assistant/chats/chat_a')).body.turns, turns);
+    // Someone else can't read, overwrite or delete them.
+    assert.deepEqual((await api(owner, '/assistant/chats')).body.chats, []);
+    assert.equal((await api(owner, '/assistant/chats/chat_a')).status, 404);
+    assert.equal((await api(owner, '/assistant/chats/chat_a', { method: 'PUT', body: { turns: [{ q: 'mine now', a: '' }] } })).status, 404);
+    assert.equal((await api(owner, '/assistant/chats/chat_a', { method: 'DELETE' })).status, 404);
+    assert.equal((await api(reader, '/assistant/chats/chat_a')).body.title, 'Sales this month?');
+    // Editing saves the whole chat again.
+    assert.equal((await api(reader, '/assistant/chats/chat_a', { method: 'PUT', body: { turns: [...turns, { q: 'Shorter', a: '₹1.2 lakh' }] } })).status, 200);
+    assert.equal((await api(reader, '/assistant/chats/chat_a')).body.turns.length, 2);
+    assert.equal((await api(reader, '/assistant/chats/chat_b', { method: 'DELETE' })).status, 200);
+    assert.equal((await api(reader, '/assistant/chats', { method: 'DELETE' })).body.deleted, 1);
+    assert.deepEqual((await api(reader, '/assistant/chats')).body.chats, []);
 });
 
 test("the app's own read requests run as the person asking", async () => {

@@ -35,6 +35,7 @@
     "notes.ts",
     "meetings.ts",
     "assistant.ts",
+    "assistantChats.ts",
     "social.ts",
     "socialRules.ts",
     "invoices.ts",
