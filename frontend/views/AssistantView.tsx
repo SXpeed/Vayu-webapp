@@ -3,7 +3,7 @@
 // allows and streams the answer; chats are saved per person (assistantChats.ts).
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Check, Copy, History, Loader2, Mic, Pencil, Plus, RefreshCw, Send, Sparkles, Square, Trash2 } from 'lucide-react';
+import { ArrowUp, Check, Copy, History, Loader2, Mic, Pencil, Plus, RefreshCw, Sparkles, Square, Trash2 } from 'lucide-react';
 import { PageRoot, PageHeader, Button, GhostIconButton, PrimaryIconButton, Textarea } from '../components/ui';
 import { assistantService, type ChatSummary } from '../services/assistantService';
 import type { Asked } from '../services/meetingService';
@@ -16,6 +16,9 @@ const EXAMPLES = ['Status of the latest inquiries', 'How much stock is available
 const REFINE: [string, string][] = [['Shorter', 'Make that shorter.'], ['More detail', 'Give me more detail on that.'], ['As a table', 'Show that as a table.'], ['Simpler', 'Explain that more simply.']];
 const MAX_SECONDS = 60;
 const DAY_MS = 86_400_000;
+/** The question box's round buttons. */
+const ROUND = 'w-9 h-9 shrink-0 rounded-full inline-flex items-center justify-center transition-colors active-scale disabled:opacity-30 disabled:pointer-events-none';
+const GHOST = 'text-[var(--neu-text-dim)] hover:text-[var(--neu-text)] hover:bg-black/5 dark:hover:bg-white/10';
 
 interface Turn extends Asked { steps?: string[]; error?: string; stopped?: boolean }
 
@@ -63,10 +66,10 @@ const MicButton: React.FC<{ onText: (q: string) => void; disabled: boolean }> = 
         setState('recording');
     };
 
-    if (state === 'hearing') return <Button type="button" disabled icon={<Loader2 size={15} className="animate-spin" />} aria-label="Listening to your question" />;
+    if (state === 'hearing') return <button type="button" disabled className={`${ROUND} ${GHOST}`} aria-label="Listening to your question"><Loader2 size={16} className="animate-spin" /></button>;
     return state === 'recording'
-        ? <Button type="button" variant="danger" onClick={() => rec.current?.stop()} icon={<Square size={15} />} aria-label="Stop and ask" aria-pressed />
-        : <Button type="button" disabled={disabled} onClick={() => { void start(); }} icon={<Mic size={15} />} aria-label="Ask by voice" />;
+        ? <button type="button" onClick={() => rec.current?.stop()} className={`${ROUND} bg-red-600 text-white animate-pulse`} aria-label="Stop and ask" aria-pressed><Square size={13} fill="currentColor" /></button>
+        : <button type="button" disabled={disabled} onClick={() => { void start(); }} className={`${ROUND} ${GHOST}`} aria-label="Ask by voice"><Mic size={17} /></button>;
 };
 
 const CopyButton: React.FC<{ text: string }> = ({ text }) => {
@@ -118,6 +121,14 @@ export const AssistantView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     const [opening, setOpening] = useState(false);
     const [showHistory, setShowHistory] = useState(false);
     const stopRef = useRef<AbortController | null>(null);
+    const boxRef = useRef<HTMLTextAreaElement>(null);
+    // The box grows with what is typed (wrapped lines too), up to its max height.
+    useEffect(() => {
+        const box = boxRef.current;
+        if (!box) return;
+        box.style.height = 'auto';
+        box.style.height = `${box.scrollHeight}px`;
+    }, [question]);
     const { scrollerRef, contentRef, scrollToLatest } = useStickToBottom(chatId ?? 'new');
 
     useEffect(() => {
@@ -296,21 +307,25 @@ export const AssistantView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                         </div>
                     </div>
 
-                    <div className="px-4 pt-2 pb-[calc(6rem+var(--safe-bottom-ui))] lg:pb-4">
-                        <form className="max-w-3xl mx-auto flex items-end gap-2 neu-card rounded-2xl p-2" onSubmit={e => { e.preventDefault(); void run(turns.length, question.trim()); }}>
-                            <Textarea value={question} onChange={e => setQuestion(e.target.value)} rows={Math.min(6, question.split('\n').length)} maxLength={1000}
-                                placeholder={turns.length ? 'Ask a follow-up…' : 'e.g. Status of Priya Shah’s inquiry'} aria-label="Your question"
-                                className="flex-1 resize-none !shadow-none !bg-transparent"
+                    <div className="px-3 lg:px-4 pt-1.5 pb-[calc(6rem+var(--safe-bottom-ui))] lg:pb-3">
+                        <form className="max-w-3xl mx-auto flex items-end gap-1 rounded-[22px] border border-black/10 dark:border-white/15 bg-white dark:bg-white/[0.06] pl-4 pr-1.5 py-1.5 shadow-sm focus-within:border-[var(--ink-focus)] transition-colors"
+                            onSubmit={e => { e.preventDefault(); void run(turns.length, question.trim()); }}>
+                            {/* 16px on phones: smaller text makes iOS zoom in on focus. */}
+                            <textarea ref={boxRef} value={question} onChange={e => setQuestion(e.target.value)} rows={1} maxLength={1000}
+                                placeholder={turns.length ? 'Ask a follow-up…' : 'Ask anything about your gallery…'} aria-label="Your question"
+                                className="flex-1 min-w-0 self-center resize-none bg-transparent py-1 max-h-40 text-[16px] lg:text-[14px] leading-6 text-[var(--neu-text)] placeholder:text-[var(--neu-text-dim)] focus-visible:outline-none"
                                 onKeyDown={e => {
                                     // Enter asks; Shift+Enter starts a new line.
                                     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void run(turns.length, question.trim()); }
                                 }} />
                             <MicButton onText={q => { void run(turns.length, q); }} disabled={busy} />
                             {busy
-                                ? <Button type="button" variant="danger" onClick={() => stopRef.current?.abort()} icon={<Square size={15} />} aria-label="Stop the answer" />
-                                : <Button type="submit" variant="primary" disabled={!question.trim()} icon={<Send size={15} />} aria-label="Ask" />}
+                                ? <button type="button" onClick={() => stopRef.current?.abort()} className={`${ROUND} bg-red-600 text-white`} aria-label="Stop the answer"><Square size={13} fill="currentColor" /></button>
+                                : <button type="submit" disabled={!question.trim()} className={`${ROUND} bg-brand-900 text-white dark:bg-gold-400 dark:text-[#1a1a1a]`} aria-label="Ask"><ArrowUp size={17} strokeWidth={2.25} /></button>}
                         </form>
-                        <p className="max-w-3xl mx-auto mt-2 text-center text-[11px] text-[var(--neu-text-dim)]">It only reads what your role can see. AI can make mistakes: check important numbers on the screen they come from.</p>
+                        <p className="max-w-3xl mx-auto mt-1.5 text-center text-[11px] text-[var(--neu-text-dim)]">
+                            <span className="hidden sm:inline">It only reads what your role can see. </span>AI can make mistakes: check important numbers.
+                        </p>
                     </div>
                 </section>
             </div>
