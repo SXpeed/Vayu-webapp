@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Plus, Image as ImageIcon, X, Trash2, Loader2, Camera, Folder, Download, Upload } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
 import { PageRoot, PageHeader, PageBody, PrimaryIconButton, GhostIconButton, EmptyState, Pill } from '../components/ui';
@@ -8,7 +8,8 @@ import storageService, { getThumbUrl } from '../services/storageService';
 import { fileKeyOf } from '../services/workspace';
 import { IfCan } from '../components/Layout';
 import { downloadCsv } from './attendance/attendanceUtils';
-import { inventoryRows, planImport, readInventoryCsv, skippedNote } from './inventoryCsv';
+import { inventoryRows, planImport, readInventoryCsv, readInventoryTable, skippedNote, type ImportedArtwork } from './inventoryCsv';
+import { readXlsx } from './inventoryXlsx';
 import { useBackClose } from '../hooks/useBackClose';
 
 
@@ -20,11 +21,18 @@ interface ArtworksViewProps {
 }
 
 const STATUS_FILTERS = ['All', 'Available', 'Sold'] as const;
+
+/** An .xlsx import waiting for a yes: each new or changed artwork with the photos it brings. */
+interface PendingImport {
+    items: { row: ImportedArtwork | Artwork; isNew: boolean; photos: File[] }[];
+    notes: string[];
+}
 type StatusFilter = typeof STATUS_FILTERS[number];
 
 export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwork, onUpdateArtwork, onArtworkClick }) => {
     const [isAdding, setIsAdding] = useState(false);
     const [isImporting, setIsImporting] = useState(false);
+    const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
     const importInputRef = useRef<HTMLInputElement>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
@@ -44,6 +52,7 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
         if (!file) return;
         setIsImporting(true);
         try {
+            if (/\.xlsx$/i.test(file.name)) { await previewXlsx(file); return; }
             const { artworks: rows, skipped } = readInventoryCsv(await file.text());
             const { adds, updates } = planImport(artworks, rows);
             const note = skippedNote(skipped);
@@ -63,6 +72,56 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
         }
     };
 
+    const previewXlsx = async (file: File) => {
+        const sheet = await readXlsx(await file.arrayBuffer());
+        const { artworks: rows, skipped, rows: rowNumbers } = readInventoryTable(sheet.table, sheet.rowNumbers);
+        const photos = rowNumbers.map(n => sheet.pictures.get(n) ?? []);
+        const { adds, updates, addFrom, updateFrom, takesPhotos } = planImport(artworks, rows, photos.map(p => p.length));
+        const items = [
+            ...adds.map((row, i) => ({ row, isNew: true, photos: photos[addFrom[i]] })),
+            ...updates.map((row, i) => ({ row, isNew: false, photos: takesPhotos[i] ? photos[updateFrom[i]] : [] })),
+        ];
+        const used = new Set(rowNumbers);
+        const offRows = [...sheet.pictures].filter(([n]) => !used.has(n)).reduce((sum, [, p]) => sum + p.length, 0);
+        const kept = updates.filter((_, i) => !takesPhotos[i] && photos[updateFrom[i]].length).length;
+        const noPhoto = adds.filter((_, i) => !photos[addFrom[i]].length).length;
+        const notes = [
+            skippedNote(skipped).trim(),
+            noPhoto ? `${noPhoto} new ${noPhoto === 1 ? 'artwork has' : 'artworks have'} no photo in the sheet.` : '',
+            offRows ? `${offRows} ${offRows === 1 ? "picture isn't" : "pictures aren't"} on an artwork's row and will be left out.` : '',
+            sheet.unusable ? `${sheet.unusable} ${sheet.unusable === 1 ? 'picture is' : 'pictures are'} in a format the app can't show (use JPG or PNG).` : '',
+            kept ? `${kept} existing ${kept === 1 ? 'artwork already has' : 'artworks already have'} photos; theirs are kept.` : '',
+        ].filter(Boolean);
+        if (items.length === 0) { toast.error(`Nothing to import: no new or changed artworks. ${notes.join(' ')}`); return; }
+        setPendingImport({ items, notes });
+    };
+
+    const runImport = async ({ items }: PendingImport) => {
+        setPendingImport(null);
+        setIsImporting(true);
+        const total = items.reduce((n, it) => n + it.photos.length, 0);
+        const progress = toast.loading(total ? `Uploading photos 0 of ${total}` : 'Importing…');
+        let done = 0, failed = 0;
+        try {
+            for (const { row, isNew, photos } of items) { // NOSONAR: in file order
+                const imageUrls: string[] = [];
+                for (const photo of photos) {
+                    try { imageUrls.push((await storageService.upload(photo)).url); } catch { failed++; }
+                    toast.loading(`Uploading photos ${++done} of ${total}`, { id: progress });
+                }
+                if (isNew) await onAddArtwork({ ...row, imageUrls });
+                else await onUpdateArtwork(imageUrls.length ? { ...(row as Artwork), imageUrls } : row as Artwork);
+            }
+            const adds = items.filter(it => it.isNew).length;
+            const lost = failed ? ` ${failed} ${failed === 1 ? 'photo' : 'photos'} couldn't be uploaded; add ${failed === 1 ? 'it' : 'them'} by hand.` : '';
+            toast[failed ? 'error' : 'success'](`Imported: ${adds} added, ${items.length - adds} updated, ${done - failed} photos.${lost}`, { id: progress });
+        } catch (err) {
+            toast.error((err as Error).message || 'The import stopped part way', { id: progress });
+        } finally {
+            setIsImporting(false);
+        }
+    };
+
     return (
         <PageRoot>
             <PageHeader
@@ -71,8 +130,8 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
                 actions={<>
                     <GhostIconButton onClick={handleExport} label="Export these artworks as CSV" icon={<Download size={16} />} disabled={filteredArtworks.length === 0} />
                     <IfCan section="inventory">
-                        <GhostIconButton onClick={() => importInputRef.current?.click()} label="Import artworks from CSV" icon={isImporting ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />} disabled={isImporting} />
-                        <input ref={importInputRef} type="file" accept=".csv,text/csv" className="hidden" aria-label="CSV file to import" onChange={e => { void handleImport(e); }} />
+                        <GhostIconButton onClick={() => importInputRef.current?.click()} label="Import artworks from CSV or Excel (.xlsx, with photos)" icon={isImporting ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />} disabled={isImporting} />
+                        <input ref={importInputRef} type="file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" aria-label="CSV or Excel file to import" onChange={e => { void handleImport(e); }} />
                         <PrimaryIconButton onClick={() => setIsAdding(true)} label="Add artwork" icon={<Plus size={16} />} />
                     </IfCan>
                 </>}
@@ -157,7 +216,50 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
                     }}
                 />
             )}
+            {pendingImport && <ImportPreview pending={pendingImport} onCancel={() => setPendingImport(null)} onConfirm={() => { void runImport(pendingImport); }} />}
         </PageRoot>
+    );
+};
+
+/** Each row with the photo(s) it brings, so a picture on the wrong row is caught before anything is saved. */
+const ImportPreview: React.FC<{ pending: PendingImport; onCancel: () => void; onConfirm: () => void }> = ({ pending, onCancel, onConfirm }) => {
+    useBackClose(true, onCancel);
+    const thumbs = useMemo(() => new Map(pending.items.map(it => [it, it.photos.map(f => URL.createObjectURL(f))])), [pending]);
+    useEffect(() => () => thumbs.forEach(urls => urls.forEach(u => URL.revokeObjectURL(u))), [thumbs]);
+    const adds = pending.items.filter(it => it.isNew).length;
+    return (
+        <div className="neu-sheet z-50 animate-fade-in-up">
+            <div className="flex justify-between items-center p-3" style={{ paddingTop: 'calc(1rem + var(--safe-top))' }}>
+                <button onClick={onCancel} className="neu-icon-btn text-gray-700 dark:text-gray-300 active-scale" aria-label="Cancel import">
+                    <X size={20} />
+                </button>
+                <h2 className="text-base font-serif text-gray-900 dark:text-white">Check the import</h2>
+                <button onClick={onConfirm} className="text-gold-700 dark:text-gold-300 font-medium px-2 py-2 uppercase tracking-wider text-xs active-scale">
+                    Import
+                </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3 no-scrollbar space-y-3">
+                <p className="text-sm text-[var(--neu-text)]">{adds} new, {pending.items.length - adds} updated. Check each photo is on the right artwork.</p>
+                {pending.notes.map(n => <p key={n} className="text-xs text-[var(--neu-text-dim)]">{n}</p>)}
+                <ul className="space-y-2">
+                    {pending.items.map((it, i) => (
+                        <li key={i} className="neu-card flex items-center gap-3 p-2">
+                            <div className="flex gap-1 shrink-0">
+                                {thumbs.get(it)?.length
+                                    ? thumbs.get(it)!.slice(0, 3).map(u => <img key={u} src={u} alt="" className="w-12 h-12 object-cover rounded-md" />)
+                                    : <div className="w-12 h-12 rounded-md flex items-center justify-center text-[var(--neu-text-dim)]" aria-label="No photo"><ImageIcon size={18} /></div>}
+                            </div>
+                            <div className="min-w-0">
+                                <p className="text-sm text-[var(--neu-text)] truncate">{it.row.title}</p>
+                                <p className="text-[11px] text-[var(--neu-text-dim)] truncate">
+                                    {[it.row.customId, it.isNew ? 'New' : 'Update', it.photos.length > 3 ? `${it.photos.length} photos` : ''].filter(Boolean).join(' · ')}
+                                </p>
+                            </div>
+                        </li>
+                    ))}
+                </ul>
+            </div>
+        </div>
     );
 };
 
