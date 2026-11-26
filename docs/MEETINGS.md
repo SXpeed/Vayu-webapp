@@ -22,7 +22,7 @@ instructions), `frontend/views/MeetingsView.tsx` + `frontend/views/meetings/` (s
 
 ## Choosing the AI
 
-**Now (trial, 2026-11-25):** OpenRouter (`https://openrouter.ai/api/v1`): `openai/whisper-1`
+**Now (trial, 2026-11-25):** OpenRouter (`https://openrouter.ai/api/v1`): `openai/whisper-large-v3`
 for speech-to-text and `openai/gpt-4o-mini` as a stand-in for summaries, action items,
 speakers, questions and translation, set in `wrangler.jsonc`. Any OpenRouter model id
 works (e.g. `anthropic/claude-sonnet-4.5` for better summaries). The key (an OpenRouter key) is left: `wrangler secret put MEETING_AI_KEY` (prod), `MEETING_AI_KEY=` in

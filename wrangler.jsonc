@@ -109,7 +109,7 @@
     // stand-in text model for summaries and translation until one is chosen.
     // The key is a secret: wrangler secret put MEETING_AI_KEY
     "MEETING_AI_URL": "https://openrouter.ai/api/v1",
-    "MEETING_TRANSCRIBE_MODEL": "openai/whisper-1",
+    "MEETING_TRANSCRIBE_MODEL": "openai/whisper-large-v3",
     "MEETING_TEXT_MODEL": "openai/gpt-4o-mini"
   }
 }
