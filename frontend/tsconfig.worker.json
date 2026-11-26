@@ -34,6 +34,7 @@
     "expenses.ts",
     "notes.ts",
     "meetings.ts",
+    "assistant.ts",
     "social.ts",
     "socialRules.ts",
     "invoices.ts",

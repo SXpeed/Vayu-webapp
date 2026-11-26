@@ -40,6 +40,11 @@ Any OpenAI-compatible service works. Set these on the API Worker:
 
 Until they are set, meetings still record and save; the AI buttons say AI isn't set up.
 
+**Ask AI** (`frontend/assistant.ts`, screen `views/AssistantView.tsx`) uses the same settings and the same
+switches: it shows when Meetings is on and the role has Meetings at Read. It answers typed or spoken
+questions from read-only lookups (inquiries, contacts, inventory, billing, sales, calendar), each one
+only if the role can read that section. It shares the AI rate limit.
+
 ## Limits
 
 - Recordings: up to 4 hours, in 3-minute parts (~1 MB each at 32 kbps). Uploaded

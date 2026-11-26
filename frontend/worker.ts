@@ -7,6 +7,7 @@ import { staffRosterRoutes } from './staffRoster';
 import { expenseRoutes } from './expenses';
 import { noteRoutes } from './notes';
 import { meetingRoutes } from './meetings';
+import { assistantRoutes } from './assistant';
 import { deliverDueInvites, handleSocialPublic, socialRoutes } from './social';
 import { autoResendDue, socialInboxRoutes } from './socialInbox';
 import { salesRoutes } from './sales';
@@ -314,6 +315,8 @@ const ACCESS_TABLE: AccessEntry[] = [
   { prefixes: ['/sales'], section: 'sales' },
   { prefixes: ['/social'], section: 'social' },
   // Meetings: asking about them only needs "view"; recording and the other AI steps, "edit".
+  // The assistant uses the meetings AI and its switch; each lookup checks its own section (assistant.ts).
+  { prefixes: ['/assistant'], rule: () => ({ section: 'meetings', level: 'view' }) },
   { prefixes: ['/meetings'], rule: (path, method) => ({ section: 'meetings', level: method === 'GET' || path.endsWith('/ask') ? 'view' : 'edit' }) },
   { prefixes: ['/events', '/holidays'], section: 'calendar' },
   { prefixes: ['/conversations', '/messages'], section: 'messages' },
@@ -3933,6 +3936,18 @@ async function dispatch(ctx: Ctx, env: Env, orgUser: string | null | undefined):
 }
 
 /**
+ * A GET of this API as the person who made ctx's request, through the same
+ * access checks: the assistant's lookups (assistant.ts) see only what that
+ * person could open themselves.
+ */
+async function readAs(ctx: Ctx, path: string): Promise<Response> {
+  const url = new URL(`/api${path}`, ctx.url);
+  const request = new Request(url, { headers: ctx.request.headers });
+  primeSession(request, await getSession(ctx.request, ctx.env.VAYU_KV));
+  return dispatch({ ...ctx, request, url, path: url.pathname.replace(/^\/api/, ''), method: 'GET' }, ctx.env, undefined);
+}
+
+/**
  * A device signed out by the device limit learns why, so the app can say so
  * instead of failing with a bare "Unauthorized".
  */
@@ -3977,6 +3992,9 @@ const routes: Route[] = [
 
   // Meetings: recordings, AI summaries and translation (meetings.ts)
   ...meetingRoutes,
+
+  // The assistant: questions about the workspace's data, typed or spoken (assistant.ts)
+  ...assistantRoutes(readAs),
 
   // Social: WhatsApp invites through the workspace's MSG91 account (social.ts)
   ...socialRoutes,

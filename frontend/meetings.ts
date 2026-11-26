@@ -128,12 +128,12 @@ const joinParts = (parts: StoredPart[]) => parts.map(p => p.text.trim()).filter(
 
 // ── AI settings ─────────────────────────────────────────────────────────────
 
-interface AiTarget { url: string; key: string; model: string }
+export interface AiTarget { url: string; key: string; model: string }
 type Ai = { text: AiTarget | null; transcribe: AiTarget | null };
 
 const noTrailingSlash = (url: string) => (url.endsWith('/') ? url.slice(0, -1) : url);
 
-function aiTargets(env: Env): Ai {
+export function aiTargets(env: Env): Ai {
     const base = noTrailingSlash(env.MEETING_AI_URL ?? '');
     const key = env.MEETING_AI_KEY ?? '';
     const tBase = noTrailingSlash(env.MEETING_TRANSCRIBE_URL ?? '') || base;

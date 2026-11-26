@@ -14,7 +14,11 @@ export const AskPanel: React.FC<{
     enabled: boolean;
     placeholder?: string;
     onOpenSource?: (id: string) => void;
-}> = ({ ask, enabled, placeholder = 'Ask about this meeting…', onOpenSource }) => {
+    examples?: string[];
+    busyText?: string;
+    /** Another way to ask (the assistant's mic), beside Send; it hands over the question. */
+    Extra?: React.FC<{ onText: (q: string) => void; disabled: boolean }>;
+}> = ({ ask, enabled, placeholder = 'Ask about this meeting…', onOpenSource, examples = EXAMPLES, busyText = 'Reading the meetings…', Extra }) => {
     const [question, setQuestion] = useState('');
     const [thread, setThread] = useState<(Asked & { sources?: AskResult['sources'] })[]>([]);
     const [busy, setBusy] = useState(false);
@@ -40,7 +44,7 @@ export const AskPanel: React.FC<{
         <div className="space-y-3">
             {thread.length === 0 && (
                 <div className="flex flex-wrap gap-1.5">
-                    {EXAMPLES.map(x => <button key={x} type="button" onClick={() => { void send(x); }} className="neu-pill text-[12px]">{x}</button>)}
+                    {examples.map(x => <button key={x} type="button" onClick={() => { void send(x); }} className="neu-pill text-[12px]">{x}</button>)}
                 </div>
             )}
             {thread.map(t => (
@@ -56,10 +60,11 @@ export const AskPanel: React.FC<{
                     )}
                 </div>
             ))}
-            {busy && <p className="flex items-center gap-2 text-[13px] text-[var(--neu-text-dim)]"><Loader2 size={15} className="animate-spin" />Reading the meetings…</p>}
+            {busy && <p className="flex items-center gap-2 text-[13px] text-[var(--neu-text-dim)]"><Loader2 size={15} className="animate-spin" />{busyText}</p>}
             {problem && <p role="alert" className="text-[13px] text-red-600 dark:text-red-400">{problem}</p>}
             <form className="flex gap-2" onSubmit={e => { e.preventDefault(); void send(question); }}>
                 <Input value={question} onChange={e => setQuestion(e.target.value)} placeholder={placeholder} maxLength={1000} aria-label="Your question" className="flex-1" />
+                {Extra && <Extra onText={q => { void send(q); }} disabled={busy} />}
                 <Button type="submit" variant="primary" disabled={busy || !question.trim()} icon={<Send size={15} />} aria-label="Ask" />
             </form>
         </div>

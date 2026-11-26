@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
     Home, Image, Library, BookOpen, MessageCircle, Search, Users,
     CalendarDays, Clock, FileText, CreditCard, User, ShieldCheck, Wind,
-    ChevronLeft, ChevronRight, CalendarClock, HandCoins, Bell, Mic,
+    ChevronLeft, ChevronRight, CalendarClock, HandCoins, Bell, Mic, Sparkles,
 } from 'lucide-react';
 import { ViewState } from '../types';
 import { CanFn, canOpenView } from '../access';
@@ -35,6 +35,7 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
             { id: 'attendance', label: 'Attendance', icon: Clock },
             { id: 'schedule', label: 'Staff roster', icon: CalendarClock },
             { id: 'meetings', label: 'Meetings', icon: Mic },
+            { id: 'assistant', label: 'Ask AI', icon: Sparkles },
         ],
     },
     {

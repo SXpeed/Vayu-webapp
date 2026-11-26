@@ -7,7 +7,7 @@ import { MAX_AUDIO_BYTES } from '../../meetingRules';
 
 export interface RecordedPart { blob: Blob; sec: number }
 
-function pickMime(): string {
+export function pickMime(): string {
     for (const t of ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus']) {
         if (MediaRecorder.isTypeSupported(t)) return t;
     }

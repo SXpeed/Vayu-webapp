@@ -22,6 +22,7 @@ export const VIEW_SECTION: Partial<Record<ViewState, SectionId>> = {
     activity: 'activity',
     social: 'social',
     meetings: 'meetings',
+    assistant: 'meetings', // uses the meetings AI and its switch (assistant.ts)
     admin: 'schedule', // the Requests tab itself shows approve / decline only to managers (server-checked)
 };
 

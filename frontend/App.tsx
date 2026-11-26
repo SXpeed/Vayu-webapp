@@ -105,6 +105,7 @@ const viewLoaders = {
     SalesView: () => import('./views/SalesView'),
     HubViews: () => import('./views/HubViews'),
     MeetingsView: () => import('./views/MeetingsView'),
+    AssistantView: () => import('./views/AssistantView'),
 };
 
 const ArtworksView = lazy(() => viewLoaders.ArtworksView().then(m => ({ default: m.ArtworksView })));
@@ -125,6 +126,7 @@ const SalesView = lazy(() => viewLoaders.SalesView().then(m => ({ default: m.Sal
 const MySpaceView = lazy(() => viewLoaders.HubViews().then(m => ({ default: m.MySpaceView })));
 const SocialView = lazy(() => viewLoaders.HubViews().then(m => ({ default: m.SocialView })));
 const MeetingsView = lazy(() => viewLoaders.MeetingsView().then(m => ({ default: m.MeetingsView })));
+const AssistantView = lazy(() => viewLoaders.AssistantView().then(m => ({ default: m.AssistantView })));
 const AdminHubView = lazy(() => viewLoaders.HubViews().then(m => ({ default: m.AdminHubView })));
 
 /** Warm every view chunk once the app is idle after sign-in, one per idle
@@ -596,6 +598,8 @@ const App: React.FC = () => {
                 return (
                     <MeetingsView canEdit={can('meetings', 'edit')} team={teamMembers} onAddTasks={addMeetingTasks} />
                 );
+            case 'assistant':
+                return <AssistantView onBack={() => navigateTo('home')} />;
             case 'admin':
                 return <AdminHubView />;
             case 'profile':
