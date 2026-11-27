@@ -219,7 +219,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 ))}
             </nav>
 
-            {/* Footer — admin + profile */}
+            {/* Footer — notifications, admin, profile */}
             <div className={collapsed ? 'mt-2 space-y-1' : 'mt-2 pt-2 w-full space-y-1 border-t border-gray-200/70 dark:border-white/5'}>
                 {collapsed && <div className="neu-divider w-7 mx-auto mb-2.5" />}
                 {renderRow({
@@ -230,7 +230,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     onClick: () => setBellOpen(true),
                     count: unseenCount,
                 })}
-                {isAdmin && onOpenAdmin && renderRow({
+                {(isAdmin || can('schedule', 'edit')) && onOpenAdmin && renderRow({
                     key: 'admin',
                     label: 'Admin',
                     icon: ShieldCheck,

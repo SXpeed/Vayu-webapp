@@ -94,8 +94,6 @@ const QUICK_ACTIONS: { section?: SectionId; level?: AccessLevel; view: ViewState
     { section: 'social', view: 'social', label: 'Social', Icon: Megaphone },
     { section: 'meetings', view: 'meetings', label: 'Meetings', Icon: Mic },
     { section: 'meetings', view: 'assistant', label: 'Ask AI', Icon: Sparkles },
-    // Admin holds leave decisions, so it shows to whoever manages the Staff roster.
-    { section: 'schedule', level: 'edit', view: 'admin', label: 'Admin', Icon: ShieldCheck },
 ];
 
 const MONTHS_SHORT = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
@@ -251,10 +249,10 @@ export const HomeView: React.FC<HomeViewProps> = ({ artworks, events, teamMember
                 actions={
                     <div className="flex items-center gap-2 lg:hidden">
                         <BellButton />
-                        {isAdmin && (
+                        {(isAdmin || can('schedule', 'edit')) && (
                             <GhostIconButton
                                 onClick={openAdmin}
-                                label="Admin — deleted items, users & activity"
+                                label="Admin"
                                 icon={<ShieldCheck size={16} className="text-brand-900 dark:text-gold-400" />}
                             />
                         )}

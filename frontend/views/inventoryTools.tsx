@@ -6,7 +6,7 @@ import toast from 'react-hot-toast';
 import { ArrowRightLeft, Plus } from 'lucide-react';
 import { Button, Field, Input, Select, SectionTitle } from '../components/ui';
 import { IfCan, useAppChrome } from '../components/Layout';
-import { Modal, Sheet } from './billing/parts';
+import { Modal } from './billing/parts';
 import type { Artwork, Collection } from '../types';
 import {
     BASE_STATUSES, STATUS_COLORS, marginOf, newLocationId, newStatusId, stockByLocation, totalOf,
@@ -26,15 +26,19 @@ const COLOR_NAME: Record<StatusColor, string> = { green: 'Green', amber: 'Amber'
 
 const rupees = (n: number) => `₹${n.toLocaleString('en-IN')}`;
 
-/** Inventory → ⚙: stock locations and statuses. Removing is archiving, so nothing that points at one breaks. */
-export function InventorySettingsSheet({ onClose }: Readonly<{ onClose: () => void }>) {
+/** Admin → Inventory: stock locations and statuses. Removing is archiving, so nothing that points at one breaks. */
+export function InventorySettingsPanel() {
     const saved = useInventorySettings();
     const [draft, setDraft] = useState<InventorySettings>(saved);
+    const [dirty, setDirty] = useState(false);
     const [saving, setSaving] = useState(false);
+    // Admin can open before the settings load: follow the loaded copy until the first edit.
+    useEffect(() => { if (!dirty) setDraft(saved); }, [saved, dirty]);
+    const change: typeof setDraft = v => { setDirty(true); setDraft(v); };
     const setLocation = (id: string, patch: Partial<InventorySettings['locations'][number]>) =>
-        setDraft(d => ({ ...d, locations: d.locations.map(l => (l.id === id ? { ...l, ...patch } : l)) }));
+        change(d => ({ ...d, locations: d.locations.map(l => (l.id === id ? { ...l, ...patch } : l)) }));
     const setStatus = (id: string, patch: Partial<StatusDef>) =>
-        setDraft(d => ({ ...d, statuses: d.statuses.map(s => (s.id === id ? { ...s, ...patch } : s)) }));
+        change(d => ({ ...d, statuses: d.statuses.map(s => (s.id === id ? { ...s, ...patch } : s)) }));
     const baseName = (b: string) => draft.statuses.find(s => s.id === b)?.name ?? b;
 
     const save = async () => {
@@ -46,7 +50,7 @@ export function InventorySettingsSheet({ onClose }: Readonly<{ onClose: () => vo
         try {
             await saveInventorySettings(draft);
             toast.success('Inventory settings saved');
-            onClose();
+            setDirty(false);
         } catch (e) {
             toast.error((e as Error).message || 'Settings not saved');
         } finally {
@@ -57,17 +61,16 @@ export function InventorySettingsSheet({ onClose }: Readonly<{ onClose: () => vo
     const active = draft.locations.filter(l => !l.archived);
     const archived = draft.locations.filter(l => l.archived);
     return (
-        <Sheet title="Inventory settings" onClose={onClose} close="close"
-            actions={<Button variant="primary" onClick={() => { void save(); }} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>}>
+        <div className="space-y-3 animate-fade-in">
             <section className="neu-card p-4 space-y-3">
-                <SectionTitle actions={<Button icon={<Plus size={14} />} onClick={() => setDraft(d => ({ ...d, locations: [...d.locations, { id: newLocationId(), name: '' }] }))}>Add</Button>}>
+                <SectionTitle actions={<Button icon={<Plus size={14} />} onClick={() => change(d => ({ ...d, locations: [...d.locations, { id: newLocationId(), name: '' }] }))}>Add</Button>}>
                     Stock locations
                 </SectionTitle>
                 <p className="text-[12px] text-[var(--neu-text-dim)]">Stores, the office, a warehouse. Each piece counts its units at each. Sales take from the default unless you choose another.</p>
                 {active.map(l => (
                     <div key={l.id} className="flex items-center gap-2">
                         <Input value={l.name} onChange={e => setLocation(l.id, { name: e.target.value })} placeholder="e.g. Store" aria-label="Location name" className="flex-1" />
-                        <Button onClick={() => setDraft(d => ({ ...d, locations: d.locations.map(x => ({ ...x, isDefault: x.id === l.id || undefined })) }))}
+                        <Button onClick={() => change(d => ({ ...d, locations: d.locations.map(x => ({ ...x, isDefault: x.id === l.id || undefined })) }))}
                             variant={l.isDefault ? 'primary' : 'default'} aria-pressed={!!l.isDefault}>Default</Button>
                         {!l.isDefault && <Button onClick={() => setLocation(l.id, { archived: true })}>Archive</Button>}
                     </div>
@@ -86,7 +89,7 @@ export function InventorySettingsSheet({ onClose }: Readonly<{ onClose: () => vo
             </section>
 
             <section className="neu-card p-4 space-y-3">
-                <SectionTitle actions={<Button icon={<Plus size={14} />} onClick={() => setDraft(d => ({ ...d, statuses: [...d.statuses, { id: newStatusId(), name: '', behaves: 'Reserved', color: 'blue' }] }))}>Add</Button>}>
+                <SectionTitle actions={<Button icon={<Plus size={14} />} onClick={() => change(d => ({ ...d, statuses: [...d.statuses, { id: newStatusId(), name: '', behaves: 'Reserved', color: 'blue' }] }))}>Add</Button>}>
                     Statuses
                 </SectionTitle>
                 <p className="text-[12px] text-[var(--neu-text-dim)]">
@@ -123,7 +126,10 @@ export function InventorySettingsSheet({ onClose }: Readonly<{ onClose: () => vo
                     </div>
                 )}
             </section>
-        </Sheet>
+            <div className="flex justify-end">
+                <Button variant="primary" onClick={() => { void save(); }} disabled={saving || !dirty}>{saving ? 'Saving…' : 'Save'}</Button>
+            </div>
+        </div>
     );
 }
 

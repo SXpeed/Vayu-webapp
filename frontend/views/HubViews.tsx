@@ -1,6 +1,6 @@
-// My Space and Admin: Home tiles, each a short list of its items (items not
-// built yet read "Coming soon", docs/IMPLEMENTATION_PLAN.md Step 8); Social
-// opens its own space.
+// My Space: a Home tile, a short list of its items (items not built yet read
+// "Coming soon", docs/IMPLEMENTATION_PLAN.md Step 8); Social opens its own
+// space. Admin opens from the sidebar or Home's shield (components/AdminPanel.tsx).
 import React, { useState } from 'react';
 import { ChevronRight, ClipboardList, Leaf, NotebookPen, Wallet } from 'lucide-react';
 import { useBackClose } from '../hooks/useBackClose';
@@ -77,19 +77,6 @@ export const MySpaceView: React.FC<{
             can('calendar') && { title: 'Tasks', line: 'Your to-do list from the calendar', Icon: ClipboardList, onOpen: () => setOpen('tasks') },
             can('schedule') && { title: 'Leave request', line: 'Ask for leave and see the decision', Icon: Leaf, onOpen: () => setOpen('leave') },
             { title: 'My Notes', line: 'Private notes only you can see', Icon: NotebookPen, onOpen: () => setOpen('notes') },
-        ]} />
-    );
-};
-
-/** Admin: things managers decide. Opens for Staff roster "Manage" (the Home tile checks it). */
-export const AdminHubView: React.FC = () => {
-    const [open, setOpen] = useState<'leave' | null>(null);
-    const close = () => setOpen(null);
-    useBackClose(open !== null, close);
-    if (open === 'leave') return <StaffRosterView initialView="requests" onBack={close} />;
-    return (
-        <Hub title="Admin" subtitle="Decisions waiting on you" items={[
-            { title: 'Leave requests', line: 'Approve or decline your team’s leave', Icon: Leaf, onOpen: () => setOpen('leave') },
         ]} />
     );
 };

@@ -127,7 +127,6 @@ const MySpaceView = lazy(() => viewLoaders.HubViews().then(m => ({ default: m.My
 const SocialView = lazy(() => viewLoaders.HubViews().then(m => ({ default: m.SocialView })));
 const MeetingsView = lazy(() => viewLoaders.MeetingsView().then(m => ({ default: m.MeetingsView })));
 const AssistantView = lazy(() => viewLoaders.AssistantView().then(m => ({ default: m.AssistantView })));
-const AdminHubView = lazy(() => viewLoaders.HubViews().then(m => ({ default: m.AdminHubView })));
 
 /** Warm every view chunk once the app is idle after sign-in, one per idle
  *  slot, so the first tap on a tab renders at once instead of showing the
@@ -601,8 +600,6 @@ const App: React.FC = () => {
                 );
             case 'assistant':
                 return <AssistantView onBack={() => navigateTo('home')} />;
-            case 'admin':
-                return <AdminHubView />;
             case 'profile':
                 return userProfile ? (
                     <ProfileView

@@ -143,7 +143,7 @@ const Layout: React.FC<{
             {!isLogin && <div className="lg:hidden"><BottomNav currentView={currentView} onChangeView={onNavigate} can={can} /></div>}
           </div>
 
-          {/* Admin Panel (full-screen overlay — admins only) */}
+          {/* Admin (full-screen overlay; it shows each person only their sections) */}
           {showAdmin && userProfile && (
             <AdminPanel
               currentUserId={userProfile.id}

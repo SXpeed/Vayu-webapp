@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Plus, Image as ImageIcon, X, Trash2, Loader2, Camera, Folder, Download, Upload, Settings, CheckSquare, Check } from 'lucide-react';
+import { Plus, Image as ImageIcon, X, Trash2, Loader2, Camera, Folder, Download, Upload, CheckSquare, Check } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
-import { PageRoot, PageHeader, PageBody, PrimaryIconButton, GhostIconButton, EmptyState, Pill, Button, Select } from '../components/ui';
+import { PageRoot, PageHeader, PageBody, PrimaryIconButton, GhostIconButton, EmptyState, Button, Select } from '../components/ui';
 import { Artwork, Collection, Edition, stockOf } from '../types';
 import toast from 'react-hot-toast';
 import storageService, { getThumbUrl } from '../services/storageService';
@@ -14,7 +14,7 @@ import { readXlsx } from './inventoryXlsx';
 import { useBackClose } from '../hooks/useBackClose';
 import { useInventorySettings } from '../services/inventorySettingsService';
 import { defaultLocation, marginOf, statusOf, stockByLocation, stockLabel, totalOf, type StatusDef } from '../inventoryRules';
-import { AddToCollectionModal, BulkMoveModal, BulkPriceModal, BulkStatusModal, InventorySettingsSheet, STATUS_TEXT } from './inventoryTools';
+import { AddToCollectionModal, BulkMoveModal, BulkPriceModal, BulkStatusModal, STATUS_TEXT } from './inventoryTools';
 
 
 interface ArtworksViewProps {
@@ -50,7 +50,6 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
     const [isAdding, setIsAdding] = useState(false);
     const [isImporting, setIsImporting] = useState(false);
     const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
-    const [settingsOpen, setSettingsOpen] = useState(false);
     const importInputRef = useRef<HTMLInputElement>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [statusFilter, setStatusFilter] = useState('All');
@@ -212,7 +211,6 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
                     <GhostIconButton onClick={handleExport} label="Export these artworks as CSV" icon={<Download size={16} />} disabled={filteredArtworks.length === 0} />
                     <IfCan section="inventory">
                         <GhostIconButton onClick={() => (selecting ? endSelect() : setSelecting(true))} label={selecting ? 'Stop selecting' : 'Select artworks to edit together'} icon={<CheckSquare size={16} />} />
-                        <GhostIconButton onClick={() => setSettingsOpen(true)} label="Inventory settings: locations and statuses" icon={<Settings size={16} />} />
                         <GhostIconButton onClick={() => importInputRef.current?.click()} label="Import artworks from CSV or Excel (.xlsx, with photos)" icon={isImporting ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />} disabled={isImporting} />
                         <input ref={importInputRef} type="file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" aria-label="CSV or Excel file to import" onChange={e => { void handleImport(e); }} />
                         <PrimaryIconButton onClick={() => setIsAdding(true)} label="Add artwork" icon={<Plus size={16} />} />
@@ -220,22 +218,18 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
                 </>}
             >
                 <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search title, artist, code, medium, location..." />
-                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar -mx-1 px-1 py-1">
-                    <Pill active={statusFilter === 'All'} onClick={() => setStatusFilter('All')} className="shrink-0">All</Pill>
-                    {settings.statuses.filter(s => !s.archived).map(s => (
-                        <Pill key={s.id} active={statusFilter === s.id} onClick={() => setStatusFilter(s.id)} className="shrink-0">{s.name}</Pill>
-                    ))}
-                </div>
-                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                <div className="flex items-center gap-2">
+                    <Select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} aria-label="Filter by status" className="flex-1 min-w-0 !text-[13px] !py-2">
+                        <option value="All">All statuses</option>
+                        {settings.statuses.filter(s => !s.archived).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </Select>
                     {activeLocations.length > 1 && (
-                        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar -mx-1 px-1 py-1 flex-1 min-w-0">
-                            <Pill active={locationFilter === 'All'} onClick={() => setLocationFilter('All')} className="shrink-0">All locations</Pill>
-                            {activeLocations.map(l => (
-                                <Pill key={l.id} active={locationFilter === l.id} onClick={() => setLocationFilter(l.id)} className="shrink-0">{l.name}</Pill>
-                            ))}
-                        </div>
+                        <Select value={locationFilter} onChange={e => setLocationFilter(e.target.value)} aria-label="Filter by location" className="flex-1 min-w-0 !text-[13px] !py-2">
+                            <option value="All">All locations</option>
+                            {activeLocations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                        </Select>
                     )}
-                    <Select value={sort} onChange={e => setSort(e.target.value as SortKey)} aria-label="Sort artworks" className="self-end sm:ml-auto !w-40 shrink-0 !text-[13px] !py-2">
+                    <Select value={sort} onChange={e => setSort(e.target.value as SortKey)} aria-label="Sort artworks" className="flex-1 min-w-0 sm:flex-none sm:!w-40 !text-[13px] !py-2">
                         {Object.entries(SORTS).map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
                     </Select>
                 </div>
@@ -346,7 +340,6 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
                     }}
                 />
             )}
-            {settingsOpen && <InventorySettingsSheet onClose={() => setSettingsOpen(false)} />}
             {pendingImport && <ImportPreview pending={pendingImport} onCancel={() => setPendingImport(null)} onConfirm={() => { void runImport(pendingImport); }} />}
         </PageRoot>
     );
