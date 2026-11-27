@@ -21,6 +21,7 @@ const STORAGE_KEYS = {
   seedVersion: 'vayu_seed_version',
   lastSaleTags: 'vayu.sales.lastTags',
   billingSettings: 'vayu.billing.settings',
+  inventorySettings: 'vayu.inventory.settings',
 };
 
 // Bumped to 3: mock/dummy data removed. Migration cleans old mock IDs
@@ -115,6 +116,11 @@ export const db = {
   /** Where this workspace's copy of the billing setup is kept (it changes with the workspace). */
   billingSettingsKey(): string {
     return scoped(STORAGE_KEYS.billingSettings);
+  },
+
+  /** Where this workspace's copy of the stock locations and statuses is kept. */
+  inventorySettingsKey(): string {
+    return scoped(STORAGE_KEYS.inventorySettings);
   },
 
   /** The tags of the last sale recorded in this workspace (an event's sales share its tag). */

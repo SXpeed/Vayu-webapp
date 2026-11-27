@@ -21,6 +21,7 @@
     "workerEnv.ts",
     "workerRoles.ts",
     "rows.ts",
+    "inventory.ts",
     "deltaSync.ts",
     "realtime.ts",
     "realtimeTickets.ts",

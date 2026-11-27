@@ -60,6 +60,7 @@
     "orgTeam.ts",
     "inbox.ts",
     "contactStore.ts",
+    "inventory.ts",
     "dist",
     "node_modules",
     ".wrangler"

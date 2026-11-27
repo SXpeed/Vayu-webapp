@@ -12,10 +12,12 @@ import { ADMIN_ROLE_ID } from './permissions';
 import {
     cleanSettings, creditRoom, currentSeller, docNumberFor, docTotals, isLocked, ISSUED_KINDS, issueProblems, KIND_LABEL,
     lockedFieldChanged, paymentsProblem, RETURNABLE, seriesKeyFor, statusChangeProblem, toBillingDoc,
-    type BillingDoc, type BillingSettings,
+    type BillingDoc, type BillingSettings, type StockTaken,
 } from './invoicing';
 import type { ChangeEvent, Ctx, SessionData } from './workerEnv';
 import { getSession } from './workerRoles';
+import { addStockStmt, historyStmt, readInventorySettings, recountStmt, stockOfArtworks, storedStock } from './inventory';
+import { defaultLocation, takePlan } from './inventoryRules';
 
 /** Why a save can't go ahead: a status change it can't make, a field GST locks once issued, or the payments. */
 function saveProblem(before: BillingDoc | null, doc: BillingDoc, s: Awaited<ReturnType<typeof readBillingSettings>>): string | null {
@@ -86,8 +88,8 @@ export interface InvoiceDeps {
     notify: (ctx: Ctx, events: ChangeEvent[]) => void;
     /** The undo snapshot of a record, as statements for the delete's own batch (empty when there is no record). */
     archive: (db: D1Database, session: SessionData, entity: string, id: string, summary: string, payload: unknown) => Promise<D1PreparedStatement[]>;
-    /** Adds the artworks table's newer columns (quantity) before stock is counted. */
-    ensureArtworks: (db: D1Database) => Promise<void>;
+    /** Adds the artworks table's newer columns and stock locations before stock is counted. */
+    ensureArtworks: (ctx: Ctx) => Promise<void>;
 }
 
 const DOC_PATH = /^\/invoices\/([\w.-]{1,80})$/;
@@ -146,20 +148,92 @@ function unitsByPiece(doc: BillingDoc): Map<string, number> {
     return units;
 }
 
+const ON_SALE = " AND status IN ('Available', 'Reserved')";
+
+/** Tax invoice stock, one piece at a time, as read now. */
+interface PiecePlan { id: string; raw: string | null; onSale: boolean; taken: StockTaken[] }
+
+async function planTakes(ctx: Ctx, ids: string[], units: Map<string, number>): Promise<PiecePlan[]> {
+    const def = defaultLocation(await readInventorySettings(ctx.env.VAYU_KV)).id;
+    const now = await stockOfArtworks(ctx.env.VAYU_DB, ids);
+    return ids.map(id => {
+        const row = now.get(id);
+        const onSale = !!row && (row.status === 'Available' || row.status === 'Reserved');
+        const taken = onSale ? takePlan(storedStock(row.raw), units.get(id) ?? 0, def).map(p => ({ artworkId: id, ...p })) : [];
+        return { id, raw: row?.raw ?? null, onSale, taken };
+    });
+}
+
 /**
- * A tax invoice counts stock: issuing takes its units out (the last one makes the
- * piece Sold), cancelling puts them back (a Sold piece is Available again).
+ * Takes a piece's planned units, only if its stock is still exactly what was
+ * read (two invoices issued at once can't both take the same units); then the
+ * history (only if taken), the total, and Sold at none. The first statement's
+ * changes tell whether it applied.
  */
-function stockStatements(ctx: Ctx, session: SessionData, doc: BillingDoc, sign: 1 | -1): D1PreparedStatement[] {
+function takeStatements(ctx: Ctx, session: SessionData, plan: PiecePlan, label: string): D1PreparedStatement[] {
     const db = ctx.env.VAYU_DB;
-    return [...unitsByPiece(doc)].flatMap(([id, units]) => [
-        sign < 0
-            ? db.prepare(`UPDATE artworks SET quantity = MAX(quantity - ?1, 0), status = CASE WHEN quantity - ?1 <= 0 THEN 'Sold' ELSE 'Available' END
-                WHERE id = ?2 AND status IN ('Available', 'Reserved')`).bind(units, id)
-            : db.prepare(`UPDATE artworks SET quantity = quantity + ?1, status = CASE WHEN status = 'Sold' THEN 'Available' ELSE status END
-                WHERE id = ?2`).bind(units, id),
-        changeLogStmt(db, ctx.env, 'artwork', id, 'put', { actorId: session.userId }),
-    ]);
+    const tail = [recountStmt(db, plan.id, "'Available'", ON_SALE), changeLogStmt(db, ctx.env, 'artwork', plan.id, 'put', { actorId: session.userId })];
+    if (!plan.onSale || plan.taken.length === 0) return tail;
+    const after: Record<string, number> = { ...storedStock(plan.raw) };
+    for (const t of plan.taken) after[t.locationId] = (after[t.locationId] ?? 0) - t.qty;
+    const left = Object.fromEntries(Object.entries(after).filter(([, n]) => n > 0).sort((a, b) => a[0].localeCompare(b[0])));
+    return [
+        db.prepare(`UPDATE artworks SET stock = ?1 WHERE id = ?2 AND stock IS ?3${ON_SALE}`).bind(JSON.stringify(left), plan.id, plan.raw),
+        historyStmt(db, session, plan.id, Object.fromEntries(plan.taken.map(t => [t.locationId, -t.qty])), label, 'WHERE changes() = 1'),
+        ...tail,
+    ];
+}
+
+/** Each piece's statements, and where each guarded take sits among them. */
+function buildTakes(ctx: Ctx, session: SessionData, plans: PiecePlan[], label: string): { stmts: D1PreparedStatement[]; guarded: { id: string; i: number }[] } {
+    const stmts: D1PreparedStatement[] = [];
+    const guarded: { id: string; i: number }[] = [];
+    for (const plan of plans) {
+        if (plan.onSale && plan.taken.length) guarded.push({ id: plan.id, i: stmts.length });
+        stmts.push(...takeStatements(ctx, session, plan, label));
+    }
+    return { stmts, guarded };
+}
+
+/** Pieces whose stock changed between reading and taking: read again and retry (3 times), then the plans as really taken (nothing for one that still couldn't be). */
+async function retryTakes(ctx: Ctx, session: SessionData, failed: string[], units: Map<string, number>, plans: PiecePlan[], label: string): Promise<PiecePlan[]> {
+    let left = failed;
+    let out = plans;
+    for (let attempt = 0; left.length && attempt < 3; attempt++) {
+        const again = await planTakes(ctx, left, units); // NOSONAR: each retry reads what the one before left
+        const { stmts, guarded } = buildTakes(ctx, session, again, label);
+        const res = await ctx.env.VAYU_DB.batch(stmts); // NOSONAR: each retry reads what the one before left
+        const missed = new Set(guarded.filter(g => res[g.i].meta.changes !== 1).map(g => g.id));
+        out = out.map(p => {
+            const fresh = again.find(x => x.id === p.id);
+            if (!fresh) return p;
+            return missed.has(fresh.id) ? { ...fresh, taken: [] } : fresh;
+        });
+        left = [...missed];
+    }
+    return out;
+}
+
+/**
+ * Cancelling puts back what issuing took (a Sold piece is Available again). An
+ * invoice issued before stock locations has no record of that: its units go to the default.
+ */
+async function returnStatements(ctx: Ctx, session: SessionData, doc: BillingDoc): Promise<D1PreparedStatement[]> {
+    const db = ctx.env.VAYU_DB;
+    const def = defaultLocation(await readInventorySettings(ctx.env.VAYU_KV)).id;
+    const units = unitsByPiece(doc);
+    const taken = doc.stockTaken ?? [...units].map(([artworkId, qty]) => ({ artworkId, locationId: def, qty }));
+    const label = `${KIND_LABEL[doc.kind]} ${doc.number} cancelled`;
+    return [...units.keys()].flatMap(id => {
+        const mine = taken.filter(t => t.artworkId === id);
+        if (mine.length === 0) return [changeLogStmt(db, ctx.env, 'artwork', id, 'put', { actorId: session.userId })];
+        return [
+            historyStmt(db, session, id, Object.fromEntries(mine.map(t => [t.locationId, t.qty])), label),
+            ...mine.map(t => addStockStmt(db, id, t.locationId, t.qty)),
+            recountStmt(db, id, "CASE WHEN status = 'Sold' THEN 'Available' ELSE status END"),
+            changeLogStmt(db, ctx.env, 'artwork', id, 'put', { actorId: session.userId }),
+        ];
+    });
 }
 
 type InventoryMove = { to: PieceStatus; from: PieceStatus[]; ids: string[]; stock?: { doc: BillingDoc; sign: 1 | -1 } };
@@ -239,9 +313,24 @@ export function invoiceRoutes(deps: InvoiceDeps): InvoiceRoute[] {
         const db = ctx.env.VAYU_DB;
         await ensureChangeLogTable(db);
         const moved = move && s?.inventoryEffects && move.ids.length ? move : null;
-        if (moved?.stock) await deps.ensureArtworks(db);
-        const inventory = moved?.stock ? stockStatements(ctx, session, moved.stock.doc, moved.stock.sign) : moved && moveStatements(ctx, session, moved.ids, moved.to, moved.from);
-        await db.batch([...docs.flatMap(({ doc, createdBy, createdByName }) => [
+        if (moved?.stock) await deps.ensureArtworks(ctx);
+        let inventory = moved && !moved.stock ? moveStatements(ctx, session, moved.ids, moved.to, moved.from) : null;
+        // Issuing: what each piece gives is kept on the invoice (the caller's copy too), so a cancel puts back exactly that.
+        const issuing = moved?.stock?.sign === -1 ? moved.stock.doc : null;
+        const units = issuing ? unitsByPiece(issuing) : new Map<string, number>();
+        let plans = issuing ? await planTakes(ctx, [...units.keys()], units) : [];
+        const label = issuing ? `${KIND_LABEL[issuing.kind]} ${issuing.number}` : '';
+        const keepTaken = () => { for (const d of docs) if (d.doc.id === issuing?.id) d.doc = { ...d.doc, stockTaken: plans.flatMap(p => p.taken) }; };
+        let first: ReturnType<typeof buildTakes> = { stmts: [], guarded: [] };
+        if (issuing) {
+            first = buildTakes(ctx, session, plans, label);
+            inventory = first.stmts;
+            keepTaken();
+        } else if (moved?.stock) {
+            inventory = await returnStatements(ctx, session, moved.stock.doc);
+        }
+        const offset = docs.length * 2;
+        const results = await db.batch([...docs.flatMap(({ doc, createdBy, createdByName }) => [
             db.prepare(`INSERT INTO invoices (id, invoice_number, customer_name, status, date, data, created_by, created_by_name, updated_at, kind, series_key, seq)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (id) DO UPDATE SET invoice_number = excluded.invoice_number, customer_name = excluded.customer_name, status = excluded.status,
@@ -249,6 +338,14 @@ export function invoiceRoutes(deps: InvoiceDeps): InvoiceRoute[] {
                 .bind(doc.id, doc.number, doc.party.name, doc.status, doc.date, JSON.stringify(doc), createdBy, createdByName, Date.now(), doc.kind, doc.seriesKey ?? null, doc.seq ?? null),
             changeLogStmt(db, ctx.env, 'invoice', doc.id, 'put', { actorId: session.userId }),
         ]), ...(inventory ?? [])]);
+        // A piece whose stock changed between reading and taking gave nothing: retry, then keep what was really taken.
+        const failed = first.guarded.filter(g => results[offset + g.i].meta.changes !== 1).map(g => g.id);
+        if (issuing && failed.length) {
+            plans = await retryTakes(ctx, session, failed, units, plans, label);
+            keepTaken();
+            const doc = docs.find(d => d.doc.id === issuing.id)!.doc;
+            await db.prepare('UPDATE invoices SET data = ? WHERE id = ?').bind(JSON.stringify(doc), doc.id).run();
+        }
         deps.notify(ctx, [
             ...docs.map(({ doc }) => ({ entity: 'invoice', id: doc.id, op: 'put' as const })),
             ...(moved?.ids ?? []).map(id => ({ entity: 'artwork', id, op: 'put' as const })),
@@ -301,6 +398,7 @@ export function invoiceRoutes(deps: InvoiceDeps): InvoiceRoute[] {
             totalPaise: before?.totalPaise,
             taxPaise: before?.taxPaise,
             linkPaidPaise: before?.linkPaidPaise,
+            stockTaken: before?.stockTaken,
             history: before?.history ?? [],
             createdAt: before?.createdAt ?? now,
         };
@@ -339,7 +437,8 @@ export function invoiceRoutes(deps: InvoiceDeps): InvoiceRoute[] {
         const now = Date.now();
         const { seq, seriesKey } = await allocate(db, before.id, seriesKeyFor(s, before.kind, before.storeId, before.date), s.series[before.kind].start);
         const number = docNumberFor(s, before.kind, before.storeId, before.date, seq);
-        const issued = withTotals(logged({ ...before, number, seq, seriesKey, status: 'Issued', issuedAt: now, seller: currentSeller(s, before.storeId) }, `Issued as ${number}`, session, now), s);
+        // stockTaken: none unless issuing takes stock (Billing setup → Update inventory), so a cancel never adds stock it didn't take.
+        const issued = withTotals(logged({ ...before, number, seq, seriesKey, status: 'Issued', issuedAt: now, seller: currentSeller(s, before.storeId), ...(before.kind === 'tax' && { stockTaken: [] }) }, `Issued as ${number}`, session, now), s);
         const sourceAfter = source ? sourceAfterIssue(source.doc, issued, session, now) : null;
         const changed: Stored[] = [{ ...stored, doc: issued }, ...(source && sourceAfter ? [{ ...source, doc: sourceAfter }] : [])];
         await writeDocs(ctx, session, changed, inventoryMoves('issue', issued), s);

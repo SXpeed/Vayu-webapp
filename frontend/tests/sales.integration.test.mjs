@@ -227,7 +227,8 @@ test('an artwork edit opened before a sale keeps the sale: Sold stays Sold, othe
     let now = (await api(owner, '/artworks')).body.find(a => a.id === art);
     assert.deepEqual([now.title, now.status, now.quantity], ['Typo fixed', 'Sold', 0]);
     // Nothing changed since it opened: the edit's status and stock apply.
-    const fresh = { ...now, status: 'Reserved', quantity: 2, stockSeen: { status: 'Sold', quantity: 0 } };
+    const { stock: _byLocation, ...quantityOnly } = now; // an app that only sends a quantity
+    const fresh = { ...quantityOnly, status: 'Reserved', quantity: 2, stockSeen: { status: 'Sold', quantity: 0 } };
     assert.equal((await api(owner, `/artworks/${art}`, { method: 'PUT', body: fresh })).status, 200);
     now = (await api(owner, '/artworks')).body.find(a => a.id === art);
     assert.deepEqual([now.status, now.quantity], ['Reserved', 2]);

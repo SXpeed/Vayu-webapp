@@ -18,6 +18,8 @@ import {
 } from '../salesRules';
 import { addDays, mondayOf } from '../staffRosterRules';
 import { stockOf, type Artwork, type Contact } from '../types';
+import { useInventorySettings } from '../services/inventorySettingsService';
+import { defaultLocation, pickLocation, stockByLocation, type InventorySettings, type Stock } from '../inventoryRules';
 import { Drawer, Msg } from './staffRoster/Panels';
 import { itemsText, rupees, saleDayLabel as dayLabel } from '../components/SalesSummary';
 import { ItemNote, ItemThumb, SalesFigures, SalesList, TagChips, TagFilterBar, sameTag } from './sales/SalesParts';
@@ -456,6 +458,22 @@ export const SalesView: React.FC<SalesViewProps> = ({ artworks, contacts }) => {
     );
 };
 
+/**
+ * Where a new sale's units leave from (the server picks the same way when none is chosen),
+ * how many are there, and why the quantity is too many ('' when it isn't).
+ */
+function saleSource(picked: Artwork | null, settings: InventorySettings, wanted: string | null | undefined, qty: number) {
+    if (!picked) return { stock: {} as Stock, holding: [], from: null, inStock: 0, short: '' };
+    const stock = stockByLocation(picked, settings);
+    const holding = settings.locations.filter(l => stock[l.id]);
+    const from = wanted ?? pickLocation(stock, Math.max(1, qty || 1), defaultLocation(settings).id) ?? holding[0]?.id ?? null;
+    const split = holding.length > 1 && !!from;
+    const inStock = split ? stock[from] ?? 0 : stockOf(picked);
+    if (qty <= inStock) return { stock, holding, from, inStock, short: '' };
+    const where = split ? `at ${settings.locations.find(l => l.id === from)?.name ?? ''}` : 'in stock';
+    return { stock, holding, from, inStock, short: `Only ${inStock} ${where}.` };
+}
+
 const inputOf = (s: Sale): SaleInput => ({
     artworkId: s.artworkId, itemTitle: s.itemTitle, itemPrice: s.itemPrice, qty: s.qty, contactId: s.contactId, buyerName: s.buyerName,
     buyerPhone: s.buyerPhone, saleDate: s.saleDate, amount: s.amount, paymentMode: s.paymentMode, referenceNo: s.referenceNo, notes: s.notes,
@@ -532,6 +550,7 @@ function buildInput(s: SaleInput, freeText: boolean, priceText: string, amountTe
     return {
         ...s,
         artworkId: freeText ? null : s.artworkId,
+        locationId: freeText ? null : s.locationId ?? null,
         itemTitle: freeText ? s.itemTitle : '',
         itemPrice: freeText ? (Number(priceText) || 0) : s.itemPrice,
         amount: amountText.trim() ? Number(amountText) : 0,
@@ -659,13 +678,13 @@ const SaleEditor: React.FC<{
     const set = (patch: Partial<SaleInput>) => setS(prev => ({ ...prev, ...patch }));
     const picked = artworks.find(a => a.id === s.artworkId) ?? null;
     const input = buildInput(s, freeText, priceText, amountText);
-    const inStock = picked ? stockOf(picked) : 0;
-    const errors = [...saleFieldErrors(input), ...(isNew && picked && input.qty > inStock ? [`Only ${inStock} in stock.`] : [])];
+    const { stock: pieceStock, holding, from, inStock, short } = saleSource(picked, useInventorySettings(), s.locationId, input.qty);
+    const errors = [...saleFieldErrors(input), ...(isNew && short ? [short] : [])];
 
     const pick = (id: string) => {
-        if (s.artworkId === id) { set({ artworkId: null }); return; }
+        if (s.artworkId === id) { set({ artworkId: null, locationId: null }); return; }
         const art = artworks.find(a => a.id === id);
-        set({ artworkId: id, itemTitle: '', itemPrice: art?.price ?? 0 });
+        set({ artworkId: id, locationId: null, itemTitle: '', itemPrice: art?.price ?? 0 });
         if (art && !amountTouched.current) setAmountText(numberText(art.price * s.qty));
     };
     const setQty = (text: string) => {
@@ -727,6 +746,13 @@ const SaleEditor: React.FC<{
                 <h3 className="neu-label">Item sold</h3>
                 {item}
                 <Quantity isNew={isNew} qty={s.qty} inStock={picked ? inStock : null} linked={!!sale?.artworkId} onQty={setQty} />
+                {isNew && !freeText && holding.length > 1 && (
+                    <Field label="Take from" htmlFor="sale-location">
+                        <Select id="sale-location" value={from ?? ''} onChange={e => set({ locationId: e.target.value })}>
+                            {holding.map(l => <option key={l.id} value={l.id}>{l.name} ({pieceStock[l.id]})</option>)}
+                        </Select>
+                    </Field>
+                )}
             </section>
 
             <BuyerFields s={s} contacts={contacts} onBuyer={name => set(withBuyer(s, name, contactsByName))} onPhone={buyerPhone => set({ buyerPhone })}

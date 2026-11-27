@@ -1,16 +1,20 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Plus, Image as ImageIcon, X, Trash2, Loader2, Camera, Folder, Download, Upload } from 'lucide-react';
+import { Plus, Image as ImageIcon, X, Trash2, Loader2, Camera, Folder, Download, Upload, Settings, CheckSquare, Check } from 'lucide-react';
 import { SearchBar } from '../components/SearchBar';
-import { PageRoot, PageHeader, PageBody, PrimaryIconButton, GhostIconButton, EmptyState, Pill } from '../components/ui';
-import { Artwork, Edition, stockOf } from '../types';
+import { PageRoot, PageHeader, PageBody, PrimaryIconButton, GhostIconButton, EmptyState, Pill, Button, Select } from '../components/ui';
+import { Artwork, Collection, Edition, stockOf } from '../types';
 import toast from 'react-hot-toast';
 import storageService, { getThumbUrl } from '../services/storageService';
 import { fileKeyOf } from '../services/workspace';
-import { IfCan } from '../components/Layout';
+import { IfCan, useAppChrome } from '../components/Layout';
+import { TypeDeleteDialog } from '../components/TypeDeleteDialog';
 import { downloadCsv } from './attendance/attendanceUtils';
 import { inventoryRows, planImport, readInventoryCsv, readInventoryTable, skippedNote, type ImportedArtwork } from './inventoryCsv';
 import { readXlsx } from './inventoryXlsx';
 import { useBackClose } from '../hooks/useBackClose';
+import { useInventorySettings } from '../services/inventorySettingsService';
+import { defaultLocation, marginOf, statusOf, stockByLocation, stockLabel, totalOf, type StatusDef } from '../inventoryRules';
+import { AddToCollectionModal, BulkMoveModal, BulkPriceModal, BulkStatusModal, InventorySettingsSheet, STATUS_TEXT } from './inventoryTools';
 
 
 interface ArtworksViewProps {
@@ -18,33 +22,58 @@ interface ArtworksViewProps {
     onAddArtwork: (artwork: Omit<Artwork, 'id' | 'createdAt'>) => unknown;
     onUpdateArtwork: (artwork: Artwork) => unknown;
     onArtworkClick: (artwork: Artwork) => void;
+    onDeleteArtwork?: (id: string) => unknown;
+    collections?: Collection[];
+    onUpdateCollection?: (collection: Collection) => unknown;
 }
-
-const STATUS_FILTERS = ['All', 'Available', 'Sold'] as const;
 
 /** An .xlsx import waiting for a yes: each new or changed artwork with the photos it brings. */
 interface PendingImport {
-    items: { row: ImportedArtwork | Artwork; isNew: boolean; photos: File[] }[];
+    items: { key: string; row: ImportedArtwork | Artwork; isNew: boolean; photos: File[] }[];
     notes: string[];
 }
-type StatusFilter = typeof STATUS_FILTERS[number];
 
-export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwork, onUpdateArtwork, onArtworkClick }) => {
+const SORTS = {
+    newest: { label: 'Newest first', by: (a: Artwork, b: Artwork) => b.createdAt - a.createdAt },
+    oldest: { label: 'Oldest first', by: (a: Artwork, b: Artwork) => a.createdAt - b.createdAt },
+    priceHigh: { label: 'Price: high to low', by: (a: Artwork, b: Artwork) => b.price - a.price },
+    priceLow: { label: 'Price: low to high', by: (a: Artwork, b: Artwork) => a.price - b.price },
+    stock: { label: 'Most in stock', by: (a: Artwork, b: Artwork) => stockOf(b) - stockOf(a) },
+    title: { label: 'Title A–Z', by: (a: Artwork, b: Artwork) => a.title.localeCompare(b.title) },
+} as const;
+type SortKey = keyof typeof SORTS;
+type BulkDialog = 'move' | 'status' | 'price' | 'collection' | 'delete' | null;
+
+export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwork, onUpdateArtwork, onArtworkClick, onDeleteArtwork, collections = [], onUpdateCollection }) => {
+    const settings = useInventorySettings();
+    const { can } = useAppChrome();
     const [isAdding, setIsAdding] = useState(false);
     const [isImporting, setIsImporting] = useState(false);
     const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
+    const [settingsOpen, setSettingsOpen] = useState(false);
     const importInputRef = useRef<HTMLInputElement>(null);
     const [searchQuery, setSearchQuery] = useState('');
-    const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
+    const [statusFilter, setStatusFilter] = useState('All');
+    const [locationFilter, setLocationFilter] = useState('All');
+    const [sort, setSort] = useState<SortKey>('newest');
+    const [selecting, setSelecting] = useState(false);
+    const [selected, setSelected] = useState<Set<string>>(new Set());
+    const [dialog, setDialog] = useState<BulkDialog>(null);
+    useBackClose(selecting && !dialog, () => { setSelecting(false); setSelected(new Set()); });
 
-    const filteredArtworks = artworks.filter(art =>
-        (statusFilter === 'All' || art.status === statusFilter) && (
-            art.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            art.customId.toLowerCase().includes(searchQuery.toLowerCase())
-        )
-    );
+    const activeLocations = settings.locations.filter(l => !l.archived);
+    const q = searchQuery.trim().toLowerCase();
+    const filteredArtworks = useMemo(() => artworks.filter(art => {
+        if (statusFilter !== 'All' && statusOf(art, settings).id !== statusFilter) return false;
+        if (locationFilter !== 'All' && !stockByLocation(art, settings)[locationFilter]) return false;
+        if (!q) return true;
+        const where = stockLabel(stockByLocation(art, settings), settings, false);
+        return [art.title, art.customId, art.artist, art.medium, where].some(v => v?.toLowerCase().includes(q));
+    }).sort(SORTS[sort].by), [artworks, statusFilter, locationFilter, q, sort, settings]);
+    const unitsShown = filteredArtworks.reduce((n, a) => n + (locationFilter === 'All' ? stockOf(a) : stockByLocation(a, settings)[locationFilter] ?? 0), 0);
+    const picked = artworks.filter(a => selected.has(a.id));
 
-    const handleExport = () => downloadCsv(`inventory-${new Date().toISOString().slice(0, 10)}.csv`, inventoryRows(filteredArtworks));
+    const handleExport = () => downloadCsv(`inventory-${new Date().toISOString().slice(0, 10)}.csv`, inventoryRows(selecting && picked.length ? picked : filteredArtworks, settings, can('costs')));
 
     const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -53,9 +82,9 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
         setIsImporting(true);
         try {
             if (/\.xlsx$/i.test(file.name)) { await previewXlsx(file); return; }
-            const { artworks: rows, skipped } = readInventoryCsv(await file.text());
-            const { adds, updates } = planImport(artworks, rows);
-            const note = skippedNote(skipped);
+            const { artworks: rows, skipped, unknownLocations } = readInventoryCsv(await file.text(), settings);
+            const { adds, updates } = planImport(artworks, rows, [], settings);
+            const note = skippedNote(skipped) + unknownNote(unknownLocations);
             if (adds.length + updates.length === 0) {
                 toast.error(`Nothing to import: no new or changed artworks.${note}`);
                 return;
@@ -74,12 +103,12 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
 
     const previewXlsx = async (file: File) => {
         const sheet = await readXlsx(await file.arrayBuffer());
-        const { artworks: rows, skipped, rows: rowNumbers } = readInventoryTable(sheet.table, sheet.rowNumbers);
+        const { artworks: rows, skipped, rows: rowNumbers, unknownLocations } = readInventoryTable(sheet.table, sheet.rowNumbers, settings);
         const photos = rowNumbers.map(n => sheet.pictures.get(n) ?? []);
-        const { adds, updates, addFrom, updateFrom, takesPhotos } = planImport(artworks, rows, photos.map(p => p.length));
+        const { adds, updates, addFrom, updateFrom, takesPhotos } = planImport(artworks, rows, photos.map(p => p.length), settings);
         const items = [
-            ...adds.map((row, i) => ({ row, isNew: true, photos: photos[addFrom[i]] })),
-            ...updates.map((row, i) => ({ row, isNew: false, photos: takesPhotos[i] ? photos[updateFrom[i]] : [] })),
+            ...adds.map((row, i) => ({ key: `add${i}`, row, isNew: true, photos: photos[addFrom[i]] })),
+            ...updates.map((row, i) => ({ key: `update${i}`, row, isNew: false, photos: takesPhotos[i] ? photos[updateFrom[i]] : [] })),
         ];
         const used = new Set(rowNumbers);
         const offRows = [...sheet.pictures].filter(([n]) => !used.has(n)).reduce((sum, [, p]) => sum + p.length, 0);
@@ -87,10 +116,11 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
         const noPhoto = adds.filter((_, i) => !photos[addFrom[i]].length).length;
         const notes = [
             skippedNote(skipped).trim(),
-            noPhoto ? `${noPhoto} new ${noPhoto === 1 ? 'artwork has' : 'artworks have'} no photo in the sheet.` : '',
-            offRows ? `${offRows} ${offRows === 1 ? "picture isn't" : "pictures aren't"} on an artwork's row and will be left out.` : '',
-            sheet.unusable ? `${sheet.unusable} ${sheet.unusable === 1 ? 'picture is' : 'pictures are'} in a format the app can't show (use JPG or PNG).` : '',
-            kept ? `${kept} existing ${kept === 1 ? 'artwork already has' : 'artworks already have'} photos; theirs are kept.` : '',
+            unknownNote(unknownLocations).trim(),
+            noPhoto ? `${count(noPhoto, 'new artwork has', 'new artworks have')} no photo in the sheet.` : '',
+            offRows ? `${count(offRows, "picture isn't", "pictures aren't")} on an artwork's row and will be left out.` : '',
+            sheet.unusable ? `${count(sheet.unusable, 'picture is', 'pictures are')} in a format the app can't show (use JPG or PNG).` : '',
+            kept ? `${count(kept, 'existing artwork already has', 'existing artworks already have')} photos; theirs are kept.` : '',
         ].filter(Boolean);
         if (items.length === 0) { toast.error(`Nothing to import: no new or changed artworks. ${notes.join(' ')}`); return; }
         setPendingImport({ items, notes });
@@ -103,17 +133,23 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
         const progress = toast.loading(total ? `Uploading photos 0 of ${total}` : 'Importing…');
         let done = 0, failed = 0;
         try {
-            for (const { row, isNew, photos } of items) { // NOSONAR: in file order
-                const imageUrls: string[] = [];
-                for (const photo of photos) {
-                    try { imageUrls.push((await storageService.upload(photo)).url); } catch { failed++; }
+            // Photos upload three at a time; each artwork keeps its photos in sheet order (a failed one is left out).
+            const urls: (string | null)[][] = items.map(it => it.photos.map(() => null));
+            const queue = items.flatMap((it, i) => it.photos.map((photo, j) => ({ photo, i, j })));
+            const worker = async () => {
+                for (let next = queue.shift(); next; next = queue.shift()) {
+                    try { urls[next.i][next.j] = (await storageService.upload(next.photo)).url; } catch { failed++; } // NOSONAR: each of the three workers uploads one photo at a time
                     toast.loading(`Uploading photos ${++done} of ${total}`, { id: progress });
                 }
-                if (isNew) await onAddArtwork({ ...row, imageUrls });
-                else await onUpdateArtwork(imageUrls.length ? { ...(row as Artwork), imageUrls } : row as Artwork);
+            };
+            await Promise.all([worker(), worker(), worker()]);
+            for (const [i, { row, isNew }] of items.entries()) {
+                const imageUrls = urls[i].filter((u): u is string => !!u);
+                if (isNew) await onAddArtwork({ ...row, imageUrls }); // NOSONAR: saved in file order
+                else await onUpdateArtwork(imageUrls.length ? { ...(row as Artwork), imageUrls } : row as Artwork); // NOSONAR: saved in file order
             }
             const adds = items.filter(it => it.isNew).length;
-            const lost = failed ? ` ${failed} ${failed === 1 ? 'photo' : 'photos'} couldn't be uploaded; add ${failed === 1 ? 'it' : 'them'} by hand.` : '';
+            const lost = failed ? lostNote(failed) : '';
             toast[failed ? 'error' : 'success'](`Imported: ${adds} added, ${items.length - adds} updated, ${done - failed} photos.${lost}`, { id: progress });
         } catch (err) {
             toast.error((err as Error).message || 'The import stopped part way', { id: progress });
@@ -122,44 +158,106 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
         }
     };
 
+    // ── Bulk edit: each piece goes through the same save as an edit ────────
+    const endSelect = () => { setSelecting(false); setSelected(new Set()); setDialog(null); };
+    const toggle = (id: string) => setSelected(prev => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+    });
+    const seen = (a: Artwork) => ({ status: a.status, quantity: stockOf(a) });
+    const applyAll = async (change: (a: Artwork) => Artwork | null, done: (changed: number, skipped: number) => string) => {
+        let changed = 0, skipped = 0;
+        for (const a of picked) {
+            const next = change(a);
+            if (next) { await onUpdateArtwork(next); changed++; } else skipped++; // NOSONAR: one at a time, like an import
+        }
+        toast.success(done(changed, skipped));
+        endSelect();
+    };
+    const pieces = (n: number) => count(n, 'piece', 'pieces');
+    const bulkMove = (to: string) => {
+        const name = settings.locations.find(l => l.id === to)?.name ?? '';
+        void applyAll(a => {
+            const total = totalOf(stockByLocation(a, settings));
+            if (total === 0 || stockByLocation(a, settings)[to] === total) return null;
+            return { ...a, stock: { [to]: total }, quantity: total, stockNote: `Moved to ${name}`, stockSeen: seen(a) };
+        }, (n, s) => `Moved ${pieces(n)} to ${name}${aside(s, 'had nothing to move')}`);
+    };
+    const bulkStatus = (st: StatusDef) => void applyAll(a => {
+        const stock = st.behaves === 'Sold' ? {} : stockByLocation(a, settings);
+        if (st.behaves === 'Available' && totalOf(stock) === 0) return null;
+        return { ...a, status: st.behaves, statusLabel: st.id === st.behaves ? '' : st.id, stock, quantity: totalOf(stock), stockSeen: seen(a) };
+    }, (n, s) => `${pieces(n)} now ${st.name}${aside(s, 'left: nothing in stock')}`);
+    const bulkPrice = (price: (old: number) => number) => void applyAll(a => ({ ...a, price: price(a.price), stockSeen: seen(a) }), n => `Price changed on ${pieces(n)}`);
+    const bulkCollection = (c: Collection) => {
+        const ids = [...new Set([...c.artworkIds, ...picked.map(a => a.id)])];
+        void onUpdateCollection?.({ ...c, artworkIds: ids });
+        toast.success(`Added to ${c.name}`);
+        endSelect();
+    };
+    const bulkDelete = async () => {
+        for (const a of picked) await onDeleteArtwork?.(a.id); // NOSONAR: one at a time
+        toast.success(`Deleted ${pieces(picked.length)}`);
+        endSelect();
+    };
+
     return (
         <PageRoot>
             <PageHeader
                 title="Inventory"
-                subtitle={`${filteredArtworks.reduce((n, a) => n + stockOf(a), 0)} in stock · ${filteredArtworks.length} ${filteredArtworks.length === 1 ? 'piece' : 'pieces'}`}
+                subtitle={`${unitsShown} in stock · ${filteredArtworks.length} ${filteredArtworks.length === 1 ? 'piece' : 'pieces'}`}
                 actions={<>
                     <GhostIconButton onClick={handleExport} label="Export these artworks as CSV" icon={<Download size={16} />} disabled={filteredArtworks.length === 0} />
                     <IfCan section="inventory">
+                        <GhostIconButton onClick={() => (selecting ? endSelect() : setSelecting(true))} label={selecting ? 'Stop selecting' : 'Select artworks to edit together'} icon={<CheckSquare size={16} />} />
+                        <GhostIconButton onClick={() => setSettingsOpen(true)} label="Inventory settings: locations and statuses" icon={<Settings size={16} />} />
                         <GhostIconButton onClick={() => importInputRef.current?.click()} label="Import artworks from CSV or Excel (.xlsx, with photos)" icon={isImporting ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />} disabled={isImporting} />
                         <input ref={importInputRef} type="file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" aria-label="CSV or Excel file to import" onChange={e => { void handleImport(e); }} />
                         <PrimaryIconButton onClick={() => setIsAdding(true)} label="Add artwork" icon={<Plus size={16} />} />
                     </IfCan>
                 </>}
             >
-                <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search artworks..." />
+                <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search title, artist, code, medium, location..." />
                 <div className="flex items-center gap-2 overflow-x-auto no-scrollbar -mx-1 px-1 py-1">
-                    {STATUS_FILTERS.map(f => (
-                        <Pill key={f} active={statusFilter === f} onClick={() => setStatusFilter(f)} className="shrink-0">{f}</Pill>
+                    <Pill active={statusFilter === 'All'} onClick={() => setStatusFilter('All')} className="shrink-0">All</Pill>
+                    {settings.statuses.filter(s => !s.archived).map(s => (
+                        <Pill key={s.id} active={statusFilter === s.id} onClick={() => setStatusFilter(s.id)} className="shrink-0">{s.name}</Pill>
                     ))}
+                </div>
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                    {activeLocations.length > 1 && (
+                        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar -mx-1 px-1 py-1 flex-1 min-w-0">
+                            <Pill active={locationFilter === 'All'} onClick={() => setLocationFilter('All')} className="shrink-0">All locations</Pill>
+                            {activeLocations.map(l => (
+                                <Pill key={l.id} active={locationFilter === l.id} onClick={() => setLocationFilter(l.id)} className="shrink-0">{l.name}</Pill>
+                            ))}
+                        </div>
+                    )}
+                    <Select value={sort} onChange={e => setSort(e.target.value as SortKey)} aria-label="Sort artworks" className="self-end sm:ml-auto !w-40 shrink-0 !text-[13px] !py-2">
+                        {Object.entries(SORTS).map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
+                    </Select>
                 </div>
             </PageHeader>
 
             {/* List */}
             <PageBody columns="gallery">
                 {filteredArtworks.map((artwork: Artwork, index: number) => {
-                    let statusText = 'text-yellow-700 dark:text-yellow-400';
-                    if (artwork.status === 'Available') statusText = 'text-green-700 dark:text-green-400';
-                    else if (artwork.status === 'Sold') statusText = 'text-red-700 dark:text-red-400';
-
+                    const status = statusOf(artwork, settings);
+                    const stock = stockByLocation(artwork, settings);
+                    const where = activeLocations.length > 1 ? stockLabel(stock, settings) : '';
                     const meta = [artwork.artist, artwork.customId, artwork.medium].filter(Boolean).join(' · ');
                     const imageCount = artwork.imageUrls.length;
+                    const isPicked = selected.has(artwork.id);
 
                     return (
                         <button
                             key={artwork.id}
                             type="button"
-                            onClick={() => onArtworkClick(artwork)}
-                            className="neu-tile neu-tile-interactive w-full animate-fade-in-up cursor-pointer active-scale"
+                            onClick={() => (selecting ? toggle(artwork.id) : onArtworkClick(artwork))}
+                            aria-pressed={selecting ? isPicked : undefined}
+                            className={`neu-tile neu-tile-interactive w-full animate-fade-in-up cursor-pointer active-scale ${isPicked ? 'ring-2 ring-[var(--neu-gold)]' : ''}`}
                             style={{ animationDelay: `${Math.min(index, 12) * 45}ms` }}
                         >
                             {/* Photo, set into the card */}
@@ -171,10 +269,15 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
                                         <ImageIcon size={28} strokeWidth={1} />
                                     </div>
                                 )}
-                                <span className={`neu-chip-float top-2 left-2 ${statusText}`}>
+                                <span className={`neu-chip-float top-2 left-2 ${STATUS_TEXT[status.color]}`}>
                                     <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                                    {artwork.status}
+                                    {status.name}
                                 </span>
+                                {selecting && (
+                                    <span className={`absolute top-2 right-2 w-6 h-6 rounded-full flex items-center justify-center ${isPicked ? 'bg-[var(--neu-gold)] text-white' : 'neu-chip-float !static border border-[var(--neu-line)]'}`} aria-hidden="true">
+                                        {isPicked && <Check size={14} />}
+                                    </span>
+                                )}
                                 <span className="neu-chip-float bottom-2 left-2 text-[var(--neu-text)] tracking-normal tabular-nums">Qty {stockOf(artwork)}</span>
                                 {imageCount > 1 && (
                                     <span className="neu-chip-float bottom-2 right-2 text-[var(--neu-text)] tracking-normal">
@@ -186,6 +289,7 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
                             <div className="flex-1 flex flex-col px-1.5 pt-3 pb-1 min-w-0">
                                 <h3 className="font-serif text-[15px] leading-snug text-[var(--neu-text)] line-clamp-2">{artwork.title}</h3>
                                 {meta && <p className="mt-1 text-[10.5px] uppercase tracking-wider text-[var(--neu-text-dim)] truncate">{meta}</p>}
+                                {where && <p className="mt-0.5 text-[10.5px] text-[var(--neu-text-dim)] truncate">{where}</p>}
                                 <div className="mt-auto pt-2.5 flex items-baseline justify-between gap-2">
                                     <p className="text-sm font-semibold text-[var(--neu-gold)] whitespace-nowrap">
                                         ₹{artwork.price.toLocaleString('en-IN')}
@@ -197,6 +301,8 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
                         </button>
                     );
                 })}
+                {/* Room to scroll the last row out from under the selection toolbar. */}
+                {selecting && <div className="col-span-full h-36" aria-hidden="true" />}
                 {filteredArtworks.length === 0 && (
                     <EmptyState
                         icon={<ImageIcon size={22} strokeWidth={1.25} />}
@@ -205,6 +311,30 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
                     />
                 )}
             </PageBody>
+
+            {selecting && (
+                <div role="toolbar" aria-label="Edit selected artworks" className="fixed inset-x-0 z-40 px-3 bottom-[calc(5.5rem+var(--safe-bottom-ui))] lg:bottom-6 flex justify-center pointer-events-none">
+                    <div className="neu-raised rounded-2xl p-2 flex flex-wrap items-center justify-center gap-1.5 pointer-events-auto max-w-3xl">
+                        <span className="px-2 text-sm text-[var(--neu-text)] tabular-nums">{selected.size} selected</span>
+                        <Button onClick={() => setSelected(selected.size === filteredArtworks.length ? new Set() : new Set(filteredArtworks.map(a => a.id)))}>
+                            {selected.size === filteredArtworks.length && selected.size > 0 ? 'None' : 'All'}
+                        </Button>
+                        <Button disabled={!selected.size} onClick={() => setDialog('move')}>Move</Button>
+                        <Button disabled={!selected.size} onClick={() => setDialog('status')}>Status</Button>
+                        <Button disabled={!selected.size} onClick={() => setDialog('price')}>Price</Button>
+                        {onUpdateCollection && can('collections', 'edit') && <Button disabled={!selected.size} onClick={() => setDialog('collection')}>Collection</Button>}
+                        <Button disabled={!selected.size} onClick={handleExport}>Export</Button>
+                        {onDeleteArtwork && <Button variant="danger" disabled={!selected.size} onClick={() => setDialog('delete')}>Delete</Button>}
+                        <Button onClick={endSelect} aria-label="Stop selecting"><X size={14} /></Button>
+                    </div>
+                </div>
+            )}
+            {dialog === 'move' && <BulkMoveModal count={picked.length} onClose={() => setDialog(null)} onMove={bulkMove} />}
+            {dialog === 'status' && <BulkStatusModal count={picked.length} onClose={() => setDialog(null)} onSet={bulkStatus} />}
+            {dialog === 'price' && <BulkPriceModal count={picked.length} onClose={() => setDialog(null)} onSet={bulkPrice} />}
+            {dialog === 'collection' && <AddToCollectionModal count={picked.length} collections={collections} onClose={() => setDialog(null)} onAdd={bulkCollection} />}
+            <TypeDeleteDialog isOpen={dialog === 'delete'} onClose={() => setDialog(null)} title="Delete artworks" itemName={pieces(picked.length)}
+                message="They go to the deleted items, where an admin can restore them." onConfirm={() => { void bulkDelete(); }} />
 
             {/* Add Modal */}
             {isAdding && (
@@ -216,10 +346,28 @@ export const ArtworksView: React.FC<ArtworksViewProps> = ({ artworks, onAddArtwo
                     }}
                 />
             )}
+            {settingsOpen && <InventorySettingsSheet onClose={() => setSettingsOpen(false)} />}
             {pendingImport && <ImportPreview pending={pendingImport} onCancel={() => setPendingImport(null)} onConfirm={() => { void runImport(pendingImport); }} />}
         </PageRoot>
     );
 };
+
+/** "3 pictures are", "1 picture is". */
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+/** " (2 had nothing to move)", or nothing. */
+const aside = (n: number, why: string) => (n ? ` (${n} ${why})` : '');
+const lostNote = (n: number) => {
+    const them = n === 1 ? 'it' : 'them';
+    return ` ${count(n, 'photo', 'photos')} couldn't be uploaded; add ${them} by hand.`;
+};
+
+/** " "Qty: Garage" names no location and was left out." */
+function unknownNote(names: string[]): string {
+    if (!names.length) return '';
+    const one = names.length === 1;
+    const columns = names.map(n => '"Qty: ' + n + '"').join(', ');
+    return ` ${columns} ${one ? 'names no location and was' : 'name no location and were'} left out. Add ${one ? 'it' : 'them'} in Inventory settings first.`;
+}
 
 /** Each row with the photo(s) it brings, so a picture on the wrong row is caught before anything is saved. */
 const ImportPreview: React.FC<{ pending: PendingImport; onCancel: () => void; onConfirm: () => void }> = ({ pending, onCancel, onConfirm }) => {
@@ -242,8 +390,8 @@ const ImportPreview: React.FC<{ pending: PendingImport; onCancel: () => void; on
                 <p className="text-sm text-[var(--neu-text)]">{adds} new, {pending.items.length - adds} updated. Check each photo is on the right artwork.</p>
                 {pending.notes.map(n => <p key={n} className="text-xs text-[var(--neu-text-dim)]">{n}</p>)}
                 <ul className="space-y-2">
-                    {pending.items.map((it, i) => (
-                        <li key={i} className="neu-card flex items-center gap-3 p-2">
+                    {pending.items.map(it => (
+                        <li key={it.key} className="neu-card flex items-center gap-3 p-2">
                             <div className="flex gap-1 shrink-0">
                                 {thumbs.get(it)?.length
                                     ? thumbs.get(it)!.slice(0, 3).map(u => <img key={u} src={u} alt="" className="w-12 h-12 object-cover rounded-md" />)
@@ -281,13 +429,23 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
         description: initialData?.description || '',
         dimensions: initialData?.dimensions || '',
         medium: initialData?.medium || '',
-        status: initialData?.status || 'Available',
-        location: initialData?.location || '',
         price: initialData?.price?.toString() || '',
         plusGst: initialData?.plusGst || false,
-        quantity: String(initialData ? stockOf(initialData) : 1),
         imageUrls: initialData?.imageUrls ?? []
     });
+    const settings = useInventorySettings();
+    const { can } = useAppChrome();
+    const [statusId, setStatusId] = useState(() => (initialData ? statusOf(initialData, settings).id : 'Available'));
+    // Units per location as typed; a new piece starts with one at the default location.
+    const [units, setUnits] = useState<Record<string, string>>(() => {
+        const stock = initialData ? stockByLocation(initialData, settings) : { [defaultLocation(settings).id]: 1 };
+        return Object.fromEntries(Object.entries(stock).map(([id, n]) => [id, String(n)]));
+    });
+    const [costText, setCostText] = useState(initialData?.costPrice ? String(initialData.costPrice) : '');
+    const status = settings.statuses.find(s => s.id === statusId) ?? statusOf({ status: 'Available' }, settings);
+    const shownLocations = settings.locations.filter(l => !l.archived || Number(units[l.id]) > 0);
+    const stock = Object.fromEntries(Object.entries(units).map(([id, t]) => [id, Math.max(0, Math.floor(Number(t) || 0))]).filter(([, n]) => (n as number) > 0)) as Record<string, number>;
+    const total = status.behaves === 'Sold' ? 0 : totalOf(stock);
     // initialData follows sync while the form is open; this keeps what it opened with.
     const [stockSeen] = useState(() => initialData && { status: initialData.status, quantity: stockOf(initialData) });
     const [isEdition, setIsEdition] = useState(!!initialData?.edition);
@@ -304,10 +462,22 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
 
     const handleSubmit = (e: React.SyntheticEvent<HTMLFormElement>) => {
         e.preventDefault();
+        if (status.behaves === 'Available' && total === 0) {
+            toast.error(`Add how many are in stock, or choose a status other than ${status.name}.`);
+            return;
+        }
+        // Sold holds no stock.
+        const saved = status.behaves === 'Sold' ? {} : stock;
         onSave({
             ...formData,
+            status: status.behaves,
+            statusLabel: status.id === status.behaves ? '' : status.id,
+            stock: saved,
+            quantity: totalOf(saved),
+            location: stockLabel(saved, settings, false),
             price: Number(formData.price) || 0,
-            quantity: Math.max(0, Math.floor(Number(formData.quantity) || 0)),
+            // Without "change" the server keeps the stored cost; the copy on this device keeps it too.
+            costPrice: can('costs', 'edit') ? Math.max(0, Number(costText) || 0) : initialData?.costPrice,
             edition: isEdition ? edition : undefined,
             stockSeen,
         });
@@ -485,20 +655,45 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
                             </div>
                         </div>
 
-                        <div className="flex gap-3">
-                            <div className="flex-1">
-                                <label htmlFor="artwork-status" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Status</label>
-                                <select id="artwork-status" name="status" value={formData.status} onChange={handleChange} className="neu-field">
-                                    <option value="Available" className="dark:bg-gray-800">Available</option>
-                                    <option value="Sold" className="dark:bg-gray-800">Sold</option>
-                                    <option value="Reserved" className="dark:bg-gray-800">Reserved</option>
-                                </select>
+                        {can('costs', 'edit') && (
+                            <div>
+                                <label htmlFor="artwork-cost" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Cost price (₹)</label>
+                                <input id="artwork-cost" type="number" min="0" inputMode="decimal" value={costText} onChange={e => setCostText(e.target.value)} className="neu-field" placeholder="What it cost you" />
+                                {marginOf(Number(formData.price), Number(costText)) && (
+                                    <p className="mt-1 text-[11px] text-[var(--neu-text-dim)]">
+                                        Margin ₹{marginOf(Number(formData.price), Number(costText))!.amount.toLocaleString('en-IN')} ({marginOf(Number(formData.price), Number(costText))!.percent}%)
+                                    </p>
+                                )}
                             </div>
-                            <div className="flex-1">
-                                <label htmlFor="artwork-quantity" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Quantity in stock</label>
-                                <input id="artwork-quantity" name="quantity" type="number" min="0" step="1" inputMode="numeric" value={formData.quantity} onChange={handleChange} className="neu-field" />
-                            </div>
+                        )}
+
+                        <div>
+                            <label htmlFor="artwork-status" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Status</label>
+                            <select id="artwork-status" value={status.id} onChange={e => setStatusId(e.target.value)} className="neu-field">
+                                {settings.statuses.filter(s => !s.archived || s.id === status.id).map(s => (
+                                    <option key={s.id} value={s.id} className="dark:bg-gray-800">{s.name}{s.id === s.behaves ? '' : ` (like ${settings.statuses.find(b => b.id === s.behaves)?.name ?? s.behaves})`}</option>
+                                ))}
+                            </select>
                         </div>
+
+                        <fieldset>
+                            <legend className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">
+                                Quantity in stock{status.behaves === 'Sold' ? '' : ` · ${total} in all`}
+                            </legend>
+                            {status.behaves === 'Sold' ? (
+                                <p className="text-[12px] text-[var(--neu-text-dim)]">A sold piece holds no stock.</p>
+                            ) : (
+                                <div className="grid grid-cols-2 gap-2">
+                                    {shownLocations.map(l => (
+                                        <label key={l.id} className="flex items-center gap-2 min-w-0">
+                                            <span className="text-[12px] text-[var(--neu-text)] truncate flex-1">{l.name}</span>
+                                            <input type="number" min="0" step="1" inputMode="numeric" value={units[l.id] ?? ''} placeholder="0"
+                                                onChange={e => setUnits(prev => ({ ...prev, [l.id]: e.target.value }))} className="neu-field w-20 text-right" aria-label={`Units at ${l.name}`} />
+                                        </label>
+                                    ))}
+                                </div>
+                            )}
+                        </fieldset>
 
                         <div className="flex gap-3">
                             <div className="flex-1">
@@ -533,11 +728,6 @@ export const ArtworkFormModal: React.FC<ArtworkFormModalProps> = ({ initialData,
                                     </div>
                                 </div>
                             )}
-                        </div>
-
-                        <div>
-                            <label htmlFor="artwork-location" className="block text-[11px] font-medium text-gray-700 dark:text-gray-300 mb-1 uppercase tracking-wider">Location</label>
-                            <input id="artwork-location" name="location" value={formData.location} onChange={handleChange} className="neu-field" placeholder="e.g. Main Gallery" />
                         </div>
 
                         <div>

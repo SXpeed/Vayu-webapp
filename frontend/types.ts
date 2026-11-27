@@ -24,6 +24,14 @@ export interface Artwork {
     quantity?: number;
     /** Sent with an edit only: the status and stock the form opened with (a sale since then wins). */
     stockSeen?: { status: ArtworkStatus; quantity: number };
+    /** Units by stock location id (inventoryRules.ts); `quantity` is the total. */
+    stock?: Record<string, number>;
+    /** Sent with an edit only: why the stock changed ("Moved to Office"), for its history. */
+    stockNote?: string;
+    /** Custom status id shown instead of `status` while it behaves like it. */
+    statusLabel?: string;
+    /** What it cost; only sent to people whose role can see cost prices. */
+    costPrice?: number;
 }
 
 /** Units in stock; a record from before stock counts is one piece, none once sold. */

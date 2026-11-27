@@ -8,6 +8,9 @@ import { ZoomableImage } from '../components/ZoomableImage';
 import { PreviewOnlyNote } from '../components/PreviewOnlyNote';
 import { IfCan } from '../components/Layout';
 import { useBackClose } from '../hooks/useBackClose';
+import { useInventorySettings } from '../services/inventorySettingsService';
+import { statusOf, stockByLocation, stockLabel } from '../inventoryRules';
+import { STATUS_TEXT, StockPanel } from './inventoryTools';
 
 /** Swaps the alpha channel of an `rgba(r, g, b, a)` color string. */
 const withAlpha = (rgba: string, alpha: number): string =>
@@ -102,9 +105,10 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
 
     const artistLine = [artwork.artist, artwork.artworkYear].filter(Boolean).join(', ');
 
-    let statusClass = 'text-yellow-700 dark:text-yellow-400';
-    if (artwork.status === 'Available') statusClass = 'text-green-700 dark:text-green-400';
-    else if (artwork.status === 'Sold') statusClass = 'text-red-700 dark:text-red-400';
+    const settings = useInventorySettings();
+    const status = statusOf(artwork, settings);
+    const statusClass = STATUS_TEXT[status.color];
+    const where = stockLabel(stockByLocation(artwork, settings), settings, false);
 
     const imageCount = artwork.imageUrls.length;
 
@@ -118,7 +122,7 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
     const specs = [
         { label: 'Medium', value: artwork.medium },
         { label: 'Dimensions', value: artwork.dimensions },
-        { label: 'Location', value: artwork.location },
+        { label: 'Location', value: where },
     ].filter(x => x.value?.trim());
     // The wall label's lines: what the piece is, then where it is kept.
     const labelLines = [artwork.medium, artwork.dimensions, editionLabel(artwork.edition)].filter(v => v?.trim());
@@ -272,11 +276,11 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                             <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-[var(--neu-text-dim)]">
                                 <span className={`inline-flex items-center gap-1.5 font-medium ${statusClass}`}>
                                     <span className="w-1.5 h-1.5 rounded-full bg-current" aria-hidden="true" />
-                                    {artwork.status}
+                                    {status.name}
                                 </span>
                                 <span aria-hidden="true">·</span><span className="tabular-nums">{stockOf(artwork)} in stock</span>
                                 {artwork.customId && <><span aria-hidden="true">·</span><span className="uppercase tracking-[0.14em]">{artwork.customId}</span></>}
-                                {artwork.location && <><span aria-hidden="true">·</span><span>{artwork.location}</span></>}
+                                {where && <><span aria-hidden="true">·</span><span>{where}</span></>}
                             </p>
                         </div>
 
@@ -300,6 +304,8 @@ export const ArtworkDetailView: React.FC<ArtworkDetailViewProps> = ({ artwork, o
                                 </IfCan>
                             )}
                         </div>
+
+                        <StockPanel artwork={artwork} onUpdateArtwork={onUpdateArtwork} />
 
                         {artwork.description && (
                             <div className="mt-7 pt-6 border-t border-[var(--neu-line)]">

@@ -123,6 +123,7 @@ export interface Seller {
 }
 
 export interface HistoryEntry { at: number; text: string }
+export interface StockTaken { artworkId: string; locationId: string; qty: number }
 
 export interface BillingDoc {
     id: string;
@@ -173,6 +174,8 @@ export interface BillingDoc {
     taxPaise?: number;
     /** What this document's payment links collected, less refunds. Kept by the server as links are paid. */
     linkPaidPaise?: number;
+    /** Tax invoice: the units issuing it took, by location; cancelling puts back exactly these. Kept by the server. */
+    stockTaken?: StockTaken[];
     payments: Payment[];
     cancelReason?: string;
     seller?: Seller;
@@ -735,6 +738,9 @@ export function cleanDoc(v: unknown): BillingDoc {
         ...optional('totalPaise', d.totalPaise === undefined ? undefined : int(d.totalPaise, -1e13, 1e13)),
         ...optional('taxPaise', d.taxPaise === undefined ? undefined : int(d.taxPaise, -1e13, 1e13)),
         ...optional('linkPaidPaise', d.linkPaidPaise === undefined ? undefined : int(d.linkPaidPaise, 0, 1e13)),
+        ...optional('stockTaken', Array.isArray(d.stockTaken)
+            ? list(d.stockTaken, MAX_LINES).map(obj).map(t => ({ artworkId: str(t.artworkId, 128), locationId: str(t.locationId, 48), qty: int(t.qty, 0, 1e6) })).filter(t => t.artworkId && t.locationId && t.qty > 0)
+            : undefined),
         payments: cleanPayments(d.payments, now),
         ...optional('cancelReason', str(d.cancelReason, 200)),
         ...optional('seller', cleanSeller(d.seller)),

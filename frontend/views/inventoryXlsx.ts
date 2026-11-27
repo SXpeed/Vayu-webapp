@@ -51,14 +51,29 @@ function openZip(buf: ArrayBuffer): Zip {
 }
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
-const decode = (s: string) => s.replace(/&(#x[\da-f]+|#\d+|\w+);/gi, (m, e: string) =>
-    e[0] === '#' ? String.fromCodePoint(Number.parseInt(e.slice(e[1] === 'x' || e[1] === 'X' ? 2 : 1), e[1] === 'x' || e[1] === 'X' ? 16 : 10)) : ENTITIES[e] ?? m);
+function entity(m: string, e: string): string {
+    if (!e.startsWith('#')) return ENTITIES[e] ?? m;
+    const hex = e[1] === 'x' || e[1] === 'X';
+    return String.fromCodePoint(Number.parseInt(e.slice(hex ? 2 : 1), hex ? 16 : 10));
+}
+const decode = (s: string) => s.replaceAll(/&(#x[\da-f]+|#\d+|\w+);/gi, entity);
+
+/** ` r="A1" t="s"` → { r: 'A1', t: 's' }. Excel writes every attribute as name="value"; split on the quotes, no regex. */
+function attrsOf(chunk: string): Record<string, string> {
+    const bits = chunk.split('"');
+    const out: Record<string, string> = {};
+    for (let i = 0; i + 1 < bits.length; i += 2) {
+        const name = bits[i].trim().replace(/=$/, '').trim();
+        if (name) out[name] = decode(bits[i + 1]);
+    }
+    return out;
+}
 
 /** Elements by local name (any namespace prefix); fine for these machine-written parts, which never nest a tag inside itself. */
 function tags(xml: string, name: string): { attrs: Record<string, string>; body: string }[] {
     const re = new RegExp(String.raw`<(?:[\w.-]+:)?${name}(\s[^>]*?)?(?:/>|>([\s\S]*?)</(?:[\w.-]+:)?${name}>)`, 'g');
     return [...xml.matchAll(re)].map(m => ({
-        attrs: Object.fromEntries([...(m[1] ?? '').matchAll(/([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)].map(a => [a[1], decode(a[2] ?? a[3])])),
+        attrs: attrsOf(m[1] ?? ''),
         body: m[2] ?? '',
     }));
 }
@@ -83,7 +98,7 @@ function cellRef(ref: string): { col: number; row: number } | null {
     const m = /^\$?([A-Z]+)\$?(\d+)$/i.exec(ref);
     if (!m) return null;
     let col = 0;
-    for (const ch of m[1].toUpperCase()) col = col * 26 + ch.charCodeAt(0) - 64;
+    for (const ch of m[1].toUpperCase()) col = col * 26 + ch.codePointAt(0)! - 64;
     return { col: col - 1, row: Number(m[2]) };
 }
 
@@ -100,7 +115,7 @@ async function cellPictures(zip: Zip, workbookRels: Map<string, string>): Promis
         .map(s => tags(s.body, 'k').findIndex(k => k.attrs.n === '_rvRel:LocalImageIdentifier'));
     const values = tags(await zip.text(richValues), 'rv').map(rv => {
         const key = structures[Number(rv.attrs.s)] ?? -1;
-        return key < 0 ? NaN : Number(tags(rv.body, 'v')[key]?.body);
+        return key < 0 ? Number.NaN : Number(tags(rv.body, 'v')[key]?.body);
     });
     const relIds = tags(await zip.text(relPart), 'rel').map(r => r.attrs['r:id']);
     const relTargets = await relsOf(zip, relPart);
@@ -108,6 +123,75 @@ async function cellPictures(zip: Zip, workbookRels: Map<string, string>): Promis
         const image = values[richIndexes[Number(tags(bk.body, 'rc')[0]?.attrs.v)]];
         return Number.isInteger(image) ? relTargets.get(relIds[image]) : undefined;
     });
+}
+
+type PicturePart = { row: number; col: number; part: string };
+
+/** A cell's text the way Excel stores it: shared string, inline string, TRUE/FALSE, nothing for an error, else the value. */
+function cellText(c: { attrs: Record<string, string>; body: string }, shared: string[]): string {
+    const raw = decode(tags(c.body, 'v')[0]?.body ?? '');
+    switch (c.attrs.t) {
+        case 's': return shared[Number(raw)] ?? '';
+        case 'inlineStr': return textOf(c.body);
+        case 'b': return raw === '1' ? 'TRUE' : 'FALSE';
+        case 'e': return '';
+        default: return raw;
+    }
+}
+
+/** The sheet's rows by Excel row number, and the "Place in Cell" pictures in them. */
+function readRows(sheet: string, shared: string[], byCell: (string | undefined)[]): { rows: Map<number, string[]>; parts: PicturePart[] } {
+    const parts: PicturePart[] = [];
+    const rows = new Map<number, string[]>();
+    let rowNumber = 0;
+    for (const row of tags(sheet, 'row')) {
+        rowNumber = Number(row.attrs.r) || rowNumber + 1;
+        const cells: string[] = [];
+        let col = -1;
+        for (const c of tags(row.body, 'c')) {
+            col = cellRef(c.attrs.r ?? '')?.col ?? col + 1;
+            cells[col] = cellText(c, shared);
+            const part = c.attrs.vm ? byCell[Number(c.attrs.vm) - 1] : undefined;
+            if (part) parts.push({ row: rowNumber, col, part });
+        }
+        rows.set(rowNumber, Array.from(cells, c => c ?? ''));
+    }
+    return { rows, parts };
+}
+
+/** Floating pictures, each on the row under its top-left corner. */
+async function floatingPictures(zip: Zip, sheet: string, sheetPart: string): Promise<PicturePart[]> {
+    const sheetRels = await relsOf(zip, sheetPart);
+    const drawings = await Promise.all(tags(sheet, 'drawing').map(async d => {
+        const drawingPart = sheetRels.get(d.attrs['r:id']);
+        if (!drawingPart) return [];
+        const [drawingRels, drawing] = await Promise.all([relsOf(zip, drawingPart), zip.text(drawingPart)]);
+        return ['twoCellAnchor', 'oneCellAnchor'].flatMap(kind => tags(drawing, kind)).flatMap(anchor => {
+            const from = tags(anchor.body, 'from')[0]?.body ?? '';
+            const row = Number(tags(from, 'row')[0]?.body) + 1;
+            const col = Number(tags(from, 'col')[0]?.body);
+            if (!Number.isFinite(row)) return [];
+            return tags(anchor.body, 'blip').map(b => drawingRels.get(b.attrs['r:embed'])).filter((part): part is string => !!part).map(part => ({ row, col, part }));
+        });
+    }));
+    return drawings.flat();
+}
+
+/** Photos by row, left to right; pictures the app can't show are counted, not kept. */
+async function loadPictures(zip: Zip, parts: PicturePart[]): Promise<{ pictures: Map<number, File[]>; unusable: number }> {
+    const sorted = [...parts].sort((a, b) => a.row - b.row || a.col - b.col);
+    const files = await Promise.all(sorted.map(async ({ part }) => {
+        const name = part.split('/').pop() ?? 'photo';
+        const type = PHOTO_TYPES[name.split('.').pop()?.toLowerCase() ?? ''];
+        const data = type ? await zip.bytes(part) : null;
+        return type && data ? new File([data], name, { type }) : null;
+    }));
+    const pictures = new Map<number, File[]>();
+    sorted.forEach(({ row }, i) => {
+        const file = files[i];
+        if (file) pictures.set(row, [...(pictures.get(row) ?? []), file]);
+    });
+    return { pictures, unusable: files.filter(f => !f).length };
 }
 
 export async function readXlsx(buf: ArrayBuffer): Promise<XlsxSheet> {
@@ -121,54 +205,8 @@ export async function readXlsx(buf: ArrayBuffer): Promise<XlsxSheet> {
     const shared = sharedPart ? tags(await zip.text(sharedPart), 'si').map(si => textOf(si.body)) : [];
     const sheet = await zip.text(sheetPart);
 
-    const byCell = await cellPictures(zip, workbookRels);
-    const pictureParts: { row: number; col: number; part: string }[] = [];
-    const rows = new Map<number, string[]>();
-    let rowNumber = 0;
-    for (const row of tags(sheet, 'row')) {
-        rowNumber = Number(row.attrs.r) || rowNumber + 1;
-        const cells: string[] = [];
-        let col = -1;
-        for (const c of tags(row.body, 'c')) {
-            col = cellRef(c.attrs.r ?? '')?.col ?? col + 1;
-            const raw = decode(tags(c.body, 'v')[0]?.body ?? '');
-            const t = c.attrs.t;
-            cells[col] = t === 's' ? shared[Number(raw)] ?? ''
-                : t === 'inlineStr' ? textOf(c.body)
-                : t === 'b' ? (raw === '1' ? 'TRUE' : 'FALSE')
-                : t === 'e' ? '' : raw;
-            const part = c.attrs.vm ? byCell[Number(c.attrs.vm) - 1] : undefined;
-            if (part) pictureParts.push({ row: rowNumber, col, part });
-        }
-        rows.set(rowNumber, Array.from(cells, c => c ?? ''));
-    }
-
-    const sheetRels = await relsOf(zip, sheetPart);
-    for (const d of tags(sheet, 'drawing')) {
-        const drawingPart = sheetRels.get(d.attrs['r:id']);
-        if (!drawingPart) continue;
-        const drawingRels = await relsOf(zip, drawingPart);
-        const drawing = await zip.text(drawingPart);
-        for (const kind of ['twoCellAnchor', 'oneCellAnchor']) for (const anchor of tags(drawing, kind)) {
-            const from = tags(anchor.body, 'from')[0]?.body ?? '';
-            const row = Number(tags(from, 'row')[0]?.body) + 1;
-            const col = Number(tags(from, 'col')[0]?.body);
-            for (const blip of tags(anchor.body, 'blip')) {
-                const part = drawingRels.get(blip.attrs['r:embed']);
-                if (part && Number.isFinite(row)) pictureParts.push({ row, col, part });
-            }
-        }
-    }
-
-    const pictures = new Map<number, File[]>();
-    let unusable = 0;
-    for (const { row, part } of pictureParts.sort((a, b) => a.row - b.row || a.col - b.col)) {
-        const name = part.split('/').pop() ?? 'photo';
-        const type = PHOTO_TYPES[name.split('.').pop()?.toLowerCase() ?? ''];
-        const data = type ? await zip.bytes(part) : null;
-        if (!type || !data) { unusable++; continue; }
-        pictures.set(row, [...(pictures.get(row) ?? []), new File([data], name, { type })]);
-    }
+    const { rows, parts } = readRows(sheet, shared, await cellPictures(zip, workbookRels));
+    const { pictures, unusable } = await loadPictures(zip, [...parts, ...await floatingPictures(zip, sheet, sheetPart)]);
 
     const kept = [...rows].filter(([, cells]) => cells.some(c => c.trim())).sort((a, b) => a[0] - b[0]);
     return { table: kept.map(([, cells]) => cells), rowNumbers: kept.map(([n]) => n), pictures, unusable };

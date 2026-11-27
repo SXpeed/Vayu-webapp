@@ -14,7 +14,7 @@ export type AccessLevel = 'none' | 'view' | 'edit';
 
 export type SectionId =
     | 'inventory' | 'collections' | 'catalogs' | 'contacts' | 'inquiries' | 'invoices'
-    | 'payments' | 'sales' | 'calendar' | 'messages' | 'attendance' | 'schedule' | 'activity' | 'social' | 'meetings';
+    | 'payments' | 'sales' | 'calendar' | 'messages' | 'attendance' | 'schedule' | 'activity' | 'social' | 'meetings' | 'costs';
 
 export interface SectionDef {
     id: SectionId;
@@ -26,6 +26,10 @@ export interface SectionDef {
 
 export const SECTIONS: SectionDef[] = [
     { id: 'inventory', label: 'Inventory', description: 'Artworks, prices and photos' },
+    {
+        id: 'costs', label: 'Cost prices', description: 'What each artwork cost and its margin. Without this, cost prices are never sent to the device',
+        levelLabels: { view: 'See', edit: 'Change' },
+    },
     { id: 'collections', label: 'Collections', description: 'Grouped artworks' },
     { id: 'catalogs', label: 'Catalogs', description: 'Catalog PDFs and the catalog builder' },
     { id: 'contacts', label: 'Contacts', description: 'Client phone numbers and emails' },
@@ -84,8 +88,9 @@ export const ADMIN_PERMISSIONS: Permissions = all('edit');
  * start at "view" for staff: the staff roster (planning it is given by role)
  * and Sales (recording sales is given by role, to the accounts team).
  * Social and Meetings start closed: both cost money, so they are given by role.
+ * Cost prices start closed: they are given by role.
  */
-export const STAFF_DEFAULT_PERMISSIONS: Permissions = { ...all('edit'), attendance: 'view', schedule: 'view', sales: 'view', activity: 'none', social: 'none', meetings: 'none' };
+export const STAFF_DEFAULT_PERMISSIONS: Permissions = { ...all('edit'), attendance: 'view', schedule: 'view', sales: 'view', activity: 'none', social: 'none', meetings: 'none', costs: 'none' };
 
 export const BUILT_IN_ROLES: RoleDef[] = [
     { id: ADMIN_ROLE_ID, name: 'Admin', builtIn: true, permissions: ADMIN_PERMISSIONS },

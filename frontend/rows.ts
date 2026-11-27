@@ -2,6 +2,7 @@
 // endpoint (frontend/deltaSync.ts). Extracted so both can import them without
 // a circular import between the two modules.
 import { databaseKey } from './workerEnv';
+import { cleanStock } from './inventoryRules';
 import { toBillingDoc, type BillingDoc } from './invoicing';
 
 /**
@@ -103,6 +104,11 @@ export function rowToArtwork(row: Record<string, unknown>): any {
     edition: row.edition ? JSON.parse(row.edition as string) : undefined,
     // A database not yet given the column: one piece, none once sold.
     quantity: row.quantity == null ? Number(row.status !== 'Sold') : Number(row.quantity),
+    // Not yet set up (inventory.ts seedStock): the app counts it all at the default location.
+    stock: row.stock == null ? undefined : cleanStock(row.stock) ?? {},
+    statusLabel: (row.status_label as string) || undefined,
+    // Removed before it leaves the server for roles that can't see cost prices.
+    costPrice: Number(row.cost_price) || 0,
   };
 }
 

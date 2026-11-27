@@ -11,6 +11,8 @@ import { assistantRoutes } from './assistant';
 import { deliverDueInvites, handleSocialPublic, socialRoutes } from './social';
 import { autoResendDue, socialInboxRoutes } from './socialInbox';
 import { salesRoutes } from './sales';
+import { ensureStockSeeded, historyStmt, inventoryRoutes, readInventorySettings, seedStock, storedStock } from './inventory';
+import { cleanStock, defaultLocation, stockLabel, totalOf, type Stock } from './inventoryRules';
 import { ensureInvoicesTable, invoiceRoutes } from './invoices';
 import { paymentLinkRoutes, reconcileAllWorkspaces, routeOrgPaymentEvent } from './paymentLinks';
 import {
@@ -295,7 +297,7 @@ type AccessEntry =
  */
 const ACCESS_TABLE: AccessEntry[] = [
   // Collections, catalogs, inquiries, invoices and sales all show artworks.
-  { prefixes: ['/artworks'], section: 'inventory', readableBy: ['collections', 'catalogs', 'inquiries', 'invoices', 'sales'] },
+  { prefixes: ['/artworks', '/inventory-settings'], section: 'inventory', readableBy: ['collections', 'catalogs', 'inquiries', 'invoices', 'sales'] },
   { prefixes: ['/collections'], section: 'collections' },
   // Staff roster: asking for (or withdrawing) your own leave only needs
   // "view"; deciding on leave and everything else that changes it, "edit".
@@ -1959,6 +1961,9 @@ const COLUMN_MIGRATIONS = {
     plus_gst: 'INTEGER DEFAULT 0',
     edition: "TEXT DEFAULT ''",
     quantity: 'INTEGER DEFAULT 1',
+    stock: 'TEXT', // JSON units by location id (inventory.ts seeds it)
+    cost_price: 'REAL DEFAULT 0',
+    status_label: "TEXT DEFAULT ''",
   },
   collections: {
     cover_image_url: "TEXT DEFAULT ''",
@@ -2149,6 +2154,7 @@ async function restoreArchivedRow(ctx: Ctx, session: SessionData, entity: string
   if (!table) return err(`Cannot restore entity type "${entity}"`);
   const cols = Object.keys(payload).filter(k => typeof payload[k] !== 'object' || payload[k] === null);
   if (cols.length === 0 || !payload.id) return err('Archived snapshot is incomplete');
+  if (table === 'artworks') await ensureArtworksReady(ctx);
   const existing = await ctx.env.VAYU_DB.prepare(`SELECT id FROM ${table} WHERE id = ?`).bind(text(payload.id)).first();
   if (existing) return err('An item with this id already exists — restore aborted', 409);
   await ctx.env.VAYU_DB.batch([
@@ -2157,6 +2163,8 @@ async function restoreArchivedRow(ctx: Ctx, session: SessionData, entity: string
     ).bind(...cols.map(c => (payload[c] === undefined ? null : payload[c]) as string | number | null)),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, entity, text(payload.id), 'put', { actorId: session.userId }),
   ]);
+  // A snapshot from before stock locations: its stock goes to its location now.
+  if (table === 'artworks') await seedStock(ctx.env.VAYU_DB, ctx.env.VAYU_KV);
   queueHubNotify(ctx, [{ entity, id: text(payload.id), op: 'put' }]);
   return null;
 }
@@ -2211,12 +2219,65 @@ async function handleDeletedItemsPurge(ctx: Ctx): Promise<Response> {
 async function handleArtworksList(ctx: Ctx): Promise<Response> {
   const session = await getSession(ctx.request, ctx.env.VAYU_KV);
   if (!session) return err('Unauthorized', 401);
+  await ensureArtworksReady(ctx);
   const results = await ctx.env.VAYU_DB.prepare(
     'SELECT * FROM artworks ORDER BY created_at DESC'
   ).all();
-  const artworks = (results.results || []).map(rowToArtwork);
+  const costs = await sessionCan(ctx, session, 'costs', 'view');
+  const artworks = (results.results || []).map(row => withoutCost(rowToArtwork(row), costs));
   return json(artworks);
 }
+
+/** Columns, then stock locations from the old free-text Location (once). */
+async function ensureArtworksReady(ctx: Ctx): Promise<void> {
+  await ensureColumns(ctx.env.VAYU_DB, 'artworks');
+  await ensureStockSeeded(ctx.env.VAYU_DB, ctx.env.VAYU_KV);
+}
+
+/** Cost prices only reach people whose role can see them. */
+const withoutCost = <T extends { costPrice?: number }>(art: T, costs: boolean): T => {
+  if (costs) return art;
+  const { costPrice: _hidden, ...rest } = art;
+  return rest as T;
+};
+
+const LABEL_ID = /^st_[a-z0-9]{4,40}$/;
+const sameName = (a: string, b: string) => a.trim().replaceAll(/\s+/g, ' ').toLowerCase() === b.trim().replaceAll(/\s+/g, ' ').toLowerCase();
+
+/**
+ * The stock an artwork save leaves: what the app sent, or (an app from before
+ * locations, which sends only a quantity) that quantity at its one location.
+ * A Sold piece holds none.
+ */
+async function stockToSave(ctx: Ctx, art: any, stored: Stock | null): Promise<{ stock: Stock; names: string }> {
+  const settings = await readInventorySettings(ctx.env.VAYU_KV);
+  const sent = cleanStock(art.stock, new Set(settings.locations.map(l => l.id)));
+  const qty = stockSent(art.quantity);
+  let stock: Stock;
+  if (sent) stock = sent;
+  else if (stored && (qty === null || Object.keys(stored).length > 1)) stock = stored; // shortcut: an old app's quantity edit of a split piece is ignored; old apps update themselves on reload
+  else {
+    const at = (stored && Object.keys(stored)[0])
+      || settings.locations.find(l => typeof art.location === 'string' && sameName(l.name, art.location))?.id
+      || defaultLocation(settings).id;
+    const units = qty ?? 1;
+    stock = units > 0 ? { [at]: units } : {};
+  }
+  if (art.status === 'Sold') stock = {};
+  return { stock, names: stockLabel(stock, settings, false) };
+}
+
+/** Units by location from one stock to another, or null when nothing moved. */
+function stockChange(before: Stock, after: Stock): Record<string, number> | null {
+  const change: Record<string, number> = {};
+  for (const id of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    const d = (after[id] ?? 0) - (before[id] ?? 0);
+    if (d) change[id] = d;
+  }
+  return Object.keys(change).length ? change : null;
+}
+
+const stockNoteOf = (art: any, fallback: string) => (typeof art.stockNote === 'string' && art.stockNote.trim() ? art.stockNote.trim().slice(0, 200) : fallback);
 
 /** Column values shared by artwork INSERT and UPDATE, in column order. */
 function artworkValues(art: any): unknown[] {
@@ -2250,20 +2311,28 @@ async function handleArtworksCreate(ctx: Ctx): Promise<Response> {
   const body = await ctx.request.json();
   const art = body as any;
   if (!art.id) return err('id is required');
-  await ensureColumns(ctx.env.VAYU_DB, 'artworks');
+  await ensureArtworksReady(ctx);
+  const db = ctx.env.VAYU_DB;
   // Re-syncs of existing artworks shouldn't show up as new in the activity log.
-  const alreadyExists = await ctx.env.VAYU_DB.prepare(
-    'SELECT 1 FROM artworks WHERE id = ?'
-  ).bind(art.id).first();
-  await ensureChangeLogTable(ctx.env.VAYU_DB);
-  await ctx.env.VAYU_DB.batch([
-    ctx.env.VAYU_DB.prepare(
+  const alreadyExists = await db.prepare(
+    'SELECT stock, cost_price FROM artworks WHERE id = ?'
+  ).bind(art.id).first<{ stock: string | null; cost_price: number | null }>();
+  const before = alreadyExists ? storedStock(alreadyExists.stock) : null;
+  const { stock, names } = await stockToSave(ctx, art, before);
+  const cost = await sessionCan(ctx, session, 'costs', 'edit') && Number.isFinite(art.costPrice) && art.costPrice >= 0
+    ? Number(art.costPrice) : Number(alreadyExists?.cost_price) || 0;
+  const label = typeof art.statusLabel === 'string' && LABEL_ID.test(art.statusLabel) ? art.statusLabel : '';
+  const change = stockChange(before ?? {}, stock);
+  await ensureChangeLogTable(db);
+  await db.batch([
+    db.prepare(
       `INSERT OR REPLACE INTO artworks
        (id, custom_id, title, artist, artwork_year, description_title, description,
-        dimensions, medium, status, location, price, plus_gst, edition, image_urls, created_at, quantity)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, (SELECT quantity FROM artworks WHERE id = ?), 1))`
-    ).bind(art.id, ...artworkValues(art), art.createdAt || Date.now(), stockSent(art.quantity), art.id),
-    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'artwork', art.id, 'put', { actorId: session.userId }),
+        dimensions, medium, status, location, price, plus_gst, edition, image_urls, created_at, quantity, stock, cost_price, status_label)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(art.id, ...artworkValues({ ...art, location: names }), art.createdAt || Date.now(), totalOf(stock), JSON.stringify(stock), cost, label),
+    ...(change ? [historyStmt(db, session, art.id, change, stockNoteOf(art, before ? 'Edited' : 'Added'))] : []),
+    changeLogStmt(db, ctx.env, 'artwork', art.id, 'put', { actorId: session.userId }),
   ]);
   queueHubNotify(ctx, [{ entity: 'artwork', id: art.id, op: 'put' }]);
   if (!alreadyExists) {
@@ -2283,19 +2352,34 @@ async function handleArtworksUpdate(ctx: Ctx): Promise<Response> {
   const seenStatus = typeof art.stockSeen?.status === 'string' ? art.stockSeen.status : null;
   const seenQty = seenStatus === null ? null : stockSent(art.stockSeen.quantity);
   const unchanged = `(?16 IS NULL OR (status = ?16 AND COALESCE(quantity, status <> 'Sold') = ?17))`;
-  await ensureColumns(ctx.env.VAYU_DB, 'artworks');
-  await ensureChangeLogTable(ctx.env.VAYU_DB);
-  await ctx.env.VAYU_DB.batch([
-    ctx.env.VAYU_DB.prepare(
+  await ensureArtworksReady(ctx);
+  const db = ctx.env.VAYU_DB;
+  const stored = await db.prepare('SELECT stock FROM artworks WHERE id = ?').bind(artId).first<{ stock: string | null }>();
+  if (!stored) return json(art); // deleted meanwhile: nothing to update
+  const before = storedStock(stored.stock);
+  const { stock, names } = await stockToSave(ctx, art, before);
+  const canCost = await sessionCan(ctx, session, 'costs', 'edit') && Number.isFinite(art.costPrice) && art.costPrice >= 0;
+  const label = typeof art.statusLabel === 'string' && LABEL_ID.test(art.statusLabel) ? art.statusLabel : '';
+  const change = stockChange(before, stock);
+  await ensureChangeLogTable(db);
+  await db.batch([
+    // History first: it checks the same "nothing sold since the form opened" as the update.
+    ...(change ? [historyStmt(db, session, artId, change, stockNoteOf(art, 'Edited'),
+      `WHERE EXISTS (SELECT 1 FROM artworks WHERE id = ?7 AND (?8 IS NULL OR (status = ?8 AND COALESCE(quantity, status <> 'Sold') = ?9)))`, artId, seenStatus, seenQty)] : []),
+    db.prepare(
       `UPDATE artworks SET
          custom_id = ?1, title = ?2, artist = ?3, artwork_year = ?4, description_title = ?5,
-         description = ?6, dimensions = ?7, medium = ?8, location = ?10,
+         description = ?6, dimensions = ?7, medium = ?8,
          price = ?11, plus_gst = ?12, edition = ?13, image_urls = ?14,
+         location = CASE WHEN ${unchanged} THEN ?10 ELSE location END,
          status = CASE WHEN ${unchanged} THEN ?9 ELSE status END,
-         quantity = CASE WHEN ${unchanged} THEN COALESCE(?15, quantity) ELSE quantity END
+         quantity = CASE WHEN ${unchanged} THEN ?15 ELSE quantity END,
+         stock = CASE WHEN ${unchanged} THEN ?19 ELSE stock END,
+         status_label = CASE WHEN ${unchanged} THEN ?20 ELSE status_label END,
+         cost_price = CASE WHEN ?21 THEN ?22 ELSE cost_price END
        WHERE id = ?18`
-    ).bind(...artworkValues(art), stockSent(art.quantity), seenStatus, seenQty, artId),
-    changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'artwork', artId, 'put', { actorId: session.userId }),
+    ).bind(...artworkValues({ ...art, location: names }), totalOf(stock), seenStatus, seenQty, artId, JSON.stringify(stock), label, canCost ? 1 : 0, canCost ? Number(art.costPrice) : 0),
+    changeLogStmt(db, ctx.env, 'artwork', artId, 'put', { actorId: session.userId }),
   ]);
   queueHubNotify(ctx, [{ entity: 'artwork', id: artId, op: 'put' }]);
   logEntityChange(ctx, session, 'updated', 'artwork', artId, `Updated artwork ${artworkLabel({ ...art, id: artId })}`);
@@ -4001,7 +4085,8 @@ const routes: Route[] = [
   ...socialInboxRoutes,
 
   // Sales ledger (sales.ts)
-  ...salesRoutes({ logChange: logEntityChange, notify: queueHubNotify, ensureArtworks: db => ensureColumns(db, 'artworks') }),
+  ...salesRoutes({ logChange: logEntityChange, notify: queueHubNotify, ensureArtworks: ensureArtworksReady }),
+  ...inventoryRoutes({ ensureArtworks: ensureArtworksReady }),
 
   { method: 'GET', match: isExact('/viewing-rooms'), handler: handleViewingRoomsList },
   { method: 'POST', match: isExact('/viewing-rooms'), handler: handleViewingRoomsCreate },
@@ -4101,7 +4186,7 @@ const routes: Route[] = [
 
   // Contacts
   // Billing: proformas, tax invoices, challans, notes and the billing setup (invoices.ts).
-  ...invoiceRoutes({ logChange: logEntityChange, notify: queueHubNotify, archive: archiveStmts, ensureArtworks: db => ensureColumns(db, 'artworks') }),
+  ...invoiceRoutes({ logChange: logEntityChange, notify: queueHubNotify, archive: archiveStmts, ensureArtworks: ensureArtworksReady }),
   { method: 'GET', match: isExact('/contacts'), handler: handleContactsList },
   { method: 'POST', match: isExact('/contacts'), handler: handleContactsCreate },
   { method: 'POST', match: isExact('/contacts/import'), handler: handleContactsImport },

@@ -3,6 +3,8 @@ import { Check, Image as ImageIcon, Info } from 'lucide-react';
 import type { Artwork, ArtworkStatus } from '../types';
 import { getThumbUrl } from '../services/storageService';
 import { SearchBar } from './SearchBar';
+import { useInventorySettings } from '../services/inventorySettingsService';
+import { statusOf } from '../inventoryRules';
 import { Pill } from './ui';
 
 type Filter = 'All' | 'Selected' | ArtworkStatus;
@@ -40,6 +42,7 @@ export const ArtworkPicker: React.FC<ArtworkPickerProps> = ({
     artworks, selected, onToggle, onAddMany, onInfo, detail, statusFilters = true,
     scroll = false, searchPlaceholder = 'Search by title, ID or artist…', className = '',
 }) => {
+    const settings = useInventorySettings();
     const [query, setQuery] = useState('');
     const [filter, setFilter] = useState<Filter>('All');
     const q = query.trim().toLowerCase();
@@ -78,7 +81,7 @@ export const ArtworkPicker: React.FC<ArtworkPickerProps> = ({
                     <div className="grid grid-cols-3 sm:grid-cols-4 xl:grid-cols-5 gap-2.5">
                         {shown.map(art => {
                             const on = selected.has(art.id);
-                            const line = detail ? detail(art) : (art.customId || art.status);
+                            const line = detail ? detail(art) : (art.customId || statusOf(art, settings).name);
                             return (
                                 <div key={art.id} className="relative">
                                     <button type="button" onClick={() => onToggle(art.id)} aria-pressed={on}

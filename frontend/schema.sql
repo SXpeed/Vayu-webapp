@@ -60,7 +60,10 @@ CREATE TABLE IF NOT EXISTS artworks (
   edition TEXT DEFAULT '',            -- JSON {size, proofs, number}; '' = unique work
   image_urls TEXT DEFAULT '[]',       -- JSON array of R2 URLs
   created_at INTEGER NOT NULL,
-  quantity INTEGER DEFAULT 1          -- units in stock; sales and tax invoices take from it
+  quantity INTEGER DEFAULT 1,         -- units in stock (the total of stock); sales and tax invoices take from it
+  stock TEXT,                         -- JSON units by stock location id (inventory.ts)
+  cost_price REAL DEFAULT 0,          -- only sent to roles that can see cost prices
+  status_label TEXT DEFAULT ''        -- custom status id (inventoryRules.ts)
 );
 
 CREATE INDEX IF NOT EXISTS idx_artworks_created ON artworks(created_at DESC);

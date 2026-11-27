@@ -31,6 +31,8 @@ import {
 } from './salesRules';
 import type { ChangeEvent, Ctx, SessionData } from './workerEnv';
 import { getSession } from './workerRoles';
+import { addStockStmt, historyStmt, pathOf, readInventorySettings, recountStmt, storedStock } from './inventory';
+import { defaultLocation, pickLocation, totalOf } from './inventoryRules';
 
 const MAX_RANGE_DAYS = 366;
 const MAX_ROWS = 2000;
@@ -85,6 +87,7 @@ const ADDED_COLUMNS: Record<string, string> = {
     tags: "TEXT NOT NULL DEFAULT '[]'",
     photo_urls: "TEXT NOT NULL DEFAULT '[]'",
     qty: 'INTEGER NOT NULL DEFAULT 1',
+    location_id: 'TEXT',
 };
 
 // ── Rows ────────────────────────────────────────────────────────────────────
@@ -113,6 +116,7 @@ function rowToSale(r: Record<string, unknown>): Sale {
         itemTitle: text(r.item_title),
         itemPrice: Number(r.item_price) || 0,
         qty: Number(r.qty) || 1,
+        locationId: text(r.location_id) || null,
         contactId: text(r.contact_id) || null,
         buyerName: text(r.buyer_name),
         buyerPhone: text(r.buyer_phone),
@@ -154,8 +158,8 @@ export interface SalesRoute { method: string; match: (path: string) => boolean; 
 export interface SalesDeps {
     logChange: (ctx: Ctx, session: SessionData, action: string, entity: string, id: string, details: string) => void;
     notify: (ctx: Ctx, events: ChangeEvent[]) => void;
-    /** Adds the artworks table's newer columns (quantity) before stock is counted. */
-    ensureArtworks: (db: D1Database) => Promise<void>;
+    /** Adds the artworks table's newer columns and stock locations before stock is counted. */
+    ensureArtworks: (ctx: Ctx) => Promise<void>;
 }
 
 const SALE_PATH = /^\/sales\/([A-Za-z0-9_-]{1,64})$/;
@@ -178,6 +182,7 @@ function readInput(raw: Record<string, unknown>): SaleInput {
         itemPrice: raw.itemPrice === undefined || raw.itemPrice === null || raw.itemPrice === '' ? 0 : Number(raw.itemPrice),
         // Older apps send none: one piece.
         qty: raw.qty === undefined ? 1 : Number(raw.qty),
+        locationId: typeof raw.locationId === 'string' && /^loc_[a-z0-9]{4,40}$/.test(raw.locationId) ? raw.locationId : null,
         contactId: typeof raw.contactId === 'string' && raw.contactId ? raw.contactId.slice(0, 128) : null,
         buyerName: cleanText(raw.buyerName, 120),
         buyerPhone: cleanText(raw.buyerPhone, 40),
@@ -229,6 +234,26 @@ async function pieceSnapshot(db: D1Database, artworkId: string): Promise<{ title
     return { title: String(art.title || art.custom_id || 'Untitled'), price: Number(art.price) || 0 };
 }
 
+/**
+ * Which location a sale takes from (set on `input`), or why none can: the one
+ * asked for must have enough; else the default, else the fullest one.
+ */
+async function saleLocation(ctx: Ctx, input: SaleInput): Promise<Response | null> {
+    const db = ctx.env.VAYU_DB;
+    const row = await db.prepare('SELECT status, stock FROM artworks WHERE id = ?').bind(input.artworkId).first<{ status: string; stock: string | null }>();
+    if (!row) return err('That piece is no longer in the inventory.', 404);
+    const stock = storedStock(row.stock);
+    const settings = await readInventorySettings(ctx.env.VAYU_KV);
+    const at = pickLocation(stock, input.qty, defaultLocation(settings).id, input.locationId);
+    if (at) { input.locationId = at; return null; }
+    if (row.status !== 'Available' || totalOf(stock) < input.qty) return notForSale(db, input.artworkId!);
+    const name = (id: string) => settings.locations.find(l => l.id === id)?.name ?? 'that location';
+    const where = Object.entries(stock).map(([id, n]) => `${n} at ${name(id)}`).join(', ');
+    return json({ error: input.locationId
+        ? `Only ${stock[input.locationId] ?? 0} at ${name(input.locationId)} (${where}). Choose another location.`
+        : `No one location has ${input.qty} (${where}). Record a sale for each location.`, code: 'low_stock' }, 409);
+}
+
 /** Why a piece couldn't be sold: it went, someone reserved or sold it first, or fewer are in stock. */
 async function notForSale(db: D1Database, artworkId: string): Promise<Response> {
     const now = await db.prepare('SELECT status, quantity FROM artworks WHERE id = ?').bind(artworkId).first<{ status: string; quantity: number }>();
@@ -255,20 +280,26 @@ async function insertSale(ctx: Ctx, session: SessionData, id: string, input: Sal
     const photoUrls = input.artworkId ? [] : input.photoUrls;
     await ensureChangeLogTable(db);
     const stmts: D1PreparedStatement[] = [];
-    // Takes the units out of stock, only while enough are Available; the last one makes it Sold.
-    if (input.artworkId) stmts.push(db.prepare(`UPDATE artworks SET quantity = quantity - ?1, status = CASE WHEN quantity - ?1 <= 0 THEN 'Sold' ELSE status END
-        WHERE id = ?2 AND status = 'Available' AND quantity >= ?1`).bind(input.qty, input.artworkId));
+    const at = input.artworkId ? input.locationId! : null;
+    // Takes the units out of that location, only while enough are there and it is Available.
+    // Each next statement runs only if the one before changed a row (changes() = 1): stock, then history, then the sale.
+    if (input.artworkId) stmts.push(
+        db.prepare(`UPDATE artworks SET stock = json_set(stock, ?3, json_extract(stock, ?3) - ?1)
+            WHERE id = ?2 AND status = 'Available' AND COALESCE(json_extract(stock, ?3), 0) >= ?1`).bind(input.qty, input.artworkId, pathOf(at!)),
+        historyStmt(db, session, input.artworkId, { [at!]: -input.qty }, `Sold to ${input.buyerName}`.slice(0, 200), 'WHERE changes() = 1'),
+    );
     stmts.push(db.prepare(
         `INSERT INTO sales (id, seq, sale_number, artwork_id, item_title, item_price, contact_id, buyer_name, buyer_phone,
-            sale_date, recorded_at, amount, payment_mode, reference_no, notes, tags, photo_urls, created_by, created_by_name, updated_at, updated_by, qty)
-         SELECT ?, n, printf('SAL-%03d', n), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            sale_date, recorded_at, amount, payment_mode, reference_no, notes, tags, photo_urls, created_by, created_by_name, updated_at, updated_by, qty, location_id)
+         SELECT ?, n, printf('SAL-%03d', n), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
          FROM (SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM sales)${input.artworkId ? ' WHERE changes() = 1' : ''}`,
     ).bind(id, input.artworkId, item.title, item.price, input.contactId, input.buyerName, input.buyerPhone,
         input.saleDate, now, input.amount, input.paymentMode, input.referenceNo, input.notes,
-        JSON.stringify(input.tags), JSON.stringify(photoUrls), session.userId, session.name, now, session.userId, input.qty));
-    if (input.artworkId) stmts.push(changeLogStmt(db, ctx.env, 'artwork', input.artworkId, 'put', { actorId: session.userId }));
+        JSON.stringify(input.tags), JSON.stringify(photoUrls), session.userId, session.name, now, session.userId, input.qty, at));
+    // The total follows the locations; the last unit makes it Sold.
+    if (input.artworkId) stmts.push(recountStmt(db, input.artworkId), changeLogStmt(db, ctx.env, 'artwork', input.artworkId, 'put', { actorId: session.userId }));
     const results = await db.batch(stmts);
-    return results[input.artworkId ? 1 : 0].meta.changes === 1;
+    return results[input.artworkId ? 2 : 0].meta.changes === 1;
 }
 
 /**
@@ -328,10 +359,12 @@ export function salesRoutes(deps: SalesDeps): SalesRoute[] {
 
         let item = { title: input.itemTitle, price: input.itemPrice };
         if (input.artworkId) {
-            await deps.ensureArtworks(db);
+            await deps.ensureArtworks(ctx);
             const piece = await pieceSnapshot(db, input.artworkId);
             if (piece instanceof Response) return piece;
             item = piece;
+            const located = await saleLocation(ctx, input);
+            if (located) return located;
         }
         if (!isAmount(item.price) || item.price > MAX_AMOUNT) item.price = 0;
         if (!(await insertSale(ctx, session, id, input, item))) return notForSale(db, input.artworkId!);
@@ -391,11 +424,13 @@ export function salesRoutes(deps: SalesDeps): SalesRoute[] {
                 .bind(Date.now(), session.userId, session.name, id),
         ];
         if (existing.artworkId) {
-            await deps.ensureArtworks(db);
-            // Its units go back into stock; a Sold piece is Available again, a reserved one stays reserved.
+            await deps.ensureArtworks(ctx);
+            // Its units go back where they came from; a Sold piece is Available again, a reserved one stays reserved.
+            const at = existing.locationId ?? defaultLocation(await readInventorySettings(ctx.env.VAYU_KV)).id;
             stmts.push(
-                db.prepare(`UPDATE artworks SET quantity = quantity + ?1, status = CASE WHEN status = 'Sold' THEN 'Available' ELSE status END
-                    WHERE id = ?2`).bind(existing.qty, existing.artworkId),
+                addStockStmt(db, existing.artworkId, at, existing.qty),
+                recountStmt(db, existing.artworkId, "CASE WHEN status = 'Sold' THEN 'Available' ELSE status END"),
+                historyStmt(db, session, existing.artworkId, { [at]: existing.qty }, `Sale ${existing.saleNumber} deleted`),
                 changeLogStmt(db, ctx.env, 'artwork', existing.artworkId, 'put', { actorId: session.userId }),
             );
         }

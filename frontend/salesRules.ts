@@ -27,6 +27,8 @@ export interface Sale {
     itemPrice: number;
     /** Units sold; taken out of the piece's stock. */
     qty: number;
+    /** The stock location the units came from (an inventory piece). */
+    locationId?: string | null;
     contactId: string | null;
     buyerName: string;
     buyerPhone: string;
@@ -49,6 +51,8 @@ export interface SaleInput {
     itemPrice: number;
     /** Units sold, a whole number from 1. */
     qty: number;
+    /** Where an inventory piece's units come from; none: the default location, else the fullest. */
+    locationId?: string | null;
     contactId: string | null;
     buyerName: string;
     buyerPhone: string;

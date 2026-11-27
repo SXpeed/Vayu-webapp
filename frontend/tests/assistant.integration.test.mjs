@@ -177,3 +177,17 @@ test('spoken questions', async () => {
     assert.equal((await api(reader, '/assistant/transcribe', { method: 'POST', raw: 'hello', type: 'text/plain' })).status, 415);
     assert.equal((await api(reader, '/assistant/transcribe', { method: 'POST', raw: new Uint8Array(), type: 'audio/webm' })).status, 400);
 });
+
+test('artworks are found by their location\'s name now, even after it was renamed', async () => {
+    const settings = (await api(owner, '/inventory-settings')).body;
+    const back = { id: 'loc_backroom1', name: 'Back room' };
+    assert.equal((await api(owner, '/inventory-settings', { method: 'PUT', body: { ...settings, locations: [...settings.locations, back] } })).status, 200);
+    assert.equal((await api(owner, '/artworks', { method: 'POST', body: { id: 'art_kept_back', title: 'Kept at the back', price: 10, status: 'Available', imageUrls: [], createdAt: 1, stock: { [back.id]: 2 } } })).status, 201);
+    const now = (await api(owner, '/inventory-settings')).body;
+    await api(owner, '/inventory-settings', { method: 'PUT', body: { ...now, locations: now.locations.map(l => l.id === back.id ? { ...l, name: 'Studio store' } : l) } });
+    wanted = [['find_artworks', { query: 'studio' }]];
+    const res = await api(owner, '/assistant/ask', { method: 'POST', body: { question: 'What is in the studio store?' } });
+    assert.equal(res.status, 200, res.text);
+    assert.match(res.body.answer, /Kept at the back/);
+    assert.match(res.body.answer, /Studio store 2/);
+});

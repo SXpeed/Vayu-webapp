@@ -14,6 +14,8 @@ import { chatRoutes } from './assistantChats';
 import { ADMIN_ROLE_ID, SECTION_IDS, atLeast, withoutSections, type SectionId } from './permissions';
 import type { Ctx, SessionData } from './workerEnv';
 import { getRoles, getSession, permissionsFor } from './workerRoles';
+import { readInventorySettings, storedStock } from './inventory';
+import { stockLabel } from './inventoryRules';
 
 type Handler = (ctx: Ctx) => Promise<Response>;
 type Args = Record<string, unknown>;
@@ -46,14 +48,23 @@ async function readable(ctx: Ctx, session: SessionData): Promise<Set<SectionId>>
 type Params = Record<string, { type: string; description: string; enum?: string[] }>;
 /** A search here (run), or one of the app's own read requests (get: the path and query). No section: everyone's own data. */
 type Tool = { section?: SectionId; description: string; params: Params } & (
-    | { run: (db: D1Database, a: Args) => Promise<unknown> }
+    | { run: (db: D1Database, a: Args, kv: KVNamespace) => Promise<unknown> }
     | { get: (a: Args) => string });
+
+/** "[open] Hang the show (Ravi) due 2026-11-30". */
+function taskLine(x: Row): string {
+    const who = x.assigneeName ? ' (' + text(x.assigneeName) + ')' : '';
+    const due = x.due ? ' due ' + text(x.due) : '';
+    return (x.done ? '[done] ' : '[open] ') + text(x.text) + who + due;
+}
 
 const isoDay = (v: unknown) => (/^\d{4}-\d{2}-\d{2}$/.test(str(v, 10)) ? str(v, 10) : '');
 /** A YYYY-MM-DD day as epoch ms (India time), for the requests that take those. */
 const dayMs = (v: unknown, end = false) => {
     const d = isoDay(v);
-    return d ? String(Date.parse(`${d}T00:00:00+05:30`) + (end ? 86_400_000 : 0)) : '';
+    if (!d) return '';
+    const extra = end ? 86_400_000 : 0;
+    return String(Date.parse(`${d}T00:00:00+05:30`) + extra);
 };
 const query = (path: string, q: Record<string, string>) => {
     const qs = new URLSearchParams(Object.entries(q).filter(([, v]) => v)).toString();
@@ -107,12 +118,19 @@ const TOOLS: Record<string, Tool> = {
             query: { type: 'string', description: 'Title, artist, code, medium or location. Empty for all.' },
             status: { type: 'string', description: 'Only this status.', enum: ['', 'Available', 'Sold', 'Reserved'] },
         },
-        async run(db, a) {
+        async run(db, a, kv) {
             const q = like(a.query);
-            return (await rows(db, `SELECT custom_id, title, artist, artwork_year, medium, dimensions, status, location, price, plus_gst, quantity FROM artworks
-                WHERE (title LIKE ? OR artist LIKE ? OR custom_id LIKE ? OR medium LIKE ? OR location LIKE ?) AND (? = '' OR status = ?) ORDER BY created_at DESC LIMIT ${MAX_ROWS}`,
-                q, q, q, q, q, str(a.status), str(a.status)))
-                .map(r => ({ code: r.custom_id, title: r.title, artist: r.artist, year: r.artwork_year, medium: r.medium, size: r.dimensions, status: r.status, location: r.location, priceRupees: r.price, plusGst: !!r.plus_gst, inStock: r.quantity }));
+            // Locations by their names now (a rename shows at once): a piece matches when it holds stock at one whose name matches.
+            const settings = await readInventorySettings(kv);
+            const term = str(a.query).trim().toLowerCase();
+            const at = term ? settings.locations.filter(l => l.name.toLowerCase().includes(term)).map(l => `"${l.id}"`) : [];
+            // * : a workspace that hasn't saved an artwork since stock locations came has no stock column yet.
+            const atSql = at.map(() => ' OR instr(stock, ?) > 0').join('');
+            return (await rows(db, `SELECT * FROM artworks
+                WHERE (title LIKE ? OR artist LIKE ? OR custom_id LIKE ? OR medium LIKE ?${atSql}) AND (? = '' OR status = ?) ORDER BY created_at DESC LIMIT ${MAX_ROWS}`,
+                q, q, q, q, ...at, str(a.status), str(a.status)))
+                .map(r => ({ code: r.custom_id, title: r.title, artist: r.artist, year: r.artwork_year, medium: r.medium, size: r.dimensions, status: r.status,
+                    location: r.stock == null ? r.location : stockLabel(storedStock(r.stock), settings), priceRupees: r.price, plusGst: !!r.plus_gst, inStock: r.quantity }));
         },
     },
     find_bills: {
@@ -169,7 +187,7 @@ const TOOLS: Record<string, Tool> = {
             return (await rows(db, `SELECT title, event_date, end_date, todos, notes FROM events WHERE event_date <= ? AND COALESCE(end_date, event_date) >= ? ORDER BY event_date LIMIT 30`, to, from))
                 .map(r => ({
                     title: r.title, date: day(r.event_date), until: day(r.end_date) || undefined, notes: text(r.notes).slice(0, 300),
-                    tasks: list(r.todos).map(t => { const x = t as Row; return `${x.done ? '[done]' : '[open]'} ${text(x.text)}${x.assigneeName ? ` (${text(x.assigneeName)})` : ''}${x.due ? ` due ${text(x.due)}` : ''}`; }),
+                    tasks: list(r.todos).map(t => taskLine(t as Row)),
                 }));
         },
     },
@@ -216,17 +234,21 @@ export function trim(v: unknown, depth = 0): unknown {
     if (typeof v === 'string') return v.length > 300 ? `${v.slice(0, 300)}…` : v;
     // Epoch-ms times as India dates and times.
     if (typeof v === 'number') return v > 1e12 && v < 1e13 ? new Date(v + 19_800_000).toISOString().slice(0, 16).replace('T', ' ') : v;
-    if (Array.isArray(v)) {
-        if (depth > 4) return `${v.length} items`;
-        const more = v.length > ROWS_PER_LIST ? [`…and ${v.length - ROWS_PER_LIST} more`] : [];
-        return [...v.slice(0, ROWS_PER_LIST).map(x => trim(x, depth + 1)), ...more];
-    }
-    if (v && typeof v === 'object') {
-        if (depth > 4) return '…';
-        const kept = Object.entries(v).filter(([k, x]) => !BULKY.test(k) && x !== null && x !== '' && !(Array.isArray(x) && !x.length));
-        return Object.fromEntries(kept.map(([k, x]) => [k, trim(x, depth + 1)]));
-    }
+    if (Array.isArray(v)) return trimList(v, depth);
+    if (v && typeof v === 'object') return trimRecord(v, depth);
     return v;
+}
+
+function trimList(v: unknown[], depth: number): unknown {
+    if (depth > 4) return `${v.length} items`;
+    const more = v.length > ROWS_PER_LIST ? [`…and ${v.length - ROWS_PER_LIST} more`] : [];
+    return [...v.slice(0, ROWS_PER_LIST).map(x => trim(x, depth + 1)), ...more];
+}
+
+function trimRecord(v: object, depth: number): unknown {
+    if (depth > 4) return '…';
+    const kept = Object.entries(v).filter(([k, x]) => !BULKY.test(k) && x !== null && x !== '' && !(Array.isArray(x) && !x.length));
+    return Object.fromEntries(kept.map(([k, x]) => [k, trim(x, depth + 1)]));
 }
 
 /** The tools this person may use, in the AI service's format. */
@@ -318,7 +340,10 @@ async function complete(t: AiTarget, messages: Msg[], tools: unknown[], onText: 
 /** Runs one of the app's read requests as the person asking (worker.ts gives this). */
 export type ReadAs = (path: string) => Promise<Response>;
 
-async function runTool(db: D1Database, read: ReadAs, allowed: string[], name: string, raw: string): Promise<string> {
+/** Where lookups read from: the workspace's database and storage, and its read requests as the person asking. */
+export interface Lookups { db: D1Database; kv: KVNamespace; read: ReadAs }
+
+async function runTool({ db, kv, read }: Lookups, allowed: string[], name: string, raw: string): Promise<string> {
     if (!allowed.includes(name)) return JSON.stringify({ error: "This person's role can't see that." });
     let args: Args = {};
     try { args = JSON.parse(raw || '{}') as Args; } catch { /* treated as no filters */ }
@@ -330,7 +355,7 @@ async function runTool(db: D1Database, read: ReadAs, allowed: string[], name: st
             if (!res.ok) return JSON.stringify({ error: text((data as Row | null)?.error) || `That lookup failed (${res.status}).` });
             return JSON.stringify(trim(data)).slice(0, 20_000);
         }
-        return JSON.stringify(await tool.run(db, args)).slice(0, 20_000);
+        return JSON.stringify(await tool.run(db, args, kv)).slice(0, 20_000);
     } catch (e) {
         // A table is made on first use: a workspace that never used a section has none yet.
         if (/no such table/i.test((e as Error).message)) return '[]';
@@ -355,7 +380,7 @@ const stepOf = (name: string) => {
 };
 
 /** The answer to a question, told to `on` as it is made: the AI and its lookups, at most MAX_ROUNDS times. */
-export async function answerQuestion(t: AiTarget, db: D1Database, read: ReadAs, allowed: string[], chat: Msg[], today: string, on: (e: Event) => void): Promise<void> {
+export async function answerQuestion(t: AiTarget, look: Lookups, allowed: string[], chat: Msg[], today: string, on: (e: Event) => void): Promise<void> {
     const messages: Msg[] = [{ role: 'system', content: systemPrompt(allowed, today) }, ...chat];
     const tools = toolSpecs(allowed);
     let said = false;
@@ -368,7 +393,7 @@ export async function answerQuestion(t: AiTarget, db: D1Database, read: ReadAs, 
         messages.push({ role: 'assistant', content: msg.content || null, tool_calls: msg.tool_calls });
         for (const call of msg.tool_calls) {
             on({ step: stepOf(call.function.name) });
-            messages.push({ role: 'tool', tool_call_id: call.id, content: await runTool(db, read, allowed, call.function.name, call.function.arguments) });
+            messages.push({ role: 'tool', tool_call_id: call.id, content: await runTool(look, allowed, call.function.name, call.function.arguments) }); // NOSONAR: lookups answered one by one, in the order asked
         }
     }
     on({ text: NO_ANSWER });
@@ -396,7 +421,7 @@ const ask = (readAs: (ctx: Ctx, path: string) => Promise<Response>): Handler => 
     const enc = new TextEncoder();
     let gone = false; // the person stopped it or left: stop spending on the AI
     const on = (e: Event) => { if (!gone) w.write(enc.encode(`${JSON.stringify(e)}\n`)).catch(() => { gone = true; }); };
-    ctx.execCtx.waitUntil(answerQuestion(t, ctx.env.VAYU_DB, path => readAs(ctx, path), allowed, [...history(b.history), { role: 'user', content: question }], today, on)
+    ctx.execCtx.waitUntil(answerQuestion(t, { db: ctx.env.VAYU_DB, kv: ctx.env.VAYU_KV, read: path => readAs(ctx, path) }, allowed, [...history(b.history), { role: 'user', content: question }], today, on)
         .catch(e => { console.error('Assistant answer failed', e); on({ error: 'That didn’t work. Try again.' }); })
         .finally(() => w.close().catch(() => {})));
     return new Response(out, { headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'X-Content-Type-Options': 'nosniff' } });

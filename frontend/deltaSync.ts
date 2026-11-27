@@ -311,7 +311,8 @@ export async function handleSync(ctx: Ctx): Promise<Response> {
     readable.has(row.entity as SyncEntity) &&
     (!SCOPED_ENTITIES.has(row.entity) || scopeAllows(row.scope, session.userId, isAdmin)));
 
-  const changes = await attachRecords(ctx, visible);
+  const hide = await costHider(ctx, session, isAdmin);
+  const changes = (await attachRecords(ctx, visible)).map(c => (c.record === undefined ? c : { ...c, record: hide(c.entity, c.record) }));
   const lastSeq = rows.at(-1)?.seq ?? cursor;
   return json({
     mode: 'incremental',
@@ -378,7 +379,8 @@ async function snapshot(
 
   // afterId always advances past every raw row so a filtered row can't stall the pagination.
   const map = ENTITY_MAPPERS[entity];
-  const records = (await visibleRows(ctx, session, entity, rows, isAdmin)).map(map);
+  const hide = await costHider(ctx, session, isAdmin);
+  const records = (await visibleRows(ctx, session, entity, rows, isAdmin)).map(row => hide(entity, map(row)));
   return json({ mode: 'snapshot', entity, cursor, records, hasMore, afterId: after });
 }
 
@@ -435,6 +437,16 @@ async function maxSeqOf(ctx: Ctx): Promise<number> {
 async function readableEntitiesFor(ctx: Ctx, session: SessionData): Promise<Set<SyncEntity>> {
   const roles = await getRoles(ctx.env.VAYU_KV);
   return readableEntities(permissionsForRoles(roles, session.role));
+}
+
+/** Takes artworks' cost prices out of what a role that can't see them receives. */
+async function costHider(ctx: Ctx, session: SessionData, isAdmin: boolean): Promise<(entity: string, record: unknown) => unknown> {
+  if (isAdmin || atLeast(permissionsForRoles(await getRoles(ctx.env.VAYU_KV), session.role).costs, 'view')) return (_e, r) => r;
+  return (entity, record) => {
+    if (entity !== 'artwork' || !record || typeof record !== 'object') return record;
+    const { costPrice: _hidden, ...rest } = record as Record<string, unknown>;
+    return rest;
+  };
 }
 
 async function canManageAttendance(ctx: Ctx, session: SessionData): Promise<boolean> {
