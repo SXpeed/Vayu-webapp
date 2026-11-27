@@ -195,6 +195,7 @@ export function rowToEvent(row: Record<string, unknown>): any {
     title: (row.title as string) || '',
     date: row.event_date as number,
     endDate: (row.end_date as number) || undefined,
+    locations: parseList(row.locations),
     notes: row.notes || undefined,
     color: (row.color as string) || undefined,
     todos,

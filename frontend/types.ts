@@ -170,6 +170,8 @@ export interface CalendarEvent {
     date: number;
     /** Optional end — for multi-day events (e.g. an exhibition running all month). */
     endDate?: number;
+    /** Where it happens — an exhibition can run at several venues. */
+    locations?: string[];
     notes?: string;
     /** Hex color identifying this event on the calendar (distinct from holidays). */
     color?: string;

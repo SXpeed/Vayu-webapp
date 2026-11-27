@@ -7,6 +7,8 @@ import { AuthUser } from '../services/authService';
 import { ViewState } from '../types';
 import { CanFn, makeCan, permissionsOf } from '../access';
 import type { AccessLevel, SectionId } from '../permissions';
+import type { EventsAdminProps } from '../views/EventsAdmin';
+import type { SectionId as AdminSectionId } from './AdminPanel';
 
 /** Smooth (Lenis) scrolling on the main content scroller. Wheel/desktop only —
  * touch stays native so iOS momentum scrolling is untouched. Nested scrollable
@@ -47,7 +49,8 @@ interface AppChrome {
     isAdmin: boolean;
     /** What the signed-in person's role allows: can('inventory', 'edit'). */
     can: CanFn;
-    openAdmin: () => void;
+    /** Opens Admin, on its menu or straight on one section. */
+    openAdmin: (section?: AdminSectionId) => void;
     navigate: (view: ViewState) => void;
 }
 
@@ -74,9 +77,12 @@ const Layout: React.FC<{
   currentView: ViewState;
   onNavigate: (view: ViewState) => void;
   userProfile?: AuthUser | null;
+  /** Data and handlers for Admin → Events. */
+  events?: EventsAdminProps;
   children?: React.ReactNode;
-}> = ({ currentView, onNavigate, userProfile, children }) => {
+}> = ({ currentView, onNavigate, userProfile, events, children }) => {
   const [showAdmin, setShowAdmin] = useState(false);
+  const [adminSection, setAdminSection] = useState<AdminSectionId | null>(null);
   const isAdmin = userProfile?.role === 'admin';
   const can = useMemo(() => makeCan(permissionsOf(userProfile)), [userProfile]);
   const mainRef = useRef<HTMLElement>(null);
@@ -96,7 +102,7 @@ const Layout: React.FC<{
   };
 
   const chrome = useMemo<AppChrome>(
-    () => ({ isAdmin, can, openAdmin: () => setShowAdmin(true), navigate: onNavigate }),
+    () => ({ isAdmin, can, openAdmin: (section?: AdminSectionId) => { setAdminSection(section ?? null); setShowAdmin(true); }, navigate: onNavigate }),
     [isAdmin, can, onNavigate],
   );
 
@@ -118,7 +124,7 @@ const Layout: React.FC<{
               onNavigate={onNavigate}
               isAdmin={isAdmin}
               can={can}
-              onOpenAdmin={() => setShowAdmin(true)}
+              onOpenAdmin={() => { setAdminSection(null); setShowAdmin(true); }}
               collapsed={collapsed}
               onToggleCollapsed={toggleCollapsed}
               userName={userProfile?.name}
@@ -148,6 +154,8 @@ const Layout: React.FC<{
             <AdminPanel
               currentUserId={userProfile.id}
               onClose={() => setShowAdmin(false)}
+              events={events}
+              initialSection={adminSection}
             />
           )}
         </div>

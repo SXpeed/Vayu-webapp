@@ -1979,6 +1979,7 @@ const COLUMN_MIGRATIONS = {
     end_date: 'INTEGER',
     todos: "TEXT NOT NULL DEFAULT '[]'",
     color: 'TEXT',
+    locations: "TEXT NOT NULL DEFAULT '[]'",
   },
   inquiries: {
     customer_address: "TEXT DEFAULT ''",
@@ -2896,12 +2897,13 @@ function ensureEventsTable(db: D1Database): Promise<void> {
         todos TEXT NOT NULL DEFAULT '[]',
         notes TEXT NOT NULL DEFAULT '',
         color TEXT,
+        locations TEXT NOT NULL DEFAULT '[]',
         created_at INTEGER NOT NULL DEFAULT 0,
         created_by TEXT,
         created_by_name TEXT
       )
     `).run()
-    // Tables created before end_date/todos/color existed. A failure here is not
+    // Tables created before end_date/todos/color/locations existed. A failure here is not
     // remembered as done: the next request tries again.
     .then(() => addMissingColumns(db, 'events')));
 }
@@ -2936,8 +2938,8 @@ async function handleEventsCreate(ctx: Ctx): Promise<Response> {
   await ctx.env.VAYU_DB.batch([
     ctx.env.VAYU_DB.prepare(
       `INSERT OR REPLACE INTO events
-       (id, title, event_date, end_date, todos, notes, color, created_at, created_by, created_by_name)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (id, title, event_date, end_date, todos, notes, color, locations, created_at, created_by, created_by_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       ev.id,
       String(ev.title).trim(),
@@ -2946,6 +2948,7 @@ async function handleEventsCreate(ctx: Ctx): Promise<Response> {
       JSON.stringify(ev.todos || []),
       ev.notes || '',
       ev.color || null,
+      JSON.stringify(cleanList(ev.locations, () => null, 20)),
       ev.createdAt || Date.now(),
       createdBy,
       createdByName
@@ -2971,7 +2974,7 @@ async function handleEventsUpdate(ctx: Ctx): Promise<Response> {
   await ctx.env.VAYU_DB.batch([
     ctx.env.VAYU_DB.prepare(
       `UPDATE events SET
-         title = ?, event_date = ?, end_date = ?, notes = ?, todos = ?, color = ?
+         title = ?, event_date = ?, end_date = ?, notes = ?, todos = ?, color = ?, locations = ?
        WHERE id = ?`
     ).bind(
       String(body.title || '').trim(),
@@ -2980,6 +2983,7 @@ async function handleEventsUpdate(ctx: Ctx): Promise<Response> {
       body.notes || '',
       JSON.stringify(body.todos || []),
       body.color || null,
+      JSON.stringify(cleanList(body.locations, () => null, 20)),
       evId
     ),
     changeLogStmt(ctx.env.VAYU_DB, ctx.env, 'event', evId, 'put', { actorId: session.userId }),

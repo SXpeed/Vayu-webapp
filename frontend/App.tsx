@@ -513,7 +513,7 @@ const App: React.FC = () => {
             case 'login':
                 return <LoginView onLogin={handleLogin} />;
             case 'home':
-                return userProfile ? <HomeView artworks={artworks} events={events} teamMembers={teamMembers} onNavigate={navigateTo} userProfile={userProfile} onAddEvent={handlers.handleAddEvent} onUpdateEvent={handlers.handleUpdateEvent} onDeleteEvent={handlers.handleDeleteEvent} /> : null;
+                return userProfile ? <HomeView artworks={artworks} events={events} teamMembers={teamMembers} onNavigate={navigateTo} userProfile={userProfile} onUpdateEvent={handlers.handleUpdateEvent} /> : null;
             case 'artworks':
                 return <ArtworksView artworks={artworks} onAddArtwork={handlers.handleAddArtwork} onUpdateArtwork={handlers.handleUpdateArtwork} onArtworkClick={handleArtworkClick}
                     onDeleteArtwork={handlers.handleDeleteArtwork} collections={collections} onUpdateCollection={handlers.handleUpdateCollection} />;
@@ -617,7 +617,8 @@ const App: React.FC = () => {
 
     return (
         <InboxContext.Provider value={inbox}>
-        <Layout currentView={currentView} onNavigate={navigateTo} userProfile={authUser}>
+        <Layout currentView={currentView} onNavigate={navigateTo} userProfile={authUser}
+            events={{ events, teamMembers, onAddEvent: handlers.handleAddEvent, onUpdateEvent: handlers.handleUpdateEvent, onDeleteEvent: handlers.handleDeleteEvent }}>
             <Toaster position="top-center" />
             <Suspense fallback={<ViewFallback />}>
                 {renderView()}

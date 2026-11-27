@@ -10,6 +10,7 @@ import { useAppChrome } from './Layout';
 import { isPlatformSession } from '../services/workspace';
 import { apiCall } from '../services/apiClient';
 import { DeletedItem } from '../types';
+import type { EventsAdminProps } from '../views/EventsAdmin';
 import { PageRoot, PageHeader } from './ui';
 import {
     Archive, Boxes, ChevronRight, Gauge, History, KeyRound, Leaf, Users as UsersIcon, Trash2, Loader2, FileText,
@@ -20,13 +21,17 @@ import toast from 'react-hot-toast';
 const ActivityLogView = React.lazy(() => import('../views/ActivityLogView').then(m => ({ default: m.ActivityLogView })));
 const InventorySettingsPanel = React.lazy(() => import('../views/inventoryTools').then(m => ({ default: m.InventorySettingsPanel })));
 const StaffRosterView = React.lazy(() => import('../views/StaffRosterView').then(m => ({ default: m.StaffRosterView })));
+const EventsAdmin = React.lazy(() => import('../views/EventsAdmin').then(m => ({ default: m.EventsAdmin })));
 
 interface AdminPanelProps {
     currentUserId: string;
     onClose: () => void;
+    events?: EventsAdminProps;
+    /** Open straight on this section instead of the menu. */
+    initialSection?: SectionId | null;
 }
 
-type SectionId = 'leave' | 'users' | 'roles' | 'inventory' | 'plan' | 'activity' | 'deleted';
+export type SectionId = 'leave' | 'events' | 'users' | 'roles' | 'inventory' | 'plan' | 'activity' | 'deleted';
 type Icon = React.FC<{ size?: number; className?: string; strokeWidth?: number }>;
 interface Section { id: SectionId; label: string; line: string; Icon: Icon }
 
@@ -40,6 +45,7 @@ const GROUPS: Array<{ title: string; sections: Section[] }> = [
         { id: 'roles', label: 'Roles', line: 'Who can see and change what', Icon: KeyRound },
     ] },
     { title: 'Workspace', sections: [
+        { id: 'events', label: 'Events', line: 'Add and edit events, venues and their tasks', Icon: CalendarDays },
         { id: 'inventory', label: 'Inventory', line: 'Stock locations and statuses', Icon: Boxes },
         { id: 'plan', label: 'Plan', line: 'Your plan and what you use of it', Icon: Gauge },
     ] },
@@ -260,13 +266,15 @@ const DeletedItems: React.FC = () => {
  * Admin: the one place to run the workspace, opened from the sidebar (desktop)
  * or the shield at the top of Home (phone). Phone: a grouped menu, each section opens on its own. Desktop:
  * the menu on the left, the open section on the right.
- * Admins see everything; whoever manages the Staff roster sees Leave requests.
+ * Admins see everything; whoever manages the Staff roster sees Leave requests,
+ * whoever edits the calendar sees Events.
  */
-export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUserId, onClose }) => {
+export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUserId, onClose, events, initialSection = null }) => {
     const { isAdmin, can } = useAppChrome();
     const isDesktop = useIsDesktop();
     const allowed = (id: SectionId) => {
         if (id === 'leave') return can('schedule', 'edit');
+        if (id === 'events') return !!events && can('calendar', 'edit');
         if (id === 'plan') return isAdmin && isPlatformSession(); // the original app on its own has no plan
         return isAdmin;
     };
@@ -277,7 +285,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUserId, onClose }
 
     // Phone starts on the menu; desktop opens the first section that sits in the pane
     // (Leave requests covers the whole screen, so it only opens when picked).
-    const [picked, setPicked] = useState<SectionId | null>(null);
+    const [picked, setPicked] = useState<SectionId | null>(initialSection);
     const section = picked ?? (isDesktop ? visible.find(s => s.id !== 'leave')?.id ?? null : null);
     const current = visible.find(s => s.id === section);
     const toMenu = () => setPicked(null);
@@ -300,6 +308,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUserId, onClose }
 
     const body = (() => {
         switch (section) {
+            case 'events': return events ? <EventsAdmin {...events} /> : null;
             case 'users': return <UserManagementPanel currentUserId={currentUserId} />;
             case 'roles': return <RolesPanel />;
             case 'plan': return <PlanPanel />;

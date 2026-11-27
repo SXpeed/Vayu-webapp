@@ -230,7 +230,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     onClick: () => setBellOpen(true),
                     count: unseenCount,
                 })}
-                {(isAdmin || can('schedule', 'edit')) && onOpenAdmin && renderRow({
+                {(isAdmin || can('schedule', 'edit') || can('calendar', 'edit')) && onOpenAdmin && renderRow({
                     key: 'admin',
                     label: 'Admin',
                     icon: ShieldCheck,

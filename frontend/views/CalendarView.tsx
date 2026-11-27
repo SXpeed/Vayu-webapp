@@ -158,6 +158,14 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack, onUp
     const weeks = useMemo(() => buildMonthGrid(viewYear, viewMonth), [viewYear, viewMonth]);
     /** Which way the month grid slides in: 1 from the right (later), -1 from the left. */
     const [direction, setDirection] = useState<1 | -1>(1);
+    /** Phones: the whole year instead of one month; a tapped month zooms in from where it sat. */
+    const [phoneYear, setPhoneYear] = useState(false);
+    const [zoomFrom, setZoomFrom] = useState<string | null>(null);
+    const zoomInto = (m: number) => {
+        setViewMonth(m);
+        setZoomFrom(`${(m % 3) * 50}% ${Math.floor(m / 3) * 33}%`);
+        setPhoneYear(false);
+    };
 
     /** Shows this month, sliding in from the side it lies on. */
     const showMonth = (year: number, month: number) => {
@@ -231,7 +239,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack, onUp
         <PageRoot width="wide">
             <PageHeader
                 title="Calendar"
-                subtitle={`${MONTHS[viewMonth]} ${viewYear}`}
+                subtitle={phoneYear ? String(viewYear) : `${MONTHS[viewMonth]} ${viewYear}`}
                 onBack={onBack}
                 // The legend and month grid sit between this header and the
                 // scroller, where a floating stepper would cover them.
@@ -247,18 +255,25 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack, onUp
                     repeated here. */}
                 <div className="flex items-center justify-between lg:hidden">
                     <button
-                        onClick={goPrevMonth}
-                        aria-label="Previous month"
+                        onClick={phoneYear ? () => setViewYear(y => y - 1) : goPrevMonth}
+                        aria-label={phoneYear ? 'Previous year' : 'Previous month'}
                         className="neu-icon-btn-sm text-gray-700 dark:text-gray-300 active-scale"
                     >
                         <ChevronLeft size={18} />
                     </button>
-                    <span className="text-[11px] font-medium text-gray-600 dark:text-gray-300 uppercase tracking-widest">
-                        Browse months
-                    </span>
+                    <fieldset className="neu-inset rounded-full p-0.5 flex">
+                        <legend className="sr-only">Show</legend>
+                        {([['Month', false], ['Year', true]] as const).map(([name, year]) => (
+                            <button key={name} type="button" aria-pressed={phoneYear === year}
+                                onClick={() => { setZoomFrom(null); setPhoneYear(year); }}
+                                className={`px-3.5 py-1 rounded-full text-[11px] font-semibold uppercase tracking-wider active-scale ${phoneYear === year ? 'neu-raised-sm text-gold-700 dark:text-gold-300' : 'text-[var(--neu-text-dim)]'}`}>
+                                {name}
+                            </button>
+                        ))}
+                    </fieldset>
                     <button
-                        onClick={goNextMonth}
-                        aria-label="Next month"
+                        onClick={phoneYear ? () => setViewYear(y => y + 1) : goNextMonth}
+                        aria-label={phoneYear ? 'Next year' : 'Next month'}
                         className="neu-icon-btn-sm text-gray-700 dark:text-gray-300 active-scale"
                     >
                         <ChevronRight size={18} />
@@ -274,8 +289,39 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack, onUp
             </div>
 
             {/* Month (phone): six weeks, a hairline between them; swipe for the next month */}
+            {phoneYear ? (
+                <div className="px-3 pb-2 lg:hidden grid grid-cols-3 gap-2">
+                    {Array.from({ length: 12 }, (_, m) => (
+                        <button key={m} type="button" onClick={() => zoomInto(m)} aria-label={`Open ${MONTHS[m]} ${viewYear}`}
+                            className="neu-card p-1.5 text-left active-scale animate-fade-in-up" style={{ animationDelay: `${m * 20}ms` }}>
+                            <p className={`text-[10px] font-semibold uppercase tracking-[0.12em] px-0.5 mb-0.5 ${m === today.getMonth() && viewYear === today.getFullYear() ? 'text-gold-700 dark:text-gold-300' : 'text-[var(--neu-text)]'}`}>
+                                {MONTHS[m].slice(0, 3)}
+                            </p>
+                            {buildMonthGrid(viewYear, m).map(week => (
+                                <div key={dayKey(week[0].date)} className="grid grid-cols-7">
+                                    {week.map(cell => {
+                                        if (!cell.inMonth) return <span key={dayKey(cell.date)} />;
+                                        const evs = eventsOnDay(cell.date);
+                                        let tone = 'text-[var(--neu-text-dim)]';
+                                        if (isToday(cell.date)) tone = 'font-bold text-gold-700 dark:text-gold-300';
+                                        else if (holidayOn(cell.date)) tone = 'text-[#b0544a] dark:text-[#e3958b]';
+                                        return (
+                                            <span key={dayKey(cell.date)} aria-hidden
+                                                className={`relative text-center text-[8.5px] leading-[13px] tabular-nums ${tone}`}>
+                                                {cell.date.getDate()}
+                                                {evs.length > 0 && <span className="absolute left-1/2 -translate-x-1/2 bottom-[-1px] w-[3px] h-[3px] rounded-full" style={{ backgroundColor: eventColor(evs[0]) }} />}
+                                            </span>
+                                        );
+                                    })}
+                                </div>
+                            ))}
+                        </button>
+                    ))}
+                </div>
+            ) : (
             <div className="px-3 pb-1 lg:hidden">
-                <div className="neu-card px-2 pt-2 pb-1 overflow-hidden touch-pan-y" {...swipeHandlers}>
+                <div key={zoomFrom ?? 'month'} className={`neu-card px-2 pt-2 pb-1 overflow-hidden touch-pan-y ${zoomFrom ? 'cal-float-in' : ''}`}
+                    style={zoomFrom ? { transformOrigin: zoomFrom } : undefined} {...swipeHandlers}>
                     <div className="grid grid-cols-7 pb-1">
                         {WEEKDAYS.map(day => (
                             <div key={day} className="text-center text-[10px] font-semibold text-[var(--neu-text-dim)] uppercase tracking-[0.12em] py-1">
@@ -292,6 +338,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onBack, onUp
                     </div>
                 </div>
             </div>
+            )}
 
             {/* Calendar + day details */}
             <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
