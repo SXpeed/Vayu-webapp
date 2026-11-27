@@ -317,9 +317,10 @@ type AiStep = (ctx: Ctx, meeting: Meeting, t: AiTarget) => Promise<Response>;
 
 const summarize: AiStep = async (ctx, m, t) => {
     if (!m.transcript.trim()) return err('There is no text to summarize yet.');
+    const s = ctx.env.MEETING_SUMMARY_MODEL ? { ...t, model: ctx.env.MEETING_SUMMARY_MODEL } : t; // a stronger model where quality matters most
     const [summary, items] = await Promise.all([
-        chat(t, summaryMessages(m.type, m.title, m.transcript, m.attendees)),
-        chat(t, actionItemsMessages(m.title, m.heldAt, m.transcript, m.attendees)),
+        chat(s, summaryMessages(m.type, m.title, m.transcript, m.attendees, m.heldAt)),
+        chat(s, actionItemsMessages(m.title, m.heldAt, m.transcript, m.attendees)),
     ]);
     if (summary instanceof Response) return summary;
     // The summary still counts when the list fails: it lists action items too.

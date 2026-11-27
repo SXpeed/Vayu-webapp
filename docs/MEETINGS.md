@@ -23,9 +23,9 @@ instructions), `frontend/views/MeetingsView.tsx` + `frontend/views/meetings/` (s
 ## Choosing the AI
 
 **Now (trial, 2026-11-25):** OpenRouter (`https://openrouter.ai/api/v1`): `openai/whisper-large-v3`
-for speech-to-text and `openai/gpt-4o-mini` as a stand-in for summaries, action items,
+for speech-to-text and `anthropic/claude-haiku-5.5` (since 2026-11-27, was `openai/gpt-4o-mini`) for summaries, action items,
 speakers, questions and translation, set in `wrangler.jsonc`. Any OpenRouter model id
-works (e.g. `anthropic/claude-sonnet-4.5` for better summaries). The key (an OpenRouter key) is left: `wrangler secret put MEETING_AI_KEY` (prod), `MEETING_AI_KEY=` in
+works (e.g. `anthropic/claude-sonnet-5.5` for better summaries). The key (an OpenRouter key) is left: `wrangler secret put MEETING_AI_KEY` (prod), `MEETING_AI_KEY=` in
 `frontend/.dev.vars` (local).
 
 Any OpenAI-compatible service works. Set these on the API Worker:
@@ -34,7 +34,8 @@ Any OpenAI-compatible service works. Set these on the API Worker:
 |---|---|
 | `MEETING_AI_URL` | Base URL, e.g. `https://api.openai.com/v1` or `https://api.anthropic.com/v1` |
 | `MEETING_AI_KEY` | Secret: `wrangler secret put MEETING_AI_KEY` |
-| `MEETING_TEXT_MODEL` | Model for summaries and translation |
+| `MEETING_TEXT_MODEL` | Model for translation, speakers, questions and Ask AI |
+| `MEETING_SUMMARY_MODEL` | Optional: model for summaries and action items (else `MEETING_TEXT_MODEL`); `anthropic/claude-sonnet-5.5`, about 3.4¢ per meeting-hour |
 | `MEETING_TRANSCRIBE_MODEL` | Speech-to-text model |
 | `MEETING_TRANSCRIBE_URL`, `MEETING_TRANSCRIBE_KEY` | Optional: speech-to-text from a different service (e.g. Claude for text, which has no speech-to-text) |
 

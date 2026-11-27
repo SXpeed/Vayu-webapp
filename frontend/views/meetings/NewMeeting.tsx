@@ -10,6 +10,7 @@ import { meetingService, type MeetingList } from '../../services/meetingService'
 import { AttendeePicker, type Member } from './AttendeePicker';
 import { PartQueue } from './partQueue';
 import { SegmentRecorder, splitAudioFile } from './recorder';
+import { livePreviewSupported, useLivePreview } from './useLivePreview';
 
 type Mode = 'record' | 'upload' | 'type';
 type Phase = 'form' | 'recording' | 'paused' | 'saving';
@@ -242,6 +243,7 @@ const RecordPanel: React.FC<{
 }> = ({ phase, elapsed, live, waiting, liveOn, onStart, onPause, onResume, onStop }) => {
     const mic = useMicPermission();
     const recording = phase === 'recording' || phase === 'paused';
+    const hearing = useLivePreview(phase === 'recording');
     return (
         <div className="rounded-2xl neu-inset p-4 space-y-3">
             <p className="font-serif text-3xl tabular-nums text-center" aria-live="polite">{clock(elapsed)}</p>
@@ -260,6 +262,12 @@ const RecordPanel: React.FC<{
             )}
             {phase === 'saving' && <p className="flex items-center justify-center gap-2 text-[13px]"><Loader2 size={16} className="animate-spin" />Saving the last part…</p>}
             <Waiting n={waiting} />
+            {recording && livePreviewSupported && (
+                <div className="rounded-xl border border-dashed border-[var(--neu-text-dim)]/40 p-3 text-[13px]">
+                    <p className="mb-1 text-[11px] text-[var(--neu-text-dim)]">Hearing now (rough preview)</p>
+                    <p aria-live="off">{hearing || '…'}</p>
+                </div>
+            )}
             {recording && liveOn && (
                 <div className="max-h-48 overflow-y-auto rounded-xl bg-black/5 dark:bg-white/5 p-3 text-[13px] whitespace-pre-wrap" aria-live="polite">
                     {live || `Live text appears here every ${PART_SECONDS / 60} minutes.`}

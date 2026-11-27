@@ -80,7 +80,7 @@ before(async () => {
     const schema = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
     worker = await startDevWorker({
         adminPassword: 'provider-admin-password', seedLegacy: { sql: schema },
-        vars: { MEETING_AI_URL: aiUrl, MEETING_AI_KEY: 'test-key', MEETING_TEXT_MODEL: 'text-model', MEETING_TRANSCRIBE_MODEL: 'speech-model' },
+        vars: { MEETING_AI_URL: aiUrl, MEETING_AI_KEY: 'test-key', MEETING_TEXT_MODEL: 'text-model', MEETING_SUMMARY_MODEL: 'summary-model', MEETING_TRANSCRIBE_MODEL: 'speech-model' },
     });
     assert.equal((await api(null, '/auth/setup', { method: 'POST', body: OWNER })).status, 200);
     owner = (await api(null, '/auth/login', { method: 'POST', body: { email: OWNER.email, password: OWNER.password } })).body.token;
@@ -193,7 +193,7 @@ test('a recording in parts: live text, in order, retries, your own uploads only'
     // Summary + action items, who said what, translation.
     const sum = await api(kabir, `/meetings/${id}/summarize`, { method: 'POST', body: {} });
     assert.equal(sum.status, 200, sum.text);
-    assert.equal(sum.body.summary, 'summary by text-model');
+    assert.equal(sum.body.summary, 'summary by summary-model');
     assert.deepEqual(sum.body.actionItems, [{ id: 'a1', text: 'Send the framer the quote', owner: 'Priya Mehta', due: '2026-12-01', done: false }]);
     assert.ok(aiCalls.some(c => c.raw.includes('People in the meeting: Priya Mehta')));
 

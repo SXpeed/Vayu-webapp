@@ -166,7 +166,9 @@ const BASE = [
     'You write meeting records for a small business team (an art gallery and design studio in India).',
     'Use only what is in the transcript. Never invent names, numbers, dates, amounts or decisions; if something is unclear, write "(unclear)".',
     'The transcript may mix Hindi and English, and may have transcription errors: read through them for the meaning.',
-    'Write in clear, plain English.',
+    'Keep every specific exactly: names, amounts (with ₹ when rupees), quantities, dates, artwork and client names.',
+    'Say who raised each point when the transcript shows it. Only call something a decision when it was agreed; a suggestion or an open question stays one.',
+    'Write in clear, plain English, specific rather than general: "Riya will send the Mehta quote by Friday", not "follow-ups were discussed".',
     'Output plain text, no Markdown symbols (#, *, **). Put each section heading on its own line ending with a colon, and use "- " for bullets.',
     'Leave out any section that has nothing in it.',
 ].join(' ');
@@ -175,7 +177,7 @@ const BY_TYPE: Record<MeetingType, string> = {
     reporting: 'This is a reporting meeting where people give updates. Sections: Overview (2–3 sentences); Updates by person (each person\'s name, then their points, with any figures); Numbers mentioned; Problems and blockers; Decisions; Action items (one per line as "- Who: what, by when" when said).',
     brainstorm: 'This is a brainstorming meeting. Sections: Topic (one sentence); Ideas (grouped under short theme headings, with who suggested each when said); Most promising (up to 3, with why); Concerns raised; Open questions; Next steps (as "- Who: what").',
     brief: 'Write a short brief, under 200 words. Sections: Purpose (one sentence); Key points (at most 6); Decisions; Dates and deadlines; Action items (as "- Who: what, by when").',
-    notes: 'Write clean meeting notes. Sections: Summary (3–5 sentences); Notes (bullets in the order things were discussed); Action items (as "- Who: what, by when"); Follow-ups.',
+    notes: 'Write clean meeting notes. Sections: Summary (3–5 sentences); Notes (bullets in the order things were discussed); Decisions; Action items (as "- Who: what, by when"); Follow-ups.',
 };
 
 const who = (attendees: Attendee[]) => (attendees.length ? `\nPeople in the meeting: ${attendees.map(a => a.name).join(', ')}.` : '');
@@ -183,10 +185,10 @@ const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const labelsSoFar = (known: string[]) => (known.length ? '\nLabels used so far (keep using them for the same people): ' + known.join(', ') + '.' : '');
 
 /** The chat messages that turn a transcript into a summary. */
-export function summaryMessages(type: MeetingType, title: string, transcript: string, attendees: Attendee[] = []) {
+export function summaryMessages(type: MeetingType, title: string, transcript: string, attendees: Attendee[] = [], heldAt?: number) {
     return [
         { role: 'system', content: `${BASE} ${BY_TYPE[type]}` },
-        { role: 'user', content: `Meeting: ${title}${who(attendees)}\n\nTranscript:\n${transcript}` },
+        { role: 'user', content: `Meeting: ${title}${heldAt ? `, held ${day(heldAt)}` : ''}.${who(attendees)}\n\nTranscript:\n${transcript}` },
     ];
 }
 

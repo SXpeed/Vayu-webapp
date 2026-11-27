@@ -106,10 +106,11 @@
     // test-mode links are refused in production again.
     "SHARED_RAZORPAY_ALLOW_TEST": "on",
     // Meetings AI (docs/MEETINGS.md), through OpenRouter: Whisper for speech-to-text, and a
-    // stand-in text model for summaries and translation until one is chosen.
+    // Haiku for translation, speakers and Ask AI; Sonnet for summaries and action items.
     // The key is a secret: wrangler secret put MEETING_AI_KEY
     "MEETING_AI_URL": "https://openrouter.ai/api/v1",
     "MEETING_TRANSCRIBE_MODEL": "openai/whisper-large-v3",
-    "MEETING_TEXT_MODEL": "openai/gpt-4o-mini"
+    "MEETING_TEXT_MODEL": "anthropic/claude-haiku-5.5",
+    "MEETING_SUMMARY_MODEL": "anthropic/claude-sonnet-5.5"
   }
 }

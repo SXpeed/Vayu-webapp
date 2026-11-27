@@ -125,6 +125,7 @@ export interface Env {
   MEETING_AI_URL?: string;
   MEETING_AI_KEY?: string; // secret
   MEETING_TEXT_MODEL?: string;
+  MEETING_SUMMARY_MODEL?: string; // summaries and action items; falls back to MEETING_TEXT_MODEL
   MEETING_TRANSCRIBE_MODEL?: string;
   // Speech-to-text from a different service than the text model (optional).
   MEETING_TRANSCRIBE_URL?: string;
